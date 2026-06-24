@@ -174,10 +174,56 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     symlink pointed at a non-existent Homebrew path; it must point at the patched
     crosstools `ld.lld` (the one that knows `aarch64elf_aros`).
 
+## kernel.resource + the boot bring-up on Apple Silicon
+
+21. **The hosted bootstrap's `mmap`s don't work on Apple Silicon.**
+    `arch/all-unix/bootstrap/memory.c` maps AROS RAM as `MAP_SHARED|PROT_EXEC` and
+    the low pool with `MAP_32BIT`. On Apple Silicon both fail: a one-shot RWX (or
+    SHARED+EXEC) anonymous `mmap` is refused (EACCES) under W^X even with
+    `allow-jit`/`allow-unsigned-executable-memory` entitlements, and `MAP_32BIT`
+    ENOMEMs because the low 4GB is unavailable. *Fix (on our branch):* on Darwin map
+    the pool `RW|MAP_PRIVATE` and drop `MAP_32BIT`; early boot executes from the
+    kickstart RO region (RW→`mprotect` RX), not the pool. The loader must be
+    code-signed with an executable-memory entitlement. (Executing code *loaded into*
+    the pool later — LoadSeg — will need the W^X-aware path the iOS code hints at.)
+
+22. **The bootstrap ELF loader has no AArch64 relocations.**
+    `bootstrap/elfloader.c` handled x86/ARM only; an aarch64 kickstart dies on
+    `Unknown relocation type 257`. Implemented the full static set (ABS64/32,
+    PREL64/32, ADR_PREL_PG_HI21, ADD/LDST_ABS_LO12, CALL26/JUMP26, and MOVW_UABS_*).
+    (The R_AARCH64_* constants aren't in AROS `dos/elf.h` either.)
+
+23. **Weak symbols force GOT relocs the simple loader can't do.** AArch64 clang
+    accesses weak symbols (e.g. `__aros_libreq_SysBase`) via the GOT even with
+    `-fno-pic`, emitting `ADR_GOT_PAGE`/`LD64_GOT_LO12_NC` — and the bootstrap loader
+    has no GOT. *Fix:* build the kickstart modules `-mcmodel=large` (absolute
+    `movz/movk`, no GOT). Needs a proper darwin-aarch64 home in `configure`.
+
+24. **The freestanding modules call the *weak* StdC library-call stubs, which
+    crash before any library is up.** Compiler-emitted `memset`/`strcmp`/`strlen`/…
+    in `exec.library`/`kernel.resource`/`hostlib.resource` resolve to AROS's weak
+    StdC stubs (`memset` is `W` in `libstdc.a`), which deref a still-NULL `StdCBase`
+    → SIGSEGV at the first call. AROS makes them weak so a strong static one can
+    override, but `libstdc.static.a`'s strong versions aren't pulled (archive
+    semantics: a weak def already "satisfies" the reference). *Fix (on our branch):*
+    force-load a static C runtime via `USER_LDFLAGS += -Wl,--whole-archive -lkrnmem
+    -Wl,--no-whole-archive`. `libkrnmem.a` is the mem/str/format dependency-closure
+    carved out of `libstdc.static.a` — currently assembled by hand in the build dir;
+    it needs a proper mmake rule (or the kernel build should link `stdc.static`
+    such that strong defs win). *Worth proposing upstream:* a clean "freestanding
+    module uses the static C runtime" knob.
+
+25. **AArch64 `setjmp` has no implementation.** `setjmp`/`longjmp` are still the weak
+    StdC stubs (no `arch/aarch64-all/stdc/setjmp.s`). Not hit on the early-boot path
+    yet, but needed for full exec exception handling.
+
 ---
 
-*Status — `exec.library` LINKS for darwin-aarch64* (175KB aarch64 AROS ELF). Items
-1, 5, 6, 10–19 have working fixes on the `aarch64-darwin-graft` branch; item 20 lists
-build-dir-only fixes still needing a permanent home. The first piece of AROS itself is
-now built for Apple Silicon — next is the rest of the core (kernel.resource, more
-modules) toward a booting hosted image.
+*Status — **AROS BOOTS on darwin-aarch64*** (Apple Silicon). The `AROSBootstrap`
+loader (native arm64 Mach-O) loads/relocates/runs the kickstart; `exec.library`
+(175KB) + `kernel.resource` (70KB) + `hostlib.resource` initialise with valid
+`SysBase`/`KernelBase`; the host-signal→AROS-trap path and the native Guru alert
+render. Items 1, 5, 6, 10–25 have working fixes on the `aarch64-darwin-graft`
+branch; items 20/23/24 list build-dir-only / by-hand fixes still needing a permanent
+home in `configure`/`mmake`. It halts at a cold-start trap (3-module kickstart) —
+next is dos.library + the boot module set toward a usable shell.
