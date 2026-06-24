@@ -13,7 +13,7 @@ set -uo pipefail
 
 # ---- config (override via env) ----
 IMG="${IMG:-build/aros-aarch64.elf}"
-MACHINE="${MACHINE:-virt}"
+MACHINE="${MACHINE:-virt,gic-version=2}"   # pin GICv2 (grounded at M5); see HARDWARE.md
 CPU="${CPU:-cortex-a72}"
 MEM="${MEM:-512}"
 TIMEOUT="${TIMEOUT:-30}"
