@@ -219,11 +219,63 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
 
 ---
 
-*Status — **AROS BOOTS on darwin-aarch64*** (Apple Silicon). The `AROSBootstrap`
-loader (native arm64 Mach-O) loads/relocates/runs the kickstart; `exec.library`
-(175KB) + `kernel.resource` (70KB) + `hostlib.resource` initialise with valid
-`SysBase`/`KernelBase`; the host-signal→AROS-trap path and the native Guru alert
-render. Items 1, 5, 6, 10–25 have working fixes on the `aarch64-darwin-graft`
-branch; items 20/23/24 list build-dir-only / by-hand fixes still needing a permanent
-home in `configure`/`mmake`. It halts at a cold-start trap (3-module kickstart) —
-next is dos.library + the boot module set toward a usable shell.
+## The CLI-boot push — building the BASE kickstart (toward a shell)
+
+26. **The whole weak-StdC-stub problem, solved globally.** Freestanding kickstart
+    modules crashed on the compiler-emitted memset/strcmp/… (weak StdC stubs that
+    deref a NULL StdCBase). Root cause subtlety: a *hosted* build compiles every
+    module as `compiler=target`, so they link via `LDFLAGS`/`TARGET_LDFLAGS` — not
+    `KERNEL_LDFLAGS` (which only applies to *native* bare-metal kickstart builds).
+    *Fix:* link `-lstdc.static` early in `LDFLAGS` (make.cfg.in) so the strong
+    freestanding functions bind before the spec's weak `-lstdc`; only referenced
+    members are pulled, so modules that emit no such calls pay nothing and disk
+    programs keep shared printf/malloc. Drops the by-hand libkrnmem.a entirely.
+
+27. **make.cfg regeneration silently dropped the build-dir-only flags** (the cause
+    of "we keep re-fixing the build"). Gave them a permanent CPU-gated home in
+    make.cfg.in: `-Wl,--allow-multiple-definition` (the clang libreq-marker
+    collision, item 18), `-mcmodel=large` (item 23), and `-D__arm64__` — the macOS
+    host headers (cc_include) guard their arch dispatch on `__arm64__`, not the
+    `__aarch64__` the AROS clang defines, so any file pulling a host header failed
+    "architecture not supported".
+
+28. **`aros/types/fenv_t.h` was missing tree-wide.** fenv.c / `<aros/stdc/fenv.h>`
+    include it for just the fenv_t/fexcept_t types (no arch inlines). Added it
+    dispatching by CPU (`compiler/crt/stdc/include/aros/types/`).
+
+29. **AArch64 had no setjmp/longjmp** (generic longjmp.c `#error`s per-cpu). Added
+    `arch/aarch64-all/stdc/{setjmp,longjmp}.s` (AAPCS64 callee-saved + NEON d8-d15).
+
+30. **The runtime ELF loader (LoadSeg) had no aarch64 relocations.**
+    `rom/dos/internalloadseg_elf.c` `#error`ed for aarch64; ported the full static
+    relocation set (same as the bootstrap loader, item 22).
+
+31. **emul-handler assumed 32-bit inodes.** `unix_hints.h` hardcoded
+    `_DARWIN_NO_64_BIT_INODE`; modern macOS has only 64-bit inodes (hard error).
+    Gave Darwin its own branch using the native (64-bit) stat.
+
+32. **The translation catalogs are git submodules, not in the main checkout.**
+    dos.library's `strings.h`/error catalog comes from `rom/dos/catalogs`
+    (github.com/aros-translation-team/dos.library); 74 such submodules exist and
+    must be `git submodule update --init`ed for the modules that have them.
+
+33. **`PrepareContext()` was unimplemented for AArch64 — THE cold-start blocker.**
+    rom/exec/preparecontext.c is a stub returning FALSE; the real impl is per-cpu in
+    `arch/<cpu>-all/exec/`. Without it every NewCreateTask() failed, so exec's first
+    service task (Exec_InitServices' "housekeeper") couldn't be created → the boot
+    died on AT_DeadEnd|AN_ExecLib. Added the AArch64 PrepareContext (args in x0-x7,
+    x29=0, x30=fallBack, 16-byte-aligned sp). The boot now runs *through* exec init.
+
+---
+
+*Status — **AROS boots through exec init; building the BASE kickstart toward a CLI***.
+exec/kernel/hostlib + dos.library + ~17 BASE modules (aros, utility, oop, expansion,
+emul-handler, dosboot, lddemon, FileSystem, bootloader, timer, battclock, processor,
+ram-handler, debug, …) build for darwin-aarch64. With PrepareContext implemented,
+task creation works and the boot proceeds past Exec_InitServices into the cold-start
+sequence, where it now hits a *new* pre-dispatch trap (X0=0, in a non-kernel.resource
+module — needs the bootstrap to print per-module load bases to symbolicate). The
+no-display path is the **emul-handler emergency shell** (host stdin/stdout), so a CLI
+prompt is reachable without a graphics HIDD. unixio.hidd still needs a host-header
+fix (`net/if.h` incomplete structs). Items 1, 5, 6, 10–33 are on the
+`aarch64-darwin-graft` branch.
