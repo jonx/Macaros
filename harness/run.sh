@@ -60,6 +60,17 @@ if [ "$WANT_GDB" != "1" ]; then
   disown "$WPID" 2>/dev/null || true   # keep shell job-control noise out of the verdict
 fi
 
+# Optional input injection (the "drive" half of the channel, M8): connect to the
+# serial socket as a client and send keystrokes. They buffer in the guest UART RX
+# FIFO until the shell reads them; the shell echoes, so they show up in serial.log.
+if [ -n "${INPUT:-}" ]; then
+  ( sleep 0.5
+    printf '%b' "$INPUT" | python3 -c 'import socket,sys
+s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(sys.argv[1])
+s.sendall(sys.stdin.buffer.read()); s.close()' "$SERSOCK"
+  ) >/dev/null 2>&1 &
+fi
+
 # Optional framebuffer view once it's plausibly up (the "image" way of seeing).
 if [ "$WANT_SHOT" = "1" ]; then
   sleep 2
