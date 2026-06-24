@@ -44,6 +44,7 @@ GDBOPT=""
 qemu-system-aarch64 \
   -M "$MACHINE" -cpu "$CPU" -m "$MEM" -display none -no-reboot \
   -semihosting-config enable=on,target=native \
+  -device ramfb \
   -kernel "$IMG" \
   -chardev "socket,id=ser0,path=$SERSOCK,server=on,wait=off,logfile=$SERIAL" \
   -serial chardev:ser0 \
