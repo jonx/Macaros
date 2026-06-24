@@ -19,6 +19,7 @@ ROWS=(
   "H6 tiny exec (compose)     : hosted-kern"
   "H7 host display            : hosted-display"
   "H8 exec.library (LVO)      : hosted-library"
+  "H9 exec Wait/Signal        : hosted-signal"
 )
 
 mkdir -p run
