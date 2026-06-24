@@ -1,0 +1,44 @@
+Add an AArch64 case to the darwin hosted flavour in AROS's configure(.in).
+
+Context: in configure the `darwin*)` target_os branch switches over `$target_cpu`
+for i386 / x86_64 / ppc / arm, then errors on anything else:
+
+        *)
+            as_fn_error $? "\"Unsupported target CPU for darwin hosted flavour -- $target_cpu\"" "$LINENO" 5
+            ;;
+
+Insert this case BEFORE that default `*)`. Modelled on the existing *x86_64* and
+*arm* cases, but uses the NATIVE Apple-Silicon toolchain (clang -arch arm64 via the
+llvm toolchain family) instead of a dead `*-apple-darwin10-` cross-prefix.
+
+            *aarch64*|*arm64*)
+                PLATFORM_EXECSMP="#define __AROSPLATFORM_SMP__"
+                aros_target_cpu="aarch64"
+                aros_object_format="aarch64elf_aros"
+                aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Daarch64"
+                aros_macosx_version="11.0"          # first macOS on Apple Silicon
+                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_OMIT_FP)"
+                aros_kernel_isa_flags="-arch arm64"
+                aros_kernel_ldflags="-arch arm64"
+                aros_nominal_depth=8
+                aros_kernel_rs="$toolchain_ar"
+                aros_kernel_ar_flags="-cr"
+                aros_kernel_ld="$toolchain_ld -arch arm64"
+                aros_kernel_as="$toolchain_as -arch arm64"
+                aros_kernel_ranlib="ranlib"
+                aros_kernel_nm="nm"
+                aros_kernel_strip="strip"
+                # Native toolchain, not a darwin10 cross-prefix:
+                kernel_tool_prefix=""
+                llvm_target_cpu="AArch64"
+                ;;
+
+Notes / still-to-resolve (the integration, not research):
+  - Confirm the binutils/lld emulation name for the object format on darwin-arm64
+    (`aarch64elf_aros` mirrors the arm `armelf_aros`; the hosted Mach-O link may
+    instead want the native ld with -arch arm64 and no -m <emul>).
+  - This pairs with: graft/cpu_aarch64.h (arch/all-darwin/kernel/) and
+    graft/cpucontext-aarch64.h (arch/aarch64-all/include/aros/).
+  - Drive `--with-toolchain=llvm` so AROS uses clang/lld; the darwin10 iPhone
+    SDK paths in the other cases must NOT be inherited.
