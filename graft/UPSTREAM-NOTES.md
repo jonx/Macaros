@@ -83,8 +83,66 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     `SAVEREGS`/`RESTOREREGS` `CopyMemQuick` straight between it and Darwin's
     `_STRUCT_ARM_THREAD_STATE64`, so it must match that layout. (Fixed on our branch.)
 
+## Building decades-old AROS C with a modern clang
+
+12. **clang 16+ turns four legacy-C warnings into hard errors, breaking the build.**
+    `-Wimplicit-function-declaration`, `-Wimplicit-int`, `-Wint-conversion` and
+    `-Wincompatible-pointer-types` are errors by default in modern clang; AROS's
+    pre-C99 sources hit them immediately (first casualty:
+    `compiler/arossupport/createseglist.c` via the `__AROS_SET_FULLJMP` macro). AROS
+    even *detects* `-Wno-int-conversion` et al. into `NOWARN_*` (config/compiler.cfg)
+    but never applies them to the general target `CFLAGS`. *Fix:* demote these back to
+    warnings in the global `CFLAGS` (config/make.cfg.in) — added a `MODERN_CLANG_NOWARN`
+    set there. (Fixed on our branch; benefits every target, not just aarch64.)
+
+13. **`_JMPLEN` (jmp_buf size) has no `__aarch64__` case.**
+    `compiler/crt/stdc/include/aros/stdc/setjmp.h` defines `_JMPLEN` per-CPU
+    (m68k/i386/x86_64/ppc/arm/riscv) but not aarch64, so *any* source pulling in
+    `<setjmp.h>` fails with `use of undeclared identifier '_JMPLEN'`. *Fix:* add an
+    `__aarch64__` case sized for the AAPCS64 callee-saved set (x19-x30, sp, NEON
+    v8-v15). A matching `arch/aarch64-all/stdc/setjmp.s` is still needed at link time.
+    (Header fixed on our branch.)
+
+## AArch64 was half-added: arch files exist, dispatch chains forgot it
+
+14. **A whole family of `#if defined(__cpu__)` dispatch chains lack an
+    `__aarch64__` case**, even though the per-arch files they select *already exist*
+    for aarch64. Each one stops the build with a generic `#error`. Found so far:
+    - `compiler/crt/stdc/include/aros/stdc/fenv.h` — never routed to the existing
+      `aros/aarch64/fenv.h`; fell through to a stub needing a nonexistent
+      `aros/types/fenv_t.h`.
+    - `compiler/crt/stdc/math/fpmath.h` — `#error unsupported CPU type`; the
+      `aarch64/_fpmath.h` (binary128 long double) already exists, just wasn't selected.
+    - `rom/exec/exec_util.h` — `#error unsupported CPU type`; needed an `__aarch64__`
+      `PC`/`FP` case (maps to `ExceptionContext.pc`/`.fp`).
+    - `arch/all-unix/kernel/kernel_cpu.h` — no `__aarch64__` include of the darwin
+      `cpu_aarch64.h` signal glue.
+    *Fix:* add the missing `__aarch64__` arm of each chain (all one-liners on our
+    branch). *Meta-fix worth proposing:* a single canonical CPU-select header instead
+    of this pattern duplicated across a dozen files.
+
+15. **`__AROS_SET_FULLJMP` in `arch/aarch64-all/include/aros/cpu.h` was copy-pasted
+    from ARM** — it wrote `0xe51ff004` (`ldr pc,[pc,#-4]`, a 32-bit *ARM* instruction)
+    into an aarch64 jump trampoline. It only compiled because of issue #12 (the
+    pointer→int assignment warning), and would have executed an illegal opcode at
+    runtime. *Fix:* real AArch64 trampoline `ldr x16,#8 ; br x16` + 64-bit target.
+    (Fixed on our branch.) The sibling `genmodule.h` (library-call stubs) was missing
+    entirely for aarch64 — written fresh from the ARM template.
+
+## macOS-on-Apple-Silicon host specifics
+
+16. **The hosted-darwin backend pulls macOS SDK headers that dispatch on Apple's
+    `__arm64__`, which the `aarch64-aros` triple doesn't define** (it defines
+    `__aarch64__`). `cc_include/machine/_types.h` and `sys/cdefs.h` then `#error
+    architecture not supported`. *Fix:* define `-D__arm64__` for the hosted aarch64
+    target (the host genuinely is arm64). Cleaner long-term: don't feed raw SDK
+    headers to the AROS target compile (part of modernising the darwin backend, #9).
+
 ---
 
-*Status:* items 1, 5, 6, 10, 11 already have working fixes on the
+*Status:* items 1, 5, 6, 10, 11, 12, 13, 14, 15, 16 already have working fixes on the
 `aarch64-darwin-graft` branch of our AROS checkout; the rest are documented for a
 proper upstream contribution pass once the toolchain + a first module build are green.
+With these, `exec.library` compiles end-to-end down to the arch-specific functions
+(`StackSwap`, `PrepareContext`, the execstubs) which need real AArch64 asm in
+`arch/aarch64-all/exec/` — the next implementation step.
