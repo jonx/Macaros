@@ -74,15 +74,19 @@ case "$RC" in 124|137|143) RC=124;; esac        # normalize timed-out/killed -> 
 # ---- verdict: uniform + machine-parseable, regardless of which channel mattered ----
 PASS=0
 if [ -n "$MARKER" ] && grep -qF -- "$MARKER" "$SERIAL"; then PASS=1; fi
-# Count real CPU faults, but not the benign "Semihosting call" pseudo-exception
-# QEMU logs for our clean-exit trap.
-FAULTS=$(grep -iE "exception|fault|abort|unimp|invalid" "$QEMULOG" 2>/dev/null \
-          | grep -ivE "semihosting call" | wc -l | tr -d ' ')
+# Count QEMU-flagged problems (guest_errors/unimp): bad/unassigned MMIO,
+# unimplemented accesses, illegal ops. We deliberately do NOT count normal
+# "Taking exception" entries — once we install vectors (M3+) we take exceptions
+# on purpose (SVC/BRK/IRQ), and counting those would make a clean run look dirty.
+# An unhandled fault still fails the run: its marker never prints (FAIL) and a
+# fault loop hangs the boot (qemu_exit=124).
+FAULTS=$(grep -iE "invalid|unimp|unassigned|illegal" "$QEMULOG" 2>/dev/null \
+          | grep -ivE "semihosting" | wc -l | tr -d ' ')
 
 echo "==== VERDICT ===="
 echo "result=$([ "$PASS" = 1 ] && echo PASS || echo FAIL)"
 echo "marker=${MARKER:-<none>}"
-echo "qemu_exit=$RC   # 124 = timed out / likely hung boot"
+echo "qemu_exit=$RC$([ "$RC" = 124 ] && echo '   # timed out / likely hung boot')"
 echo "fault_lines=$FAULTS"
 echo "serial=$SERIAL"
 echo "qemu_trace=$QEMULOG"
