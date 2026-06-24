@@ -21,6 +21,7 @@ ROWS=(
   "H8 exec.library (LVO)      : hosted-library"
   "H9 exec Wait/Signal        : hosted-signal"
   "H10 exec message ports     : hosted-msgport"
+  "H11 device -> real file    : hosted-device"
 )
 
 mkdir -p run
