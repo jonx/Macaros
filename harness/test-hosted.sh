@@ -22,6 +22,7 @@ ROWS=(
   "H9 exec Wait/Signal        : hosted-signal"
   "H10 exec message ports     : hosted-msgport"
   "H11 device -> real file    : hosted-device"
+  "H12 exec.library boot      : hosted-execboot"
 )
 
 mkdir -p run
