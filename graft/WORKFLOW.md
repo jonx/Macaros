@@ -83,10 +83,11 @@ stands on it.
 | 8 | Host prereqs + objcopy shim | 🟢 done | host env |
 | 9 | configure + cmake patched LLVM | 🟢 done | build dir |
 | 10 | Compile clang/lld archives | 🟢 done | build dir |
-| 11 | Link clang-20 + tool targets | 🟡 in progress | build dir |
-| 12 | install/strip + clean | ⚪ pending | → real `clang`+`lld` |
-| 13 | `make kernel-exec` (exec.library) | ⚪ pending | first AArch64 module |
-| 14 | Port AArch64 module gaps | ⚪ pending | `arch/aarch64-all/{exec,kernel}` |
+| 11 | Link clang-20 + tool targets | 🟢 done | crosstools installed |
+| 12 | install/strip + clean | 🟢 done | real `clang`+`lld` |
+| 12b | compiler-rt builtins (libclang_rt.builtins-aarch64) | 🟢 done | needed at link |
+| 13 | `make kernel-exec` → **exec.library LINKS** | 🟢 done | 175KB aarch64 AROS ELF |
+| 14 | AArch64 exec arch impl (stackswap/newstackswap/execstubs) | 🟢 done | `arch/aarch64-all/exec/` |
 | 15 | More modules → link → boot | ⚪ pending | Phase 4 |
 
 ## Related docs

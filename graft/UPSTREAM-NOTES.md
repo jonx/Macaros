@@ -138,11 +138,46 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     target (the host genuinely is arm64). Cleaner long-term: don't feed raw SDK
     headers to the AROS target compile (part of modernising the darwin backend, #9).
 
+## Toolchain runtime + link stage (getting exec.library to link)
+
+17. **`crosstools-compiler-rt` cmake breaks with a modern LLVM that ships shared
+    dylibs.** On macOS, LLVM 20.1.0 builds `libLLVM.dylib`/`libLTO.dylib`, so
+    `LLVMExports.cmake` declares `add_library(LTO SHARED IMPORTED)`. compiler-rt's
+    `load_llvm_config()` always `find_package(LLVM)`s, and with
+    `-DCMAKE_SYSTEM_NAME=Generic` (no shared-lib support) the SHARED import aborts
+    configure. AROS's default LLVM 11 didn't hit this. *Fix idea:* build the
+    crosstools LLVM with `-DLLVM_BUILD_LLVM_DYLIB=OFF` (static only), or make the
+    compiler-rt cmake tolerate it. (Worked around locally by rewriting the SHARED
+    imports to STATIC in the installed exports.)
+
+18. **`AROS_LIBREQ` emits its version marker as a non-weak symbol under modern
+    clang, so every object in a module collides.** The marker is declared
+    `extern const LONG __aros_libreq_<base> __attribute__((weak))` for *reading*,
+    but the *definition* (a block-scope static const, weak+used inside the call
+    macro) is emitted by clang on aarch64-aros as a **global-absolute** symbol
+    `__aros_libreq_SysBase.0` — `weak` is dropped on block-scope statics. Result:
+    `ld.lld: duplicate symbol` across every object in exec.library. All copies are
+    identical (the required version), so the safe unblock is
+    `-Wl,--allow-multiple-definition`. *Cleaner fix:* emit the marker at file scope
+    (where `weak` sticks), or via an explicit `.weak`+`.set` in asm.
+
+19. **AArch64 had no `arch/aarch64-all/exec/` at all.** The generic
+    `rom/exec/{stackswap,newstackswap}.c` `#error` by design ("must be replaced in
+    $(ARCH)"), and `UseExecstubs=1` needs `execstubs.s`. Wrote AArch64 `stackswap.S`,
+    `newstackswap.c`, `execstubs.s` + an `mmakefile.src`, grounded in the arm-all
+    templates and the build-generated `aros/aarch64/asm.h` offsets. (On our branch.)
+
+20. **A couple of fixes currently live only in the build dir's `config/make.cfg`**
+    (not the shared `make.cfg.in`, since they're darwin-aarch64-specific):
+    `-D__arm64__` (item 16) and `-Wl,--allow-multiple-definition` (item 18). They
+    want a proper darwin-aarch64 home in `configure`. Also the crosstools `ld.lld`
+    symlink pointed at a non-existent Homebrew path; it must point at the patched
+    crosstools `ld.lld` (the one that knows `aarch64elf_aros`).
+
 ---
 
-*Status:* items 1, 5, 6, 10, 11, 12, 13, 14, 15, 16 already have working fixes on the
-`aarch64-darwin-graft` branch of our AROS checkout; the rest are documented for a
-proper upstream contribution pass once the toolchain + a first module build are green.
-With these, `exec.library` compiles end-to-end down to the arch-specific functions
-(`StackSwap`, `PrepareContext`, the execstubs) which need real AArch64 asm in
-`arch/aarch64-all/exec/` — the next implementation step.
+*Status — `exec.library` LINKS for darwin-aarch64* (175KB aarch64 AROS ELF). Items
+1, 5, 6, 10–19 have working fixes on the `aarch64-darwin-graft` branch; item 20 lists
+build-dir-only fixes still needing a permanent home. The first piece of AROS itself is
+now built for Apple Silicon — next is the rest of the core (kernel.resource, more
+modules) toward a booting hosted image.
