@@ -20,6 +20,7 @@ ROWS=(
   "H7 host display            : hosted-display"
   "H8 exec.library (LVO)      : hosted-library"
   "H9 exec Wait/Signal        : hosted-signal"
+  "H10 exec message ports     : hosted-msgport"
 )
 
 mkdir -p run
