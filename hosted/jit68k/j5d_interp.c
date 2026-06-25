@@ -152,24 +152,30 @@ static void fpu_mem_wr_s(j5d_sandbox *sb, uint32_t addr, double v, int *oob)
 }
 
 /* The FPSR condition-code byte the 68881 sets: N(bit27) Z(bit26) I(bit25,infinity) NAN(bit24).
- * This MIRRORS Emu68's EMIT_GetFPUFlags (A64.h): it packs the AArch64 NZCV from `fcmpzd`/`fcmpd`
- * into FPSR{N=NZCV.N, Z=NZCV.Z, I=NZCV.C, NAN=NZCV.V}. For a compare-with-ZERO (fcmpzd) used by
- * FTST/FABS/FNEG/FADD/.../FMOVE-to-reg: AArch64 N=(v<0), Z=(v==0), C=(v>=0 || NaN), V=unordered.
- * For FCMP (fcmpd dst,src): N=(dst<src), Z=(dst==src), C=(dst>=src || unordered), V=unordered.
- * We reproduce the SAME NZCV->FPSR packing so the FPSR byte is bit-identical to the JIT's. */
+ * This MIRRORS Emu68's EMIT_GetFPUFlags (A64.h) EXACTLY — the gate the bit-exact assert checks.
+ * EMIT_GetFPUFlags packs the AArch64 NZCV from `fcmpzd`/`fcmpd` into the FPSR cc nibble via
+ * `bic_immed(tmp,tmp,1,3)` (which CLEARS the AArch64 C bit) then `orr fpsr |= (tmp >> 4)`. So the
+ * mapping is FPSR{N=NZCV.N, Z=NZCV.Z, I=0 ALWAYS (C is bic'd out), NAN=NZCV.V}. [J5p] CORRECTION
+ * (the [J5o] oracle latently mapped C->I, which never surfaced because every [J5o] test case had
+ * C=0 in the FINAL FPSR-setting op): the I (infinity) bit is NEVER set by this path — VERIFIED
+ * empirically against the JIT: FTST(-2.0)->cc 0x08 (N), FTST(3.0)->0x00, FTST(0.0)->0x04 (Z),
+ * FTST(NaN)->0x01 (NAN), FTST(+inf)->0x00, FTST(-inf)->0x08 (N). For a compare-with-ZERO (fcmpzd)
+ * used by FTST/FABS/FNEG/FADD/.../transcendental/utility: AArch64 N=(v<0), Z=(v==0), V=unordered.
+ * For FCMP (fcmpd dst,src): N=(dst<src), Z=(dst==src), V=unordered. C is computed but DISCARDED. */
 #define J5O_FPSR_N   0x08000000u
 #define J5O_FPSR_Z   0x04000000u
-#define J5O_FPSR_I   0x02000000u   /* maps from AArch64 C flag (per EMIT_GetFPUFlags LSR#4)    */
+#define J5O_FPSR_I   0x02000000u   /* the 68881 Infinity bit — NOT set by EMIT_GetFPUFlags (C bic'd)*/
 #define J5O_FPSR_NAN 0x01000000u   /* maps from AArch64 V flag (unordered)                    */
 #define J5O_FPSR_CC  (J5O_FPSR_N | J5O_FPSR_Z | J5O_FPSR_I | J5O_FPSR_NAN)
 
-/* Pack the AArch64 NZCV (as four ints) into the FPSR cc bits, clearing them first. */
+/* Pack the AArch64 NZCV (as four ints) into the FPSR cc bits, clearing them first. The C flag is
+ * IGNORED — EMIT_GetFPUFlags clears it before the shift, so the FPSR I bit stays 0 (see above). */
 static uint32_t fpu_pack_fpsr(uint32_t fpsr, int N, int Z, int C, int V)
 {
+    (void)C;                       /* [J5p] EMIT_GetFPUFlags bic's the AArch64 C bit -> I stays 0 */
     fpsr &= ~J5O_FPSR_CC;
     if (N) fpsr |= J5O_FPSR_N;
     if (Z) fpsr |= J5O_FPSR_Z;
-    if (C) fpsr |= J5O_FPSR_I;
     if (V) fpsr |= J5O_FPSR_NAN;
     return fpsr;
 }
@@ -1684,6 +1690,22 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             double res = dst;
             int writes_dst = 1;       /* FCMP/FTST do not write FPn */
             int cmp_fpsr   = 0;       /* FCMP: FPSR from fcmpd(dst,src); else fcmpzd(res)      */
+            int fpsr_test_src = 0;    /* FTST: the FPSR fcmpzd tests src (not res)             */
+
+            /* [J5p] FSINCOS (opmode 0x30..0x37): computes sin INTO fp_dst_sin (= fpn) AND cos
+             * INTO fp_dst_cos (= opcode2 & 7). The FPSR fcmpzd tests fp_dst_sin (the decoder's
+             * order). Mirror the HOST libm (the same sin/cos the JIT's blr reaches). */
+            if ((oper & 0x78) == 0x30) {
+                unsigned fp_cos = opcode2 & 7u;
+                double s = sin(src), c = cos(src);
+                st->fp[fpn & 7] = s;
+                st->fp[fp_cos]  = c;
+                res = s;                                  /* FPSR tests the sin result          */
+                if (fpu_fpsr_update_needed(sb, after_pc))
+                    st->fpsr = fpu_fcmp_fpsr(st->fpsr, res, 0.0);
+                pc = after_pc; continue;
+            }
+
             switch (oper) {
                 case 0x00: res = src;                 break;  /* FMOVE  <src> -> FPn          */
                 case 0x18: res = fabs(src);           break;  /* FABS                         */
@@ -1694,19 +1716,71 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 case 0x23: res = dst * src;           break;  /* FMUL                         */
                 case 0x28: res = dst - src;           break;  /* FSUB   FPn - <src>           */
                 case 0x38: writes_dst = 0; cmp_fpsr = 1; break; /* FCMP  (FPn ? <src>)        */
-                case 0x3a: writes_dst = 0; res = src; break;  /* FTST   (test <src>)          */
-                default: IFAIL("FPU: operation not in [J5o] subset (transcendental/FMOVECR deferred)");
+                case 0x3a: writes_dst = 0; res = src; fpsr_test_src = 1; break; /* FTST       */
+
+                /* ============ [J5p] TRANSCENDENTALS — routed to the SAME HOST libm the JIT's
+                 * blr reaches (see j5o_fpu_shims.c). The 68881 last-ULP behaviour is
+                 * implementation-defined, so the HOST libm is the reference both sides use;
+                 * bit-exact verifies the TRANSLATION (decode + correct register-as-argument +
+                 * store), not a re-derivation of sin(). All unary: res = fn(src). ========== */
+                case 0x0e: res = sin(src);   break;  /* FSIN                                  */
+                case 0x1d: res = cos(src);   break;  /* FCOS                                  */
+                case 0x0f: res = tan(src);   break;  /* FTAN                                  */
+                case 0x0c: res = asin(src);  break;  /* FASIN                                 */
+                case 0x1c: res = acos(src);  break;  /* FACOS                                 */
+                case 0x0a: res = atan(src);  break;  /* FATAN                                 */
+                case 0x02: res = sinh(src);  break;  /* FSINH                                 */
+                case 0x19: res = cosh(src);  break;  /* FCOSH                                 */
+                case 0x09: res = tanh(src);  break;  /* FTANH                                 */
+                case 0x0d: res = atanh(src); break;  /* FATANH                                */
+                case 0x10: res = exp(src);   break;  /* FETOX   (e^x)                         */
+                case 0x08: res = expm1(src); break;  /* FETOXM1 (e^x - 1)                     */
+                case 0x11: res = exp2(src);  break;  /* FTWOTOX (2^x)                         */
+                case 0x12: res = pow(10.0, src); break; /* FTENTOX (10^x; host has no exp10)  */
+                case 0x14: res = log(src);   break;  /* FLOGN   (ln)                          */
+                case 0x06: res = log1p(src); break;  /* FLOGNP1 (ln(1+x))                     */
+                case 0x15: res = log10(src); break;  /* FLOG10                                */
+                case 0x16: res = log2(src);  break;  /* FLOG2                                 */
+
+                /* ============ [J5p] FP-UTILITY ops the decoder emits INLINE (no libm blr) —
+                 * the oracle mirrors the EXACT inline emit (NEON frint / bit-extraction). ===*/
+                case 0x01: res = rint(src);  break;  /* FINT   -> frint64x (round per FPCR;   */
+                                                     /*           host default = nearest-even)*/
+                case 0x03: res = trunc(src); break;  /* FINTRZ -> frint64z (round toward 0)   */
+                case 0x21: {                          /* FMOD: x - y*trunc(x/y) (the decoder's */
+                    double q = dst / src;             /*  fdiv/frint64z/fmul/fsub sequence)    */
+                    q = trunc(q);
+                    res = dst - src * q;
+                    break;
+                }
+                case 0x25: res = remainder(dst, src); break; /* FREM -> remquo (IEEE round-to- */
+                                                     /* nearest remainder; quotient byte not   */
+                                                     /* part of the asserted cc byte)          */
+                case 0x26: res = ldexp(dst, (int)src); break; /* FSCALE: fp_dst * 2^trunc(src) */
+                case 0x1e: {                          /* FGETEXP: unbiased exponent as double  */
+                    uint64_t b; memcpy(&b, &src, 8);
+                    int e = (int)((b >> 52) & 0x7ffu) - 1023;
+                    res = (double)e;
+                    break;
+                }
+                case 0x1f: {                          /* FGETMAN: mantissa forced into [1,2)   */
+                    uint64_t b; memcpy(&b, &src, 8);
+                    b = (b & ~(0x7ffULL << 52)) | (0x3ffULL << 52);
+                    memcpy(&res, &b, 8);
+                    break;
+                }
+                default: IFAIL("FPU: operation not in [J5p] subset (FMOVECR/.x/.p deferred)");
             }
             if (writes_dst) st->fp[fpn & 7] = res;
 
             /* FPSR condition codes — set IFF a subsequent FP consumer needs them (same gate as
              * the JIT's FPSR_Update_Needed). FCMP packs fcmpd(FPn,src); the rest pack fcmpzd of
-             * the value compared against 0 (the result for arith/FABS/FNEG/FMOVE-to-reg; the
-             * source for FTST). */
+             * the value compared against 0 (the result for arith/transcendental/utility/FABS/
+             * FNEG/FMOVE-to-reg; the source for FTST — see fpsr_test_src). */
             if (fpu_fpsr_update_needed(sb, after_pc)) {
                 if (cmp_fpsr) st->fpsr = fpu_fcmp_fpsr(st->fpsr, dst, src);
                 else {
-                    double t = (oper == 0x3a) ? src : res;   /* FTST tests src; others test res */
+                    double t = fpsr_test_src ? src : res;   /* FTST tests src; others test res */
                     st->fpsr = fpu_fcmp_fpsr(st->fpsr, t, 0.0);  /* fcmpzd: compare with 0.0    */
                 }
             }

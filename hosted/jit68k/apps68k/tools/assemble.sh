@@ -66,5 +66,12 @@ asm     j5o     -kick1hunks -m68882 -no-opt  # [J5o] 68881/68882 FPU CORE: FMOVE
                                  # FABS/FNEG + FCMP/FTST. -m68882 enables the FPU instruction
                                  # set; -no-opt keeps the exact line-F encodings; -kick1hunks
                                  # for the RELOC32 of the lea fpconst/result DATA addresses.
+asm     j5p     -kick1hunks -m68882 -no-opt  # [J5p] 68881/68882 TRANSCENDENTAL + FP-UTILITY:
+                                 # FSIN/FCOS/FTAN/FASIN/FACOS/FATAN, FSINH/FCOSH/FTANH/FATANH,
+                                 # FETOX/FETOXM1/FTWOTOX/FTENTOX, FLOGN/FLOGNP1/FLOG10/FLOG2,
+                                 # FSINCOS + FINT/FINTRZ/FGETEXP/FGETMAN/FMOD/FREM/FSCALE, plus
+                                 # NaN edge cases (FACOS(10)/FLOGN(-1)/FATANH(10)). -m68882 for
+                                 # the FPU set; -no-opt keeps the exact line-F encodings;
+                                 # -kick1hunks for the RELOC32 of lea fpconst/result.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

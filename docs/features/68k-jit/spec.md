@@ -1685,10 +1685,95 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
 
   - **Deferred to the next FP increment (honest scope):** the **transcendentals** (FSIN/FCOS/FETOX/
     FLOGN/… — their `blr` math-helper sites are stubbed in `j5o_fpu_shims.c`, abort-on-call so a
-    future increment trips loudly); **FBcc/FScc/FDBcc/FTRAPcc**; **FMOVEM**; the **80-bit extended
-    `.x`** and **packed-decimal `.p`** MEMORY formats (the precision model is double; `.x`/`.p` route
-    to deferred `Load96bit`/`PackedToDouble` stubs, never driven here); and FP **exceptions** (the
-    FPSR exception/accrued bits + FP traps). The integer FPSR condition byte (N/Z/I/NAN) IS live.
+    future increment trips loudly) **— NOW DONE in `[J5p]` below**; **FBcc/FScc/FDBcc/FTRAPcc**;
+    **FMOVEM**; the **80-bit extended `.x`** and **packed-decimal `.p`** MEMORY formats (the precision
+    model is double; `.x`/`.p` route to deferred `Load96bit`/`PackedToDouble` stubs, never driven
+    here); and FP **exceptions** (the FPSR exception/accrued bits + FP traps). The integer FPSR
+    condition byte (N/Z/I/NAN) IS live.
+
+- **`[J5p]` the 68881/68882 TRANSCENDENTAL + FP-UTILITY ops — IMPLEMENTED / GREEN.** The next FP
+  increment after the `[J5o]` core. Drives Emu68's **REAL** `EMIT_FPU` decoder (the SAME verbatim,
+  quarantined `emu68/M68k_LINEF.c` — no new vendored file) for the 68881 transcendentals and the
+  FP-utility ops, asserted **bit-exact** vs the independent C-`double` oracle, both routed to the
+  **SAME host `libm`**. Files: OURS `hosted/jit68k/{j5p_test.c}`, the transcendental routing +
+  real `EMIT_SaveRegFrame`/`EMIT_RestoreRegFrame` in `j5o_fpu_shims.c`, the transcendental/utility
+  opmodes + the corrected FPSR-cc model in `j5d_interp.c`, the `--fpu-sandbox` (C) call-site
+  address-LE-fix + (D) FMOD GP-scratch fix in `emu68_darwinize.pl`, the Emu68 post-emit-marker
+  strip in `j5d_engine.c`, and `apps68k/j5p.s` (+ committed `j5p.exe`, assembled `-m68882`).
+  Target `make hosted-jit68k-j5p` (marker `[J5p] PASS`, watchdog 40 s).
+
+  - **Ops covered + the opcode→libm map (the FPU command-word opmode selects the fn).** Trig:
+    `FSIN`→sin, `FCOS`→cos, `FTAN`→tan, `FASIN`→asin, `FACOS`→acos, `FATAN`→atan. Hyperbolic:
+    `FSINH`→sinh, `FCOSH`→cosh, `FTANH`→tanh, `FATANH`→atanh. Exponentials: `FETOX`→exp,
+    `FETOXM1`→expm1, `FTWOTOX`→exp2, `FTENTOX`→exp10 (= `pow(10,x)`). Logarithms: `FLOGN`→log,
+    `FLOGNP1`→log1p, `FLOG10`→log10, `FLOG2`→log2. `FSINCOS`→sin AND cos into two FP regs. FP-utility:
+    `FINT`→`frint64x` (round per FPCR; host default round-nearest-even = oracle `rint`), `FINTRZ`→
+    `frint64z` (oracle `trunc`), `FGETEXP`→raw biased-exponent bit-extract (oracle mirrors the bits),
+    `FGETMAN`→mantissa-into-[1,2) bit-force (oracle mirrors the bits), `FMOD`→`x − y·trunc(x/y)`
+    (oracle `dst − src·trunc(dst/src)`), `FREM`→`remquo` (oracle `remainder`, IEEE round-to-nearest),
+    `FSCALE`→`fp_dst · 2^trunc(src)` (oracle `ldexp`). `FABS`/`FNEG`/`FSQRT` were `[J5o]`.
+
+  - **THE ROUTING (no quarantine edit — the load-bearing realization).** The 68881 transcendentals
+    are implementation-defined in their last ULPs, so the faithful hosted realization routes Emu68's
+    transcendental helper sites to the host `libm` and has the oracle use the **SAME** host `libm` —
+    so the assert is **bit-exact** and verifies the real thing under test: that the JIT correctly
+    *decodes* each FP transcendental, passes the right register as the argument, and stores the
+    result (we test the *translation*, not re-derive sin()). The mechanism: the verbatim decoder
+    BAKES the helper's ADDRESS into the emitted block at translate time (`u.u64 = (uintptr_t)sin;
+    … blr`), so routing is simply **not shadowing the standard `libm` names** in `j5o_fpu_shims.c`
+    (they resolve to the system `libm` at link time); the only symbols OURS DEFINES are the three
+    the host lacks in the decoder's exact signature — `exp10` (= `pow(10,x)`), `sincos` (→ `struct
+    double2`), `remquo` (→ `struct rq`) — as thin wrappers over the standard host fns. The
+    quarantine `M68k_LINEF.c` stays **byte-verbatim**; everything below is in OUR shim / the
+    darwinize transform (the sanctioned "adjust a vendored helper CALL in the transform, not the
+    quarantine" path):
+    - **`EMIT_SaveRegFrame`/`EMIT_RestoreRegFrame` (j5o_fpu_shims.c).** The decoder wraps each
+      transcendental's `blr` in these; the `[J5o]` no-op stub was safe only because `[J5o]` drove
+      no `blr`. They now do REAL save/restore: the `blr` clobbers AAPCS64 caller-saved registers,
+      and OUR block keeps load-bearing values there — x1 (the `M68KState*`), x12 (the sandbox
+      base-adjust), and the live RA temps + the REG_PROTECT set (A0–A4 = x13–x17, PC = x18). They
+      push exactly those before the call and pop after. (The 68k integer file x19–x28 and the FP
+      file d8–d15 are AAPCS64 callee-saved, so `libm` preserves them — no save needed.)
+    - **`--fpu-sandbox` (C) call-site address-LE fix (emu68_darwinize.pl).** The verbatim
+      4-instruction `movz/movk` that materializes the baked-in helper address pairs word[3]↔shift0
+      … word[0]↔shift3 — **word-reversed on a little-endian host** (it works on Emu68's bare-metal
+      RasPi only because helpers live in low memory). The transform rewrites the BUILD-DIR copy to
+      pair word N with shift N. 31 sites.
+    - **`--fpu-sandbox` (D) FMOD GP-scratch fix (emu68_darwinize.pl).** FMOD computes the remainder
+      into fp_dst with FP scratch (safe) but derives the FPSR quotient byte using x0/x1 as GP
+      scratch — and **x1 is OUR permanent `M68KState*`**, so FMOD corrupted the state pointer. The
+      transform redirects the scratch register `1` → FMOD's own RA temp in the BUILD-DIR copy.
+    - **Post-emit marker strip (j5d_engine.c).** The FP decoder emits trailing sentinel words
+      (`0xfffffff0`, and in un-driven paths `0xfffffffe`/`0xffffffff`) that Emu68's optimizer (NOT
+      lifted) consumes + removes; our straight-line engine strips them from the body before
+      finalizing (they are non-executable AArch64 and would branch to garbage).
+
+  - **VERIFY + the FPSR-cc CORRECTION.** `j5d_interp.c` computes every op with the SAME host `libm`;
+    the test asserts **bit-exact** (FP0..FP7 raw `double` bits — NaN/−0.0/inf by bits — the FPSR cc
+    byte, the FP-to-memory stored doubles, the integer regs, and the whole sandbox) JIT vs oracle,
+    plus an independent host-`libm` hand-check (27 transcendental/utility results + 3 NaN edges) and
+    NaN/inf FPSR edge cases (`FACOS(10)`/`FLOGN(-1)`/`FATANH(10)` → NaN). **`[J5p]` corrected the
+    FPSR cc model:** the `[J5o]` oracle latently mapped the AArch64 C flag → the 68881 I (infinity)
+    bit, but Emu68's `EMIT_GetFPUFlags` (A64.h) `bic`s the C bit out before the shift, so **I is
+    NEVER set** — VERIFIED empirically against the JIT (FTST: −2.0→cc 0x08 (N), 0.0→0x04 (Z),
+    NaN→0x01 (NAN), +inf→0x00, −inf→0x08). The discrepancy never surfaced in `[J5o]` because every
+    `[J5o]` test case had C=0 in the final FPSR-setting op; `[J5p]`'s NaN edge (C=1) exposed + fixed
+    it. **Negative control bites:** flipping FSIN→FCOS (opmode 0x0e→0x1d) in the JIT copy ONLY makes
+    the JIT store cos(0.5) where the oracle stores sin(0.5) — diverged. **PASS (observed):** `regs=yes
+    fp=yes mem=yes jit-fpmem=yes`, hand-check "all match", FPSR "NAN=1, rest 0", neg-ctrl "DIVERGED",
+    and the WHOLE corpus + the `[J5o]` FP core re-run through the SAME engine stays byte-exact.
+    `[J1]`–`[J5o]` re-confirmed green.
+
+  - **PRECISION NOTE.** Results are host-`libm` IEEE-`double` — that's the reference BOTH sides use,
+    so bit-exact verifies the translation. The real 68881 used 80-bit extended + its own polynomials
+    (not bit-reproducible on AArch64), consistent with the `[J5o]` precision model.
+
+  - **Still deferred (honest scope):** **FBcc/FScc/FDBcc/FTRAPcc** (FP branches/sets/traps), **FMOVEM**
+    (FP register-list move), the **80-bit extended `.x`** and **packed-decimal `.p`** MEMORY formats
+    (precision model is double; `.x`/`.p` still route to the abort `Load96bit`/`my_pow10`/`my_log10`
+    stubs, never driven), and FP **exceptions** (the FPSR exception/accrued bits + FP traps; the
+    integer FPSR condition byte N/Z/Inf-not-set/NAN is live). The FMOD/FREM FPSR **quotient byte** is
+    computed by the decoder but is NOT part of the asserted cc byte.
 
 ## Risks
 

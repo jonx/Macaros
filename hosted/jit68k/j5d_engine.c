@@ -618,6 +618,26 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         cb->body_insns += insn_consumed;   /* [J5n] per-block body instruction count */
     }
 
+    /* [J5p] STRIP Emu68's post-emit OPTIMIZER MARKERS from the body. Emu68's FP decoder
+     * (M68k_LINEF.c) emits trailing sentinel words INSN_TO_LE(0xfffffff0) (and, in paths we do
+     * NOT drive, 0xfffffffe / 0xffffffff) into the AArch64 stream after a transcendental's blr
+     * site — markers its translator's OPTIMIZER pass (M68K_Translator.c, NOT lifted) consumes
+     * and removes before the unit is finalized. They are NOT executable AArch64; left in the
+     * body they would be reached as garbage and branch to an invalid PC. We do not run Emu68's
+     * optimizer, so we strip them here. The body is straight-line + position-independent (no
+     * intra-block branches in a [J5d] block), so compacting these words out is safe. (0xfffffff0
+     * is the only marker the [J5p] DRIVEN set — transcendentals + FSINCOS + FREM — emits; the
+     * others belong to FBcc/FSAVE/FRESTORE paths that are not decoded here.) */
+    {
+        uint32_t *rd = body, *wr = body;
+        while (rd < bp) {
+            uint32_t w = *rd++;
+            if (w == 0xfffffff0u || w == 0xfffffffeu || w == 0xffffffffu) continue; /* marker */
+            *wr++ = w;
+        }
+        bp = wr;
+    }
+
     /* The CCR + PC delta flush is part of the body's exit work (touches scratch regs only,
      * not the architectural file). Append it to the body so the masks are final. [J5o]: the
      * FPCR/FPSR are flushed the same way (the FPU decoder lazily loads them via RA_ModifyFPSR

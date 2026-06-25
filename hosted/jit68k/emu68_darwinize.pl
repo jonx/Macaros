@@ -253,6 +253,55 @@ if ($fpu_sandbox) {
         }
     }
 
+    # (C) [J5p] TRANSCENDENTAL CALL-SITE ADDRESS-MATERIALIZATION FIX. The verbatim FPU decoder
+    #   bakes a runtime helper address (the host libm fn for a transcendental: &sin/&cos/&exp/...,
+    #   and &sincos/&remquo/&exp10) into the emitted block as four immediate-moves, then `blr`s it:
+    #       *ptr++ = mov64_immed_u16 (R, u.u16[3], 0);   // word3 (HIGH 16 bits) -> bits [0:16)
+    #       *ptr++ = movk64_immed_u16(R, u.u16[2], 1);   // word2 -> bits [16:32)
+    #       *ptr++ = movk64_immed_u16(R, u.u16[1], 2);   // word1 -> bits [32:48)
+    #       *ptr++ = movk64_immed_u16(R, u.u16[0], 3);   // word0 (LOW 16 bits)  -> bits [48:64)
+    #   On a LITTLE-ENDIAN host (AArch64/darwin) u.u16[0] is the LOW 16 bits, so this pairing emits
+    #   the address WORD-REVERSED — the assembled x_R holds the byteswapped pointer and the blr
+    #   jumps to garbage. (Upstream Emu68's bare-metal RasPi build resolves helpers in low memory
+    #   where this never bit; our hosted libm addresses have nonzero high words, so it bites.) Fix
+    #   in the BUILD-DIR COPY only: pair word N with shift N (the standard movz/movk lo->hi build).
+    #   This is the sanctioned "adjust a vendored helper CALL in the darwinize transform, not the
+    #   quarantine" path (CLEANROOM.md); the QUARANTINE M68k_LINEF.c stays BYTE-VERBATIM, and only
+    #   the address BYTE-ORDER is corrected — the decode + the blr + the FP semantics are untouched.
+    my $callsite = 0;
+    $code =~ s{
+        \*ptr\+\+\s*=\s*mov64_immed_u16\s*\(\s*(\w+)\s*,\s*u\.u16\[3\]\s*,\s*0\s*\)\s*;\s*
+        \*ptr\+\+\s*=\s*movk64_immed_u16\s*\(\s*\1\s*,\s*u\.u16\[2\]\s*,\s*1\s*\)\s*;\s*
+        \*ptr\+\+\s*=\s*movk64_immed_u16\s*\(\s*\1\s*,\s*u\.u16\[1\]\s*,\s*2\s*\)\s*;\s*
+        \*ptr\+\+\s*=\s*movk64_immed_u16\s*\(\s*\1\s*,\s*u\.u16\[0\]\s*,\s*3\s*\)\s*;
+    }{
+        my $r = $1; $callsite++;
+        "*ptr++ = mov64_immed_u16($r, u.u16[0], 0); /* [J5p] darwinize: call-site addr LE fix */\n".
+        "        *ptr++ = movk64_immed_u16($r, u.u16[1], 1);\n".
+        "        *ptr++ = movk64_immed_u16($r, u.u16[2], 2);\n".
+        "        *ptr++ = movk64_immed_u16($r, u.u16[3], 3);";
+    }gex;
+
+    # (D) [J5p] FMOD GP-SCRATCH REGISTER FIX. Emu68's FMOD (opmode 0x21) computes the remainder
+    #   into fp_dst with FP scratch v0/v1 (caller-saved SIMD — safe), then derives the FPSR
+    #   QUOTIENT byte using the GENERAL-PURPOSE registers x0 and x1 as scratch:
+    #       *ptr++ = bic_immed(1, 0, 25, 25);   // x1 = x0 & ~bit25
+    #       *ptr++ = orr_immed(0, 0, 25, 25);   // x0 = x0 | bit25
+    #       *ptr++ = csel(0, 1, 0, A64_CC_PL);  // x0 = PL ? x1 : x0
+    #   On Emu68 bare-metal x0/x1 are free scratch (the m68k context lives in TPIDRRO_EL0). In
+    #   OUR hosted model x1 is the PERMANENT struct j5d_m68k_state* (J5C_STATE_X) kept for the
+    #   whole block — so FMOD's use of x1 as scratch CORRUPTS the state pointer, and the next
+    #   state access (the CCR/FPSR flush) faults. Redirect the SCRATCH register 1 -> the FMOD-
+    #   local RA temp `tmp` (allocated at the top of the FMOD case, freed at the bottom — a real
+    #   free register), in the BUILD-DIR COPY only. The result (remainder in fp_dst) and the
+    #   asserted FPSR cc byte are unchanged; only the intermediate GP scratch moves off x1. The
+    #   QUARANTINE M68k_LINEF.c stays BYTE-VERBATIM. (x0 stays — it is free scratch in our model:
+    #   the entry arg is moved out of x0 into x1 in the prologue, so x0 is dead for the block.)
+    my $fmod = 0;
+    $fmod += ($code =~ s/\*ptr\+\+\s*=\s*bic_immed\(1,\s*0,\s*25,\s*25\);/\*ptr++ = bic_immed(tmp, 0, 25, 25); \/* [J5p] FMOD GP-scratch off x1(state) *\//g);
+    $fmod += ($code =~ s/\*ptr\+\+\s*=\s*csel\(0,\s*1,\s*0,\s*A64_CC_PL\);/\*ptr++ = csel(0, tmp, 0, A64_CC_PL); \/* [J5p] FMOD GP-scratch off x1(state) *\//g);
+    warn "[darwinize --fpu-sandbox] FMOD GP-scratch (x1->tmp) sites=$fmod\n";
+
     if ($fp || $fpi) {
         my $decl = "\n/* [J5o] darwinize: FP-memory sandbox helpers (OURS, j5d_ea_helpers.c) */\n";
         my %seen;
@@ -269,7 +318,7 @@ if ($fpu_sandbox) {
             my $head = $1; substr($code, length($head), 0) = $decl;
         } else { $code = $decl . $code; }
     }
-    warn "[darwinize --fpu-sandbox] FP-mem sites=$fp FP-int-mem sites=$fpi poly-stubs=$poly cache-thunks=$cache\n";
+    warn "[darwinize --fpu-sandbox] FP-mem sites=$fp FP-int-mem sites=$fpi poly-stubs=$poly cache-thunks=$cache call-site-addr-fix=$callsite\n";
 }
 
 # ===================== [J5m] MOVE TWO-PUSH MERGE NEUTRALISE =====================

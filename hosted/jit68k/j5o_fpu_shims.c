@@ -52,6 +52,15 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+/* [J5p] We deliberately DO NOT #include <math.h>: emu68/math/libm.h (included below for the
+ * decoder's struct types) provides `static inline sqrt/fabs` + a 2-arg `remquo` decl that clash
+ * with <math.h>. The HOST libm functions we call for the three wrappers are declared minimally
+ * here (they resolve to the system libm at link time — the SAME reference the oracle uses). */
+extern double pow(double, double);
+extern double sin(double), cos(double);
+extern double remainder(double, double);
+extern double rint(double);
+
 #include "emu68/cache.h"        /* enum CacheType + cache_read_16 (the [J5c] HOOK 2 fetch)   */
 #include "math/libm.h"          /* struct double2 / struct rq + the transcendental decls. We
                                  * include the DARWINIZED build copy (asm-fixed) via the build's
@@ -103,43 +112,122 @@ uint8_t reg_Save96 = 0xff;
 uint64_t Load96bit(uintptr_t ignore, uintptr_t base)  { (void)ignore; (void)base; abort(); }
 uint64_t Store96bit(uintptr_t value,  uintptr_t base) { (void)value;  (void)base; abort(); }
 
-/* ---- EMIT_SaveRegFrame / EMIT_RestoreRegFrame: no-op (driven ops never call them; only the
- * un-driven .x/.p/transcendental blr paths would). Authored as a documented no-op — NOT copied
- * from Emu68's RegisterAllocator64.c. */
-uint32_t *EMIT_SaveRegFrame   (uint32_t *ptr, uint32_t mask) { (void)mask; return ptr; }
-uint32_t *EMIT_RestoreRegFrame(uint32_t *ptr, uint32_t mask) { (void)mask; return ptr; }
+/* ---- [J5p] EMIT_SaveRegFrame / EMIT_RestoreRegFrame: REAL save/restore around the
+ * transcendental blr. Every driven transcendental + FSINCOS + FREM site wraps its `blr`
+ * (to the host libm fn) in EMIT_SaveRegFrame(...) / EMIT_RestoreRegFrame(...). The blr clobbers
+ * the AAPCS64 CALLER-SAVED registers (x0..x18 + the caller-saved SIMD lanes); the 68k FP file
+ * (d8..d15) and the 68k integer file (x19..x28) are AAPCS64 CALLEE-SAVED so libm preserves them,
+ * but OUR block keeps load-bearing values in CALLER-SAVED registers that MUST survive the call:
+ *   - x1  = the struct j5d_m68k_state* (J5C_STATE_X, kept for the whole block — every later FP
+ *           store + the FPCR/FPSR flush reads through it),
+ *   - x12 = the sandbox base-adjust (J5D_BASEADJ_X = host_mem - origin — every later FP-mem
+ *           store adds it),
+ *   - the live RA scratch temps (RA_GetTempAllocMask() => x4..x11) and the REG_PROTECT set the
+ *     decoder passes (A0..A4 = x13..x17, REG_PC = x18 — these hold live 68k A-registers / PC).
+ * We push exactly those onto the host stack before the call and pop them after, so the JIT'd
+ * block resumes with every live register intact. (Authored from the AAPCS64 caller/callee-save
+ * rule + OUR register map — NOT copied from Emu68's RegisterAllocator64.c, which keeps the frame
+ * in a different layout and assumes the bare-metal context.) The decoder no-op stub this
+ * replaces was safe ONLY for the [J5o] core, which drives no blr site. */
+#include "emu68/A64.h"   /* the adopted AArch64 encoders (stp/ldp); calling them copies no source */
 
-/* ---- transcendental math — the FPU's FSIN/FCOS/FETOX/FLOGN/... ops. OUT OF SCOPE this
- * increment (the next FP increment drives them). The verbatim M68k_LINEF.c references these by
- * name (its own libm — declared in emu68/math/libm.h — NOT the system libm; the names overlap
- * but the decoder calls THESE). None is on the [J5o] driven path, so they are abort stubs: a
- * future increment that drives a transcendental will trip the abort and must port a real
- * implementation. (Signatures EXACTLY match emu68/math/libm.h so the decls agree.) ---------- */
-int    my_log10(double v) { (void)v; abort(); }   /* Emu68's integer-log10 (used by .p)  */
+uint32_t *EMIT_SaveRegFrame(uint32_t *ptr, uint32_t mask)
+{
+    /* Build the ordered list of x-registers to preserve: always x1 (state) + x12 (base_adjust),
+     * then each register in `mask` (the RA temps + REG_PROTECT set), skipping the non-GP sentinel
+     * bits (>=29: bit30 is REG_PROTECT's marker, not a register). x1/x12 are added explicitly so
+     * a mask that omits them still protects them. */
+    uint8_t regs[32]; int n = 0;
+    regs[n++] = 1;    /* x1  = state ptr      */
+    regs[n++] = 12;   /* x12 = base-adjust    */
+    for (int r = 2; r <= 28; r++) {
+        if (r == 12) continue;                 /* already added */
+        if (mask & (1u << r)) regs[n++] = (uint8_t)r;
+    }
+    if (n & 1) regs[n++] = 31;                 /* pad to an even count with xzr (16-byte stp)   */
+    /* push pairs, pre-decrementing sp by 16 each (LIFO; matches the postindex restore order).   */
+    for (int i = 0; i < n; i += 2)
+        *ptr++ = stp64_preindex(31 /*sp*/, regs[i], regs[i + 1], -16);
+    return ptr;
+}
+
+uint32_t *EMIT_RestoreRegFrame(uint32_t *ptr, uint32_t mask)
+{
+    /* Rebuild the SAME list, then pop in REVERSE (LIFO) so the stack unwinds exactly. */
+    uint8_t regs[32]; int n = 0;
+    regs[n++] = 1;
+    regs[n++] = 12;
+    for (int r = 2; r <= 28; r++) {
+        if (r == 12) continue;
+        if (mask & (1u << r)) regs[n++] = (uint8_t)r;
+    }
+    if (n & 1) regs[n++] = 31;
+    for (int i = n - 2; i >= 0; i -= 2)
+        *ptr++ = ldp64_postindex(31 /*sp*/, regs[i], regs[i + 1], 16);
+    return ptr;
+}
+
+/* ---- [J5p] TRANSCENDENTAL + FP-UTILITY math — ROUTED TO THE HOST libm. ------------------
+ * The 68881/68882 transcendentals are implementation-defined in their last ULPs, so the
+ * faithful hosted realization is: route Emu68's transcendental helper sites to the HOST libm
+ * (<math.h>), and have the independent oracle (j5d_interp.c) use the SAME host libm — so the
+ * assert is bit-exact and verifies the real thing under test (that the JIT correctly DECODES
+ * each FP transcendental, passes the right register as the argument, and stores the result).
+ * We are testing the TRANSLATION, not re-deriving sin(); host libm is the reference.
+ *
+ * HOW THE ROUTING WORKS (no quarantine edit): the verbatim decoder bakes the helper's ADDRESS
+ * into the emitted block at translate time — `u.u64 = (uintptr_t)sin; ... blr`. So routing is
+ * simply: do NOT shadow the standard libm names here; let them resolve to the HOST libm at link
+ * time. The decoder then bakes in &sin == the host sin. The only symbols we DEFINE are the THREE
+ * the host does not provide in the decoder's exact signature: exp10 (10^x — not standard C),
+ * sincos (-> struct double2), and remquo (-> struct rq {double rem; uint64_t quo}). Those are
+ * THIN WRAPPERS over the standard host functions (pow/sin+cos/remquo) — no Emu68 source copied;
+ * the wrapping is ours.
+ *
+ * libm <-> 68881 opmode map driven this increment (the FPU command word opmode selects):
+ *   FSIN->sin  FCOS->cos  FTAN->tan  FASIN->asin  FACOS->acos  FATAN->atan
+ *   FSINH->sinh  FCOSH->cosh  FTANH->tanh  FATANH->atanh
+ *   FETOX(e^x)->exp  FETOXM1->expm1  FTWOTOX(2^x)->exp2  FTENTOX(10^x)->exp10(=pow(10,x))
+ *   FLOGN(ln)->log  FLOGNP1->log1p  FLOG10->log10  FLOG2->log2
+ *   FSINCOS->sincos (sin AND cos into two FP regs)   FREM->remquo (IEEE remainder + quo byte)
+ * The FP-UTILITY ops the decoder emits INLINE (no libm blr) are still ours-via-decoder and the
+ * oracle mirrors them: FINT->frint64x (round per FPCR), FINTRZ->frint64z (trunc), FGETEXP/
+ * FGETMAN (bit extraction), FMOD (fdiv/frint/fmul/fsub), FSCALE (build 2^n * x).
+ *
+ * STILL DEFERRED (abort-on-call): my_log10/my_pow10 are Emu68's integer log10/pow10 used ONLY
+ * by the packed-decimal (.p) DoubleToPacked path — not driven (precision model is double; .p is
+ * a deferred MEMORY format). They trip loudly if a future .p increment reaches them. ---------- */
+
+/* The three non-standard signatures the host libm does not provide as-is. */
+double exp10(double x) { return pow(10.0, x); }          /* FTENTOX: 10^x */
+
+struct double2 sincos(double x)                          /* FSINCOS: sin AND cos */
+{
+    struct double2 r;
+    r.d[0] = sin(x);
+    r.d[1] = cos(x);
+    return r;
+}
+
+struct rq remquo(double x, double y)                     /* FREM: IEEE remainder + quotient */
+{
+    /* The decoder calls a 2-arg struct-returning remquo; the host's standard remquo is the
+     * 3-arg form. We can't recurse into the host's (this IS the symbol `remquo`), so we use
+     * remainder() for the value (IEEE round-to-nearest, identical to FREM's r = x - y*N with
+     * N = round(x/y)) and derive the quotient ourselves. The quotient's low 7 bits + sign go to
+     * the FPSR quotient byte (NOT part of the N/Z/I/NAN cc byte the [J5p] test asserts). */
+    struct rq r;
+    r.rem = remainder(x, y);
+    double q = (y != 0.0) ? rint(x / y) : 0.0;           /* round-to-nearest quotient */
+    long long qi = (long long)q;
+    r.quo = (uint64_t)(qi < 0 ? -qi : qi) & 0x7f;
+    if (qi < 0) r.quo |= 0x80;
+    return r;
+}
+
+/* Emu68's integer log10 / pow10 — used ONLY by the deferred packed-decimal (.p) path. */
+int    my_log10(double v) { (void)v; abort(); }
 double my_pow10(int e)    { (void)e; abort(); }
-double scalbn(double x, int n)   { (void)x;(void)n; abort(); }
-double floor(double x)           { (void)x; abort(); }
-double tan(double x)             { (void)x; abort(); }
-double tanh(double x)            { (void)x; abort(); }
-double exp(double x)             { (void)x; abort(); }
-double exp10(double x)           { (void)x; abort(); }
-double exp2(double x)            { (void)x; abort(); }
-double expm1(double x)           { (void)x; abort(); }
-double cosh(double x)            { (void)x; abort(); }
-double log(double x)             { (void)x; abort(); }
-double atan(double x)            { (void)x; abort(); }
-double sinh(double x)            { (void)x; abort(); }
-double asin(double x)            { (void)x; abort(); }
-double acos(double x)            { (void)x; abort(); }
-double atanh(double x)           { (void)x; abort(); }
-double log1p(double x)           { (void)x; abort(); }
-double log10(double x)           { (void)x; abort(); }
-double log2(double x)            { (void)x; abort(); }
-double modf(double x, double *iptr) { (void)x;(void)iptr; abort(); }
-double sin(double x)             { (void)x; abort(); }
-double cos(double x)             { (void)x; abort(); }
-struct double2 sincos(double x)           { (void)x;        abort(); }
-struct rq      remquo(double x, double y) { (void)x;(void)y; abort(); }
 
 /* ---- the GNU-as Poly thunks were neutralised in the build-dir copy (darwinize --fpu-sandbox);
  * provide their global SYMBOLS as no-op stubs so the (un-driven) transcendental blr sites link. */
