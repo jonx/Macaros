@@ -1931,6 +1931,98 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
     the abort stubs, never driven). Then the **vbcc-compiled FP capstone** (a real C program using
     `float`/`double` through the JIT end-to-end), which exercises the whole FP stack together.
 
+- **`[J5s]` the 68881/68882 FP EXCEPTION MODEL — the FPSR exception/accrued bytes, the FPCR
+  exception-enable + rounding-mode/precision bytes, the FP exception traps, and BSUN — IMPLEMENTED /
+  GREEN.** The last FP increment before the capstone. Files: OURS `hosted/jit68k/{j5s_fpu_exc.h,
+  j5s_test.c}` (the shared bit-layout/fenv-mapping/AEXC/vector/rounding header + the test harness) +
+  the per-op FP-exception derivation in the dispatcher (`j5d_engine.c`) and the oracle (`j5d_interp.c`)
+  + `apps68k/j5s.s` (+ committed `j5s.exe`, `-m68882`). Target `make hosted-jit68k-j5s` (marker
+  `[J5s] PASS`, watchdog 40 s). **NO new vendored file, NO new darwinize pass, NO new state field —
+  the EXC/AEXC bits live in the existing `fpsr`; the seam struct `j5d_jit68k.h` is structurally
+  unchanged (only a `[J5q]` predicate comment was clarified — no field/offset change, the
+  static-asserts hold); the Emu68 quarantine stays byte-verbatim.**
+
+  - **GROUNDED bit layout + FP vectors (against the AROS m68k FPSP — Motorola's own FP support
+    package, in-tree APL/LGPL).** `arch/m68k-all/m680x0/fpsp/fpsp.h` gives the bit numbers within
+    each FPSR/FPCR byte; `FPSP.sa` gives the FP exception VECTOR offsets; `arch/m68k-all/include/aros/
+    fenv.h` confirms the C-`fenv`↔68k mapping. The layout used (verified against those sources):
+    - **FPSR (32-bit):** CC byte (31–24: N=27 Z=26 I=25 NAN=24 — already live since `[J5o]`),
+      QUOTIENT byte (23–16 — set by FREM/FMOD, NOT asserted, per `[J5p]`), **EXC byte (15–8):
+      BSUN=15 SNAN=14 OPERR=13 OVFL=12 UNFL=11 DZ=10 INEX2=9 INEX1=8**, **AEXC byte (7–0): AIOP=7
+      AOVFL=6 AUNFL=5 ADZ=4 AINEX=3**.
+    - **FPCR (32-bit):** **ENABLE byte (15–8)** — SAME positions as the EXC byte (a trap fires when an
+      EXC bit fires AND the matching ENABLE bit is set); **MODE byte (7–0): PREC bits 7–6** (x=00,
+      single=01, double=10), **RND bits 5–4** (RN=00, RZ=01, RM=10, RP=11).
+    - **FP exception VECTOR numbers (byte = vector·4, from `FPSP.sa`):** **BSUN=48 ($c0), INEX=49
+      ($c4), DZ=50 ($c8), UNFL=51 ($cc), OPERR=52 ($d0), OVFL=53 ($d4), SNAN=54 ($d8)** — the exact
+      assignment verified before wiring (the task's hint matched the FPSP source).
+
+  - **THE fenv MAPPING (the load-bearing realization).** The JIT runs the FP arithmetic NATIVELY
+    (Emu68's `EMIT_lineF` emits AArch64 `fadd/fdiv/...` inside the block; that path produces the FP
+    register + memory RESULTS, verified bit-exact since `[J5o]`). The FPSR EXC/AEXC bytes, though, are
+    PER-INSTRUCTION state (the EXC byte reflects ONLY the last FP op; AEXC is sticky). So both the
+    dispatcher and the oracle derive them PER-OP with `<fenv.h>`: set `fesetround` from the FPCR RND
+    bits, `feclearexcept`, do the op, `fetestexcept`, and map `FE_DIVBYZERO→DZ`, `FE_OVERFLOW→OVFL`,
+    `FE_UNDERFLOW→UNFL`, `FE_INEXACT→INEX2`, `FE_INVALID→OPERR` (or `SNAN` when a source operand is a
+    signalling NaN — `fenv` cannot split them, so an operand `j5s_is_snan` scan does, identically on
+    both sides). The AEXC byte accrues per the 68881 EXC→AEXC table (AIOP←BSUN|SNAN|OPERR, AOVFL←OVFL,
+    AUNFL←UNFL&INEX2, ADZ←DZ, AINEX←INEX1|INEX2|OVFL). **The dispatcher derives the EXC/AEXC by a
+    per-op C RE-WALK** (`j5s_fp_exc_walk`) over the just-run FP block (seeded from a pre-block FP
+    snapshot, recomputing each op in C `double` under per-op fenv — last-op-wins EXC + sticky AEXC),
+    EXACTLY the oracle's per-op model — so the asserted FPSR is bit-exact. (A block-level fenv read was
+    tried first; it accumulates ALL ops into the EXC byte and so diverges from the last-op-only EXC
+    semantics — the re-walk is the fix.) `FMOVE` is a plain move that does NOT signal on AArch64, so it
+    never sets the EXC byte (matched on both sides). `#pragma STDC FENV_ACCESS ON` keeps `-O2` from
+    hoisting an inexact-producing op across a `fetestexcept`. The cc byte (27–24) stays from the native
+    `EMIT_GetFPUFlags` path; EXC/AEXC are disjoint and merged in.
+
+  - **ROUNDING.** The FPCR RND bits drive `fesetround(FE_TONEAREST/TOWARDZERO/DOWNWARD/UPWARD)` before
+    the native block AND in the oracle — bit-exact for double precision. PRECISION single re-rounds the
+    result through `float` (`j5s_round_prec`); extended/double keep the native double. The host round
+    mode is restored after each block.
+
+  - **THE TRAPS + BSUN.** If an EXC bit fires AND its FPCR enable bit is set, the corresponding FP
+    vector (48–54) is taken through the EXISTING `[J5i]` `raise_exception(vector)` path — additive, just
+    more vector numbers; the `[J5i]` model is unchanged. **BSUN:** a SIGNALLING FP conditional predicate
+    (selector **bit 4** set — the IEEE-aware variants `FBGT/FBGE/FBLT/FBLE/FBGL/FBGLE` and their `FBN*`
+    duals, `0x10–0x1F`) on an UNORDERED operand (FPSR NAN set) sets FPSR BSUN + accrues AIOP, and traps
+    to vector 48 when BSUN is enabled in FPCR. Wired into all four `[J5q]` FP control ops (FBcc/FScc/
+    FDBcc/FTRAPcc) in both the dispatcher and the oracle.
+
+  - **VERIFY.** `apps68k/j5s.s` raises each exception from a REAL cause and reads the FPSR back via
+    `FMOVE.l FPSR,Dn`: `0.0/0.0`→OPERR, `1.0/0.0`→DZ, overflow→OVFL, underflow→UNFL, `1/3`→INEX2, a
+    signalling-NaN operand→SNAN, a signalling unordered predicate→BSUN; the four rounding modes divide
+    `1/3` distinctly (RP rounds the last bit up: `…5555` vs `…5556`); and a TRAP-ENABLED OPERR fires
+    vector 52 through a planted handler (observed via the `[J5i]` path). The test asserts **byte-exact**
+    (integer regs + FP regs + the FULL FPSR cc+EXC+AEXC + FPCR/FPIAR + the whole sandbox — the stored
+    FPSR longwords, the rounding doubles, the trap frame/marker) JIT vs the INDEPENDENT oracle, plus a
+    fully-independent hand-check of every EXC+AEXC bit per cause + the four rounding modes + BSUN + the
+    trap. **Negative control bites:** clearing the OPERR-enable bit in the JIT copy ONLY makes the
+    trap-enabled `0/0` no longer fire vector 52 — JIT vs oracle DIVERGE. **PASS (observed):** `regs=yes
+    fp=yes mem=yes`, hand-check "all match", `d0 == 0x34` (the trap vector marker), neg-ctrl "DIVERGED",
+    and the WHOLE corpus + the `[J5o]/[J5p]/[J5q]/[J5r]` FP programs re-run byte-exact. `[J1]`–`[J5r]`
+    re-confirmed green (the integer-only spikes J1–J5n, which compile the engine WITHOUT the FP decoder,
+    are unaffected — the FP-exception path is gated by a per-block `fpu_block` flag, zero overhead for a
+    non-FP block). Seam offsets unchanged; Emu68 quarantine byte-verbatim.
+
+  - **PACKED-DECIMAL (`.p`) — DEFERRED, precisely (an explicit decision, not an omission).** The `.p`
+    format is the 68881's 12-byte BCD floating-DECIMAL-STRING memory form (FMOVE.p with a k-factor that
+    selects the number of significant digits / the scientific-vs-fixed layout). It is essentially
+    FP↔decimal-string I/O: it is **not emitted by any normal compiled software** (vbcc/gcc never produce
+    it; it exists for hand-coded BCD numeric I/O), so the upcoming vbcc FP capstone will never touch it.
+    A correct implementation needs the full binary↔decimal rounding logic — the k-factor, the 3-digit
+    decimal exponent, the SM/SE sign nibbles, the 17-significant-digit round-trip — which is
+    disproportionately complex for how rare it is. It is **the one remaining FP MEMORY format** (`.x` is
+    done at `[J5r]`); the `PackedToDouble`/`DoubleToPacked` helpers stay the abort-on-call stubs in
+    `j5o_fpu_shims.c`, so a future increment that drives `.p` trips loudly rather than silently
+    mis-converting. Decision: defer — disproportionate complexity for a format unused by the capstone.
+
+  - **THE LAST FP STEP (the vbcc FP capstone).** With the FP register file + format conversions + all
+    arithmetic + transcendentals + FP conditional control-flow + FMOVEM/`.x` + the exception model now
+    in, the natural close-out is a **vbcc-compiled C program using `float`/`double` through the JIT
+    end-to-end** — the FP analog of `[J5m]`'s integer capstone — exercising the whole FP stack together
+    from real compiler output (the only remaining FP work besides the deliberately-deferred `.p`).
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:

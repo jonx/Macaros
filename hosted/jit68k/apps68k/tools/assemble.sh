@@ -84,5 +84,10 @@ asm     j5r     -kick1hunks -m68882 -no-opt  # [J5r] FMOVEM + FP system-register
                                  # (FP prologue/epilogue) + FMOVE/FMOVEM FPCR/FPSR/FPIAR. -m68882
                                  # for the FPU set; -no-opt keeps the exact line-F encodings;
                                  # -kick1hunks for the RELOC32 of lea fpconst/scratch.
+asm     j5s     -kick1hunks -m68882 -no-opt  # [J5s] FP EXCEPTION MODEL: raises OPERR/DZ/OVFL/
+                                 # UNFL/INEX/SNAN/BSUN from real causes + reads the FPSR EXC/AEXC
+                                 # back; four rounding modes; a trap-enabled OPERR -> vector 52.
+                                 # -m68882 for the FPU set; -no-opt keeps the exact line-F
+                                 # encodings; -kick1hunks for the RELOC32 of lea fpconst/result.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

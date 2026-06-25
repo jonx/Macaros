@@ -16,9 +16,15 @@
  *
  * CCR layout: the 68k CCR byte, bit0=C bit1=V bit2=Z bit3=N bit4=X (J5D_CCR_*). */
 #include "j5d_jit68k.h"
+#include "j5s_fpu_exc.h"  /* [J5s] the FP exception model: FPSR EXC/AEXC, FPCR enable/mode, vectors, BSUN */
 #include <string.h>
 #include <stdio.h>
 #include <math.h>     /* [J5o] fabs/sqrt for the independent double-precision FP oracle */
+#include <fenv.h>     /* [J5s] feclearexcept/fetestexcept/fesetround for the FP exception model */
+/* [J5s] we READ the FP exception flags + set the rounding mode at runtime, so the compiler must
+ * NOT reorder FP ops across feclearexcept/fetestexcept (else -O2 can hoist an inexact-producing op
+ * across the read and corrupt the derived FPSR EXC byte). */
+#pragma STDC FENV_ACCESS ON
 
 #define STEP_CAP 2000000u
 
@@ -326,6 +332,46 @@ static int iraise(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned vnum,
         r->a7_at_entry=a7; r->handler_pc=handler;
     }
     *handler_out = handler;
+    return 0;
+}
+
+/* [J5s] Take an FP exception trap if any EXC bit in `exc` is enabled in FPCR (bits 15..8).
+ * Builds the [J5i] 68k frame on a7 and vectors to the matching FP vector (48..54), highest
+ * priority first. `return_pc` is the PC after the faulting FP instruction (saved in the frame).
+ * Returns 1 if a trap was taken (sets *pc to the handler), 0 if none fired. On a raise failure
+ * (bad/unmapped vector) returns 1 with *pc = 0xFFFFFFFF and errbuf set (caller returns 1). */
+static int j5s_fp_trap(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t exc,
+                       uint32_t return_pc, char *errbuf, unsigned errlen, uint32_t *pc)
+{
+    uint32_t enabled = exc & (st->fpcr & J5S_FPCR_ENABLE_MASK);
+    unsigned vec;
+    if (!j5s_exc_vector(enabled, &vec)) return 0;
+    uint32_t h;
+    if (iraise(sb, st, vec, return_pc, &h, errbuf, errlen)) { *pc = 0xFFFFFFFFu; return 1; }
+    *pc = h;
+    return 1;
+}
+
+/* [J5s] BSUN: a SIGNALLING FP conditional predicate (selector bit 4 set) on an UNORDERED
+ * operand (FPSR NAN bit set) sets the FPSR BSUN bit, and traps (vector 48) if BSUN is enabled
+ * in FPCR. The bit-5 selectors are the IEEE-aware variants (FBSGT/FBSEQ/...); the non-
+ * non-signalling variants (bit4 clear) never raise BSUN. Returns 1 if a BSUN trap was TAKEN (the
+ * conditional op must NOT also branch — the trap supersedes; *pc holds the handler). Returns 0
+ * otherwise (the op proceeds normally). On a raise failure: *pc=0xFFFFFFFF, errbuf set. */
+static int j5s_bsun(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned pred,
+                    uint32_t return_pc, char *errbuf, unsigned errlen, uint32_t *pc)
+{
+    int signalling = (pred & 0x10u) != 0;     /* bit 4 = the IEEE-aware (signalling) predicate set */
+    int unordered  = (st->fpsr & J5Q_FPSR_NAN) != 0;
+    if (!(signalling && unordered)) return 0;
+    st->fpsr |= J5S_FPSR_BSUN;
+    st->fpsr |= J5S_FPSR_AIOP;                 /* BSUN accrues to the AIOP (invalid) AEXC bit */
+    if (st->fpcr & (J5S_FPSR_BSUN /* enable bit shares the EXC position in the FPCR byte */)) {
+        uint32_t h;
+        if (iraise(sb, st, J5S_VEC_FP_BSUN, return_pc, &h, errbuf, errlen)) { *pc = 0xFFFFFFFFu; return 1; }
+        *pc = h;
+        return 1;
+    }
     return 0;
 }
 
@@ -801,6 +847,8 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int16_t disp16 = be16s(ip + 4);
             uint32_t disp_pc = pc + 4;
             uint32_t after = pc + 6;
+            { uint32_t bpc; if (j5s_bsun(sb, st, pred, after, errbuf, errlen, &bpc))   /* [J5s] BSUN */
+                { if (bpc == 0xFFFFFFFFu) return 1; pc = bpc; continue; } }
             if (j5q_fp_cond_taken(pred, st->fpsr)) {
                 pc = after;
             } else {
@@ -815,6 +863,8 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             unsigned pred = be16(ip + 2) & 0x3fu;
             uint32_t after = pc + 4;
             if (mode == 2) after += 2; else if (mode == 3) after += 4;
+            { uint32_t bpc; if (j5s_bsun(sb, st, pred, after, errbuf, errlen, &bpc))   /* [J5s] BSUN */
+                { if (bpc == 0xFFFFFFFFu) return 1; pc = bpc; continue; } }
             if (j5q_fp_cond_taken(pred, st->fpsr)) {
                 uint32_t h;
                 if (iraise(sb, st, J5I_VECTOR_TRAPcc, after, &h, errbuf, errlen)) return 1;
@@ -827,6 +877,9 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         if ((op & 0xFFC0u) == 0xF240u) {                         /* FScc <ea> (set byte) */
             unsigned pred = be16(ip + 2) & 0x3fu;
             unsigned mode = (op >> 3) & 7u, regn = op & 7u;
+            uint32_t after0 = pc + 4; if (mode == 5) after0 += 2;
+            { uint32_t bpc; if (j5s_bsun(sb, st, pred, after0, errbuf, errlen, &bpc))   /* [J5s] BSUN */
+                { if (bpc == 0xFFFFFFFFu) return 1; pc = bpc; continue; } }
             uint8_t val = j5q_fp_cond_taken(pred, st->fpsr) ? 0xFFu : 0x00u;
             uint32_t after = pc + 4;
             if (mode == 0) {
@@ -855,6 +908,8 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int64_t disp; uint32_t after;
             if (is_long) { disp = (int32_t)be32(ip + 2); after = pc + 6; }
             else         { disp = (int16_t)be16s(ip + 2); after = pc + 4; }
+            { uint32_t bpc; if (j5s_bsun(sb, st, pred, after, errbuf, errlen, &bpc))   /* [J5s] BSUN */
+                { if (bpc == 0xFFFFFFFFu) return 1; pc = bpc; continue; } }
             pc = j5q_fp_cond_taken(pred, st->fpsr)
                  ? (uint32_t)((int64_t)disp_pc + disp)
                  : after;
@@ -1846,17 +1901,38 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int cmp_fpsr   = 0;       /* FCMP: FPSR from fcmpd(dst,src); else fcmpzd(res)      */
             int fpsr_test_src = 0;    /* FTST: the FPSR fcmpzd tests src (not res)             */
 
+            /* [J5s] THE FP EXCEPTION MODEL (oracle side — the authoritative FPSR EXC/AEXC).
+             * Set the host rounding direction per the FPCR MODE byte, clear the host fenv, do
+             * the op, then read the fenv exceptions raised and map them into the FPSR EXC byte.
+             * FMOVE (opmode 0) does NOT signal on an sNaN operand on AArch64 (a plain move), so
+             * the SNAN bit is set only by an ARITHMETIC op consuming an sNaN — detected by
+             * j5s_is_snan over the operands here, identically to the engine's sNaN scan. */
+            int had_snan = j5s_is_snan(src) || (oper != 0x00 && oper != 0x3a && j5s_is_snan(dst));
+            int prev_round = fegetround();
+            fesetround(j5s_host_round(st->fpcr));
+            feclearexcept(FE_ALL_EXCEPT);
+
             /* [J5p] FSINCOS (opmode 0x30..0x37): computes sin INTO fp_dst_sin (= fpn) AND cos
              * INTO fp_dst_cos (= opcode2 & 7). The FPSR fcmpzd tests fp_dst_sin (the decoder's
              * order). Mirror the HOST libm (the same sin/cos the JIT's blr reaches). */
             if ((oper & 0x78) == 0x30) {
                 unsigned fp_cos = opcode2 & 7u;
                 double s = sin(src), c = cos(src);
+                int fe = fetestexcept(FE_ALL_EXCEPT);
+                fesetround(prev_round);
+                s = j5s_round_prec(s, st->fpcr); c = j5s_round_prec(c, st->fpcr);
                 st->fp[fpn & 7] = s;
                 st->fp[fp_cos]  = c;
                 res = s;                                  /* FPSR tests the sin result          */
+                uint32_t exc = j5s_fenv_to_exc(fe, had_snan);
+                st->fpsr = (st->fpsr & ~J5S_FPSR_EXC_MASK) | exc;
+                st->fpsr |= j5s_exc_to_aexc(exc);
                 if (fpu_fpsr_update_needed(sb, after_pc))
                     st->fpsr = fpu_fcmp_fpsr(st->fpsr, res, 0.0);
+                if (j5s_fp_trap(sb, st, exc, after_pc, errbuf, errlen, &pc)) {
+                    if (pc == 0xFFFFFFFFu) return 1;      /* trap raise failed (bad vector)     */
+                    continue;                             /* trap taken: pc = handler           */
+                }
                 pc = after_pc; continue;
             }
 
@@ -1925,7 +2001,23 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 }
                 default: IFAIL("FPU: operation not in [J5p] subset (FMOVECR/.x/.p deferred)");
             }
+            /* [J5s] read the host fenv the op raised, restore the rounding direction, and
+             * round the result to the FPCR precision (single -> through float). */
+            int fe = fetestexcept(FE_ALL_EXCEPT);
+            fesetround(prev_round);
+            /* FMOVE (opmode 0) is a plain move — it does NOT signal on AArch64 (matching the host
+             * the JIT runs on), so it never sets the EXC byte. */
+            if (oper == 0x00u) fe = 0;
+            if (writes_dst) res = j5s_round_prec(res, st->fpcr);
             if (writes_dst) st->fp[fpn & 7] = res;
+
+            /* [J5s] FPSR exception (EXC) byte + accrued (AEXC) byte. FMOVE/FTST do not signal
+             * on an sNaN operand (had_snan already excludes them); arith ops do. The EXC byte
+             * reflects THIS op (it is re-set each op); the AEXC bits are STICKY (OR-accumulated).
+             * (The CC byte set below is disjoint — bits 27..24 — so the merge is clean.) */
+            uint32_t exc = j5s_fenv_to_exc(fe, had_snan);
+            st->fpsr = (st->fpsr & ~J5S_FPSR_EXC_MASK) | exc;
+            st->fpsr |= j5s_exc_to_aexc(exc);
 
             /* FPSR condition codes — set IFF a subsequent FP consumer needs them (same gate as
              * the JIT's FPSR_Update_Needed). FCMP packs fcmpd(FPn,src); the rest pack fcmpzd of
@@ -1937,6 +2029,12 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                     double t = fpsr_test_src ? src : res;   /* FTST tests src; others test res */
                     st->fpsr = fpu_fcmp_fpsr(st->fpsr, t, 0.0);  /* fcmpzd: compare with 0.0    */
                 }
+            }
+            /* [J5s] TAKE AN FP EXCEPTION TRAP if an EXC bit fired AND its FPCR enable bit is set
+             * (the [J5i] vector dispatch, just more vector numbers — vectors 48..54). */
+            if (j5s_fp_trap(sb, st, exc, after_pc, errbuf, errlen, &pc)) {
+                if (pc == 0xFFFFFFFFu) return 1;          /* trap raise failed (bad vector)     */
+                continue;                                 /* trap taken: pc = handler           */
             }
             pc = after_pc; continue;
         }

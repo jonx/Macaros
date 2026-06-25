@@ -150,9 +150,11 @@ struct j5d_m68k_state {
  * NAN=unordered}, and NEVER the I/infinity bit (the AArch64 C is bic'd out). So the FP
  * predicate is defined over {N, Z, NAN} exactly.
  *
- * The 6-bit selector's bit5 (the IEEE-aware/SIGNALLING variant) does NOT change the truth
- * value — only whether an unordered operand raises BSUN (an FP trap, DEFERRED). So the
- * truth table is over the low 4 bits (`predicate & 0x0f`) — the 16 base conditions. This
+ * The selector's bit 4 (the IEEE-aware/SIGNALLING variant — predicates 0x10..0x1F) does NOT
+ * change the truth value — only whether an unordered operand raises BSUN ([J5s] now wires this:
+ * the signalling predicates set FPSR BSUN + trap vector 48 on a NaN; [J5q] evaluated the truth
+ * only). So the truth table is over the low 4 bits (`predicate & 0x0f`) — the 16 base conditions.
+ * (The non-signalling 0x00..0x0F and signalling 0x10..0x1F share the `&0x0f` truth.) This
  * is OUR re-derivation of the table Emu68's verbatim FBcc decoder emits in AArch64
  * (M68k_LINEF.c FBcc/FScc cases, tst/orr/eor against FPSR_N/FPSR_Z/FPSR_NAN) — the same
  * boolean per case, evaluated here in C at the dispatcher level (the way the integer Bcc

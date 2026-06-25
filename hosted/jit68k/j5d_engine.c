@@ -57,6 +57,7 @@
  * ===============================================================================
  */
 #include "j5d_jit68k.h"
+#include "j5s_fpu_exc.h"        /* [J5s] FP exception model: FPSR EXC/AEXC, FPCR enable/mode, vectors, BSUN */
 #include "jit_region.h"
 #include "emu68/A64.h"
 #include "j3_jit68k.h"          /* j3_vector_recognise: the negative-offset LVO math */
@@ -66,6 +67,10 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <fenv.h>               /* [J5s] feclearexcept/fetestexcept/fesetround around FP blocks */
+/* [J5s] the dispatcher reads the host FP exception flags + sets the rounding mode around each
+ * native FP block run; tell the compiler not to reorder across the fenv calls. */
+#pragma STDC FENV_ACCESS ON
 
 /* [J5n] The DIAGNOSTICS funnel hook. EVERY fault path in this dispatcher routes through
  * here when a diag config is registered (j5d_set_diag); NULL (the whole existing corpus)
@@ -274,6 +279,9 @@ typedef struct {
     jit_region region;      /* the MAP_JIT code               */
     uint32_t   chain_off;   /* word offset of the CHAIN ENTRY (regs already live)         */
     uint16_t   dirty_mask;  /* [J5k] which 68k regs this block writes (for spill accounting)*/
+    uint8_t    fpu_block;   /* [J5s] 1 if this block contains FP arithmetic (drives the    */
+                            /*       per-block fenv exception model around the native run)  */
+    uint8_t    fp_dirty;    /* [J5s] FP0..FP7 written by this block (for single-prec re-round)*/
     uint8_t    nlinks;      /* number of chainable tail slots (0,1,2)                      */
     j5k_link   link[J5K_MAX_LINKS];
     int        live;
@@ -627,6 +635,172 @@ static int j5d_fmove_sysreg(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t
     return 0;
 }
 
+/* ===================== [J5s] THE FP EXCEPTION MODEL (engine / dispatcher side) =========
+ * The JIT runs the FP arithmetic NATIVELY (Emu68's EMIT_lineF emits AArch64 fadd/fdiv/... inside
+ * the block) — that path produces the FP register + memory RESULTS, verified bit-exact since
+ * [J5o]. The FPSR EXCEPTION (EXC) + ACCRUED (AEXC) bytes, though, are PER-INSTRUCTION state: the
+ * EXC byte reflects ONLY THE LAST FP instruction (re-set each op), while AEXC is sticky. The
+ * block-level host fenv accumulates ALL ops in the block, so it cannot give the last-op EXC byte.
+ * So the FPSR EXC/AEXC are derived by a per-op C RE-WALK (j5s_fp_exc_walk): for each FP arithmetic
+ * op in [start,end) the walk recomputes it in C double from an EVOLVING LOCAL FP file (seeded by
+ * the pre-block snapshot — so a dependent op sees the prior op's result), under PER-OP host fenv
+ * (clear/test), mapping to the EXC byte (last op wins) + AEXC (OR-accumulated) + the SNAN-vs-OPERR
+ * split (sNaN source operand) — EXACTLY the oracle's per-op model, so the asserted FPSR is bit-
+ * exact. The cc byte (bits 27..24) stays from the native EMIT_GetFPUFlags path; EXC (15..8) + AEXC
+ * (7..0) are disjoint and merged in here. The rounding MODE is applied to the walk (fesetround)
+ * just as to the native block, and PRECISION single re-rounds through float (j5s_round_prec). */
+
+/* Recompute one FP arithmetic op in C double from the evolving local FP file `fp` (8 doubles),
+ * under per-op host fenv, and return its EXC bits (incl. the SNAN/OPERR split). Advances the
+ * local FP file for a dst-writing op. `oper` is the FPU opmode; the op is the SAME table the
+ * oracle's switch uses. Non-FP-arith opers (FMOVE-to-mem, sys-reg, etc.) are filtered by the
+ * caller. Returns the EXC bits for THIS op. */
+static uint32_t j5s_one_op_exc(double fp[8], unsigned oper, unsigned fpn, double src, uint32_t fpcr)
+{
+    double dst = fp[fpn & 7];
+    int had_snan = j5s_is_snan(src) ||
+                   (oper != 0x00u && oper != 0x3au && j5s_is_snan(dst));
+    feclearexcept(FE_ALL_EXCEPT);
+    double res = dst; int writes = 1;
+    switch (oper) {
+        case 0x00: res = src; writes = 1; break;                 /* FMOVE (no signal: see below) */
+        case 0x18: res = fabs(src); break;  case 0x1a: res = -src; break;
+        case 0x04: res = sqrt(src); break;
+        case 0x20: res = dst / src; break;  case 0x22: res = dst + src; break;
+        case 0x23: res = dst * src; break;  case 0x28: res = dst - src; break;
+        case 0x38: writes = 0; break;                            /* FCMP                         */
+        case 0x3a: writes = 0; break;                            /* FTST                         */
+        case 0x0e: res = sin(src); break;   case 0x1d: res = cos(src); break;
+        case 0x0f: res = tan(src); break;   case 0x0c: res = asin(src); break;
+        case 0x1c: res = acos(src); break;  case 0x0a: res = atan(src); break;
+        case 0x02: res = sinh(src); break;  case 0x19: res = cosh(src); break;
+        case 0x09: res = tanh(src); break;  case 0x0d: res = atanh(src); break;
+        case 0x10: res = exp(src); break;   case 0x08: res = expm1(src); break;
+        case 0x11: res = exp2(src); break;  case 0x12: res = pow(10.0, src); break;
+        case 0x14: res = log(src); break;   case 0x06: res = log1p(src); break;
+        case 0x15: res = log10(src); break; case 0x16: res = log2(src); break;
+        case 0x01: res = rint(src); break;  case 0x03: res = trunc(src); break;
+        case 0x21: { double q = trunc(dst / src); res = dst - src * q; break; } /* FMOD          */
+        case 0x25: res = remainder(dst, src); break;             /* FREM                         */
+        case 0x26: res = ldexp(dst, (int)src); break;            /* FSCALE                       */
+        case 0x1e: { uint64_t b; memcpy(&b,&src,8); res = (double)((int)((b>>52)&0x7ff)-1023); break; } /* FGETEXP */
+        case 0x1f: { uint64_t b; memcpy(&b,&src,8); b=(b&~(0x7ffull<<52))|(0x3ffull<<52); memcpy(&res,&b,8); break; } /* FGETMAN */
+        default: writes = 0; break;                              /* moves/format-only: no signal */
+    }
+    int fe = fetestexcept(FE_ALL_EXCEPT);
+    /* FMOVE (and the non-arith moves) do NOT signal on AArch64 (a plain move), so they never
+     * set the EXC byte — match the host: clear fe for a pure move. */
+    if (oper == 0x00u) fe = 0;
+    if (writes) { res = j5s_round_prec(res, fpcr); fp[fpn & 7] = res; }
+    return j5s_fenv_to_exc(fe, had_snan);
+}
+
+/* Per-op FP exception RE-WALK over [start_pc,end_pc). Seeds a local FP file from `fp_pre`, decodes
+ * each FP arithmetic op (resolving its source operand from registers / sandbox / immediate, exactly
+ * as the oracle does), and computes the per-op EXC. Returns the LAST op's EXC byte in *exc_out
+ * (the byte the FPSR shows) and the OR of all ops' AEXC contributions in *aexc_out. The rounding
+ * direction must already be set (fesetround) by the caller. */
+static void j5s_fp_exc_walk(j5d_sandbox *sb, struct j5d_m68k_state *st, const double fp_pre[8],
+                            uint32_t start_pc, uint32_t end_pc, uint32_t *exc_out, uint32_t *aexc_out)
+{
+    double fp[8]; memcpy(fp, fp_pre, sizeof fp);
+    uint32_t last_exc = 0, aexc = 0;
+    uint32_t pc = start_pc; int guard = 0;
+    while (pc < end_pc) {
+        if (++guard > 512) break;
+        if ((uint64_t)pc + 4 > (uint64_t)sb->origin + sb->size) break;
+        const uint8_t *p = sb->host_mem + (pc - sb->origin);
+        uint16_t op = be16(p);
+        if ((op & 0xff80u) != 0xf200u || (op & 0x0e00u) != 0x0200u) { pc += 2; continue; }
+        uint16_t opcode2 = be16(p + 2);
+        unsigned ea  = op & 0x3fu;
+        unsigned rm  = (opcode2 >> 14) & 1u;
+        unsigned srcspec = (opcode2 >> 10) & 7u;
+        unsigned fpn = (opcode2 >> 7) & 7u;
+        unsigned oper = opcode2 & 0x7fu;
+        unsigned is_to_mem = ((opcode2 & 0xe000u) == 0x6000u);
+        uint32_t ext = pc + 4;
+        if (is_to_mem) { pc = ext; continue; }   /* FMOVE FPn->mem: a CONSUMER, no EXC of its own */
+
+        double src = 0.0;
+        if (rm == 0) { src = fp[srcspec & 7]; }   /* register-direct FP source */
+        else {
+            unsigned mode = (ea >> 3) & 7u, reg = ea & 7u;
+            int fsz = (srcspec==0)?4 : (srcspec==1)?4 : (srcspec==4)?2 : (srcspec==5)?8 : (srcspec==6)?1 : 0;
+            uint32_t addr = 0; int rd = 0, imm = 0;
+            if (mode == 0) {                       /* Dn-direct */
+                uint32_t dv = st->d[reg];
+                if (srcspec == 0)      src = (double)(int32_t)dv;
+                else if (srcspec == 4) src = (double)(int32_t)(int16_t)(dv & 0xffff);
+                else if (srcspec == 6) src = (double)(int32_t)(int8_t)(dv & 0xff);
+                else if (srcspec == 1) { float f; memcpy(&f,&dv,4); src=(double)f; }
+            } else if (mode == 2 || mode == 3) { addr = st->a[reg]; rd = 1; }
+            else if (mode == 5) { addr = st->a[reg] + (uint32_t)(int32_t)(int16_t)be16(sb->host_mem+(ext-sb->origin)); ext += 2; rd = 1; }
+            else if (mode == 4) { addr = st->a[reg] - (uint32_t)fsz; rd = 1; }   /* -(An) base */
+            else if (mode == 7 && reg == 4) imm = 1;
+            if (imm) {
+                if (srcspec == 0) { src = (double)(int32_t)be32(sb->host_mem+(ext-sb->origin)); ext += 4; }
+                else if (srcspec == 1) { uint32_t b=be32(sb->host_mem+(ext-sb->origin)); float f; memcpy(&f,&b,4); src=(double)f; ext += 4; }
+                else if (srcspec == 4) { src = (double)(int32_t)(int16_t)be16(sb->host_mem+(ext-sb->origin)); ext += 2; }
+                else if (srcspec == 5) { uint64_t b=0; for(int i=0;i<8;i++) b=(b<<8)|sb->host_mem[(ext+i)-sb->origin]; memcpy(&src,&b,8); ext += 8; }
+                else if (srcspec == 6) { src = (double)(int32_t)(int8_t)(be16(sb->host_mem+(ext-sb->origin))&0xff); ext += 2; }
+            } else if (rd && (uint64_t)addr + (uint64_t)(fsz?fsz:4) <= (uint64_t)sb->origin + sb->size) {
+                if (srcspec == 0)      src = (double)(int32_t)be32(sb->host_mem+(addr-sb->origin));
+                else if (srcspec == 1) { uint32_t b=be32(sb->host_mem+(addr-sb->origin)); float f; memcpy(&f,&b,4); src=(double)f; }
+                else if (srcspec == 4) src = (double)(int32_t)(int16_t)be16(sb->host_mem+(addr-sb->origin));
+                else if (srcspec == 5) { uint64_t b=0; for(int i=0;i<8;i++) b=(b<<8)|sb->host_mem[(addr+i)-sb->origin]; memcpy(&src,&b,8); }
+                else if (srcspec == 6) src = (double)(int32_t)(int8_t)(be16(sb->host_mem+(addr-sb->origin))&0xff);
+            }
+        }
+        uint32_t exc = j5s_one_op_exc(fp, oper, fpn, src, st->fpcr);
+        last_exc = exc;
+        aexc |= j5s_exc_to_aexc(exc);
+        pc = ext;
+    }
+    *exc_out = last_exc;
+    *aexc_out = aexc;
+}
+
+/* Merge the per-op FP exception state into st->fpsr (EXC byte = the last op's; AEXC OR-accumulated;
+ * the cc byte from the native path is preserved) and TAKE an FP trap if an enabled exception fired.
+ * `exc`/`aexc` come from j5s_fp_exc_walk; `return_pc` is the PC after the FP block (saved in a trap
+ * frame). On a trap: *trap_pc=handler, return 1; on a raise failure: *trap_pc=0xFFFFFFFF, return 1.
+ * 0 = no trap. */
+static int j5s_fp_exc_apply(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t exc, uint32_t aexc,
+                            uint32_t return_pc, uint32_t *trap_pc, char *errbuf, unsigned errlen)
+{
+    st->fpsr = (st->fpsr & ~J5S_FPSR_EXC_MASK) | exc;
+    st->fpsr |= aexc;
+    uint32_t enabled = exc & (st->fpcr & J5S_FPCR_ENABLE_MASK);
+    unsigned vec;
+    if (!j5s_exc_vector(enabled, &vec)) return 0;
+    uint32_t handler;
+    if (raise_exception(sb, st, vec, return_pc, &handler, errbuf, errlen)) { *trap_pc = 0xFFFFFFFFu; return 1; }
+    *trap_pc = handler;
+    return 1;
+}
+
+/* [J5s] BSUN (engine side, mirrors the oracle's j5s_bsun). A SIGNALLING FP predicate (selector
+ * bit4 set) on an UNORDERED operand (FPSR NAN bit set) sets BSUN, accrues AIOP, and traps to
+ * vector 48 if BSUN is enabled in FPCR. Returns 1 if a trap was TAKEN (*pc=handler, or
+ * 0xFFFFFFFF on a raise failure); 0 if the op proceeds normally. */
+static int j5s_engine_bsun(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned pred,
+                           uint32_t return_pc, char *errbuf, unsigned errlen, uint32_t *pc)
+{
+    int signalling = (pred & 0x10u) != 0;     /* bit 4 = the IEEE-aware (signalling) predicate set */
+    int unordered  = (st->fpsr & J5Q_FPSR_NAN) != 0;
+    if (!(signalling && unordered)) return 0;
+    st->fpsr |= J5S_FPSR_BSUN;
+    st->fpsr |= J5S_FPSR_AIOP;
+    if (st->fpcr & J5S_FPSR_BSUN) {               /* the FPCR BSUN enable bit (same position)  */
+        uint32_t h;
+        if (raise_exception(sb, st, J5S_VEC_FP_BSUN, return_pc, &h, errbuf, errlen)) { *pc = 0xFFFFFFFFu; return 1; }
+        *pc = h;
+        return 1;
+    }
+    return 0;
+}
+
 /* ============================ [J5k] CROSS-REGION CHAINING ==========================
  * A block whose terminator is a STATIC-TARGET control transfer can branch DIRECTLY to the
  * target block (past the C dispatcher), keeping the 68k register file live in host regs.
@@ -846,6 +1020,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     uint16_t fp_live = 0, fp_dirty = 0;
     j5c_ra_get_fp_masks(&fp_live, &fp_dirty);
     int touches_fpu = (fp_live | fp_dirty) != 0;
+    cb->fpu_block = (uint8_t)(touches_fpu != 0);   /* [J5s] drive the per-block fenv exc model */
+    cb->fp_dirty  = (uint8_t)(fp_dirty & 0xff);    /* [J5s] FP regs to re-round for single-prec */
 
     /* Decode the terminator: is it a CHAINABLE static-target transfer? [J5o]: a block that
      * touches the FPU is NOT chained — it stays a C-dispatcher round-trip (like rts / the
@@ -1055,6 +1231,8 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     b->body_insns = tmp.body_insns;    /* [J5n] per-block instruction count for #N         */
     b->chain_off  = tmp.chain_off;     /* [J5k] carry the chain metadata into the cache slot */
     b->dirty_mask = tmp.dirty_mask;
+    b->fpu_block  = tmp.fpu_block;     /* [J5s] FP-exception per-block fenv gate              */
+    b->fp_dirty   = tmp.fp_dirty;      /* [J5s] dirty FP regs for single-precision re-round   */
     b->nlinks     = tmp.nlinks;
     for (unsigned k = 0; k < tmp.nlinks; k++) b->link[k] = tmp.link[k];
     g_cache_n++;
@@ -1248,8 +1426,49 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
          * chain-entry exec bump), and only RE-ENTERS C at the end of the chain — so one C call
          * here may run a whole CHAIN of blocks. */
         g_chain_terminal_idx = (uint32_t)(b - g_cache);   /* default: no chaining ran          */
+
+        /* [J5s] THE FP EXCEPTION MODEL. FP blocks are never chained (translate_block keeps
+         * touches_fpu blocks un-chained), so this block runs alone and returns to C here. The
+         * native run sets the rounding direction we apply (fesetround), produces the FP register +
+         * memory RESULTS, and we then derive the FPSR EXC/AEXC by a PER-OP C RE-WALK over the
+         * block's FP ops (j5s_fp_exc_walk) — last-op-wins EXC + sticky AEXC, the SAME per-op model
+         * the oracle uses, so the FPSR is bit-exact. A non-FP block (fpu_block==0, the whole integer
+         * corpus) skips ALL of this: zero overhead, byte-identical to before. */
+        int j5s_fp = b->fpu_block;
+        double j5s_fp_pre[8];
+        int j5s_prev_round = 0;
+        uint32_t j5s_blk_start = b->pc, j5s_blk_end = b->end_pc;
+        if (j5s_fp) {
+            memcpy(j5s_fp_pre, st->fp, sizeof j5s_fp_pre);   /* operands for the per-op re-walk */
+            j5s_prev_round = fegetround();
+            fesetround(j5s_host_round(st->fpcr));            /* the native FP honours this      */
+        }
+
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
         g_stats.dispatcher_roundtrips++;             /* [J5k] one C-dispatcher round-trip      */
+
+        if (j5s_fp) {
+            /* single-precision rounding: re-round the FP regs this block wrote through float
+             * (the native ops computed double; the FPCR PREC byte may select single). */
+            if ((st->fpcr & J5S_FPCR_PREC_MASK) == J5S_FPCR_PREC_S) {
+                for (int fpi = 0; fpi < 8; fpi++)
+                    if (b->fp_dirty & (1u << fpi)) st->fp[fpi] = j5s_round_prec(st->fp[fpi], st->fpcr);
+            }
+            uint32_t exc = 0, aexc = 0;
+            j5s_fp_exc_walk(sb, st, j5s_fp_pre, j5s_blk_start, j5s_blk_end, &exc, &aexc);
+            fesetround(j5s_prev_round);
+            uint32_t trap_pc = 0;
+            if (j5s_fp_exc_apply(sb, st, exc, aexc, j5s_blk_end, &trap_pc, errbuf, errlen)) {
+                if (trap_pc == 0xFFFFFFFFu) {            /* enabled trap but no handler installed */
+                    char dt[96]; snprintf(dt, sizeof dt, "FP exception trap with no handler @pc=%08x", j5s_blk_end);
+                    J5N_FUNNEL(J5N_FAULT_ENGINE, dt, st, sb);
+                    return 1;
+                }
+                g_stats.exceptions_dispatched++;
+                pc = trap_pc;                            /* take the FP exception vector          */
+                continue;
+            }
+        }
         /* [J5n] #N counts EVERY 68k instruction (body + the one terminator), matching the
          * instruction-precise oracle, so a fault's #N (set in the funnel) equals the oracle
          * index of the faulting instruction and replay-to-N lands on it. After running this
@@ -1471,6 +1690,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int16_t disp16 = be16s(thost + 4);
             uint32_t disp_pc = tpc + 4;              /* disp is relative to the disp word  */
             uint32_t after = tpc + 6;                /* FDBcc is opcode+cmdword+disp = 6 B */
+            { uint32_t bpc; if (j5s_engine_bsun(sb, st, pred, after, errbuf, errlen, &bpc)) {  /* [J5s] BSUN */
+                if (bpc == 0xFFFFFFFFu) RFAIL("BSUN trap with no handler (vector 48)");
+                g_stats.fp_cc_ops++; g_stats.exceptions_dispatched++; pc = bpc; continue; } }
             if (j5q_fp_cond_taken(pred, st->fpsr)) {
                 pc = after;                          /* condition true -> terminate the loop */
             } else {
@@ -1492,6 +1714,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             uint32_t after = tpc + 4;                /* opcode + command word            */
             if (mode == 2) after += 2;               /* + .W operand                     */
             else if (mode == 3) after += 4;          /* + .L operand                     */
+            { uint32_t bpc; if (j5s_engine_bsun(sb, st, pred, after, errbuf, errlen, &bpc)) {  /* [J5s] BSUN */
+                if (bpc == 0xFFFFFFFFu) RFAIL("BSUN trap with no handler (vector 48)");
+                g_stats.fp_cc_ops++; g_stats.exceptions_dispatched++; pc = bpc; continue; } }
             if (j5q_fp_cond_taken(pred, st->fpsr)) {
                 uint32_t handler;
                 /* TRAPcc is a group-2 exception: the saved PC is the instruction AFTER. */
@@ -1513,6 +1738,10 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
              * through to the next instruction (it is a terminator only because it is line-F). */
             unsigned pred = be16(thost + 2) & 0x3fu;
             unsigned mode = (top >> 3) & 7u, regn = top & 7u;
+            uint32_t after0 = tpc + 4; if (mode == 5) after0 += 2;
+            { uint32_t bpc; if (j5s_engine_bsun(sb, st, pred, after0, errbuf, errlen, &bpc)) {  /* [J5s] BSUN */
+                if (bpc == 0xFFFFFFFFu) RFAIL("BSUN trap with no handler (vector 48)");
+                g_stats.fp_cc_ops++; g_stats.exceptions_dispatched++; pc = bpc; continue; } }
             uint8_t val = j5q_fp_cond_taken(pred, st->fpsr) ? 0xFFu : 0x00u;
             uint32_t after = tpc + 4;                /* opcode + command word            */
             if (mode == 0) {                         /* Dn direct: low byte              */
@@ -1543,6 +1772,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int64_t disp; uint32_t after;
             if (is_long) { disp = (int32_t)be32(thost + 2); after = tpc + 6; }
             else         { disp = (int16_t)be16s(thost + 2); after = tpc + 4; }
+            { uint32_t bpc; if (j5s_engine_bsun(sb, st, pred, after, errbuf, errlen, &bpc)) {  /* [J5s] BSUN */
+                if (bpc == 0xFFFFFFFFu) RFAIL("BSUN trap with no handler (vector 48)");
+                g_stats.fp_cc_ops++; g_stats.exceptions_dispatched++; pc = bpc; continue; } }
             pc = j5q_fp_cond_taken(pred, st->fpsr)
                  ? (uint32_t)((int64_t)disp_pc + disp)
                  : after;
