@@ -37,5 +37,10 @@ asm mp64    -no-opt              # [J5h] 64-bit add/negate via add.l+addx.l / ne
 asm j5i     -kick1hunks -no-opt  # [J5i] exception/SR model: trap #1 / divu.w #0 / illegal;
                                  # -kick1hunks for the jmp-finish RELOC32; -no-opt keeps the
                                  # exact opcodes (no addq fold of the exit packer)
+asm mandel  -no-opt              # [J5j] CAPSTONE: fixed-point Mandelbrot ASCII renderer.
+                                 # -no-opt keeps the exact opcodes (no fold of move.l #imm->
+                                 # moveq, addi->addq, etc.) so the JIT + oracle decode the
+                                 # precise muls.w/asr/(d16,a5)-EA/Bcc/cmpi set. No relocation
+                                 # (PC-relative branches + abs sandbox scratch addr only).
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

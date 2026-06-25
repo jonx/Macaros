@@ -141,6 +141,35 @@ uint32_t stublib_vector_addr(const stub_lib *lib, int lvo)
     return lib->libbase - (uint32_t)lvo * J3_M68K_LIB_VECTSIZE;
 }
 
+/* Per-LVO marshal-thunk cache. The [J3] marshaller emits one MAP_JIT region per build and
+ * holds a small pool (J3_MAX_THUNKS). A library-calling program in a LOOP (e.g. the [J5j]
+ * Mandelbrot, which calls PutChar ~1700 times) would exhaust that pool if a fresh thunk were
+ * built per call. The thunk for a given LVO is FIXED (its source-register map never changes),
+ * so build it ONCE and reuse it — exactly what a real library base does (the JumpVec is set
+ * up once at MakeLibrary time). Keyed by the LVO index; the three stub LVOs need three thunks
+ * total, well within the pool. (Single-threaded harness; no locking needed.) */
+typedef struct { int lvo; j3_thunk_fn thunk; } thunk_cache_ent;
+static thunk_cache_ent g_thunk_cache[8];
+static int             g_thunk_cache_n = 0;
+
+static j3_thunk_fn cached_thunk(const j3_lvo_desc *desc, char *errbuf, unsigned errlen)
+{
+    for (int i = 0; i < g_thunk_cache_n; i++)
+        if (g_thunk_cache[i].lvo == desc->lvo) return g_thunk_cache[i].thunk;
+    j3_thunk_fn t = j3_build_marshal_thunk(desc, errbuf, errlen);
+    if (!t) return NULL;
+    if (g_thunk_cache_n < (int)(sizeof g_thunk_cache / sizeof g_thunk_cache[0])) {
+        g_thunk_cache[g_thunk_cache_n].lvo = desc->lvo;
+        g_thunk_cache[g_thunk_cache_n].thunk = t;
+        g_thunk_cache_n++;
+    }
+    return t;
+}
+
+/* Drop the thunk cache (the underlying regions are freed by j3_free_all_thunks). Call this
+ * after each program run so a fresh run rebuilds against a fresh [J3] pool. */
+void stublib_reset_thunk_cache(void) { g_thunk_cache_n = 0; }
+
 int stublib_dispatch(stub_lib *lib, j4_sandbox *sb, int lvo,
                      struct M68KState *st, char *errbuf, unsigned errlen)
 {
@@ -152,13 +181,13 @@ int stublib_dispatch(stub_lib *lib, j4_sandbox *sb, int lvo,
     j3_lvo_desc desc = *base;
     desc.libbase = lib->libbase;
 
-    /* Build the reverse-H3 marshal thunk via the REAL [J3] marshaller (emitted into
-     * a MAP_JIT region), then invoke it: it reads the source 68k registers from the
-     * M68KState, places them in AAPCS64 x0..x7, blr's the native stub, and (if the
-     * LVO returns) stores the native return into st->d[0]. */
+    /* Build (once, then cache) the reverse-H3 marshal thunk via the REAL [J3] marshaller
+     * (emitted into a MAP_JIT region), then invoke it: it reads the source 68k registers from
+     * the M68KState, places them in AAPCS64 x0..x7, blr's the native stub, and (if the LVO
+     * returns) stores the native return into st->d[0]. */
     g_active = lib;
-    j3_thunk_fn thunk = j3_build_marshal_thunk(&desc, errbuf, errlen);
-    if (!thunk) return 1;
+    j3_thunk_fn thunk = cached_thunk(&desc, errbuf, errlen);
+    if (!thunk) { g_active = NULL; return 1; }
     thunk(st);
     g_active = NULL;
     return 0;

@@ -70,8 +70,10 @@ typedef struct {
     stub_call_rec  calls[STUB_MAX_CALLS];
     int            ncalls;
 
-    /* The "print" sink PutChar writes into (so a program's output is observable). */
-    char           out[256];
+    /* The "print" sink PutChar writes into (so a program's output is observable). Sized to
+     * hold a full screen of program output — the [J5j] Mandelbrot capstone emits 26 rows of
+     * 64 chars + newlines = 1690 bytes; 4096 leaves headroom for larger renders. */
+    char           out[4096];
     int            outlen;
 
     /* Bytes currently allocated (incremented by AllocMem, decremented by FreeMem)

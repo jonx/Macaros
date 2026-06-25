@@ -36,6 +36,7 @@ ROWS=(
   "J5g broaden ISA+addr modes  : hosted-jit68k-j5g"
   "J5h X-bit multi-precision   : hosted-jit68k-j5h"
   "J5i 68k exception/SR model  : hosted-jit68k-j5i"
+  "J5j Mandelbrot capstone     : hosted-jit68k-j5j"
   "apps68k real 68k programs  : hosted-jit68k-apps"
   "D1 cocoa/metal present     : hosted-cocoametal"
   "ABI cocoametal dylib seam  : cocoametal-abi"

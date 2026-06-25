@@ -37,6 +37,7 @@ modified.
 | `arraysum.s`   | `add.l (a0)+,d0` (**post-increment memory**) in a loop, **`lea` + HUNK_RELOC32** | d0=150 | needs `[J5c]` |
 | `libcall.s`    | **`jsr -off(a6)`** library calls (AllocMem/PutChar/FreeMem) via the negative-offset LVO ABI | d0=0 | needs `[J5c]` |
 | `sumsq.s`      | **nested `bsr`/`jsr`/`rts` over a REAL return stack** + a **computed `jsr (a0)`** + a `cmp.l`/`bne.s` loop (a `square` subroutine nesting a `mul` helper, called from a loop) | d0=55 | **JIT `[J5f]`** |
+| `mandel.s`     | **the `[J5j]` CAPSTONE** — fixed-point Mandelbrot ASCII renderer: three nested loops, `muls.w` Q11 fixed point + `asr.l` shifts, `add`/`sub`/`cmp` reg+**`#imm`**, `Bcc`, **`(d16,a5)` displacement EA** (load+store), and a `PutChar` per cell via `jsr -off(a6)`. Prints the recognisable fractal; the 1690-byte output stream + regs + memory are byte-exact vs the oracle | d0=0 | **JIT `[J5j]`** |
 
 `mul.exe` stays entirely inside the opcode subset the `[J5b]` single-block decoder
 handles, so the runner **translates it to AArch64 and runs it under W^X TODAY**,

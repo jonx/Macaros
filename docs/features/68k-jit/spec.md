@@ -1224,6 +1224,83 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   `divu`/`divs` C-decode covers only the register-direct + `#imm.w` source forms the test uses
   (an unsupported EA is a clean error, not a silent miss).
 
+- **`[J5j]` THE CAPABILITY CAPSTONE — a SUBSTANTIAL, recognisable real 68k program through
+  the JIT — IMPLEMENTED / GREEN.** Where `[J5a]`..`[J5i]` are unit-test-shaped (small,
+  targeted blocks), `[J5j]` runs a real *workload*: a **fixed-point integer Mandelbrot-set
+  ASCII renderer** (`apps68k/mandel.s` → `bin/mandel.exe`, vasm `-Fhunkexe -no-opt`,
+  big-endian) through the REAL translate→emit→execute path of the `[J5d]`..`[J5i]` engine,
+  with VISIBLE output asserted byte-exact against the independent interpreter. Files:
+  `hosted/jit68k/{j5j_test.c, apps68k/mandel.s}` + the oracle extension in
+  `hosted/jit68k/j5d_interp.c` + the harness fixes in `hosted/jit68k/apps68k/{stublib.c,
+  stublib.h}`; target `make hosted-jit68k-j5j` (marker `[J5j] PASS`, watchdog 20 s), added to
+  `harness/test-hosted.sh`. **PASS (observed):** the classic Mandelbrot silhouette (main
+  cardioid + period-2 bulb) renders as **26 rows × 64 chars** (a 1690-byte PutChar stream),
+  byte-identical between the JIT and the oracle; `d0 == 0`; the final register file and the
+  **full sandbox memory** are byte-exact; the negative control bites. Engine telemetry: **19
+  blocks translated, 41 757 executed (41 738 cache hits), 1690 library (PutChar) calls, 34
+  `(d16,An)` memory accesses, 1156 AArch64 words** — i.e. nineteen hot blocks translated once
+  and re-run ~42 000 times.
+
+  *What it exercises (the point of a capstone).* The renderer is Q11 fixed point (1.0 =
+  2048). Per cell it iterates `z := z² + c` until `|z|² > 4` or `maxiter`, with each iteration
+  doing three signed `muls.w` (16×16→32) multiplies (the JIT's only multiply — operands are
+  bounded so they never overflow the 16-bit inputs), two-step `asr.l #8 ; asr.l #3` shifts to
+  renormalise Q22→Q11, the full `add.l`/`sub.l`/`cmp.l` set, `Bcc` (`bgt`/`blt`/`bne`, both
+  `.b` and `.w` widths the escape/loop branches need), and `(d16,a5)` displacement-EA loads
+  AND stores into a scratch frame in free sandbox space (the loop-invariant coordinates +
+  the per-iteration squared terms live there). The escape count maps to an ASCII shade
+  (`#`/`+`/`-`/`.`/space) emitted with `jsr LVO_PutChar(a6)` — the `jsr -off(a6)` →
+  negative-offset `[J3]` LVO bridge, **once per cell**. So a single program drives the whole
+  register/ALU/multiply/shift/branch/displacement-EA/library-call surface in tight nested
+  loops, far past what the unit blocks reach, and produces output a human recognises.
+
+  *The bug/gap the capstone surfaced + closed (a primary deliverable).* Under `-no-opt` vasm
+  emits `add.l #k,Dn` / `cmp.l #k,Dn` as the **immediate-source ALU forms** `add.l`/`sub.l`/
+  `cmp.l #imm,Dn` (EA = mode 7 reg 4 = immediate; LINED/LINEB encodings `0xD0BC`/`0x90BC`/
+  `0xB0BC`), NOT the ADDI/CMPI (LINE0) forms or the register-source forms the earlier corpus
+  used. **The JIT translated them CORRECTLY all along** — the REAL Emu68 `EMIT_lineD`/
+  `EMIT_lineB` decoders handle the immediate EA, and the engine tracks the 6-byte instruction
+  length from the decoder's own `m68k_ptr` advancement. But the **independent oracle**
+  (`j5d_interp.c`) only modeled the ADDI/CMPI + register-source variants, so running mandel
+  made the *oracle* stop on an unmodeled opcode (the JIT did not — this was an oracle coverage
+  gap, not a JIT bug). **Fix:** added the three immediate-source forms to `j5d_interp.c`, with
+  flag rules identical to the existing register-source `add`/`sub`/`cmp` (same EMU68-internal
+  C/V-swapped CCR layout) but a 32-bit immediate source and a 6-byte length. The byte-exact
+  assert then verifies the JIT's REAL decoder against the extended oracle — a genuine
+  cross-check, not a tautology (the negative control confirms it bites). The change is in OUR
+  (AROS-licensed) `j5d_interp.c`; **no `emu68/` file is touched**, no new file is vendored, the
+  Exhibit-B grep is unchanged/clean.
+
+  *Two harness limits the scale of the program also forced (NOT JIT bugs, stated honestly).*
+  (i) The `[J3]` marshaller emits one MAP_JIT region per thunk build and holds a small pool
+  (`J3_MAX_THUNKS`); `stublib_dispatch` rebuilt the thunk on **every** library call, so a
+  program calling PutChar ~1700 times exhausted the pool after 8 calls. A thunk for a given
+  LVO is fixed (its source-register map never changes), so `stublib_dispatch` now **caches one
+  thunk per LVO** and reuses it — exactly what a real library base does (its JumpVec is built
+  once at `MakeLibrary` time). (ii) The stub PutChar sink buffer was 256 bytes; enlarged to
+  4096 to hold a full screen of output. Both are in the OURS stub harness (`apps68k/stublib.*`),
+  not the translator.
+
+  *Verification (value-asserting) + the negative control.* The JIT runs mandel through the
+  engine (REAL decoders + dispatcher + the `(d16,An)` sandbox EA + the `[J3]` PutChar bridge),
+  capturing the PutChar byte stream; the oracle runs the SAME program from scratch over its
+  own copy of the sandbox + the same library bridge. PASS iff: the output streams are
+  byte-identical (length + bytes), the final register files are byte-exact, the full sandbox
+  memory is byte-exact, `d0 == 0` in both, the output is the expected 1690-byte shape, and it
+  actually contains both the inside-the-set `#` and background ` `. The **negative control**
+  flips the escape compare's destination register (`cmp.l #4,d0` → `cmp.l #4,d1`, a one-bit
+  change) in the JIT copy only; the fractal then differs and the JIT-vs-oracle stream + `d0`
+  diverge — proving the byte-exact assert depends on the real computation, not a fixed
+  expected string. Watchdog 20 s → `[J5j] FAIL`. `[J1]`–`[J5i]` + `apps68k` re-confirmed green.
+
+  *Honest scope / what `[J5j]` does NOT add.* It is a CAPABILITY capstone (stress + visible
+  output + a recognisable program), not new ISA: it stays inside the already-driven opcode set
+  (`moveq`/`move.l`+EA/`movea`/`add`/`sub`/`cmp` reg+imm/`addq`/`muls.w`/`asr.l`/`Bcc`/`jsr
+  d16(a6)`/`rts`) — integer only, no FPU/`roxl`/`roxr`/`movem`/bitfield/BCD, no self-modifying
+  code. The single coverage delta is the immediate-source ALU oracle forms above. The larger
+  debt (cross-region chaining, SMC invalidation, the FPU/privileged ISA, the boot-gated real
+  AROS library env) is unchanged from `[J5i]`.
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:

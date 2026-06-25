@@ -396,6 +396,45 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* ============================ [J5j] ALU with an IMMEDIATE source EA ==========
+         * add.l/sub.l/cmp.l #imm32,Dn : the LINED/LINEB/LINEB "<op>.l #imm,Dn" forms the
+         * Mandelbrot capstone uses (ADD/SUB/CMP with EA = mode 7 reg 4 = immediate), as
+         * opposed to the ADDI/SUBI/CMPI (LINE0) forms or the register-source forms the
+         * earlier corpus used. The JIT engine already translates these via the REAL Emu68
+         * EMIT_lineD/EMIT_lineB decoders; the oracle was missing them (the [J5j] coverage
+         * gap the substantial program surfaced). Flag rules are identical to the register-
+         * source add/sub/cmp (same EMU68-internal CCR layout), only the source operand is the
+         * 32-bit immediate and the instruction is 6 bytes.
+         *   add.l #imm,Dn : 1101 ddd 0 10 111 100 = 0xD0BC | dn<<9
+         *   sub.l #imm,Dn : 1001 ddd 0 10 111 100 = 0x90BC | dn<<9
+         *   cmp.l #imm,Dn : 1011 ddd 0 10 111 100 = 0xB0BC | dn<<9   */
+        if ((op & 0xF1FFu) == 0xD0BCu) {                 /* add.l #imm,Dn */
+            unsigned dn = (op >> 9) & 7u; uint32_t a = st->d[dn], b = be32(ip + 2);
+            uint64_t s = (uint64_t)a + b; uint32_t res = (uint32_t)s;
+            uint32_t cc = 0;
+            if (s >> 32) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ res) & (b ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 6; continue;
+        }
+        if ((op & 0xF1FFu) == 0x90BCu) {                 /* sub.l #imm,Dn */
+            unsigned dn = (op >> 9) & 7u; uint32_t a = st->d[dn], b = be32(ip + 2);
+            uint32_t res = a - b; uint32_t cc = 0;
+            if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ b) & (a ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 6; continue;
+        }
+        if ((op & 0xF1FFu) == 0xB0BCu) {                 /* cmp.l #imm,Dn (flags only; X kept) */
+            unsigned dn = (op >> 9) & 7u; uint32_t a = st->d[dn], b = be32(ip + 2);
+            uint32_t res = a - b; uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a) cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            if (res == 0)          cc |= J5D_CCR_Z;
+            if (res & 0x80000000u) cc |= J5D_CCR_N;
+            st->ccr = cc; pc += 6; continue;
+        }
+
         /* add.l Dm,Dn : D080 */
         if ((op & 0xF1F8u) == 0xD080u) {
             unsigned dn = (op >> 9) & 7u, dm = op & 7u;
