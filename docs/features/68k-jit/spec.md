@@ -803,7 +803,9 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   model is currently flat) — **DONE by `[J5f]` below** (the PC-driven dispatcher + the real
   68k return stack + the full Bcc widths + computed jumps + a reported block-cache win);
   OUR own SR/exception model (a host SIGSEGV inside translated
-  code → a 68k bus/illegal/divide-by-zero vector, the SECOND mapping layer in Risks);
+  code → a 68k bus/illegal/divide-by-zero vector, the SECOND mapping layer in Risks) —
+  **DONE by `[J5i]` below** (the dispatcher-level 68k exception model: a sandbox vector table,
+  the SR+PC frame, `rte`, the S bit, and the `graft/cpu_aarch64.h` host-signal seam stated);
   dirty-page SMC invalidation (`M68K_VerifyUnit`/CRC32 we did not re-host); the FPU
   (`LINEF`) + privileged ISA; and a sandbox-backed allocator so a native call returning
   memory *outside* the 32-bit sandbox is reachable by the 68k program. The `[J5d]` engine
@@ -1049,13 +1051,17 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   the checksum diverges — proving the byte-exact assert genuinely bites.
 
   *Honest deferrals / what `[J5g]` does NOT cover (stated in source + here).* (i) **`neg.l`/`not.l`
-  in a long block:** decoded correctly, but their **X bit** in a multi-instruction block does not
-  match the textbook 68k X byte-exact (Emu68's X handling in context diverges) — so they are
-  DELIBERATELY excluded from the verified program (the rule "don't run what the oracle can't check
-  byte-exact"). This is exactly the deferred **X-bit multi-precision chain**. (ii) **`roxl`/`roxr`**
+  in a long block:** decoded correctly, but their **X bit** was UN-ORACLED at `[J5g]` time — so they
+  were DELIBERATELY excluded from the verified program (the rule "don't run what the oracle can't
+  check byte-exact"). This is exactly the deferred **X-bit multi-precision chain**. **[RESOLVED by
+  `[J5h]`:** empirically ground against the PRM, Emu68's register-direct X handling is byte-exact
+  CORRECT real 68k — the deferral was conservative, not a real divergence; the oracle was extended to
+  match and `addx`/`subx`/`negx`/`neg`/`not` are now driven + byte-exact. See the `[J5h]` section.] (ii) **`roxl`/`roxr`**
   (the X-rotate-through-carry ops) and the **`bfXXX` bitfield** + **`movem`/`movep`/BCD** opcodes are
   vendored (the files link verbatim) but not driven/oracled. (iii) **The SR/exception model** (host
-  SIGSEGV inside translated code → a 68k bus/illegal/divide-by-zero vector), **SMC / dirty-page
+  SIGSEGV inside translated code → a 68k bus/illegal/divide-by-zero vector) — **DONE by `[J5i]`**
+  (vectors 2/3/4/5/32+n, the SR+PC frame, `rte`, the S bit; the host-signal seam to
+  `graft/cpu_aarch64.h` stated). **SMC / dirty-page
   block-cache invalidation** (no `M68K_VerifyUnit`/CRC32 yet), the **FPU (`LINEF`) + privileged +
   line-A/F** ISA, and the **boot-gated real AROS library environment** (the `LoadSeg`→`RunCommand`/
   `CallEntry` hook + real libraries vs the stub `exec`) all remain. (iv) `j5g_shims.c` (OURS) supplies
@@ -1067,9 +1073,156 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   (no "Incompatible With Secondary Licenses"), `emu68/NOTICE` updated. The flag helpers
   (`EMIT_GetNZCV` etc.) they call are `static inline` in the already-vendored `A64.h`. The EA funnel
   rewrite + the x1-state fix + the CCR-layout fix are all in OUR (AROS-licensed) files; no Emu68
-  source is copied. **NEXT coverage gap:** the deferred X-bit multi-precision chain (`neg`/`not`/
-  `roxl`/`roxr`/`addx`/`subx`/`negx` with byte-exact X) — needed before a `move.l`-with-X-carry
+  source is copied. **NEXT coverage gap (CLOSED by `[J5h]`):** the deferred X-bit multi-precision
+  chain (`neg`/`not`/`addx`/`subx`/`negx` with byte-exact X) — needed before a `move.l`-with-X-carry
   decompressor-style program can be verified.
+
+- **`[J5h]` the X-bit MULTI-PRECISION chain — IMPLEMENTED / GREEN.** Closes the one bounded coverage
+  gap `[J5g]` deferred: byte-exact, X-bit-exact `addx.l`/`subx.l`/`negx.l`/`neg.l`/`not.l` (and the
+  `.w`/`.b` sizes via the existing size-param path) through the REAL Emu68 decoders, with the
+  independent oracle agreeing on REAL 68k semantics. Files: `hosted/jit68k/j5h_test.c` + the oracle
+  `j5d_interp.c` (extended with `addx`/`subx`/`negx` + the multi-precision Z rule + `neg` generalised
+  to all sizes) + the new program `apps68k/mp64.s`→`bin/mp64.exe`; target `make hosted-jit68k-j5h`
+  (marker `[J5h] PASS`), added to the `test-hosted.sh` regression matrix (alongside the previously-
+  missing `[J5f]`/`[J5g]` rows). **PASS (observed):** mp64 — a 64-bit ADD (`add.l` low + `addx.l`
+  high, X carries lo→hi) of `0x00000001_FFFFFFFF + 0x00000002_00000001 = 0x00000004_00000000`, then a
+  64-bit NEGATE (`neg.l` low + `negx.l` high, X borrows lo→hi) `−S = 0xFFFFFFFC_00000000`, folded to
+  **`d0 = 0x000004FC`** — runs through the REAL Emu68 decoders, **byte-exact equal to the independent
+  oracle** on the FULL register file AND the **CCR byte INCLUDING the X bit** AND the sandbox memory; a
+  `subx.l` 64-bit-subtract sub-test (`0 − 1 = 0xFFFFFFFF_FFFFFFFF`) is also byte-exact; the negative
+  control flips `addx.l d4,d2`→plain `add.l d4,d2` (drops the X carry) so the high longword is off by
+  one (`d0 = 0x000003FD`), proving the byte-exact assert is not a tautology. `[J1]`–`[J5g]` + `apps68k`
+  re-confirmed green. Watchdog 15 s → FAIL.
+
+  *The RESOLVED X-bit / Z semantics — was Emu68 right, or the oracle? (the load-bearing finding).*
+  The `[J5g]` report read "Emu68's in-context X handling diverges" and deferred these ops. `[J5h]`
+  resolves it EMPIRICALLY: a throwaway probe ran each register-direct X-chain op (`.l`/`.w`/`.b`,
+  with X seeded both ways and the prior Z seeded both ways) through the REAL Emu68 decoders and dumped
+  the resulting register + CCR byte; each was then checked AGAINST THE M68000 PRM (4th ed., the
+  ADDX/SUBX/NEGX/NEG/NOT instruction pages) by hand. **Verdict: Emu68 is byte-exact CORRECT real 68k
+  for the register-direct path — the `[J5g]` deferral was conservative (the ops were UN-ORACLED, i.e.
+  "don't run what the oracle can't yet check", NOT proven wrong).** The PRM rules now implemented in
+  BOTH the engine path (already, via the real decoder) AND the oracle:
+  - **`neg`**: `X = C = (result != 0)` (the borrow out of `0 − Dn`); `V` set iff `Dn` was the sized
+    sign-minimum (`0x80…`); `N`,`Z` from the sized result. (PRM "NEG".)
+  - **`not`**: `N`,`Z` from result; `V = 0`; `C = 0`; **`X` UNAFFECTED** — confirmed against Emu68
+    (`EMIT_NOT` declares `SR_dirty = SR_NZVC`, never `SR_X`). (PRM "NOT".)
+  - **`negx`/`addx`/`subx`**: `Dx = 0 − Dx − X` / `Dx + Dy + X` / `Dx − Dy − X`; `X = C =` carry or
+    borrow out of the sized MSB; `V` = the sized two's-complement overflow; and **THE MULTI-PRECISION
+    Z RULE**: "Z — Cleared if the result is nonzero; UNCHANGED otherwise" — i.e. these ops NEVER SET
+    Z, they only ever CLEAR it, so Z ANDs across the words of a multi-precision value (a chain leaves
+    Z set only if EVERY word was zero). Emu68 implements exactly this (it emits a clear-only
+    `b.eq +2 ; bic Z`, never an unconditional set); the oracle's `sized_x_ccr` mirrors it (it carries
+    the prior Z forward when the result is zero and clears it otherwise). The probe's
+    `addx 0+0 X=0` case with the prior Z seeded 0 vs 1 produced CCR `0x00` vs `0x04` from BOTH the
+    engine and the oracle — the discriminating proof that Z is ANDed, not plainly set.
+    (Note: the CCR byte uses Emu68's internal `[J5g]` layout — bit0=V, bit1=C, bit2=Z, bit3=N,
+    bit4=X — so the oracle and dispatcher already agree on bit positions.)
+
+  *Exactly what `[J5h]` adds + the honest scope statement.* Driven through the REAL decoders +
+  oracled byte-exact: `addx.l`/`addx.w`/`addx.b Dy,Dx` (LINED), `subx.l`/`subx.w`/`subx.b Dy,Dx`
+  (LINE9), `negx.l`/`negx.w`/`negx.b Dx` + `neg.l`/`neg.w`/`neg.b Dx` + `not.l Dx` (LINE4) — all the
+  REGISTER-DIRECT (`Dn`) forms. **No new Emu68 file is vendored** — these decoders all live in the
+  already-driven, already-vendored verbatim `M68k_LINE4/LINE9/LINED.c`; Exhibit-B is UNCHANGED and
+  re-grep clean, and no `emu68/` file is touched by `[J5h]`. The change is entirely in OUR
+  (AROS-licensed) files: the oracle's three new decoders + the `sized_x_ccr` helper, the test driver,
+  the `.s`/`.exe` program, the Makefile target, and the regression-matrix rows.
+
+  *Honest deferrals / what `[J5h]` does NOT cover.* (i) The `(An)`/`(An)+`/`-(An)`/displacement
+  **MEMORY-EA forms** of `addx`/`subx`/`negx` — Emu68's in-place memory `EMIT_NEGX` carries an
+  upstream `// BROKEN!!!!` marker on its byte/word memory path, so only the register-direct chain
+  (which is byte-exact) is scoped in. (ii) **`roxl`/`roxr`** (the X-rotate-through-carry ops) — still
+  vendored-but-undriven. (iii) Everything `[J5g]` already listed (movem/movep/bitfield/BCD, the
+  SR/exception model, SMC, the FPU/privileged/line-A/F ISA, the boot-gated real AROS library env).
+
+- **`[J5i]` the 68k EXCEPTION / SR model — IMPLEMENTED / GREEN.** Closes the highest-value
+  remaining gap the prior spikes deferred (named in `[J5d]`/`[J5f]`/`[J5g]`/`[J5h]` + Risks
+  "68k exceptions → host signal"): a bounded, **dispatcher-level (C)** 68k exception model —
+  a vector table in the sandbox, the standard SR+PC exception frame on the supervisor stack,
+  dispatch through the normal PC loop to the vector's handler, and `rte`. A real vasm-assembled
+  hunk program (`apps68k/j5i.s` → `bin/j5i.exe`, `-kick1hunks` for the `jmp finish` `RELOC32`)
+  installs handlers and raises three exceptions from three REAL causes; three hand-built
+  micro-tests cover the frame/`rte`-resume in isolation and the bus-error path. Files:
+  `hosted/jit68k/{j5i_test.c, apps68k/j5i.s}` + the model in `hosted/jit68k/j5d_engine.c`
+  (engine) / `j5d_interp.c` (oracle) / `j5d_jit68k.h` (the SR/vector/frame types); target
+  `make hosted-jit68k-j5i` (marker `[J5i] PASS`, watchdog 15 s), added to the
+  `test-hosted.sh` matrix. **PASS (observed):**
+  1. **`j5i.exe`** — installs handlers for vectors 33 (TRAP #1), 5 (div0), 4 (illegal) at the
+     sandbox VBR stand-in (`0x00240000`), then `trap #1` → vector 33, `divu.w #0,d0` →
+     vector 5, `ILLEGAL` (`0x4AFC`) → vector 4. The trap + div0 handlers tally a bit and
+     `rte`-resume (saved PC = the instruction after); the illegal handler tallies, pops its
+     own frame, and redirects. Exit `d0 = 0x0000075A` (`(tally=7)<<8 | 0x5A`). All three
+     exceptions dispatched to the **correct vector** with the **correct frame** (SR + return
+     PC, the frame address recorded), byte-exact (registers + sandbox memory + the per-exception
+     log) vs the independent oracle.
+  2. **`trapframe`** — `trap #2` → vector 34; the handler writes a witness (`d1=0x11`) and
+     `rte`s; the saved frame PC is asserted to equal the post-trap instruction's address and
+     `rte` is asserted to resume there (`d0=0x5A`). Proves the frame contents + `rte` resume
+     in isolation.
+  3. **`buserror`** — `jmp 0x00100000` (below the sandbox origin) → a 68k **BUS error**
+     (vector 2); the installed handler runs (`d0=0x59`) and the frame carries the bad target
+     PC `0x00100000`. This is the **`graft/cpu_aarch64.h` SIGSEGV seam modeled in-band** (below).
+  4. **negative control** — NOP the `move.l a0,VBR+33*4` that installs the trap handler →
+     the slot stays 0, the trap dispatches to PC 0 (out of sandbox), the frame push then
+     faults cleanly; the program does **not** reach `0x075A`. The host does not crash either
+     way; the assert bites (`DIVERGED`).
+
+  *Exactly what `[J5i]` models (the honest scope statement).* (a) A **256-longword vector
+  table** in the sandbox at a fixed base `J5I_VBR=0x00240000` (our stand-in for the VBR
+  register); the tested vectors are populated by the program at runtime
+  (`lea handler(pc),An ; move.l An, vbr+vec*4`). (b) The standard **short exception frame**:
+  on entry the dispatcher pushes the 16-bit SR then the 32-bit return PC, big-endian,
+  predecrement (`a7 -= 6`) — the 68000 format-less 6-byte frame (SR @ a7, PC @ a7+2). (c)
+  **`rte`** (`0x4E73`): pop SR (16-bit) + PC (32-bit), `a7 += 6`, restore the condition codes +
+  the system byte, resume at the popped PC. (d) The **S (supervisor) bit**: set on every
+  exception entry (`sr_high |= S`), saved in the pushed frame, restored by `rte`. (e) The
+  **SR packing**: the pushed SR is a genuine architectural 68k SR — the CCR low byte is
+  re-ordered from Emu68's internal C/V-swapped storage (`j5d_pack_sr`, shared by engine +
+  oracle) so a real handler / `rte` reads standard bits. The vectors covered, each from a
+  real cause decoded straight from the stream: `TRAP #n` → 32+n; `divu.w`/`divs.w` with a
+  zero divisor → 5; `ILLEGAL` → 4; an out-of-sandbox / odd PC → bus/address 2/3 (reusing the
+  `[J5a]` clean-fault detection, now turned into a real 68k dispatch instead of a flag).
+
+  *The architectural finding (why the exception model is OURS, in C).* Emu68's div/illegal
+  decoders call `EMIT_Exception(ptr, VECTOR_*, …)` which emits a **branch into Emu68's
+  bare-metal VBR-based exception path** (`src/M68k_Exception.c`, NOT vendored — it is part of
+  the machine-owning runtime `[J0]` re-hosts). In the hosted runtime that symbol is the
+  documented **no-op stub** (`j5c_shims.c`), so an exception-causing instruction driven
+  through the decoders would silently do nothing in translated code. The faithful, bounded
+  realisation is therefore exactly the spec's Architecture §(2) "**68k exceptions handled in
+  C**": the **dispatcher** decodes the exception-causing instructions as terminators (the same
+  funnel that already owns the inter-block PC, the return stack, and the `[J3]` LVO bridge),
+  builds the frame, and vectors through the sandbox table. `divu`/`divs` are computed in C at
+  the terminator (so a zero divisor can vector, and the non-fault result + CCR stay byte-exact
+  with the oracle). No `emu68/` file is touched; the body opcodes (`ori`/`lsl`/`move`/…) still
+  run through the REAL Emu68 decoders. The Exhibit-B grep is unchanged/clean; no new vendored
+  file.
+
+  *The `graft/cpu_aarch64.h` integration seam (stated clearly, not faked).* In an
+  AROS-integrated JIT a genuinely wild 68k access (a translated `ldr`/`str` off a corrupt
+  `An`, or a jump to a bad PC) faults the **host** with SIGSEGV/SIGBUS.
+  `graft/cpu_aarch64.h`'s `SAVEREGS`/`RESTOREREGS` + `struct ExceptionContext` bridge that
+  host signal into AROS's trap machinery at the **AArch64** level. The 68k-level layer this
+  spike implements is the **piece that pairs with it**: the host signal handler recovers the
+  faulting m68k PC (Emu68 keeps it in `x18` at a block boundary; our hosted blocks keep
+  `st->pc`) + the fault kind, then calls the SAME `j5d_raise_exception()` path this test
+  exercises to build the 68k frame + vector. The seam is:
+  `{ host SIGSEGV in translated code } --(graft/cpu_aarch64.h SAVEREGS)--> { recover m68k PC +
+  fault address } --> j5d_raise_exception(BUS/ADDRESS) --> { 68k vector dispatch }`. In THIS
+  spike the sandbox bounds-check raises the SAME `j5d_raise_exception` path **without** a real
+  host SIGSEGV (the clean-fault `[J5a]` detection turned into a real 68k dispatch), so the 68k
+  model is exercised end-to-end while the host-signal wiring stays an AROS-side integration
+  task — documented, not faked.
+
+  *Honest deferrals (stated in source + here).* The **real VBR register** (we use a fixed
+  sandbox base); the **USP/SSP split** (one `a7` — supervisor and user share it; fine for
+  self-contained programs that do not switch modes mid-exception); all **68010+ frame formats**
+  (the 2-byte format/vector word, the long bus/address-error frame — we model the 68000 6-byte
+  frame); **group-0 vs group-1/2 exception priorities** (we dispatch the one faulting
+  instruction; no nesting-priority arbitration); and the **actual host-SIGSEGV → this-path
+  wiring** (lands at AROS integration via `graft/cpu_aarch64.h`, the seam above). The
+  `divu`/`divs` C-decode covers only the register-direct + `#imm.w` source forms the test uses
+  (an unsupported EA is a clean error, not a silent miss).
 
 ## Risks
 

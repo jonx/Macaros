@@ -68,12 +68,31 @@ struct j5d_m68k_state {
     uint32_t a[8];     /* A0..A7 : byte off 32.. 60 */
     uint32_t ccr;      /* CCR    : byte off 64       (low byte = 68k CCR)            */
     uint32_t pc;       /* PC     : byte off 68                                       */
+    /* [J5i] the rest of the SR (above the CCR byte) + the exception bookkeeping. These
+     * sit AFTER pc so EVERY existing offset (D/A/CCR/PC) is byte-for-byte unchanged —
+     * the emitted prologue/epilogue + the (An) EA helpers reference only J5D_OFF_D/A/
+     * CCR/PC, none of which move. The JIT'd code never touches these fields; the C
+     * dispatcher owns the SR-high byte + the exception state (the spec's "68k exceptions
+     * handled in C", §Architecture (2) "no host vectors"). */
+    uint16_t sr_high;  /* SR bits 8..15 : the SUPERVISOR (S, bit13) + trace/int-mask. The
+                          full SR = (sr_high << 8) | (ccr & 0x1F)  — but note the CCR byte
+                          here is Emu68's INTERNAL bit layout (see J5D_CCR_* below), so the
+                          architectural 68k SR is reconstructed by j5d_pack_sr().          */
+    uint16_t exc_count;/* [J5i] number of exceptions dispatched so far (test bookkeeping)  */
 };
 
 #define J5D_OFF_D(n)   ((uint16_t)((n) * 4u))
 #define J5D_OFF_A(n)   ((uint16_t)(32u + (n) * 4u))
 #define J5D_OFF_CCR    ((uint16_t)64u)
 #define J5D_OFF_PC     ((uint16_t)68u)
+
+/* ----- [J5i] the SR (status register) supervisor / trace / interrupt-mask bits --------
+ * Modeled in sr_high (SR bits 8..15). The S bit (supervisor) is the one with real
+ * semantics here: set on every exception entry, saved in the pushed frame, restored by
+ * rte. (M68000 PRM §1.3.2 "Status Register"; the high byte is the system byte.) */
+#define J5D_SR_S       0x2000u   /* bit 13: Supervisor state                            */
+#define J5D_SR_T       0x8000u   /* bit 15: Trace (modeled as a stored bit; not traced)  */
+#define J5D_SR_IMASK   0x0700u   /* bits 8..10: interrupt priority mask (stored only)    */
 
 /* CCR bit positions — EMU68's INTERNAL representation (a [J5g] finding). Emu68's
  * memory-backed CCR (RA_StoreCC writes the byte the decoders' EMIT_GetNZCV / EMIT_GetNZxx
@@ -154,8 +173,104 @@ typedef struct j5d_stats {
     uint32_t state_ldrstr_ra;     /* sum over blocks of (live-in loads + dirty stores)  */
     uint32_t reg_loads_emitted;   /* prologue Dn/An loads emitted (live-in only)        */
     uint32_t reg_stores_emitted;  /* epilogue Dn/An stores emitted (dirty only)         */
+    /* [J5i] the exception / SR model. */
+    uint32_t exceptions_dispatched; /* 68k exceptions vectored (TRAP/div0/illegal/bus)  */
+    uint32_t rte_returns;           /* rte instructions executed (frame popped, resumed) */
 } j5d_stats;
 void j5d_get_stats(j5d_stats *out);
+
+/* ===================== [J5i] THE 68k EXCEPTION / SR MODEL ==========================
+ * A bounded, dispatcher-level (C) 68k exception model — the spec's "68k exceptions
+ * handled in C" (Architecture §(2): we re-host Emu68's machine-owning runtime, so there
+ * is NO host VBAR and Emu68's bare-metal EMIT_Exception/VBR path is a no-op stub here;
+ * the exception dispatch is OURS, in the dispatcher, exactly like the inter-block PC
+ * funnel + the LVO bridge).
+ *
+ * WHAT WE MODEL (and what is deferred — honest scope, also in spec [J5i]):
+ *   - A 256-longword 68k VECTOR TABLE in the sandbox at a fixed base (J5I_VBR). The tested
+ *     vectors are populated with a tiny 68k STUB HANDLER (built into the test program);
+ *     the dispatcher reads handler[vector] as a big-endian longword and jumps there.
+ *   - The standard short-frame EXCEPTION FRAME: on entry the dispatcher pushes (to a7,
+ *     the supervisor stack — we DEFER the USP/SSP split, see below) the 16-bit SR then the
+ *     32-bit return PC, big-endian, predecrement (a7 -= 6). It sets S in sr_high and jumps
+ *     to the vector's handler. This is the 68000 (format-less) 6-byte frame: SR @ (a7),
+ *     PC @ (a7+2). (68010+ add a 2-byte format/vector word — DEFERRED.)
+ *   - rte (0x4E73): pop SR (16-bit) then PC (32-bit) big-endian, a7 += 6, restore S from
+ *     the popped SR, resume at the popped PC.
+ *   - The S (supervisor) bit: set on entry, saved/restored via the frame.
+ *
+ * DEFERRED (stated): the real VBR register (we use a fixed sandbox base), the USP/SSP
+ * split (one a7 — supervisor and user share it; fine for self-contained programs that do
+ * not switch modes mid-exception), all 68010+ frame formats (format/vector word, the long
+ * bus/address-error frame), group-0 vs group-1/2 exception priorities (we dispatch the one
+ * faulting instruction; no nesting-priority arbitration), and the actual host-SIGSEGV ->
+ * this-path wiring (that lands at AROS integration via graft/cpu_aarch64.h — see below).
+ *
+ * THE graft/cpu_aarch64.h INTEGRATION SEAM. In a JIT integrated into AROS, a genuinely
+ * wild 68k access (a translated ldr/str off a corrupt An) faults the HOST with SIGSEGV/
+ * SIGBUS. graft/cpu_aarch64.h's SAVEREGS/RESTOREREGS + struct ExceptionContext bridge that
+ * host signal into AROS's trap machinery at the AArch64 level. The 68k-level layer here is
+ * the PIECE THAT PAIRS WITH IT: the host handler recovers the faulting m68k PC (Emu68 keeps
+ * it in x18 at a block boundary; our hosted blocks keep st->pc) and the access kind, then
+ * calls j5d_raise_exception() to build the 68k frame + vector through THIS model. The seam
+ * is: { host SIGSEGV in translated code } --(graft/cpu_aarch64.h SAVEREGS)--> { recover m68k
+ * PC + fault address } --> j5d_raise_exception(BUS/ADDRESS) --> { 68k vector dispatch }.
+ * In THIS spike the sandbox bounds-check raises the SAME j5d_raise_exception path WITHOUT a
+ * real host SIGSEGV (the clean-fault [J5a] detection turned into a real 68k dispatch), so
+ * the 68k model is exercised end-to-end while the host-signal wiring stays an AROS-side
+ * integration task — documented, not faked. */
+
+/* The 68k vector numbers we cover (vector NUMBER; byte offset = number*4). */
+#define J5I_VEC_BUS_ERROR        2u    /* spurious/bus access fault   (group 0)          */
+#define J5I_VEC_ADDRESS_ERROR    3u    /* misaligned / bad address    (group 0)          */
+#define J5I_VEC_ILLEGAL          4u    /* illegal instruction         (group 1)          */
+#define J5I_VEC_DIV_BY_ZERO      5u    /* divu/divs by zero           (group 2)          */
+#define J5I_VEC_TRAP_BASE        32u   /* TRAP #n -> vector 32+n      (group 2)          */
+
+/* The sandbox-space base of the 256-longword vector table (our fixed stand-in for the VBR;
+ * the real VBR register is deferred). The test program plants handler addresses here at
+ * runtime (lea handler(pc),An ; move.l An, vbr+vec*4). It sits ABOVE the code/data the
+ * loader bump-allocates from the sandbox origin (0x00210000), so it never collides with the
+ * program. 256 longwords = 0x400 bytes. */
+#define J5I_VBR                  0x00240000u
+#define J5I_VECTOR_COUNT         256u
+
+/* Reason codes j5d_raise_exception accepts (it maps cause -> vector + frame). */
+typedef enum {
+    J5I_CAUSE_TRAP = 0,    /* arg = trap number n (vector 32+n)                          */
+    J5I_CAUSE_DIVZERO,     /* vector 5                                                   */
+    J5I_CAUSE_ILLEGAL,     /* vector 4                                                   */
+    J5I_CAUSE_BUS,         /* vector 2 (out-of-sandbox access / corrupt PC)              */
+    J5I_CAUSE_ADDRESS,     /* vector 3 (misaligned address)                              */
+} j5i_cause;
+
+/* A record of one dispatched exception (the test asserts these against the oracle). */
+typedef struct {
+    uint8_t  vector;       /* the 68k vector NUMBER it dispatched to                     */
+    uint32_t frame_sr;     /* the 16-bit SR pushed in the frame (architectural 68k SR)   */
+    uint32_t frame_pc;     /* the 32-bit return PC pushed in the frame                   */
+    uint32_t a7_at_entry;  /* a7 AFTER the 6-byte frame push (the frame's address)       */
+    uint32_t handler_pc;   /* the handler address read from the vector table             */
+} j5i_exc_record;
+
+#define J5I_MAX_EXC 32
+/* The exception log the engine + the oracle each fill. Reset at the start of each run. */
+typedef struct {
+    int            n;
+    j5i_exc_record rec[J5I_MAX_EXC];
+} j5i_exc_log;
+
+/* Engine + oracle write their per-run exception log here when the caller supplies one.
+ * Pass NULL if the program raises no exceptions (the whole existing corpus). The log is
+ * part of the j5d_run / j5d_interp_run signatures via j5d_set_exc_log (below) to keep the
+ * existing call sites byte-for-byte unchanged. */
+void j5d_set_exc_log(j5i_exc_log *log);          /* engine  (j5d_engine.c) */
+void j5d_interp_set_exc_log(j5i_exc_log *log);   /* oracle  (j5d_interp.c) */
+
+/* Reconstruct the architectural 68k SR (CCR low byte in standard order + the system byte)
+ * from the internal state. Defined in j5d_engine.c; the oracle uses the same packer so the
+ * pushed-frame SR is identical. */
+uint16_t j5d_pack_sr(const struct j5d_m68k_state *st);
 
 /* ----- The independent reference (j5d_interp.c, OURS — no Emu68) -------------------
  * Execute the SAME program from scratch (no Emu68) over its own state + the SAME

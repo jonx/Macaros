@@ -79,6 +79,91 @@ static uint32_t logic_ccr(uint32_t res, uint32_t keepX)
     return ccr;   /* V=0, C=0 */
 }
 
+/* ============================ [J5h] X-chain CCR (the multi-precision rule) ==========
+ * addx/subx/negx (and the .w/.b sizes) follow the M68000 PRM (4th ed., the ADDX/SUBX/
+ * NEGX instruction pages):
+ *   - X = C = carry/borrow OUT of the MSB of the size operated on.
+ *   - N from the result's MSB; V from the (sized) two's-complement overflow.
+ *   - THE MULTI-PRECISION Z RULE: "Cleared if the result is nonzero; UNCHANGED otherwise."
+ *     i.e. Z is NEVER set by these ops — it is only ever CLEARED (ANDed in across the words
+ *     of a multi-precision value), so a chain of addx/subx/negx leaves Z set only if EVERY
+ *     word was zero. This is the whole point of the X-chain: the running Z accumulates.
+ * `sized_x_ccr` builds the CCR from a sized result with explicit carry/overflow and the
+ * PRIOR ccr (consulted ONLY to carry Z forward when the result is zero; X is always rewritten
+ * here as X=C). `bits` is the operand width (8/16/32); `res` is already masked to that width. */
+static uint32_t sized_x_ccr(uint32_t res, unsigned bits, int carry, int overflow,
+                            uint32_t prior_ccr)
+{
+    uint32_t msb = 1u << (bits - 1);
+    uint32_t cc = 0;
+    if (carry)        cc |= J5D_CCR_C | J5D_CCR_X;   /* X = C = carry/borrow out      */
+    if (overflow)     cc |= J5D_CCR_V;
+    if (res & msb)    cc |= J5D_CCR_N;
+    /* Multi-precision Z: cleared if result nonzero, UNCHANGED otherwise (never set here). */
+    if (res != 0)     cc &= ~J5D_CCR_Z;              /* (Z not in cc yet; explicit)   */
+    else              cc |= (prior_ccr & J5D_CCR_Z); /* result==0: keep the prior Z   */
+    return cc;
+}
+
+/* ============================== [J5i] the oracle's SR / EXCEPTION model =============
+ * An INDEPENDENT re-derivation of the same 68k exception dispatch the engine does (NO
+ * Emu68; the engine's path is in j5d_engine.c). It uses the SHARED j5d_pack_sr / unpack
+ * (pure CCR-bit reordering, deterministic, declared in j5d_jit68k.h) so the SR pushed in
+ * the frame is bit-identical, then independently builds the frame + reads the vector +
+ * logs the record — the test asserts the two logs agree. */
+static j5i_exc_log *gi_exc_log = NULL;
+void j5d_interp_set_exc_log(j5i_exc_log *log) { gi_exc_log = log; }
+
+static void iunpack_sr(struct j5d_m68k_state *st, uint16_t sr)
+{
+    uint32_t i = 0;
+    if (sr & 0x01u) i |= J5D_CCR_C;
+    if (sr & 0x02u) i |= J5D_CCR_V;
+    if (sr & 0x04u) i |= J5D_CCR_Z;
+    if (sr & 0x08u) i |= J5D_CCR_N;
+    if (sr & 0x10u) i |= J5D_CCR_X;
+    st->ccr = i;
+    st->sr_high = (uint16_t)((sr >> 8) & 0xFFu);
+}
+
+/* Read a vector slot (BE longword at J5I_VBR + vnum*4). Returns 1 if out of sandbox. */
+static int iread_vector(j5d_sandbox *sb, unsigned vnum, uint32_t *handler)
+{
+    uint32_t va = J5I_VBR + vnum * 4u;
+    if (va < sb->origin || (uint64_t)va + 4 > (uint64_t)sb->origin + sb->size) return 1;
+    *handler = be32(sb->host_mem + (va - sb->origin));
+    return 0;
+}
+
+/* Build the 68k short frame on a7 + set S + log; return the handler PC. 0 ok, 1 error. */
+static int iraise(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned vnum,
+                  uint32_t return_pc, uint32_t *handler_out, char *errbuf, unsigned errlen)
+{
+    uint32_t handler;
+    if (iread_vector(sb, vnum, &handler)) {
+        if (errbuf) snprintf(errbuf, errlen, "exc: vector %u out of sandbox", vnum); return 1;
+    }
+    uint16_t sr = j5d_pack_sr(st);
+    uint32_t a7 = st->a[7] - 6u;
+    if (a7 < sb->origin || (uint64_t)a7 + 6 > (uint64_t)sb->origin + sb->size) {
+        if (errbuf) snprintf(errbuf, errlen, "exc: frame a7=%08x out of sandbox", a7); return 1;
+    }
+    uint8_t *p = sb->host_mem + (a7 - sb->origin);
+    p[0]=(uint8_t)(sr>>8); p[1]=(uint8_t)sr;
+    p[2]=(uint8_t)(return_pc>>24); p[3]=(uint8_t)(return_pc>>16);
+    p[4]=(uint8_t)(return_pc>>8);  p[5]=(uint8_t)return_pc;
+    st->a[7] = a7;
+    st->sr_high |= (J5D_SR_S >> 8);
+    st->exc_count++;
+    if (gi_exc_log && gi_exc_log->n < J5I_MAX_EXC) {
+        j5i_exc_record *r = &gi_exc_log->rec[gi_exc_log->n++];
+        r->vector=(uint8_t)vnum; r->frame_sr=sr; r->frame_pc=return_pc;
+        r->a7_at_entry=a7; r->handler_pc=handler;
+    }
+    *handler_out = handler;
+    return 0;
+}
+
 int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                    struct j5d_m68k_state *st, uint32_t *exit_d0,
                    j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
@@ -97,8 +182,15 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 
     for (;;) {
         if (++steps > STEP_CAP) IFAIL("step cap exceeded (runaway/mis-decode)");
-        if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size)
-            IFAIL("pc out of sandbox");
+        /* [J5i] address/bus error from a bad PC (mirror of the engine dispatcher). */
+        if ((pc & 1u) && (pc >= sb->origin) && ((uint64_t)pc + 2 <= (uint64_t)sb->origin + sb->size)) {
+            uint32_t h; if (iraise(sb, st, J5I_VEC_ADDRESS_ERROR, pc, &h, errbuf, errlen)) return 1;
+            pc = h; continue;
+        }
+        if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size) {
+            uint32_t h; if (iraise(sb, st, J5I_VEC_BUS_ERROR, pc, &h, errbuf, errlen)) return 1;
+            pc = h; continue;
+        }
         const uint8_t *ip = sb->host_mem + (pc - sb->origin);
         uint16_t op = be16(ip);
         st->pc = pc;
@@ -113,6 +205,59 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             continue;
         }
         if (op == 0x4E71u) { pc += 2; continue; }                /* nop            */
+
+        /* ============================ [J5i] the exception causes + rte =============== */
+        if (op == 0x4E73u) {                                     /* rte -> pop frame */
+            uint32_t a7 = st->a[7];
+            if (a7 < sb->origin || (uint64_t)a7 + 6 > (uint64_t)sb->origin + sb->size)
+                IFAIL("rte: frame a7 out of sandbox");
+            const uint8_t *fp = sb->host_mem + (a7 - sb->origin);
+            uint16_t sr = (uint16_t)((fp[0] << 8) | fp[1]);
+            uint32_t rpc = be32(fp + 2);
+            st->a[7] = a7 + 6u;
+            iunpack_sr(st, sr);
+            pc = rpc; continue;
+        }
+        if ((op & 0xFFF0u) == 0x4E40u) {                         /* TRAP #n -> 32+n  */
+            unsigned n = op & 0xFu; uint32_t h;
+            if (iraise(sb, st, J5I_VEC_TRAP_BASE + n, pc + 2, &h, errbuf, errlen)) return 1;
+            pc = h; continue;
+        }
+        if (op == 0x4AFCu) {                                     /* ILLEGAL -> 4     */
+            uint32_t h;
+            if (iraise(sb, st, J5I_VEC_ILLEGAL, pc, &h, errbuf, errlen)) return 1;
+            pc = h; continue;
+        }
+        if ((op & 0xFFC0u) == 0x80C0u || (op & 0xFFC0u) == 0x81C0u) { /* divu.w/divs.w */
+            int is_signed = ((op & 0xFFC0u) == 0x81C0u);
+            unsigned dn = (op >> 9) & 7u, mode = (op >> 3) & 7u, srcreg = op & 7u;
+            uint32_t divisor; uint32_t after;
+            if (mode == 0)                  { divisor = st->d[srcreg] & 0xFFFFu; after = pc + 2; }
+            else if (mode == 7 && srcreg==4){ divisor = be16(ip + 2);           after = pc + 4; }
+            else IFAIL("divu/divs: unsupported source EA in oracle");
+            if (divisor == 0) {
+                uint32_t h;
+                if (iraise(sb, st, J5I_VEC_DIV_BY_ZERO, after, &h, errbuf, errlen)) return 1;
+                pc = h; continue;
+            }
+            uint32_t dividend = st->d[dn], quot, rem;
+            if (is_signed) {
+                quot = (uint32_t)((int32_t)dividend / (int32_t)(int16_t)divisor);
+                rem  = (uint32_t)((int32_t)dividend % (int32_t)(int16_t)divisor);
+            } else { quot = dividend / divisor; rem = dividend % divisor; }
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            int ovf = is_signed ? ((int32_t)quot < -32768 || (int32_t)quot > 32767)
+                                : (quot > 0xFFFFu);
+            if (ovf) { st->ccr = cc | J5D_CCR_V; }
+            else {
+                st->d[dn] = ((rem & 0xFFFFu) << 16) | (quot & 0xFFFFu);
+                uint16_t qw = (uint16_t)quot;
+                if (qw == 0)      cc |= J5D_CCR_Z;
+                if (qw & 0x8000u) cc |= J5D_CCR_N;
+                st->ccr = cc;
+            }
+            pc = after; continue;
+        }
 
         /* jsr d16(A6) -> library bridge (same as the JIT dispatcher; no stack push). */
         if (op == 0x4EAEu) {
@@ -229,6 +374,28 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 4; continue;
         }
 
+        /* ============================ [J5h] addx Dy,Dx (register-direct) =============
+         * 1101 xxx 1 ss 00 0 yyy : xxx=Dx(dst), ss=size(00 b,01 w,10 l), yyy=Dy(src),
+         * mode bits 5-3 = 000 (register). Dx = Dx + Dy + X. X=C=carry out of the sized
+         * MSB; multi-precision Z (cleared if nonzero, else unchanged). Matches Emu68's
+         * REAL EMIT_ADDX .l/.w/.b register paths byte-exact (verified empirically). */
+        if ((op & 0xF138u) == 0xD100u) {
+            unsigned dx = (op >> 9) & 7u, dy = op & 7u;
+            unsigned sz = (op >> 6) & 3u;                 /* 0=b 1=w 2=l */
+            unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+            uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+            uint32_t xin = (st->ccr & J5D_CCR_X) ? 1u : 0u;
+            uint32_t a = st->d[dx] & mask, b = st->d[dy] & mask;
+            uint64_t s = (uint64_t)a + b + xin;
+            uint32_t res = (uint32_t)s & mask;
+            uint32_t msb = 1u << (bits - 1);
+            int carry = (s >> bits) & 1u;
+            int overflow = (((a ^ res) & (b ^ res)) & msb) != 0;     /* add overflow */
+            st->d[dx] = (st->d[dx] & ~mask) | res;                   /* keep upper bytes */
+            st->ccr = sized_x_ccr(res, bits, carry, overflow, st->ccr);
+            pc += 2; continue;
+        }
+
         /* add.l Dm,Dn : D080 */
         if ((op & 0xF1F8u) == 0xD080u) {
             unsigned dn = (op >> 9) & 7u, dm = op & 7u;
@@ -253,6 +420,26 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             if (((a ^ res) & (b ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
             st->d[dn] = res; st->a[an] = addr + 4;
             st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 2; continue;
+        }
+
+        /* ============================ [J5h] subx Dy,Dx (register-direct) =============
+         * 1001 xxx 1 ss 00 0 yyy : Dx = Dx - Dy - X. X=C=borrow out of the sized MSB;
+         * multi-precision Z. Matches Emu68's REAL EMIT_SUBX register paths byte-exact. */
+        if ((op & 0xF138u) == 0x9100u) {
+            unsigned dx = (op >> 9) & 7u, dy = op & 7u;
+            unsigned sz = (op >> 6) & 3u;
+            unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+            uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+            uint32_t xin = (st->ccr & J5D_CCR_X) ? 1u : 0u;
+            uint32_t a = st->d[dx] & mask, b = st->d[dy] & mask;
+            uint64_t diff = (uint64_t)a - b - xin;        /* borrow in bit `bits` */
+            uint32_t res = (uint32_t)diff & mask;
+            uint32_t msb = 1u << (bits - 1);
+            int borrow = ((uint64_t)b + xin) > a;
+            int overflow = (((a ^ b) & (a ^ res)) & msb) != 0;        /* sub overflow */
+            st->d[dx] = (st->d[dx] & ~mask) | res;
+            st->ccr = sized_x_ccr(res, bits, borrow, overflow, st->ccr);
             pc += 2; continue;
         }
 
@@ -307,6 +494,19 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             uint32_t res = (uint32_t)(a * b);
             st->d[dn] = res; st->ccr = nz32(res, st->ccr & J5D_CCR_X);
             pc += 2; continue;
+        }
+
+        /* [J5i] addq.l #imm,An : 5088 | q<<9 | an  (q==0 => 8). ADDA form: full 32-bit add
+         * to the address register, NO condition codes (PRM ADDQ-to-An). Used by the J5i
+         * illegal handler to pop its own exception frame (addq.l #6,a7). */
+        if ((op & 0xF1F8u) == 0x5088u) {
+            unsigned q = (op >> 9) & 7u, imm = (q == 0) ? 8u : q, an = op & 7u;
+            st->a[an] = st->a[an] + imm; pc += 2; continue;
+        }
+        /* [J5i] subq.l #imm,An : 5188 | q<<9 | an  (SUBA form, no flags). */
+        if ((op & 0xF1F8u) == 0x5188u) {
+            unsigned q = (op >> 9) & 7u, imm = (q == 0) ? 8u : q, an = op & 7u;
+            st->a[an] = st->a[an] - imm; pc += 2; continue;
         }
 
         /* addq.l #imm,Dn : 5080 | q<<9 | dn  (q==0 => 8) */
@@ -533,13 +733,45 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             st->ccr = (st->ccr & J5D_CCR_X) | J5D_CCR_Z;
             pc += 2; continue;
         }
-        /* neg.l Dn : 4480 | dn  (Dn = 0 - Dn) */
-        if ((op & 0xFFF8u) == 0x4480u) {
-            unsigned dn = op & 7u; uint32_t a = st->d[dn]; uint32_t res = 0u - a;
+        /* ============================ [J5h] negx Dn (register-direct) ================
+         * 0100 0000 ss 000 rrr : Dn = 0 - Dn - X. ss=size (00 b,01 w,10 l). X=C=borrow;
+         * V from the sized overflow; multi-precision Z (cleared if nonzero, else kept).
+         * Matches Emu68's REAL EMIT_NEGX register .l/.w/.b paths byte-exact.
+         * mask 0xFF38: high byte == 0x40 (op field 0000) + mode bits 5-3 == 000; any size. */
+        if ((op & 0xFF38u) == 0x4000u) {
+            unsigned dn = op & 7u, sz = (op >> 6) & 3u;
+            unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+            uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+            uint32_t xin = (st->ccr & J5D_CCR_X) ? 1u : 0u;
+            uint32_t a = st->d[dn] & mask;
+            uint64_t diff = (uint64_t)0 - a - xin;
+            uint32_t res = (uint32_t)diff & mask;
+            uint32_t msb = 1u << (bits - 1);
+            int borrow = (a + xin) != 0;                  /* borrow out of 0 - a - X */
+            int overflow = (a & res & msb) != 0;          /* 0-a-X overflow: both src&res neg */
+            st->d[dn] = (st->d[dn] & ~mask) | res;
+            st->ccr = sized_x_ccr(res, bits, borrow, overflow, st->ccr);
+            pc += 2; continue;
+        }
+
+        /* neg.b/.w/.l Dn : 0100 0100 ss 000 rrr  (Dn = 0 - Dn). NOT a multi-precision op:
+         * Z is set normally (cleared if nonzero, SET if zero). X=C=(result!=0); V overflow.
+         * [J5h] generalised to all sizes (was .l-only); mask 0xFF38 -> high byte 0x44, mode
+         * 000. Matches Emu68's REAL EMIT_NEG register paths byte-exact. */
+        if ((op & 0xFF38u) == 0x4400u) {
+            unsigned dn = op & 7u, sz = (op >> 6) & 3u;
+            unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+            uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+            uint32_t msb = 1u << (bits - 1);
+            uint32_t a = st->d[dn] & mask;
+            uint32_t res = (0u - a) & mask;
             uint32_t cc = 0;
-            if (a != 0) cc |= J5D_CCR_C | J5D_CCR_X;       /* borrow out of 0-a */
-            if (a == 0x80000000u) cc |= J5D_CCR_V;          /* overflow */
-            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            if (a != 0)   cc |= J5D_CCR_C | J5D_CCR_X;       /* borrow out of 0-a */
+            if (a == msb) cc |= J5D_CCR_V;                    /* overflow: only 0x80.. */
+            if (res == 0) cc |= J5D_CCR_Z;
+            if (res & msb) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & ~mask) | res;
+            st->ccr = cc;
             pc += 2; continue;
         }
         /* not.l Dn : 4680 | dn  (one's complement; N,Z; V=C=0; X kept) */

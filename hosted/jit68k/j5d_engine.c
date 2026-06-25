@@ -138,19 +138,118 @@ static uint32_t be32(const uint8_t *p)
 /* Is `op` a terminator the DISPATCHER handles (not driven through a real decoder)?
  * [J5f] broadens this from the [J5d] flat-PC subset to the full control-flow set:
  * rts, bsr/bra/Bcc (all .B/.W/.L widths), jmp/jsr absolute + computed (An), the
- * library jsr d16(A6) vector, and lea abs.l,An. */
+ * library jsr d16(A6) vector, and lea abs.l,An.  [J5i] adds the EXCEPTION-causing
+ * instructions + rte as dispatcher-decoded terminators (the 68k exception model is OURS,
+ * in C — Emu68's bare-metal EMIT_Exception is a no-op stub in the hosted runtime). */
 static int is_terminator(uint16_t op)
 {
     if (op == 0x4E75u) return 1;                 /* rts                            */
+    if (op == 0x4E73u) return 1;                 /* rte  ([J5i] return from exception) */
     if (op == 0x4E71u) return 1;                 /* nop (dispatcher steps over it) */
     if (op == 0x4EAEu) return 1;                 /* jsr d16(A6)  (library vector)  */
     if (op == 0x4EB9u) return 1;                 /* jsr abs.l                      */
     if (op == 0x4EF9u) return 1;                 /* jmp abs.l                      */
     if ((op & 0xFFF8u) == 0x4E90u) return 1;     /* jsr (An)   (computed)          */
     if ((op & 0xFFF8u) == 0x4ED0u) return 1;     /* jmp (An)   (computed)          */
+    if ((op & 0xFFF0u) == 0x4E40u) return 1;     /* TRAP #n  ([J5i] vector 32+n)   */
+    if (op == 0x4AFCu) return 1;                 /* ILLEGAL  ([J5i] vector 4)      */
+    if ((op & 0xFFC0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
+    if ((op & 0xFFC0u) == 0x81C0u) return 1;     /* divs.w  ([J5i] vector 5 on /0) */
     if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
     if ((op & 0xF1FFu) == 0x41F9u) return 1;     /* lea abs.l,An (dispatcher-decoded)*/
     if ((op & 0xF1FFu) == 0x41FAu) return 1;     /* lea (d16,pc),An (dispatcher-decoded)*/
+    return 0;
+}
+
+/* ============================== [J5i] THE SR / EXCEPTION MODEL =====================
+ * Dispatcher-level (C), the spec's "68k exceptions handled in C" (no host VBAR; Emu68's
+ * bare-metal EMIT_Exception/VBR path is a no-op stub in our re-hosted runtime). The
+ * dispatcher already owns the inter-block PC funnel + the return stack + the LVO bridge;
+ * the exception dispatch is one more thing decided at the same terminator boundary. */
+
+/* Pack the architectural 68k SR from the internal state. The CCR byte stored in the state
+ * uses Emu68's INTERNAL bit layout (V=0,C=1,Z=2,N=3,X=4 — see j5d_jit68k.h); the real 68k
+ * CCR low byte is C=0,V=1,Z=2,N=3,X=4. We re-order C and V so the SR PUSHED IN THE FRAME is
+ * a genuine 68k SR (the program's rte / a real handler would read standard bits). */
+uint16_t j5d_pack_sr(const struct j5d_m68k_state *st)
+{
+    uint32_t i = st->ccr;
+    uint16_t ccr68 = 0;
+    if (i & J5D_CCR_C) ccr68 |= 0x01u;   /* C: internal bit1 -> 68k bit0 */
+    if (i & J5D_CCR_V) ccr68 |= 0x02u;   /* V: internal bit0 -> 68k bit1 */
+    if (i & J5D_CCR_Z) ccr68 |= 0x04u;   /* Z */
+    if (i & J5D_CCR_N) ccr68 |= 0x08u;   /* N */
+    if (i & J5D_CCR_X) ccr68 |= 0x10u;   /* X */
+    return (uint16_t)((st->sr_high << 8) | ccr68);
+}
+
+/* The reverse: write the CCR low byte (Emu68-internal layout) + sr_high back from a 68k SR
+ * (used by rte to restore the condition codes + the system byte the frame saved). */
+static void j5d_unpack_sr(struct j5d_m68k_state *st, uint16_t sr)
+{
+    uint32_t i = 0;
+    if (sr & 0x01u) i |= J5D_CCR_C;
+    if (sr & 0x02u) i |= J5D_CCR_V;
+    if (sr & 0x04u) i |= J5D_CCR_Z;
+    if (sr & 0x08u) i |= J5D_CCR_N;
+    if (sr & 0x10u) i |= J5D_CCR_X;
+    st->ccr     = i;
+    st->sr_high = (uint16_t)((sr >> 8) & 0xFFu);
+}
+
+/* The per-run exception log (the test's bookkeeping; NULL when a program raises none). */
+static j5i_exc_log *g_exc_log = NULL;
+void j5d_set_exc_log(j5i_exc_log *log) { g_exc_log = log; }
+
+/* Read the handler address for vector `vnum` from the sandbox vector table (big-endian
+ * longword at J5I_VBR + vnum*4). Returns 1 (error) if the table slot is out of sandbox. */
+static int read_vector(j5d_sandbox *sb, unsigned vnum, uint32_t *handler)
+{
+    uint32_t va = J5I_VBR + vnum * 4u;
+    if (va < sb->origin || (uint64_t)va + 4 > (uint64_t)sb->origin + sb->size) return 1;
+    *handler = be32(sb->host_mem + (va - sb->origin));
+    return 0;
+}
+
+/* Raise a 68k exception: build the standard short frame on the supervisor stack (a7),
+ * set S, and RETURN the handler PC the dispatcher must jump to. `return_pc` is the PC saved
+ * in the frame (for a TRAP/illegal: the instruction AFTER; for div0/bus: the faulting one,
+ * per the PRM group conventions we model). On any error (bad vector slot / a7 escapes the
+ * sandbox) returns 1 with errbuf set. */
+static int raise_exception(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned vnum,
+                           uint32_t return_pc, uint32_t *handler_out,
+                           char *errbuf, unsigned errlen)
+{
+    uint32_t handler;
+    if (read_vector(sb, vnum, &handler)) {
+        if (errbuf) snprintf(errbuf, errlen, "exception: vector %u table slot out of sandbox", vnum);
+        return 1;
+    }
+    uint16_t sr = j5d_pack_sr(st);            /* the SR to push (BEFORE setting S)         */
+
+    /* Push the 6-byte frame: predecrement a7 by 6, write SR (16-bit BE) @ a7, PC (32-bit
+     * BE) @ a7+2. (M68000 short frame: SR then PC, both big-endian.) */
+    uint32_t a7 = st->a[7] - 6u;
+    if (a7 < sb->origin || (uint64_t)a7 + 6 > (uint64_t)sb->origin + sb->size) {
+        if (errbuf) snprintf(errbuf, errlen, "exception: frame push a7=%08x out of sandbox", a7);
+        return 1;
+    }
+    uint8_t *p = sb->host_mem + (a7 - sb->origin);
+    p[0] = (uint8_t)(sr >> 8);  p[1] = (uint8_t)sr;                          /* SR  @ a7    */
+    p[2] = (uint8_t)(return_pc >> 24); p[3] = (uint8_t)(return_pc >> 16);
+    p[4] = (uint8_t)(return_pc >> 8);  p[5] = (uint8_t)return_pc;            /* PC  @ a7+2  */
+    st->a[7] = a7;
+
+    st->sr_high |= (J5D_SR_S >> 8);           /* enter supervisor state (set S)            */
+    st->exc_count++;
+
+    if (g_exc_log && g_exc_log->n < J5I_MAX_EXC) {
+        j5i_exc_record *r = &g_exc_log->rec[g_exc_log->n++];
+        r->vector = (uint8_t)vnum; r->frame_sr = sr; r->frame_pc = return_pc;
+        r->a7_at_entry = a7; r->handler_pc = handler;
+    }
+    g_stats.exceptions_dispatched++;
+    *handler_out = handler;
     return 0;
 }
 
@@ -422,6 +521,29 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
     for (;;) {
         if (++steps > 2000000u) RFAIL("dispatcher step cap (runaway)");
 
+        /* [J5i] ADDRESS / BUS error: a jump/return to a PC OUTSIDE the sandbox (a corrupt
+         * return address, a wild computed jmp/jsr(An), a bad branch target) is the hosted
+         * stand-in for the host SIGSEGV the integrated JIT would take (graft/cpu_aarch64.h
+         * seam). Rather than a clean dispatcher error, vector it as a 68k exception:
+         *   - odd PC  -> ADDRESS error (vector 3): 68k instructions must be word-aligned.
+         *   - PC out of sandbox -> BUS error (vector 2): an access to nonexistent memory.
+         * The vector table itself lives in the sandbox, so the handler PC is reachable; the
+         * saved frame PC is the bad target (group-0 convention: the faulting address). If
+         * the program has NOT installed these vectors (handler reads as 0 / out of range),
+         * raise_exception fails cleanly — no host crash either way. */
+        if ((pc & 1u) && (pc >= sb->origin) && ((uint64_t)pc + 2 <= (uint64_t)sb->origin + sb->size)) {
+            uint32_t handler;
+            if (raise_exception(sb, st, J5I_VEC_ADDRESS_ERROR, pc, &handler, errbuf, errlen))
+                return 1;
+            pc = handler; continue;
+        }
+        if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size) {
+            uint32_t handler;
+            if (raise_exception(sb, st, J5I_VEC_BUS_ERROR, pc, &handler, errbuf, errlen))
+                return 1;
+            pc = handler; continue;
+        }
+
         /* (1)+(2): look up (translate-on-miss + cache) + run the block at pc. */
         j5d_cached_block *b = get_block(sb, pc, errbuf, errlen);
         if (!b) return 1;                            /* errbuf set                  */
@@ -448,6 +570,85 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             g_stats.returns_popped++;
             if (depth) depth--;
             pc = ret;
+        }
+        else if (top == 0x4E73u) {                   /* [J5i] rte -> pop SR+PC, resume */
+            /* The frame is at a7: SR (16-bit BE) @ a7, PC (32-bit BE) @ a7+2. Pop both,
+             * a7 += 6, restore S + the condition codes from the saved SR, resume at PC. */
+            uint32_t a7 = st->a[7];
+            if (a7 < sb->origin || (uint64_t)a7 + 6 > (uint64_t)sb->origin + sb->size)
+                RFAIL("rte: frame a7 out of sandbox");
+            const uint8_t *fp = sb->host_mem + (a7 - sb->origin);
+            uint16_t sr = (uint16_t)((fp[0] << 8) | fp[1]);
+            uint32_t rpc = be32(fp + 2);
+            st->a[7] = a7 + 6u;
+            j5d_unpack_sr(st, sr);                   /* restore CCR + the system byte (S) */
+            g_stats.rte_returns++;
+            pc = rpc;
+        }
+        else if ((top & 0xFFF0u) == 0x4E40u) {       /* [J5i] TRAP #n -> vector 32+n */
+            unsigned n = top & 0xFu;
+            uint32_t handler;
+            /* TRAP is group 2: the saved PC is the instruction AFTER the TRAP (2 bytes). */
+            if (raise_exception(sb, st, J5I_VEC_TRAP_BASE + n, tpc + 2, &handler, errbuf, errlen))
+                return 1;
+            pc = handler;
+        }
+        else if (top == 0x4AFCu) {                   /* [J5i] ILLEGAL -> vector 4    */
+            uint32_t handler;
+            /* Illegal is group 1: the saved PC is the faulting instruction itself. */
+            if (raise_exception(sb, st, J5I_VEC_ILLEGAL, tpc, &handler, errbuf, errlen))
+                return 1;
+            pc = handler;
+        }
+        else if ((top & 0xFFC0u) == 0x80C0u || (top & 0xFFC0u) == 0x81C0u) {
+            /* [J5i] divu.w/divs.w — the dispatcher computes the (16-bit) division IN C so
+             * a ZERO divisor can vector to 5 (Emu68's decoder would emit a branch into the
+             * un-rehosted bare-metal EMIT_Exception/VBR path — a no-op stub here). Only the
+             * register-direct + #imm source forms the test uses are decoded; an unsupported
+             * EA mode is a clean error, not a silent miss. dst = Dn = (top>>9)&7. */
+            int is_signed = ((top & 0xFFC0u) == 0x81C0u);
+            unsigned dn = (top >> 9) & 7u;
+            unsigned mode = (top >> 3) & 7u, srcreg = top & 7u;
+            uint32_t divisor; uint32_t after;
+            if (mode == 0) {                         /* Dm direct */
+                divisor = st->d[srcreg] & 0xFFFFu; after = tpc + 2;
+            } else if (mode == 7 && srcreg == 4) {   /* #imm.w     */
+                divisor = be16(thost + 2);           after = tpc + 4;
+            } else {
+                RFAIL("divu/divs: unsupported source EA (only Dm and #imm.w decoded in C)");
+            }
+            if (divisor == 0) {                      /* -> vector 5 (group 2: save PC after) */
+                uint32_t handler;
+                if (raise_exception(sb, st, J5I_VEC_DIV_BY_ZERO, after, &handler, errbuf, errlen))
+                    return 1;
+                pc = handler;
+            } else {
+                uint32_t dividend = st->d[dn];       /* 32-bit dividend */
+                uint32_t quot, rem;
+                if (is_signed) {
+                    int32_t q = (int32_t)dividend / (int32_t)(int16_t)divisor;
+                    int32_t r = (int32_t)dividend % (int32_t)(int16_t)divisor;
+                    quot = (uint32_t)q; rem = (uint32_t)r;
+                } else {
+                    quot = dividend / divisor; rem = dividend % divisor;
+                }
+                /* result = (remainder.w << 16) | (quotient.w); NZ from the quotient word,
+                 * V on quotient overflow (>16 bits), C=0, X unaffected (PRM DIVU/DIVS). */
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                int ovf = is_signed ? ((int32_t)quot < -32768 || (int32_t)quot > 32767)
+                                    : (quot > 0xFFFFu);
+                if (ovf) {
+                    cc |= J5D_CCR_V;                 /* overflow: result undefined, regs kept */
+                    st->ccr = cc;
+                } else {
+                    st->d[dn] = ((rem & 0xFFFFu) << 16) | (quot & 0xFFFFu);
+                    uint16_t qw = (uint16_t)quot;
+                    if (qw == 0)            cc |= J5D_CCR_Z;
+                    if (qw & 0x8000u)       cc |= J5D_CCR_N;
+                    st->ccr = cc;
+                }
+                pc = after;
+            }
         }
         else if (top == 0x4E71u) {                   /* nop                          */
             pc = tpc + 2;

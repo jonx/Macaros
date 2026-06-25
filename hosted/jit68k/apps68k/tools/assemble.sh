@@ -32,5 +32,10 @@ asm libcall
 asm sumsq -kick1hunks         # subroutines: nested bsr/jsr/rts + computed jsr(a0) ([J5f])
 asm bubsort -kick1hunks -no-opt  # [J5g] bubble sort (indexed EA) + checksum (shifts/imm/misc);
                                  # -no-opt keeps the exact opcodes (vasm would fold addi->addq etc.)
+asm mp64    -no-opt              # [J5h] 64-bit add/negate via add.l+addx.l / neg.l+negx.l
+                                 # -no-opt keeps the exact X-chain opcodes (no fold to addq etc.)
+asm j5i     -kick1hunks -no-opt  # [J5i] exception/SR model: trap #1 / divu.w #0 / illegal;
+                                 # -kick1hunks for the jmp-finish RELOC32; -no-opt keeps the
+                                 # exact opcodes (no addq fold of the exit packer)
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"
