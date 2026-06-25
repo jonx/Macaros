@@ -1,0 +1,58 @@
+NOTICE — Emu68 quarantine dir (adopted MPL-2.0 source)
+======================================================
+
+This directory contains files VENDORED VERBATIM from the Emu68 project. They are
+kept here, unmodified, with their original Mozilla Public License v2.0 (MPL-2.0)
+Exhibit-A headers intact. They are NOT AROS-licensed and MUST NOT be intermixed
+with or pasted into AROS-licensed source. See docs/features/CLEANROOM.md (licence
+map: "Emu68 ... Adoptable as isolated files (file-level copyleft)") and
+docs/features/68k-jit/spec.md (the [J0] decision: adapt Emu68's AArch64 emitter).
+
+Upstream
+--------
+  Repository : https://github.com/michalsc/Emu68
+  Commit     : 305f686f84712f88c4d80d35769af5c60a4e988b
+  Commit date: 2025-12-08 ("Merge pull request #310 from michalsc/1.0.7", v1.0.7)
+  Fetched    : 2026-06-24 via `git clone --depth 1`
+  Licence    : MPL-2.0 (Exhibit A header present in each file below)
+
+Files taken (verbatim, byte-identical to upstream include/)
+-----------------------------------------------------------
+  A64.h                 <- Emu68 include/A64.h
+      The self-contained AArch64 instruction emitter: `static inline uint32_t`
+      encoders (mov_immed_u16, movk, add_reg, ret/bx_lr, ...). This is the single
+      high-value asset the [J0] decision adopts. Lines 1..650 (the `#ifndef _A64_H`
+      body) are pure encoders depending only on <stdint.h>. The section after
+      line 650 (`#include <RegisterAllocator.h>` + the EMIT_* register-allocator
+      helpers) is NOT used by the [J2] spike; it is present only because the file
+      is kept verbatim.
+
+  RegisterAllocator.h   <- Emu68 include/RegisterAllocator.h
+      Declarations-only header (the RA_*/EMIT_* register-allocator interface).
+      Vendored solely so that A64.h's verbatim `#include <RegisterAllocator.h>`
+      (line 652) resolves and the file compiles unmodified. NONE of these RA_*
+      functions are defined or called by the [J2] spike — the spike hand-emits
+      without a register allocator. Full register-allocator adoption is [J3] scope.
+
+NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
+-----------------------------------------------------------------------------
+  src/aarch64/{start,vectors,mmu}.c, src/raspi/*, src/pistorm/*, src/boards/*,
+  src/support.c (bare-metal cache asm), src/tlsf.c, the M68k_LINE*.c decoders,
+  src/M68k_Translator.c, src/ExecutionLoop.c, src/aarch64/RegisterAllocator64.c.
+  The [J2] spike proves only the EMITTER separates cleanly; the decoder +
+  register-allocator adoption is explicitly deferred to [J3].
+
+Exhibit-B (MPL <-> LGPL compatibility) check
+--------------------------------------------
+  Grep for the "Incompatible With Secondary Licenses" Exhibit-B notice across the
+  two vendored files: NONE FOUND (both carry only the Exhibit-A header). Per
+  MPL-2.0 sec. 3.3, the absence of the Exhibit-B notice makes these files
+  compatible with the LGPL secondary licence AROS uses. (Re-run before re-vendoring:
+  `grep -rn "Incompatible With Secondary Licenses" hosted/jit68k/emu68/` must be empty.)
+
+Local edits to these files
+--------------------------
+  NONE. Both files are byte-identical to upstream. All glue/adaptation lives in
+  separate, AROS-licensed files OUTSIDE this directory (hosted/jit68k/j2_*.c,
+  hosted/jit68k/emu68_glue.h). Any future edit to a file in THIS directory stays
+  MPL-2.0 and its source must be disclosed under MPL; record the edit here.
