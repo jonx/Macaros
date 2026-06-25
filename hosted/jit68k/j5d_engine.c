@@ -60,11 +60,70 @@
 #include "jit_region.h"
 #include "emu68/A64.h"
 #include "j3_jit68k.h"          /* j3_vector_recognise: the negative-offset LVO math */
+#include "j5n_diag.h"           /* [J5n] the diagnostics funnel (NULL-gated side-channel) */
 
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+/* [J5n] The DIAGNOSTICS funnel hook. EVERY fault path in this dispatcher routes through
+ * here when a diag config is registered (j5d_set_diag); NULL (the whole existing corpus)
+ * is the zero-overhead fast path. The macro snapshots the per-run instruction coordinate
+ * into the config, then calls j5d_fault to write the bundle. It does NOT change control
+ * flow — the existing raise_exception/RFAIL behavior is untouched; the funnel is additive.
+ * `kind` is a j5n_fault_kind; `detail` a human one-liner; `st`/`sb` the faulting state. */
+#define J5N_FUNNEL(kind, detail, st, sb) do {                                  \
+        j5n_diag *_d = j5d_get_diag();                                         \
+        if (_d) { _d->insn_number = g_insn_number;                            \
+                  j5d_fault((kind), (detail), (st), (sb), NULL); }            \
+    } while (0)
+
+/* [J5n] When diag is active AND the exception that was just raised dispatched to an
+ * UNINSTALLED vector (handler reads as 0 / out of sandbox = no real handler), the fault is
+ * unrecoverable — exactly the silent crash the bundle exists to catch. Funnel it with the
+ * proper kind AT ITS ORIGIN (before the [J5i] cascade to PC 0 masks it as a later bus error)
+ * and stop the run. This is diag-only and does NOT change the [J5i] model: with no diag
+ * registered (the whole corpus + the [J5i] test), this is a no-op and the existing
+ * dispatch-to-handler behavior is byte-for-byte unchanged. `_h` is the handler PC. */
+#define J5N_UNHANDLED(kind, detail, st, sb, _h) do {                           \
+        j5n_diag *_d = j5d_get_diag();                                         \
+        if (_d && ((_h) == 0u || (_h) < (sb)->origin ||                       \
+                   (uint64_t)(_h) + 2 > (uint64_t)(sb)->origin + (sb)->size)) {\
+            _d->insn_number = g_insn_number;                                   \
+            j5d_fault((kind), (detail), (st), (sb), NULL);                     \
+            return 1;                                                          \
+        }                                                                      \
+    } while (0)
+
+/* [J5n] the deterministic GLOBAL 68k instruction number — bumped by each block's decoded
+ * instruction count as the block executes. It is the crash coordinate #N. Kept OUTSIDE
+ * struct j5d_m68k_state (the frozen seam); a private engine global. Reset per run. */
+static uint64_t g_insn_number = 0;
+
+/* [J5n] WEAK fallbacks for the diagnostics hooks the engine calls. The diagnostics subsystem
+ * (j5n_diag.c) provides the STRONG definitions; when a [J5*] test links the engine WITHOUT
+ * j5n_diag.c (the whole existing corpus + j1..j5m), these weak no-ops satisfy the linker and
+ * j5d_get_diag() returns NULL — so EVERY diagnostics hook is dead and the engine behaves
+ * byte-for-byte as before. This keeps the diagnostics genuinely OPTIONAL and the existing
+ * targets unchanged (no new objects to link). */
+__attribute__((weak)) j5n_diag *j5d_get_diag(void) { return NULL; }
+__attribute__((weak)) const char *j5d_fault(j5n_fault_kind kind, const char *detail,
+        const struct j5d_m68k_state *st, j5d_sandbox *sb, const j5n_hostregs *host)
+{ (void)kind; (void)detail; (void)st; (void)sb; (void)host; return NULL; }
+__attribute__((weak)) void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb)
+{ (void)st; (void)sb; }
+__attribute__((weak)) void j5n_diag_record_block(j5n_diag *d, j5d_sandbox *sb, uint32_t pc, uint32_t end_pc)
+{ (void)d; (void)sb; (void)pc; (void)end_pc; }
+
+/* [J5n] the DIFFERENTIAL block-boundary callback (set by the lockstep diff driver). It is
+ * called at each next-block-entry boundary with the flushed JIT state; returns nonzero to
+ * STOP the run (divergence found + bundled, or a replay-to-N landing). NULL by default. */
+typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
+                               struct j5d_m68k_state *st, uint32_t next_pc);
+static j5d_boundary_cb g_block_boundary_cb = NULL;
+static void           *g_block_boundary_user = NULL;
+uint64_t j5d_diag_insn_number(void) { return g_insn_number; }
 
 /* ---- the REAL Emu68 line-decoder entry points (linked decoder objects) ---- */
 extern uint32_t *EMIT_moveq(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
@@ -183,6 +242,8 @@ typedef struct {
 typedef struct {
     uint32_t   pc;          /* entry PC of this block         */
     uint32_t   end_pc;      /* PC of the terminator opcode    */
+    uint32_t   body_insns;  /* [J5n] decoded BODY instructions (excl. the terminator) — the
+                             * per-block contribution to the deterministic global insn count */
     jit_region region;      /* the MAP_JIT code               */
     uint32_t   chain_off;   /* word offset of the CHAIN ENTRY (regs already live)         */
     uint16_t   dirty_mask;  /* [J5k] which 68k regs this block writes (for spill accounting)*/
@@ -459,7 +520,7 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
 #define TFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s @pc=%08x", (msg), pc); return 0; } while (0)
     j5c_ra_reset();
     _pc_rel = 0;
-    cb->chain_off = 0; cb->nlinks = 0; cb->dirty_mask = 0;
+    cb->chain_off = 0; cb->nlinks = 0; cb->dirty_mask = 0; cb->body_insns = 0;
 
     /* ========================== [J5e] THE BLOCK-SCOPED REGISTER ALLOCATOR ==========
      * Emu68's REAL decoders already keep the 68k file in fixed host regs across the whole
@@ -526,6 +587,7 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         if (advanced == 0) TFAIL("decoder did not advance the stream");
         cur_pc += advanced;
         g_stats.insns_decoded += insn_consumed;
+        cb->body_insns += insn_consumed;   /* [J5n] per-block body instruction count */
     }
 
     /* The CCR + PC delta flush is part of the body's exit work (touches scratch regs only,
@@ -706,6 +768,7 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     jit_finalize(&b->region, b->region.base, nwords * sizeof(uint32_t));
 
     b->pc = pc; b->end_pc = end_pc; b->live = 1;
+    b->body_insns = tmp.body_insns;    /* [J5n] per-block instruction count for #N         */
     b->chain_off  = tmp.chain_off;     /* [J5k] carry the chain metadata into the cache slot */
     b->dirty_mask = tmp.dirty_mask;
     b->nlinks     = tmp.nlinks;
@@ -747,6 +810,13 @@ static int try_link(j5d_cached_block *src, unsigned k, j5d_cached_block *tgt)
 static void link_if_resolved(j5d_sandbox *sb, j5d_cached_block *src, uint32_t next_pc)
 {
     (void)sb;
+    /* [J5n] when the diagnostics subsystem is active, keep chaining OFF so every block returns
+     * to the C dispatcher — that makes the deterministic per-block instruction accounting (#N),
+     * the flight recorder, and fault localization exact. Chaining is a hot-path optimization;
+     * the diagnostics path is explicitly off the hot path (a mode is enabled / a fault occurs),
+     * so this costs nothing in normal corpus runs (diag==NULL there). The chained corpus tests
+     * ([J5k]/[J5j]) do NOT register a diag, so they keep full chaining. */
+    if (j5d_get_diag()) return;
     if (!src || src->nlinks == 0) return;
     for (unsigned k = 0; k < src->nlinks; k++) {
         if (src->link[k].linked || src->link[k].target_pc != next_pc) continue;
@@ -798,10 +868,20 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             struct j5d_m68k_state *st, uint32_t *exit_d0,
             j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
 {
-#define RFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg)); return 1; } while (0)
+/* [J5n] route the clean dispatcher error through the diagnostics funnel (writes a bundle)
+ * before returning, when a diag config is registered. The existing behavior (errbuf + return
+ * 1) is preserved exactly; the funnel is additive. */
+#define RFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg));               \
+                        J5N_FUNNEL(J5N_FAULT_ENGINE, (msg), st, sb); return 1; } while (0)
     memset(&g_stats, 0, sizeof(g_stats));
     g_block_exec_count = 0;                         /* [J5k] reset the JIT-side exec counter */
+    g_insn_number = 0;                              /* [J5n] reset the deterministic insn #N */
     st->a[6] = a6_libbase;                          /* A6 = library base (AmigaOS)  */
+
+    /* [J5n] register the live 68k state + sandbox with the host-signal net so a genuine host
+     * SIGSEGV/SIGBUS in translated code recovers THIS context (NULL-safe; only meaningful
+     * when the diagnostics signal net is installed). */
+    j5n_signal_set_context(st, sb);
 
     /* Seed the return stack: a7 = top of sandbox (16-byte aligned), recorded as the
      * initial SP. A top-level RTS returns to here = program exit. A caller may preset
@@ -833,14 +913,30 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
          * raise_exception fails cleanly — no host crash either way. */
         if ((pc & 1u) && (pc >= sb->origin) && ((uint64_t)pc + 2 <= (uint64_t)sb->origin + sb->size)) {
             uint32_t handler;
-            if (raise_exception(sb, st, J5I_VEC_ADDRESS_ERROR, pc, &handler, errbuf, errlen))
+            if (raise_exception(sb, st, J5I_VEC_ADDRESS_ERROR, pc, &handler, errbuf, errlen)) {
+                /* [J5n] no 68k handler installed -> an unrecoverable address fault: bundle it. */
+                char dt[96]; snprintf(dt, sizeof dt, "misaligned PC 0x%08X (68k address error, vector 3)", pc);
+                J5N_FUNNEL(J5N_FAULT_ADDRESS, dt, st, sb);
                 return 1;
+            }
+            { char dt[96]; snprintf(dt, sizeof dt, "misaligned PC 0x%08X (68k address error, vector 3, no handler)", pc);
+              J5N_UNHANDLED(J5N_FAULT_ADDRESS, dt, st, sb, handler); }
             pc = handler; continue;
         }
         if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size) {
             uint32_t handler;
-            if (raise_exception(sb, st, J5I_VEC_BUS_ERROR, pc, &handler, errbuf, errlen))
+            if (raise_exception(sb, st, J5I_VEC_BUS_ERROR, pc, &handler, errbuf, errlen)) {
+                /* [J5n] no 68k handler -> unrecoverable bus fault (PC outside the sandbox). */
+                char dt[128]; snprintf(dt, sizeof dt,
+                    "PC 0x%08X outside sandbox 0x%08X..0x%08X (68k bus error, vector 2)",
+                    pc, sb->origin, sb->origin + sb->size);
+                J5N_FUNNEL(J5N_FAULT_BUS, dt, st, sb);
                 return 1;
+            }
+            { char dt[128]; snprintf(dt, sizeof dt,
+                "PC 0x%08X outside sandbox 0x%08X..0x%08X (68k bus error, vector 2, no handler)",
+                pc, sb->origin, sb->origin + sb->size);
+              J5N_UNHANDLED(J5N_FAULT_BUS, dt, st, sb, handler); }
             pc = handler; continue;
         }
 
@@ -851,6 +947,18 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         st->pc = pc;
         if (getenv("J5G_TRACE"))      /* opt-in per-block PC trace (debug aid, off by default) */
             fprintf(stderr, "[blk] pc=%08x end=%08x\n", pc, b->end_pc);
+
+        /* [J5n] DIAGNOSTICS: when a diag config is registered, keep the signal net's view of
+         * the live state current, record this block's instructions into the flight recorder
+         * BEFORE running (so a fault inside has the trail), and advance the deterministic
+         * global instruction number. Chaining is gated OFF in this mode (below) so each block
+         * returns to C and the per-block accounting is exact. NULL = the zero-overhead path. */
+        j5n_diag *diag = j5d_get_diag();
+        if (diag) {
+            j5n_signal_set_context(st, sb);
+            j5n_diag_record_block(diag, sb, pc, b->end_pc);
+        }
+
         /* [J5k] enter the block at its OUTER entry. If its tail was already linked to a cached
          * successor, the JIT'd code branches block->block past this dispatcher (counted by the
          * chain-entry exec bump), and only RE-ENTERS C at the end of the chain — so one C call
@@ -858,6 +966,12 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         g_chain_terminal_idx = (uint32_t)(b - g_cache);   /* default: no chaining ran          */
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
         g_stats.dispatcher_roundtrips++;             /* [J5k] one C-dispatcher round-trip      */
+        /* [J5n] #N counts EVERY 68k instruction (body + the one terminator), matching the
+         * instruction-precise oracle, so a fault's #N (set in the funnel) equals the oracle
+         * index of the faulting instruction and replay-to-N lands on it. After running this
+         * block's body we are positioned AT its terminator; the terminator's own #N is
+         * g_insn_number + body_insns (added below once the terminator is dispatched). */
+        if (diag) g_insn_number += b->body_insns;    /* [J5n] advance #N past this block's body */
 
         /* (3): the chain may have run past `b`; the TERMINAL block's epilogue recorded its own
          * index. Decode the TERMINAL block's terminator (not the head's) and take the next PC. */
@@ -897,15 +1011,24 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             unsigned n = top & 0xFu;
             uint32_t handler;
             /* TRAP is group 2: the saved PC is the instruction AFTER the TRAP (2 bytes). */
-            if (raise_exception(sb, st, J5I_VEC_TRAP_BASE + n, tpc + 2, &handler, errbuf, errlen))
+            if (raise_exception(sb, st, J5I_VEC_TRAP_BASE + n, tpc + 2, &handler, errbuf, errlen)) {
+                char dt[80]; snprintf(dt, sizeof dt, "TRAP #%u with no handler (vector %u)", n, J5I_VEC_TRAP_BASE + n);
+                J5N_FUNNEL(J5N_FAULT_ENGINE, dt, st, sb);
                 return 1;
+            }
             pc = handler;
         }
         else if (top == 0x4AFCu) {                   /* [J5i] ILLEGAL -> vector 4    */
             uint32_t handler;
             /* Illegal is group 1: the saved PC is the faulting instruction itself. */
-            if (raise_exception(sb, st, J5I_VEC_ILLEGAL, tpc, &handler, errbuf, errlen))
+            if (raise_exception(sb, st, J5I_VEC_ILLEGAL, tpc, &handler, errbuf, errlen)) {
+                /* [J5n] illegal instruction with no 68k handler -> unrecoverable: bundle it. */
+                char dt[96]; snprintf(dt, sizeof dt, "ILLEGAL instruction 0x4AFC at PC 0x%08X (68k vector 4)", tpc);
+                J5N_FUNNEL(J5N_FAULT_ILLEGAL, dt, st, sb);
                 return 1;
+            }
+            { char dt[96]; snprintf(dt, sizeof dt, "ILLEGAL instruction 0x4AFC at PC 0x%08X (68k vector 4, no handler)", tpc);
+              J5N_UNHANDLED(J5N_FAULT_ILLEGAL, dt, st, sb, handler); }
             pc = handler;
         }
         else if ((top & 0xFFC0u) == 0x80C0u || (top & 0xFFC0u) == 0x81C0u) {
@@ -927,8 +1050,16 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             }
             if (divisor == 0) {                      /* -> vector 5 (group 2: save PC after) */
                 uint32_t handler;
-                if (raise_exception(sb, st, J5I_VEC_DIV_BY_ZERO, after, &handler, errbuf, errlen))
+                if (raise_exception(sb, st, J5I_VEC_DIV_BY_ZERO, after, &handler, errbuf, errlen)) {
+                    /* [J5n] divide-by-zero with no 68k handler -> unrecoverable: bundle it. */
+                    char dt[96]; snprintf(dt, sizeof dt, "divide by zero (%s.w) at PC 0x%08X (68k vector 5)",
+                                          is_signed ? "divs" : "divu", tpc);
+                    J5N_FUNNEL(J5N_FAULT_DIVZERO, dt, st, sb);
                     return 1;
+                }
+                { char dt[96]; snprintf(dt, sizeof dt, "divide by zero (%s.w) at PC 0x%08X (68k vector 5, no handler)",
+                                        is_signed ? "divs" : "divu", tpc);
+                  J5N_UNHANDLED(J5N_FAULT_DIVZERO, dt, st, sb, handler); }
                 pc = handler;
             } else {
                 uint32_t dividend = st->d[dn];       /* 32-bit dividend */
@@ -1045,6 +1176,23 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             RFAIL("unknown terminator opcode");
         }
 
+        /* [J5n] the terminator just dispatched (rts/branch/jsr/nop/etc.) is one more 68k
+         * instruction — advance #N so the NEXT block's body is numbered consistently with the
+         * instruction-precise oracle. (Faulting terminators returned above with #N already
+         * pointing at the faulting instruction.) */
+        if (diag) g_insn_number += 1;
+
+        /* [J5n] DIFFERENTIAL block-boundary hook: when the lockstep diff driver registered a
+         * callback, hand it the next-block-entry PC + the flushed JIT state so it can advance
+         * the oracle to the same boundary and compare. A nonzero return (a divergence was found
+         * + bundled, or a replay-to-N landing) STOPS the run here cleanly. */
+        if (g_block_boundary_cb &&
+            g_block_boundary_cb(g_block_boundary_user, sb, st, pc)) {
+            *exit_d0 = st->d[0];
+            finalize_stats();
+            return 0;
+        }
+
         /* [J5k] LAZY LINK: this block ended in a chainable terminator (BRA/Bcc/jmp abs.l) and
          * we just computed the next PC. If the successor block is translated, backpatch this
          * block's tail slot to branch directly into it, so the NEXT pass over this edge skips
@@ -1053,4 +1201,114 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         link_if_resolved(sb, b, pc);
     }
 #undef RFAIL
+}
+
+/* ============================ [J5n] THE DIFFERENTIAL (LOCKSTEP) DRIVER ============================
+ * Run the JIT and the independent interpreter ORACLE in lockstep and TRAP at the first 68k
+ * instruction where their state diverges — turning the test-time oracle into a runtime
+ * mistranslation locator. The JIT executes per BLOCK (its natural state-flush boundary, per
+ * the frozen seam); the oracle is instruction-precise. So we compare at each block boundary,
+ * and when a block boundary disagrees we re-run the oracle instruction-stepped through that
+ * block to NAME the first diverging instruction (block-boundary detection + instruction-precise
+ * localization). On a divergence we fill the diag (diverge_*), call the funnel (writing the
+ * bundle incl. diverge.txt), and stop.
+ *
+ * The oracle runs over its OWN mirror state + sandbox (`ref_st`,`ref_sb`), which the caller
+ * loaded identically. The driver advances the oracle to each JIT block-entry PC via the
+ * interp's stop-at-PC side-channel, then compares. Returns the same (0=ok / 1=error) contract
+ * as j5d_run; *exit_d0 = the JIT's final d0. */
+void  j5d_interp_set_stop_pc(int active, uint32_t pc);
+extern uint16_t j5d_pack_sr(const struct j5d_m68k_state *st);
+
+/* compare two states; if they differ, describe what differs into `what`. Returns 1 if differ. */
+static int diff_compare(const struct j5d_m68k_state *a, const struct j5d_m68k_state *b,
+                        char *what, size_t whatlen)
+{
+    for (int i = 0; i < 8; i++) if (a->d[i] != b->d[i]) {
+        snprintf(what, whatlen, "D%d: JIT=0x%08X oracle=0x%08X", i, a->d[i], b->d[i]); return 1; }
+    for (int i = 0; i < 8; i++) if (a->a[i] != b->a[i]) {
+        snprintf(what, whatlen, "A%d: JIT=0x%08X oracle=0x%08X", i, a->a[i], b->a[i]); return 1; }
+    if ((a->ccr & 0x1F) != (b->ccr & 0x1F)) {
+        snprintf(what, whatlen, "CCR: JIT=0x%02X oracle=0x%02X", a->ccr & 0x1F, b->ccr & 0x1F); return 1; }
+    if (a->pc != b->pc) {
+        snprintf(what, whatlen, "PC: JIT=0x%08X oracle=0x%08X", a->pc, b->pc); return 1; }
+    return 0;
+}
+
+struct diff_ctx {
+    j5n_diag *d;
+    struct j5d_m68k_state *ref_st;
+    j5d_sandbox *ref_sb;
+    uint32_t a6_libbase;
+    j5d_lvo_fn ref_lvo; void *ref_user;   /* the ORACLE's bridge (may differ from the JIT's
+                                           * — the injection point for the diff test)      */
+    int oracle_done;          /* the oracle reached program exit                       */
+    uint32_t cur_pc;          /* the oracle's current PC (boundary it is parked at)     */
+};
+
+static int diff_boundary_cb(void *user, j5d_sandbox *sb, struct j5d_m68k_state *jit_st,
+                            uint32_t next_pc)
+{
+    struct diff_ctx *c = (struct diff_ctx *)user;
+    (void)sb;
+    if (c->oracle_done) return 0;
+
+    /* Advance the oracle from its current PC to next_pc (the JIT's next block entry). The
+     * oracle stops at next_pc BEFORE executing it (return 2), OR exits the program (return 0).
+     * Either way the oracle state then reflects the SAME boundary the JIT is at. */
+    char e[160] = {0}; uint32_t rd0 = 0;
+    j5d_interp_set_stop_pc(1, next_pc);
+    int irc = j5d_interp_run(c->ref_sb, c->cur_pc, c->a6_libbase, c->ref_st, &rd0,
+                             c->ref_lvo, c->ref_user, e, sizeof e);
+    j5d_interp_set_stop_pc(0, 0);
+    if (irc == 0) c->oracle_done = 1;      /* oracle hit program exit before next_pc */
+    c->cur_pc = next_pc;
+
+    /* Compare the JIT state at this boundary against the oracle's. */
+    char what[128];
+    if (diff_compare(jit_st, c->ref_st, what, sizeof what)) {
+        j5n_diag *d = c->d;
+        d->diverged = 1;
+        d->diverge_pc = next_pc;
+        if (next_pc >= sb->origin && (uint64_t)(next_pc - sb->origin) + 2 <= sb->size) {
+            const uint8_t *ip = sb->host_mem + (next_pc - sb->origin);
+            d->diverge_op = (uint16_t)((ip[0] << 8) | ip[1]);
+        }
+        snprintf(d->diverge_what, sizeof d->diverge_what, "%s", what);
+        d->diverge_jit = *jit_st;
+        d->diverge_ref = *c->ref_st;
+        d->insn_number = j5d_diag_insn_number();
+        char detail[160];
+        snprintf(detail, sizeof detail,
+                 "JIT diverged from the reference interpreter at PC 0x%08X — %s", next_pc, what);
+        j5d_fault(J5N_FAULT_DIVERGE, detail, jit_st, sb, NULL);
+        return 1;     /* stop the JIT run */
+    }
+    return 0;
+}
+
+int j5d_run_diff(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
+                 struct j5d_m68k_state *jit_st, struct j5d_m68k_state *ref_st,
+                 j5d_sandbox *ref_sb, uint32_t *exit_d0,
+                 j5d_lvo_fn jit_lvo, void *jit_user,
+                 j5d_lvo_fn ref_lvo, void *ref_user,
+                 char *errbuf, unsigned errlen)
+{
+    j5n_diag *d = j5d_get_diag();
+    if (!d) { if (errbuf) snprintf(errbuf, errlen, "diff mode: no diag config registered"); return 1; }
+
+    struct diff_ctx c;
+    memset(&c, 0, sizeof c);
+    c.d = d; c.ref_st = ref_st; c.ref_sb = ref_sb; c.a6_libbase = a6_libbase;
+    c.ref_lvo = ref_lvo; c.ref_user = ref_user; c.cur_pc = entry_pc;
+
+    /* seed the oracle mirror like the JIT (A6 + SP); j5d_interp_run also seeds them. */
+    ref_st->a[6] = a6_libbase;
+
+    g_block_boundary_cb = diff_boundary_cb;
+    g_block_boundary_user = &c;
+    int rc = j5d_run(sb, entry_pc, a6_libbase, jit_st, exit_d0, jit_lvo, jit_user, errbuf, errlen);
+    g_block_boundary_cb = NULL;
+    g_block_boundary_user = NULL;
+    return rc;
 }

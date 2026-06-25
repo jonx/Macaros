@@ -21,6 +21,28 @@
 
 #define STEP_CAP 2000000u
 
+/* [J5n] DIAGNOSTICS step hook (optional, NULL by default). The diagnostics subsystem
+ * (j5n_diag.c) registers a per-instruction callback so the oracle becomes the instruction-
+ * precise stepper for replay-to-N and divergence localization. It is a function POINTER set
+ * via j5d_interp_set_step_hook so the interp keeps ZERO hard dependency on the diag layer —
+ * every other [J5*] test links the interp WITHOUT j5n_diag.c and this stays NULL (the fast
+ * path). The hook returns nonzero to STOP the run (a clean replay-to-N landing). */
+typedef int (*j5n_step_hook_fn)(void *diag, const struct j5d_m68k_state *st,
+                                j5d_sandbox *sb, uint32_t pc, uint16_t op);
+static j5n_step_hook_fn g_step_hook = NULL;
+static void *g_step_diag = NULL;
+void j5d_interp_set_step_hook(j5n_step_hook_fn fn, void *diag)
+{ g_step_hook = fn; g_step_diag = diag; }
+
+/* [J5n] DIFFERENTIAL lockstep: a stop-at-PC side-channel so the engine can advance the
+ * oracle one block at a time and compare at each block boundary. When g_stop_active and the
+ * loop reaches g_stop_pc at an instruction boundary, j5d_interp_run returns 2 (a clean
+ * "stopped at the requested PC", distinct from 0=program-exit / 1=error). NULL by default —
+ * every other test leaves it inactive (the fast path). */
+static int      g_stop_active = 0;
+static uint32_t g_stop_pc = 0;
+void j5d_interp_set_stop_pc(int active, uint32_t pc) { g_stop_active = active; g_stop_pc = pc; }
+
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static int16_t  be16s(const uint8_t *p){ return (int16_t)be16(p); }
 static uint32_t be32(const uint8_t *p)
@@ -214,9 +236,22 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             uint32_t h; if (iraise(sb, st, J5I_VEC_BUS_ERROR, pc, &h, errbuf, errlen)) return 1;
             pc = h; continue;
         }
+        /* [J5n] stop-at-PC (the differential lockstep boundary). Return 2 = "stopped at the
+         * requested PC" BEFORE executing the instruction there. The engine sets the next
+         * block boundary as the stop PC and compares state when the oracle lands on it. */
+        if (g_stop_active && pc == g_stop_pc) { st->pc = pc; return 2; }
+
         const uint8_t *ip = sb->host_mem + (pc - sb->origin);
         uint16_t op = be16(ip);
         st->pc = pc;
+
+        /* [J5n] the per-instruction diagnostics hook: the deterministic global instruction
+         * counter, the flight recorder, and the replay-to-N break. Returns nonzero to STOP
+         * (a clean replay-to-N landing); st->pc already holds the break PC. */
+        if (g_step_hook && g_step_hook(g_step_diag, st, sb, pc, op)) {
+            *exit_d0 = st->d[0];
+            return 0;
+        }
 
         if (op == 0x4E75u) {                                     /* rts            */
             if (st->a[7] >= initial_sp) { *exit_d0 = st->d[0]; return 0; }  /* top-level */

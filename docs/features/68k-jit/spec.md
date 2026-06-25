@@ -1555,6 +1555,73 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   field layout (`j5d_jit68k.h`), the `[J3]` LVO-call marshalling contract, and the `[J5i]`
   exception/SR model (`INTERFACE.md`). The whole corpus + `[J1]`–`[J5l]` re-confirmed green.
 
+- **`[J5n]` the DIAGNOSTICS subsystem — faults are never silent — IMPLEMENTED / GREEN.** A
+  host-side diagnostics layer for the 68k JIT: on ANY fault it produces ONE self-contained,
+  shareable **crash bundle** (`tar.gz`) with everything a developer needs to reproduce + fix,
+  prints a LOUD banner with its absolute path, and (in a mode) pins the exact mistranslated
+  instruction + reproduces the moment deterministically. Files (all OURS):
+  `hosted/jit68k/{j5n_diag.{h,c}, j5n_symbols.{h,c}, j5n_test.c}`, the fault fixtures
+  `apps68k/{diagfault,diagill,diagbus}.s` + their committed `.exe`, additive NULL-gated hooks in
+  `j5d_engine.c` + the optional step hook in `j5d_interp.c`; target `make hosted-jit68k-j5n`
+  (marker `[J5n] PASS`, watchdog 40 s). **PASS (observed):**
+  1. **The crash BUNDLE.** On a fault the funnel writes a bundle dir then `tar -czf`s it to
+     `jit68k-crash-<UTCstamp>-<faultkind>.tar.gz` at `$JIT68K_CRASH_DIR`/`<cwd>/crash`. Contents:
+     `README.txt` (plain-English: what it is + the ONE action "send this .tar.gz" + a friendly
+     file gloss + a "For the developer" workflow), `MANIFEST.txt` (the precise index), `REPORT.txt`
+     (the two-level dump, below), `core.snapshot` (`struct M68KState` + the FULL raw sandbox image,
+     reloadable — `j5n_snapshot_load` round-trips it), `program.exe` + `program.sha256` (the exact
+     hunk + a self-contained SHA-256 — verified bundle digest == committed binary), `REPRODUCE.txt`
+     (the `run-to #N` replay command + `git rev-parse HEAD` + the build config), and `diverge.txt`
+     (only in differential mode). The banner prints the absolute path + "SEND THIS FILE … open
+     README.txt inside if you're not sure what this is."
+  2. **The two-level REPORT.** ALL fault paths route through ONE funnel `j5d_fault(kind,detail,st,
+     sb,host)`. Level 1 the COORDINATE: fault kind + offending detail (e.g. "divide by zero
+     (divu.w) at PC 0x.. (vector 5, no handler)"), the deterministic global instruction number
+     **#N**, the 68k PC + enclosing function (symbol), the host-context yes/no. Level 2: the
+     faulting 68k instruction (opcode words + a minimal disassembly), the 68k registers
+     (D0–D7/A0–A7/PC/SR/CCR), the host AArch64 registers (x0–x30/sp/pc/cpsr, captured from the
+     signal `ucontext` via the `graft/cpu_aarch64.h` shape), BOTH stacks (the 68k call stack walked
+     from a7 via the saved return addresses → symbols, AND the native host `backtrace()`), and a
+     flight-recorder ring of the last N (PC,opcode) executed. A threads note states the AmigaOS task
+     list is an integration-time hook (not faked).
+  3. **The host-signal safety net.** `SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE` handlers on a
+     `sigaltstack` (so a stack fault is still reportable) recover the host `mcontext` + the current
+     68k state (the engine registers it per block via `j5n_signal_set_context`) and route to
+     `j5d_fault`, then re-raise to die — never a silent host crash. The test forks a child that does
+     a genuine out-of-sandbox HOST access and asserts the child died by the signal AND a bundle was
+     written (the `graft/cpu_aarch64.h` SIGSEGV seam, exercised host-side).
+  4. **HUNK_SYMBOL mapping.** The loader skips `HUNK_SYMBOL`/`HUNK_DEBUG`; `j5n_symbols.c` re-walks
+     the SAME file buffer (the loader is untouched), resolving each label→hunk-relative-value to a
+     68k runtime PC via the loaded seglist's hunk bases, into a PC→symbol map for the report + the
+     call-stack. `diagfault.exe` (assembled WITH symbols) makes the report name the faulting
+     function `divide` + the caller frame. `HUNK_DEBUG` line info is reported-if-present (vasm's
+     symbol hunk is reliable; line debug is toolchain-dependent — symbols-only is honestly fine).
+  5. **The DIFFERENTIAL (lockstep) mode (`JIT68K_DIFF=1`).** `j5d_run_diff` runs the JIT and the
+     independent interpreter ORACLE in lockstep and traps at the first instruction where their
+     `M68KState` diverges — turning the test-time oracle into a runtime mistranslation locator. The
+     JIT executes per BLOCK (its natural state-flush boundary, per the seam) so the compare is at
+     block boundaries, with instruction-precise localization via the oracle's per-instruction
+     stepper; `diverge.txt` records the exact diverging instruction + both states side-by-side. The
+     test injects a deliberate divergence (the JIT's library bridge returns a different `d0` than
+     the oracle's — a negative-control-style forced mismatch) and asserts the trap lands at the
+     exact diverging PC with a `diverge.txt`.
+  6. **Deterministic coordinate + REPLAY-TO-N (`JIT68K_RUNTO=N`).** A global instruction counter
+     (deterministic: single execution, sandbox, deterministic stub OS, single thread) numbers every
+     68k instruction; the bundle records the fault's **#N**. `JIT68K_RUNTO=N` re-runs the SAME
+     program via the instruction-precise oracle and breaks at exactly #N, landing on the crash
+     (asserted: same PC + same #N). A `core.snapshot` reload/inspect path is included.
+  **The frozen seam is UNCHANGED (git-confirmed, no diff):** the whole subsystem is wired via a
+  side-channel `j5d_set_diag()` that MIRRORS the existing `j5d_set_exc_log()`, reads `M68KState`
+  read-only, and the engine hooks are additive + NULL-gated (diag==NULL = the zero-overhead path
+  the whole corpus runs on; the diagnostics are off the hot path — chaining stays on for the
+  corpus and is gated off only when a diagnostics mode is enabled, for exact accounting). Untouched:
+  the `jit_region` API (`jit_region.h`), the `struct M68KState`/`struct j5d_m68k_state` field layout
+  (`j5d_jit68k.h`), the `[J3]` LVO-call contract (`j3_*`), and the `[J5i]` exception/SR model. The
+  whole corpus + `[J1]`–`[J5m]` re-confirmed green (the engine edits do not regress any marker).
+  **Deferred (honest):** instruction-level (vs block-level) JIT lockstep would need block-splitting;
+  `HUNK_DEBUG` line→source mapping (symbols suffice); the production host-SIGSEGV→`j5d_raise_
+  exception` wiring INSIDE AROS stays the owner's track (the net here is host-side, around the test).
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:

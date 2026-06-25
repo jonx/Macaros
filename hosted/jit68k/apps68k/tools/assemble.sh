@@ -25,6 +25,14 @@ asm() {   # asm <name> [extra vasm flags]
         2>&1 | grep -vE '^vasm |^$' || true
 }
 
+asm_sym() {   # asm_sym <name> [extra flags] — KEEP HUNK_SYMBOL (no -nosym), for [J5n]'s
+              # symbol-mapping fixture: the crash report names the faulting function.
+    name="$1"; shift
+    echo ">> $name.s -> bin/$name.exe (WITH symbols)"
+    "$VASM" -Fhunkexe "$@" -o "$HERE/bin/$name.exe" "$HERE/$name.s" \
+        2>&1 | grep -vE '^vasm |^$' || true
+}
+
 asm mul
 asm fact
 asm arraysum -kick1hunks      # has a relocated DATA section
@@ -47,5 +55,11 @@ asm j5l     -no-opt              # [J5l] movem save/restore: a compiler-style no
                                  # epilogue) around a clobbering body, plus the control/(d16,An)
                                  # /.w movem forms. -no-opt keeps the exact movem encodings.
                                  # PC-relative bsr only, no relocation.
+# [J5n] DIAGNOSTICS fault fixtures — small programs that fault DETERMINISTICALLY (no handler
+# installed -> unrecoverable -> the diagnostics crash bundle). diagfault keeps SYMBOLS so the
+# crash report names the faulting function `divide`; the other two are stripped (no labels).
+asm_sym diagfault -no-opt        # div-by-zero inside `divide`, called via bsr (symbol mapping)
+asm     diagill   -no-opt        # ILLEGAL (0x4AFC), no handler -> vector 4
+asm     diagbus   -no-opt        # jmp out of sandbox, no handler -> vector 2 (bus error)
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"
