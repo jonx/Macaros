@@ -24,6 +24,22 @@
  * so cm_open does not need the runtime Metal shader compiler (MTLCompilerService),
  * which is unreachable when AROS runs in AROSBootstrap's fork()ed child. */
 #include "cmshader_metallib.h"
+
+#include <signal.h>
+#include <pthread.h>
+/* Hop a cm_* call onto the main thread (AppKit/Metal require it; under the AROS
+ * "inversion" cm_* are called from AROS's dedicated thread). ALL signals are
+ * blocked on the calling (AROS) thread for the duration of the sync: AROS's
+ * scheduler is signal-driven, and a SIGALRM landing mid-dispatch_sync would make
+ * AROS context-switch tasks from inside a host syscall and corrupt the task
+ * stack. The main thread (which runs the block) is unaffected. */
+static void cm__sync_main(dispatch_block_t block) {
+    sigset_t all, old;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, &old);
+    dispatch_sync(dispatch_get_main_queue(), block);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+}
 #import <QuartzCore/QuartzCore.h>
 
 #include <string.h>
@@ -195,7 +211,7 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
      * thread model intact -- that thread is now simply the main thread. */
     if (![NSThread isMainThread]) {
         __block CMContext *r = NULL;
-        dispatch_sync(dispatch_get_main_queue(), ^{ r = cm_open(w, h, fmt, title); });
+        cm__sync_main(^{ r = cm_open(w, h, fmt, title); });
         return r;
     }
     (void)title;
@@ -319,7 +335,7 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
 
 void cm_close(CMContext *cx) {
     if (!cx) return;
-    if (![NSThread isMainThread]) { dispatch_sync(dispatch_get_main_queue(), ^{ cm_close(cx); }); return; }
+    if (![NSThread isMainThread]) { cm__sync_main(^{ cm_close(cx); }); return; }
     /* ARC releases the Obj-C objects when the struct fields are cleared / freed;
      * but we must drop the window explicitly (it's held as void*). */
     if (cx->window) { cm_destroy_window(cx); }
@@ -333,7 +349,7 @@ void cm_upload_rect(CMContext *cx, const void *src, int srcStride,
                     int x, int y, int w, int h) {
     if (!cx || !src) return;
     if (![NSThread isMainThread]) {
-        dispatch_sync(dispatch_get_main_queue(), ^{ cm_upload_rect(cx, src, srcStride, x, y, w, h); });
+        cm__sync_main(^{ cm_upload_rect(cx, src, srcStride, x, y, w, h); });
         return;
     }
     if (x < 0 || y < 0 || w <= 0 || h <= 0) return;
@@ -451,7 +467,7 @@ static void encode_present_pass(CMContext *cx, id<MTLCommandBuffer> cb,
 
 void cm_present(CMContext *cx) {
     if (!cx) return;
-    if (![NSThread isMainThread]) { dispatch_sync(dispatch_get_main_queue(), ^{ cm_present(cx); }); return; }
+    if (![NSThread isMainThread]) { cm__sync_main(^{ cm_present(cx); }); return; }
     cx->presentCount++;
 
     /* 1) Render the framebuffer into the offscreen target (the oracle). Always
@@ -637,7 +653,7 @@ int cm_readback(CMContext *cx, void *dst, int dstStride, int w, int h) {
     if (!cx || !dst) return 1;
     if (![NSThread isMainThread]) {
         __block int r = 0;
-        dispatch_sync(dispatch_get_main_queue(), ^{ r = cm_readback(cx, dst, dstStride, w, h); });
+        cm__sync_main(^{ r = cm_readback(cx, dst, dstStride, w, h); });
         return r;
     }
     if (w != cx->w || h != cx->h) return 2;   /* readback is logical w*h */
