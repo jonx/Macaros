@@ -80,6 +80,19 @@ static uint16_t live_mask    = 0;   /* read before written: must be loaded in pr
 static uint16_t dirty_mask   = 0;   /* written by the block: must be stored in epilogue   */
 static uint16_t written_mask = 0;   /* written SO FAR (internal: read-before-write gate)  */
 
+/* [J5o] FPU allocator + FP-register liveness + FPCR/FPSR scratch state. Declared HERE (up
+ * front) because j5c_ra_reset() — which precedes the FPU function bodies below — resets
+ * them. The real getter/mapper/FPCR/FPSR bodies are in the [J5o] FPU RA section near the
+ * bottom of this file. */
+static uint8_t  fpu_allocstate  = 0; /* d2..d7 scratch pool (bit i = di busy)              */
+static uint16_t fp_live_mask    = 0; /* FP regs read before written: load in prologue      */
+static uint16_t fp_dirty_mask   = 0; /* FP regs written by the block: store in epilogue     */
+static uint16_t fp_written_mask = 0; /* written SO FAR (read-before-write gate, internal)   */
+static uint8_t  reg_FPCR = 0xff;     /* lazily-loaded scratch mirroring st->fpcr            */
+static uint8_t  mod_FPCR = 0;
+static uint8_t  reg_FPSR = 0xff;     /* lazily-loaded scratch mirroring st->fpsr            */
+static uint8_t  mod_FPSR = 0;
+
 static inline void ra_note_read(uint8_t m68k_reg)
 {
     uint16_t bit = (uint16_t)(1u << (m68k_reg & 15));
@@ -201,6 +214,13 @@ void j5c_ra_reset(void)
     live_mask    = 0;   /* [J5e] block-scoped liveness, reset per block */
     dirty_mask   = 0;
     written_mask = 0;
+    /* [J5o] FPU allocator + FP liveness + FPCR/FPSR scratch, reset per block. */
+    fpu_allocstate  = 0;
+    fp_live_mask    = 0;
+    fp_dirty_mask   = 0;
+    fp_written_mask = 0;
+    reg_FPCR = 0xff; mod_FPCR = 0;
+    reg_FPSR = 0xff; mod_FPSR = 0;
 }
 
 /* ---- CTX: Emu68's RA_GetCTX does `mrs reg, TPIDRRO_EL0`. Ours returns x0 (the state
@@ -211,12 +231,62 @@ uint8_t RA_TryCTX(uint32_t **ptr) { (void)ptr; return reg_CTX; }
 uint8_t RA_GetCTX(uint32_t **ptr) { (void)ptr; reg_CTX = J5C_STATE_X /*x1*/; return reg_CTX; }
 void    RA_FlushCTX(uint32_t **ptr) { (void)ptr; reg_CTX = 0xff; }
 
-/* ---- FPU RA (unused by the [J5c] integer block; trivial like Emu68's) -------------- */
-static uint8_t fpu_allocstate;
+/* ===================================================================================
+ * [J5o] THE FPU REGISTER ALLOCATOR — the 68881/68882 FP register file + FPCR/FPSR.
+ *
+ * This is now a REAL implementation (the prior [J5c] version was a 0xff no-op stub,
+ * harmless because the integer corpus never drives the FPU decoder). The contract is the
+ * same shape as the integer RA above, re-hosted for the FPU:
+ *
+ *   FP0..FP7 map to a FIXED set of AArch64 d-registers — d8..d15 — exactly as Emu68's
+ *   RA_MapFPURegister does (`return (fpu_reg & 7) + 8`). d8..d15 are AAPCS64 CALLEE-SAVED,
+ *   so the FP file stays live across the JIT'd block without per-op spill (mirrors how the
+ *   integer file lives in callee-saved w19.. across the block). The engine's prologue seeds
+ *   d8..d15 from st->fp[] and the epilogue stores them back — but ONLY for the FP registers
+ *   the block actually touches (the [J5e]-style liveness masks below), so a block that uses
+ *   no FPU emits ZERO FP load/store and the integer corpus is byte-for-byte unchanged.
+ *
+ *   FPCR / FPSR are MEMORY-BACKED in struct j5d_m68k_state (offsets J5O_OFF_FPCR/FPSR),
+ *   loaded lazily into a scratch reg and stored back if modified — exactly like the CCR
+ *   above (NOT Emu68's bare-metal v29-SIMD packing, the FPU analogue of the TPIDR coupling).
+ *
+ *   Scratch FP registers (RA_AllocFPURegister) come from d2..d7 — disjoint from the
+ *   FP0..FP7 file (d8..d15) and from the AArch64 argument/temporary d0..d1 the runtime
+ *   helper-call paths use. This matches Emu68's own scratch FP pool (`for i=2; i<8`).
+ * =================================================================================== */
+
+/* Byte offsets of fpcr/fpsr in struct j5d_m68k_state (the append-only [J5o] fields). The
+ * engine STATIC-ASSERTS these against offsetof() at build time (j5d_engine.c), so this
+ * literal can never silently drift from the struct. The state pointer is in x1 (J5C_STATE_X),
+ * the same base the CCR load/store uses; the FPU fields sit past the integer file. */
+#define J5O_OFF_FPCR  144u
+#define J5O_OFF_FPSR  148u
+
+/* (fpu_allocstate / fp_live_mask / fp_dirty_mask / fp_written_mask declared up top.) */
+
+static inline void ra_note_fp_read(uint8_t f)
+{
+    uint16_t bit = (uint16_t)(1u << (f & 7));
+    if (!(fp_written_mask & bit)) fp_live_mask |= bit;
+}
+static inline void ra_note_fp_write(uint8_t f)
+{
+    uint16_t bit = (uint16_t)(1u << (f & 7));
+    fp_dirty_mask |= bit;
+    fp_written_mask |= bit;
+}
+
+/* The engine reads these after driving the decoders for a block to size its FP frame. */
+void j5c_ra_get_fp_masks(uint16_t *live, uint16_t *dirty)
+{
+    if (live)  *live  = fp_live_mask;
+    if (dirty) *dirty = fp_dirty_mask;
+}
+
 void    RA_ResetFPUAllocator(void) { fpu_allocstate = 0; }
-uint8_t RA_MapFPURegister(uint32_t **s, uint8_t f)          { (void)s; return (f & 7) + 8; }
-uint8_t RA_MapFPURegisterForWrite(uint32_t **s, uint8_t f)  { (void)s; return (f & 7) + 8; }
-void    RA_SetDirtyFPURegister(uint32_t **s, uint8_t f)     { (void)s; (void)f; }
+uint8_t RA_MapFPURegister(uint32_t **s, uint8_t f)          { (void)s; ra_note_fp_read(f);  return (uint8_t)((f & 7) + 8); }
+uint8_t RA_MapFPURegisterForWrite(uint32_t **s, uint8_t f)  { (void)s; ra_note_fp_write(f); return (uint8_t)((f & 7) + 8); }
+void    RA_SetDirtyFPURegister(uint32_t **s, uint8_t f)     { (void)s; ra_note_fp_write(f); }
 void    RA_FlushFPURegs(uint32_t **s)                       { (void)s; }
 void    RA_StoreDirtyFPURegs(uint32_t **s)                  { (void)s; }
 uint8_t RA_AllocFPURegister(uint32_t **s)
@@ -227,12 +297,55 @@ uint8_t RA_AllocFPURegister(uint32_t **s)
 }
 void RA_FreeFPURegister(uint32_t **s, uint8_t a) { (void)s; if (a < 8 && (fpu_allocstate & (1 << a))) fpu_allocstate &= ~(1 << a); }
 
-/* FPCR/FPSR — unused by the integer block; harmless stubs (no system-register access). */
-uint8_t RA_GetFPCR(uint32_t **ptr)    { (void)ptr; return 0xff; }
-uint8_t RA_ModifyFPCR(uint32_t **ptr) { (void)ptr; return 0xff; }
-void    RA_StoreFPCR(uint32_t **ptr)  { (void)ptr; }
-void    RA_FlushFPCR(uint32_t **ptr)  { (void)ptr; }
-uint8_t RA_GetFPSR(uint32_t **ptr)    { (void)ptr; return 0xff; }
-uint8_t RA_ModifyFPSR(uint32_t **ptr) { (void)ptr; return 0xff; }
-void    RA_StoreFPSR(uint32_t **ptr)  { (void)ptr; }
-void    RA_FlushFPSR(uint32_t **ptr)  { (void)ptr; }
+/* ---- FPCR / FPSR — MEMORY-BACKED (NOT Emu68's v29-SIMD packing) --------------------
+ * Same lazy-load / store-if-modified scheme as the CCR (reg_CC above), reading/writing the
+ * appended fpcr/fpsr fields of struct j5d_m68k_state via the x1 state base. The FPU decoder
+ * only ever RA_ModifyFPSR()s when FPSR_Update_Needed says a consumer follows; for FPCR it
+ * reads the rounding/precision mode (we store it; this increment leaves rounding at the
+ * default-nearest the host also uses, so the result bit-exactness holds). (reg_FPCR/mod_FPCR/
+ * reg_FPSR/mod_FPSR are declared up top — j5c_ra_reset resets them before these bodies.) */
+uint8_t RA_GetFPCR(uint32_t **ptr)
+{
+    if (reg_FPCR == 0xff) {
+        reg_FPCR = alloc_scratch();
+        **ptr = ldr_offset(J5C_STATE_X, reg_FPCR, J5O_OFF_FPCR); (*ptr)++;
+        mod_FPCR = 0;
+    }
+    return reg_FPCR;
+}
+uint8_t RA_ModifyFPCR(uint32_t **ptr) { uint8_t r = RA_GetFPCR(ptr); mod_FPCR = 1; return r; }
+void    RA_StoreFPCR(uint32_t **ptr)
+{
+    if (reg_FPCR != 0xff && mod_FPCR) { **ptr = str_offset(J5C_STATE_X, reg_FPCR, J5O_OFF_FPCR); (*ptr)++; }
+}
+void    RA_FlushFPCR(uint32_t **ptr)
+{
+    if (reg_FPCR != 0xff) {
+        if (mod_FPCR) { **ptr = str_offset(J5C_STATE_X, reg_FPCR, J5O_OFF_FPCR); (*ptr)++; }
+        RA_FreeARMRegister(ptr, reg_FPCR);
+    }
+    reg_FPCR = 0xff; mod_FPCR = 0;
+}
+
+uint8_t RA_GetFPSR(uint32_t **ptr)
+{
+    if (reg_FPSR == 0xff) {
+        reg_FPSR = alloc_scratch();
+        **ptr = ldr_offset(J5C_STATE_X, reg_FPSR, J5O_OFF_FPSR); (*ptr)++;
+        mod_FPSR = 0;
+    }
+    return reg_FPSR;
+}
+uint8_t RA_ModifyFPSR(uint32_t **ptr) { uint8_t r = RA_GetFPSR(ptr); mod_FPSR = 1; return r; }
+void    RA_StoreFPSR(uint32_t **ptr)
+{
+    if (reg_FPSR != 0xff && mod_FPSR) { **ptr = str_offset(J5C_STATE_X, reg_FPSR, J5O_OFF_FPSR); (*ptr)++; }
+}
+void    RA_FlushFPSR(uint32_t **ptr)
+{
+    if (reg_FPSR != 0xff) {
+        if (mod_FPSR) { **ptr = str_offset(J5C_STATE_X, reg_FPSR, J5O_OFF_FPSR); (*ptr)++; }
+        RA_FreeARMRegister(ptr, reg_FPSR);
+    }
+    reg_FPSR = 0xff; mod_FPSR = 0;
+}

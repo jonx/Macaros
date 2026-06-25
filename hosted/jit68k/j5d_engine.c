@@ -137,6 +137,21 @@ extern uint32_t *EMIT_lineB(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_c
 extern uint32_t *EMIT_lineC(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_lineD(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_lineE(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);  /* [J5g] */
+extern uint32_t *EMIT_lineF(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);  /* [J5o] FPU */
+/* [J5o] WEAK fallback for the line-F (FPU) decoder so the engine LINKS for the integer-only
+ * spikes (J5d..J5n) that do NOT vendor M68k_LINEF.c. When the real verbatim M68k_LINEF.c IS
+ * linked (the J5o target), its STRONG EMIT_lineF overrides this. Non-FPU programs never decode a
+ * line-F opcode (the engine's pre-decode validation rejects any out-of-subset opcode before
+ * translating), so this fallback is never reached there — it exists purely to satisfy the linker,
+ * keeping the FPU strictly additive/opcode-gated (no Makefile change to the integer targets). */
+__attribute__((weak))
+uint32_t *EMIT_lineF(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+{
+    (void)ptr; (void)m68k_ptr; (void)insn_consumed;
+    /* Should be unreachable in an integer-only build. If a line-F opcode somehow reaches here,
+     * leave insn_consumed at 0 so the engine's "decoder consumed 0 insns" guard fails loudly. */
+    return ptr;
+}
 
 /* The (An)-class EA-emit counter (j5d_ea_helpers.c): each sandbox memory access the
  * rewritten EA decoder emits bumps it, so the engine can report real memory traffic. */
@@ -149,10 +164,22 @@ extern void      RA_FlushCC(uint32_t **ptr);
 extern uint32_t *EMIT_FlushPC(uint32_t *ptr);
 extern void      j5c_fetch_set_base(const void *host_stream);
 extern void      j5c_ra_get_masks(uint16_t *live, uint16_t *dirty);  /* [J5e] liveness */
+extern void      j5c_ra_get_fp_masks(uint16_t *live, uint16_t *dirty); /* [J5o] FP liveness */
 
 /* The Emu68 m68k->ARM map for our prologue/epilogue (REG_* from A64.h). */
 static const uint8_t reg_d[8] = { REG_D0, REG_D1, REG_D2, REG_D3, REG_D4, REG_D5, REG_D6, REG_D7 };
 static const uint8_t reg_a[8] = { REG_A0, REG_A1, REG_A2, REG_A3, REG_A4, REG_A5, REG_A6, REG_A7 };
+
+/* [J5o] FP0..FP7 map to AArch64 d8..d15 in the JIT'd block (Emu68's RA_MapFPURegister:
+ * fp_reg -> d8+fp_reg). The engine seeds these from st->fp[] (FP regs the block reads) in the
+ * prologue and stores back the ones it writes in the epilogue — the [J5e]-style FP liveness
+ * frame, so a block touching no FPU emits ZERO FP load/store (the integer corpus is unchanged).
+ * The fp[] / fpcr / fpsr byte offsets are taken with offsetof() so the struct's padding before
+ * fp[] never needs hand-encoding; static-asserted against the J5O_OFF_* literals j5c_ra.c uses. */
+#define J5O_FP0  8u                 /* d8 = FP0 ... d15 = FP7 */
+#include <stddef.h>
+_Static_assert(offsetof(struct j5d_m68k_state, fpcr) == 144u, "[J5o] fpcr offset drift");
+_Static_assert(offsetof(struct j5d_m68k_state, fpsr) == 148u, "[J5o] fpsr offset drift");
 
 #define J5D_BASEADJ_X  12u   /* x12 = sandbox base-adjust (host_mem - origin)        */
 
@@ -577,7 +604,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
             case 0xC: bp = EMIT_lineC(bp, &m68k_ptr, &insn_consumed); break; /* and/mul        */
             case 0xD: bp = EMIT_lineD(bp, &m68k_ptr, &insn_consumed); break; /* add            */
             case 0xE: bp = EMIT_lineE(bp, &m68k_ptr, &insn_consumed); break; /* [J5g] asl/asr/lsl/lsr/rol/ror */
-            default:  TFAIL("opcode line not in the [J5g] driven set (0/2/4/5/7/8/9/B/C/D/E + terminators)");
+            case 0xF: bp = EMIT_lineF(bp, &m68k_ptr, &insn_consumed); break; /* [J5o] FPU (FMOVE/FADD/...)   */
+            default:  TFAIL("opcode line not in the [J5g]/[J5o] driven set (0/2/4/5/7/8/9/B/C/D/E/F + terminators)");
         }
         if (insn_consumed == 0) TFAIL("decoder consumed 0 insns (unimplemented opcode?)");
 
@@ -591,8 +619,14 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     }
 
     /* The CCR + PC delta flush is part of the body's exit work (touches scratch regs only,
-     * not the architectural file). Append it to the body so the masks are final. */
+     * not the architectural file). Append it to the body so the masks are final. [J5o]: the
+     * FPCR/FPSR are flushed the same way (the FPU decoder lazily loads them via RA_ModifyFPSR
+     * and we store the modified scratch back to st->fpsr/fpcr here, exactly as RA_FlushCC does
+     * for the CCR). For an integer block these are no-ops (never loaded), so the existing frame
+     * is byte-identical. */
     RA_FlushCC(&bp);
+    RA_FlushFPCR(&bp);
+    RA_FlushFPSR(&bp);
     bp = EMIT_FlushPC(bp);
     unsigned body_words = (unsigned)(bp - body);
 
@@ -600,11 +634,23 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     uint16_t live = 0, dirty = 0;
     j5c_ra_get_masks(&live, &dirty);
     cb->dirty_mask = dirty;
+    /* [J5o] FP register liveness — the FP regs the block reads (load in prologue) / writes
+     * (store in epilogue). For a non-FPU block these are 0, so no FP load/store is emitted and
+     * the integer frame is byte-for-byte unchanged. */
+    uint16_t fp_live = 0, fp_dirty = 0;
+    j5c_ra_get_fp_masks(&fp_live, &fp_dirty);
+    int touches_fpu = (fp_live | fp_dirty) != 0;
 
-    /* Decode the terminator: is it a CHAINABLE static-target transfer? */
+    /* Decode the terminator: is it a CHAINABLE static-target transfer? [J5o]: a block that
+     * touches the FPU is NOT chained — it stays a C-dispatcher round-trip (like rts / the
+     * library bridge / exceptions already are). Cross-block FP-register caching would need the
+     * d8..d15 file kept live across the hop AND a whole-FP-file flush at the chain-terminal
+     * epilogue (mirroring the integer file's "store all 16" policy); rather than store all 8 FP
+     * regs at EVERY epilogue (which would touch d8..d15 for integer blocks too and regress the
+     * corpus), we keep FP blocks un-chained. FP block->block chaining is a later FP increment. */
     const uint8_t *thost = sb->host_mem + (*end_pc - sb->origin);
     uint32_t ctgt[2]; unsigned ccc4 = 0;
-    int ntargets = ((uint64_t)*end_pc + 2 <= (uint64_t)sb->origin + sb->size)
+    int ntargets = (!touches_fpu && (uint64_t)*end_pc + 2 <= (uint64_t)sb->origin + sb->size)
                    ? chain_targets(thost, *end_pc, ctgt, &ccc4) : 0;
 
     uint32_t *ptr = out;
@@ -624,6 +670,18 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     *ptr++ = stp64_preindex(31, 15, 16, -16);   /* [J5k] A2,A3 */
     *ptr++ = stp64_preindex(31, 17, 18, -16);   /* [J5k] A4, x18(REG_PC scratch) — keep pair */
 
+    /* [J5o] FP CALLEE-SAVE: d8..d15 are AAPCS64 callee-saved, and this block uses them as the
+     * FP0..FP7 file (loading/computing into them clobbers the caller's values). Save exactly the
+     * d-regs the block touches (load-in OR written — loading clobbers too) onto the stack here,
+     * restore them in the epilogue, so the C dispatcher's d8..d15 are preserved across the block
+     * activation. For an integer block (fp_clobber==0) NOTHING is emitted — the frame is unchanged.
+     * FP blocks are un-chained (see ntargets above), so this entry + the epilogue restore always
+     * pair up (no chain jumps over them). Pushed LIFO; each push is a 16-byte-aligned slot. */
+    uint16_t fp_clobber = (uint16_t)((fp_live | fp_dirty) & 0xff);
+    for (int i = 0; i < 8; i++)
+        if (fp_clobber & (1u << i))
+            *ptr++ = fstd_preindex((uint8_t)(J5O_FP0 + i), 31 /*sp*/, -16);
+
     /* The block is entered as block(state in x0, base_adjust in x1).  [J5g]: the STATE
      * pointer is kept in x1 for the whole block (NOT x0). Save base_adjust (x1) into x12
      * FIRST, then move the state (x0) into x1. */
@@ -635,6 +693,14 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
      * skips this entirely, branching to chain_off below with the file already live.) */
     for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_d[i], J5D_OFF_D(i));
     for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_a[i], J5D_OFF_A(i));
+
+    /* [J5o] FP PROLOGUE: load the FP regs the block reads (live-in) from st->fp[] into d8..d15.
+     * fp[i] is at offsetof(struct j5d_m68k_state, fp[i]) — fits the fldd signed-9-bit byte
+     * offset (fp[] spans bytes 80..136). Only live-in FP regs are loaded (the [J5e] minimal
+     * frame); for an integer block fp_live==0 so nothing is emitted. */
+    for (int i = 0; i < 8; i++)
+        if (fp_live & (1u << i))
+            *ptr++ = fldd((uint8_t)(J5O_FP0 + i), 1, (int16_t)offsetof(struct j5d_m68k_state, fp[i]));
 
     /* ---- CHAIN ENTRY: regs already live (cold path loaded them just above; chained path was
      * left them live by the predecessor). x2/x3 are dead here (the body has not run; the EA
@@ -708,6 +774,18 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     for (int i = 0; i < 8; i++) { *ptr++ = str_offset(1, reg_d[i], J5D_OFF_D(i)); reg_stores++; }
     for (int i = 0; i < 8; i++) { *ptr++ = str_offset(1, reg_a[i], J5D_OFF_A(i)); reg_stores++; }
     (void)dirty;
+
+    /* [J5o] FP EPILOGUE: store the FP regs the block WROTE back to st->fp[] (the [J5e] minimal
+     * frame — only dirty regs), then RESTORE the caller's d8..d15 from the stack in REVERSE
+     * (LIFO) order. The store-to-state happens FIRST (d-regs still hold the computed FP values),
+     * the stack restore SECOND (overwriting them with the caller's saved values). For an integer
+     * block both loops emit nothing — the epilogue is byte-identical. */
+    for (int i = 0; i < 8; i++)
+        if (fp_dirty & (1u << i))
+            *ptr++ = fstd((uint8_t)(J5O_FP0 + i), 1, (int16_t)offsetof(struct j5d_m68k_state, fp[i]));
+    for (int i = 7; i >= 0; i--)
+        if (fp_clobber & (1u << i))
+            *ptr++ = fldd_postindex((uint8_t)(J5O_FP0 + i), 31 /*sp*/, 16);
 
     *ptr++ = ldp64_postindex(31, 17, 18, 16);   /* [J5k] restore A4,x18 */
     *ptr++ = ldp64_postindex(31, 15, 16, 16);   /* [J5k] A2,A3 */

@@ -123,6 +123,43 @@ Files taken for [J5g] (verbatim — broaden the ISA + addressing-mode coverage)
   extraction scratch) and the C/V CCR-layout fix are entirely in OUR files (j5c_ra.c,
   j5d_engine.c, j5c_build.c, j5d_jit68k.h) — no quarantine edit.
 
+Files taken for [J5o] (verbatim — the 68881/68882 FPU coprocessor decoder + its libm/tlsf deps)
+----------------------------------------------------------------------------------------------
+  [J5o] adds the FPU CORE (FMOVE/format-conversions + FADD/FSUB/FMUL/FDIV/FSQRT/FABS/FNEG/FCMP/
+  FTST), driving Emu68's REAL line-F (FPU coprocessor) decoder. Three MORE files are vendored
+  BYTE-VERBATIM from the same pin (commit 305f686); the Exhibit-B re-grep is clean and `diff`
+  vs upstream is EMPTY for each (verified 2026-06-25):
+  M68k_LINEF.c    <- Emu68 src/M68k_LINEF.c     (the FPU coprocessor decoder: EMIT_FPU =
+                                                 FMOVE/FMOVEM/FADD/.../FCMP/FTST + the line-F
+                                                 MOVE16/CINV/CPUSH branch; carries the Exhibit-A
+                                                 MPL header)
+  math/libm.h     <- Emu68 src/math/libm.h      (the decoder's OWN libm — struct double2/rq +
+                                                 the transcendental decls M68k_LINEF.c references;
+                                                 a header, inherits the repo MPL via the project
+                                                 LICENSE — no per-file header upstream either)
+  tlsf.h          <- Emu68 include/tlsf.h        (the bare-metal allocator interface the line-F
+                                                 MOVE16/CINV branch references; header, repo MPL)
+  The engine dispatcher (j5d_engine.c) drives EMIT_lineF for group F. The FP arithmetic/convert/
+  compare encoders it calls (faddd/fsubd/fmuld/fdivd/fsqrtd/fabsd/fnegd/fcmpd/fcmpzd/fcvtds/
+  fcvtsd/scvtf_32toD/fcvtzs_Dto32 + EMIT_GetFPUFlags) are `static inline` in the already-vendored
+  A64.h. [J5o] also adds OUR (AROS-licensed, NON-MPL) glue, which CALLS/LINKS the vendored decoder
+  but copies NO Emu68 source (MPL FAQ Q11-Q13):
+    hosted/jit68k/j5o_fpu_shims.c   — link stubs for the symbols the monolithic verbatim
+                                      M68k_LINEF.c references but the [J5o] DRIVEN set never reaches
+                                      (the 80-bit .x runtime Load96bit/Store96bit; the packed .p +
+                                      transcendental math; the bare-metal TLSF/cache-maintenance);
+                                      M68K_IsBranch is authored from the PUBLISHED 68000 branch
+                                      encodings (an ISA fact, not Emu68 expression). Each stub is a
+                                      documented no-op or abort-on-call (a future increment that
+                                      drives them trips loudly and must port a real implementation).
+    hosted/jit68k/j5d_ea_helpers.c  — EXTENDED with the FP single/double + integer-format sandbox
+                                      memory helpers (j5d_fpu_f{ldd,std,lds,sts}* + j5d_fpu_i{ldr,
+                                      str,ldrh,strh,ldrb,strb}*: base-adjust + per-element byteswap).
+    hosted/jit68k/j5c_ra.c          — EXTENDED with the FPU register file (FP0..FP7 -> d8..d15) +
+                                      memory-backed FPCR/FPSR (RA_MapFPURegister/RA_ModifyFPSR/
+                                      RA_FlushFPCR), implementing RegisterAllocator.h's FPU side.
+    hosted/jit68k/{j5o_test.c,j5d_interp.c} — the [J5o] driver + the INDEPENDENT C-double oracle.
+
 Build-time darwinize (NO edit to the verbatim files)
 ----------------------------------------------------
   The vendored decoders use GNU __attribute__((alias(...))) function aliases, which
@@ -186,6 +223,23 @@ Build-time darwinize (NO edit to the verbatim files)
   100% the REAL EMIT_MOVEM. The QUARANTINE M68k_LINE4.c is NOT touched — `diff` vs upstream
   stays empty (verified). No new file is vendored ([J5g] already vendored M68k_LINE4.c).
 
+  [J5o] FIFTH/SIXTH build-time transforms (the FPU sandbox + the libm asm-fix) — applied to the
+  BUILD-DIR COPIES of M68k_LINEF.c and math/libm.h ONLY, gated by `--fpu-sandbox` / `--libm-asm-fix`
+  (the [J5o] build passes them). M68k_LINEF.c's FPU_FetchData/FPU_StoreData resolve the EA base
+  ONCE and emit their OWN fp/integer load/store straight off the resolved 68k address (the 1:1-MMU
+  + big-endian assumption) — NOT via M68k_EA.c. `--fpu-sandbox` rewrites each such MEMORY site
+  (scoped to those whose base operand is the literal `int_reg`/`off`): the .s/.d FP forms
+  (fldd/fstd/flds/fsts + pre/post/pimm) to OUR j5d_fpu_f* helpers, and the integer .l/.w/.b forms
+  (ldr/str/ldrsh/strh/ldrsb/strb + ur/pre/post) to OUR j5d_fpu_i* helpers — both base-adjust +
+  per-element byteswap (REV64/REV/REV16), sign-correct for the decoder's scvtf/fcvtzs. It also
+  NEUTRALISES the bodies of the bare-metal GNU-as asm thunks clang/Mach-O cannot assemble and the
+  driven FPU set never reaches (the transcendental Poly* thunks; the MOVE16/CINV cache-maintenance).
+  `--libm-asm-fix` fixes the two clang-incompatible inline-asm constraints in math/libm.h. The
+  DECODE + the FP ARITHMETIC stay 100% the REAL decoder; the QUARANTINE M68k_LINEF.c / math/libm.h
+  are NOT touched — `diff` vs upstream stays empty (verified). The engine's `EMIT_lineF` carries a
+  WEAK fallback (in OUR j5d_engine.c) so the integer-only spikes that do not link M68k_LINEF.c still
+  build; the strong vendored decoder overrides it in the [J5o] build.
+
 NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
 -----------------------------------------------------------------------------
   src/aarch64/{start,vectors,mmu}.c, src/raspi/*, src/pistorm/*, src/boards/*,
@@ -214,15 +268,18 @@ Exhibit-B (MPL <-> LGPL compatibility) check
   ([J5f] vendored NO new file — the PC-driven dispatcher / real return stack / computed
   jumps / full Bcc widths are dispatcher-level C in OUR files (j5d_engine.c, j5d_interp.c)
   — so the Exhibit-B set is unchanged; re-grep on 2026-06-25 still empty.)
+  (Confirmed empty for the [J5o] vendoring — M68k_LINEF.c, math/libm.h, tlsf.h — on 2026-06-25.)
 
 Local edits to these files
 --------------------------
-  NONE. EVERY file in this directory (the [J2] pair AND the [J5c]+[J5d] decoder set +
-  headers, including the new M68k_LINE5.c and M68k_CC.c) is byte-identical to upstream —
-  `diff` against the pinned commit is empty for each. All glue/adaptation lives in
-  separate, AROS-licensed files OUTSIDE this directory (hosted/jit68k/j2_*.c, j5c_*.c,
-  j5d_*.c) and in the build-time darwinize generator (hosted/jit68k/emu68_darwinize.pl,
-  which writes patched COPIES to build/emu68-darwin/ — the alias-forwarder transform for
-  all files, plus the [J5d] (An)-EA call-substitution for the M68k_EA.c copy under
-  --ea-sandbox — and never touches these files). Any future edit to a file in THIS
-  directory stays MPL-2.0 and its source must be disclosed under MPL; record the edit here.
+  NONE. EVERY file in this directory (the [J2] pair AND the [J5c]+[J5d]+[J5g]+[J5o] decoder
+  set + headers, including M68k_LINE5.c, M68k_CC.c, and the [J5o] M68k_LINEF.c / math/libm.h /
+  tlsf.h) is byte-identical to upstream — `diff` against the pinned commit is empty for each.
+  All glue/adaptation lives in separate, AROS-licensed files OUTSIDE this directory
+  (hosted/jit68k/j2_*.c, j5c_*.c, j5d_*.c, j5o_*.c) and in the build-time darwinize generator
+  (hosted/jit68k/emu68_darwinize.pl, which writes patched COPIES to build/emu68-darwin/ — the
+  alias-forwarder transform for all files, plus the [J5d] (An)-EA call-substitution under
+  --ea-sandbox, the [J5l] movem rewrite under --movem-sandbox, and the [J5o] FPU sandbox +
+  libm asm-fix under --fpu-sandbox/--libm-asm-fix — and never touches these files). Any future
+  edit to a file in THIS directory stays MPL-2.0 and its source must be disclosed under MPL;
+  record the edit here.

@@ -83,11 +83,194 @@ sub ea_kind {
 #                    M68k_LINE4.c stays BYTE-VERBATIM; only the build-dir copy is patched.
 use strict; use warnings;
 my ($src, $out, @opts) = @ARGV;
-die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge]\n" unless $src && $out;
+die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge] [--fpu-sandbox] [--libm-asm-fix]\n" unless $src && $out;
 my $ea_sandbox    = grep { $_ eq '--ea-sandbox' } @opts;
 my $movem_sandbox = grep { $_ eq '--movem-sandbox' } @opts;
 my $move_no_merge = grep { $_ eq '--move-no-merge' } @opts;
+my $fpu_sandbox   = grep { $_ eq '--fpu-sandbox' } @opts;     # [J5o] M68k_LINEF.c
+my $libm_asm_fix  = grep { $_ eq '--libm-asm-fix' } @opts;    # [J5o] math/libm.h
 local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close $fh;
+
+# ===================== [J5o] LIBM.H CLANG ASM-CONSTRAINT FIX =====================
+# Applied to math/libm.h only (--libm-asm-fix). Emu68's libm.h provides two tiny inline
+# helpers with GNU-as register-tie input constraints clang/Mach-O REJECTS:
+#     asm volatile("fsqrt %d0, %d0":"+w"(x):"0"(x));   // "0" tied-input is invalid in clang
+#     asm volatile("fabs  %d0, %d0":"+w"(x):"0"(x));
+# The "+w"(x) read-write output already names x as both in and out, so the tied input "0"(x)
+# is REDUNDANT. Drop it — semantics-preserving (same instruction, same operand). Only the
+# build-dir copy is patched; the quarantine math/libm.h stays byte-verbatim. (These helpers
+# are used only by the transcendental paths this increment does not drive; the fix exists so
+# the verbatim file COMPILES under clang.)
+if ($libm_asm_fix) {
+    my $n = ($code =~ s!("\+w"\(x\)):"0"\(x\)!$1!g);
+    die "!! --libm-asm-fix: expected 2 asm-constraint sites, matched $n\n" unless $n == 2;
+}
+
+# ===================== [J5o] FPU SANDBOX + BARE-METAL ASM NEUTRALISE =====================
+# Applied to M68k_LINEF.c only (--fpu-sandbox). Two transforms on the verbatim FPU decoder:
+#
+# (A) FP-MEMORY sandbox rewrite. FPU_FetchData/FPU_StoreData resolve the EA base ONCE
+#     (EMIT_LoadFromEffectiveAddress size 0 -> int_reg/off holds the 68k ADDRESS) and emit
+#     their OWN fp load/store straight off it (fldd/flds/fstd/fsts + pre/post/pimm variants),
+#     the 1:1-MMU + big-endian-CPU assumption. Each such site whose BASE operand is the
+#     literal `int_reg` or `off` (the resolved 68k address — uniquely the memory-EA path;
+#     the immediate/const paths use REG_PC or 0 and are left ALONE) is rewritten to OUR
+#     j5d_fpu_* helper (j5d_ea_helpers.c): host = base_adjust(x12) + base (UXTW) + a per-
+#     element REV64/REV byteswap. The DECODE + the fp ARITHMETIC stay 100% the REAL decoder.
+#     Operand order is preserved. The QUARANTINE M68k_LINEF.c stays BYTE-VERBATIM.
+#
+# (B) BARE-METAL ASM neutralise. The verbatim file embeds AArch64 inline-asm that clang/
+#     Mach-O cannot assemble and that this increment never drives:
+#       - the GNU-as transcendental Poly thunks (stub_PolySine/Cosine[Single]) using
+#         `ldr x0,=constants` literal pools + `.ltorg` + `.globl` (only FSIN/FCOS need them);
+#       - the bare-metal cache-maintenance asm in EMIT_lineF's MOVE16/CINV/CPUSH branch
+#         (CLIDR/CSSELR/CCSIDR loops, dc/ic, `msr tpidr_el1,...` — re-hosted as host
+#         __clear_cache at integration; never on the FPU arithmetic path).
+#     Their bodies are emptied in the BUILD-DIR COPY (the PolySine* global SYMBOLS are still
+#     provided as no-op stubs in j5o_fpu_shims.c so the transcendental blr sites link). The
+#     QUARANTINE file is untouched. This is a portability neutralise, identical in spirit to
+#     the alias-forwarder rewrite — semantics of the DRIVEN ops are unaffected.
+if ($fpu_sandbox) {
+    my $fp = 0;
+    # (A) FP-memory sites: base operand is int_reg or off; value is *reg / reg / vfp_reg.
+    #   plain offset  -> j5d_fpu_f{ldd,std,lds->flds,sts}(reg, base, offset)
+    #   _preindex     -> _pre   (helper does base+=pre_sz first)
+    #   _postindex    -> _post  (helper does base+=post_sz after)
+    #   _pimm         -> _pimm  (helper multiplies the scaled immediate back up)
+    my %fpmap = (
+        'fldd' => 'j5d_fpu_fldd', 'fldd_preindex' => 'j5d_fpu_fldd_pre',
+        'fldd_postindex' => 'j5d_fpu_fldd_post', 'fldd_pimm' => 'j5d_fpu_fldd_pimm',
+        'fstd' => 'j5d_fpu_fstd', 'fstd_preindex' => 'j5d_fpu_fstd_pre',
+        'fstd_postindex' => 'j5d_fpu_fstd_post', 'fstd_pimm' => 'j5d_fpu_fstd_pimm',
+        'flds' => 'j5d_fpu_flds', 'flds_preindex' => 'j5d_fpu_flds_pre',
+        'flds_postindex' => 'j5d_fpu_flds_post', 'flds_pimm' => 'j5d_fpu_flds_pimm',
+        'fsts' => 'j5d_fpu_fsts', 'fsts_preindex' => 'j5d_fpu_fsts_pre',
+        'fsts_postindex' => 'j5d_fpu_fsts_post', 'fsts_pimm' => 'j5d_fpu_fsts_pimm',
+    );
+    $code =~ s{
+        \*ptr\+\+\s*=\s*
+        (fldd_pimm|fldd_preindex|fldd_postindex|fldd|
+         fstd_pimm|fstd_preindex|fstd_postindex|fstd|
+         flds_pimm|flds_preindex|flds_postindex|flds|
+         fsts_pimm|fsts_preindex|fsts_postindex|fsts)
+        \(\s*(\*reg|reg|vfp_reg)\s*,\s*(int_reg|off)\s*,\s*([^;()]+?)\s*\)\s*;
+    }{
+        my ($enc, $val, $base, $arg) = ($1, $2, $3, $4);
+        my $h = $fpmap{$enc};
+        $fp++;
+        "ptr = $h(ptr, $val, $base, $arg); /* [J5o] FP-mem sandbox: was $enc */";
+    }gex;
+
+    # (A2) FP INTEGER-FORMAT memory sites (.l/.w/.b FMOVE <-> mem). Unlike the fldd/flds FP
+    #   loads/stores, the integer-format FMOVE converts in a GP reg and emits a PLAIN integer
+    #   ldr/str (+h/+b, +ur/preindex/postindex) STRAIGHT OFF int_reg/off (the resolved 68k
+    #   address) — the SAME 1:1-MMU + big-endian assumption, but emitted INLINE in M68k_LINEF.c
+    #   (FPU_FetchData/FPU_StoreData Case 3), NOT via the darwinized M68k_EA.c. Operand order is
+    #   (BASE, val, offset) — base FIRST (the address), val second — so we match only sites whose
+    #   FIRST operand is the literal int_reg/off (the memory-EA path; the Dn / immediate / PC paths
+    #   never use int_reg as the base of these and are left ALONE). Route each to OUR j5d_fpu_i*
+    #   helper (j5d_ea_helpers.c): base-adjust(x12) + per-element byteswap (REV / REV16 / none),
+    #   sign-correct for the decoder's following scvtf_32toD. Sizes from the encoder: ldr/str=.l(4),
+    #   ldrsh/strh=.w(2), ldrsb/strb=.b(1). The QUARANTINE M68k_LINEF.c stays BYTE-VERBATIM.
+    my %imap = (
+        # .l (longword): ldr/ldur load, str/stur store
+        'ldr_offset'            => 'j5d_fpu_ildr',  'ldur_offset'   => 'j5d_fpu_ildr',
+        'ldr_offset_preindex'   => 'j5d_fpu_ildr_pre',
+        'ldr_offset_postindex'  => 'j5d_fpu_ildr_post',
+        'str_offset'            => 'j5d_fpu_istr',  'stur_offset'   => 'j5d_fpu_istr',
+        'str_offset_preindex'   => 'j5d_fpu_istr_pre',
+        'str_offset_postindex'  => 'j5d_fpu_istr_post',
+        # .w (halfword, sign-extending load): ldrsh/ldursh load, strh/sturh store
+        'ldrsh_offset'          => 'j5d_fpu_ildrh', 'ldursh_offset' => 'j5d_fpu_ildrh',
+        'ldrsh_offset_preindex' => 'j5d_fpu_ildrh_pre',
+        'ldrsh_offset_postindex'=> 'j5d_fpu_ildrh_post',
+        'strh_offset'           => 'j5d_fpu_istrh', 'sturh_offset'  => 'j5d_fpu_istrh',
+        'strh_offset_preindex'  => 'j5d_fpu_istrh_pre',
+        'strh_offset_postindex' => 'j5d_fpu_istrh_post',
+        # .b (byte, sign-extending load): ldrsb/ldursb load, strb/sturb store
+        'ldrsb_offset'          => 'j5d_fpu_ildrb', 'ldursb_offset' => 'j5d_fpu_ildrb',
+        'ldrsb_offset_preindex' => 'j5d_fpu_ildrb_pre',
+        'ldrsb_offset_postindex'=> 'j5d_fpu_ildrb_post',
+        'strb_offset'           => 'j5d_fpu_istrb', 'sturb_offset'  => 'j5d_fpu_istrb',
+        'strb_offset_preindex'  => 'j5d_fpu_istrb_pre',
+        'strb_offset_postindex' => 'j5d_fpu_istrb_post',
+    );
+    my $fpi = 0;
+    $code =~ s{
+        \*ptr\+\+\s*=\s*
+        (ldr_offset_preindex|ldr_offset_postindex|ldr_offset|ldur_offset|
+         str_offset_preindex|str_offset_postindex|str_offset|stur_offset|
+         ldrsh_offset_preindex|ldrsh_offset_postindex|ldrsh_offset|ldursh_offset|
+         strh_offset_preindex|strh_offset_postindex|strh_offset|sturh_offset|
+         ldrsb_offset_preindex|ldrsb_offset_postindex|ldrsb_offset|ldursb_offset|
+         strb_offset_preindex|strb_offset_postindex|strb_offset|sturb_offset)
+        \(\s*(int_reg|off)\s*,\s*(val_reg)\s*,\s*([^;()]+?)\s*\)\s*;
+    }{
+        my ($enc, $base, $val, $arg) = ($1, $2, $3, $4);
+        my $h = $imap{$enc};
+        $fpi++;
+        "ptr = $h(ptr, $base, $val, $arg); /* [J5o] FP-int-mem sandbox: was $enc */";
+    }gex;
+
+    # (B1) Empty the GNU-as inline-asm thunk bodies that clang/Mach-O cannot assemble and the
+    #   [J5o] FPU sub-decoder never drives: the four Poly transcendental thunks (stub_PolyXxx)
+    #   AND the __trampoline_icache_invalidate thunk (its `.globl ... bl invalidate_instruction_
+    #   cache` uses the BARE C name, which Mach-O underscore-mangling won't resolve; the MOVE16/
+    #   CINV path that uses it is not driven). Match `void __attribute__((used)) NAME(void) { ... }`
+    #   and replace the body with `{ }`. The global SYMBOLS (PolySine etc, trampoline_icache_
+    #   invalidate) are provided as no-op stubs in j5o_fpu_shims.c so the (un-driven) blr sites link.
+    my $poly = 0;
+    while ($code =~ /(void\s+__attribute__\(\(used\)\)\s+(?:stub_Poly\w+|__trampoline_icache_invalidate)\s*\(void\)\s*)\{/g) {
+        my $hdr_end = pos($code); my $open = $hdr_end - 1;
+        my $depth = 1; my $i = $hdr_end;
+        while ($i < length($code) && $depth) {
+            my $ch = substr($code, $i, 1); $depth++ if $ch eq '{'; $depth-- if $ch eq '}'; $i++;
+        }
+        substr($code, $open, $i - $open) = "{ /* [J5o] darwinize: GNU-as thunk neutralised (transcendental/cache, not driven) */ }";
+        pos($code) = $open + 5;
+        $poly++;
+    }
+
+    # (B2) Empty the bare-metal cache-maintenance asm functions in the MOVE16/CINV path.
+    #   These are file-static helpers wrapping `asm volatile(... dc/ic/msr tpidr_el1 ...)`.
+    #   Match a `static ... NAME(...) { ... asm volatile(...) ... }` whose body contains
+    #   `tpidr_el1` or a `dc ` / `ic ` cache op and empty it. Scoped narrowly by the asm
+    #   marker so only the cache thunks are touched.
+    my $cache = 0;
+    while ($code =~ /\b(static\s+(?:void|uint32_t\s*\*?|int)\s+\w+\s*\([^;{]*\)\s*)\{/g) {
+        my $hdr_end = pos($code); my $open = $hdr_end - 1;
+        my $depth = 1; my $i = $hdr_end;
+        while ($i < length($code) && $depth) {
+            my $ch = substr($code, $i, 1); $depth++ if $ch eq '{'; $depth-- if $ch eq '}'; $i++;
+        }
+        my $body = substr($code, $open, $i - $open);
+        if ($body =~ /tpidr_el1|"\s*msr\s|"\s*dc\s|"\s*ic\s|CLIDR|CSSELR|CCSIDR/) {
+            substr($code, $open, $i - $open) = "{ /* [J5o] darwinize: bare-metal cache-maintenance asm neutralised (host __clear_cache at integration) */ }";
+            pos($code) = $open + 5;
+            $cache++;
+        } else {
+            pos($code) = $open + 1;
+        }
+    }
+
+    if ($fp || $fpi) {
+        my $decl = "\n/* [J5o] darwinize: FP-memory sandbox helpers (OURS, j5d_ea_helpers.c) */\n";
+        my %seen;
+        for my $h (sort values %fpmap) {
+            next if $seen{$h}++;
+            $decl .= "uint32_t *$h(uint32_t *ptr, uint8_t reg, uint8_t base, int arg);\n";
+        }
+        $decl .= "/* [J5o] FP integer-format (.l/.w/.b) memory helpers (base, val, off) */\n";
+        for my $h (sort values %imap) {
+            next if $seen{$h}++;
+            $decl .= "uint32_t *$h(uint32_t *ptr, uint8_t base, uint8_t val, int arg);\n";
+        }
+        if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
+            my $head = $1; substr($code, length($head), 0) = $decl;
+        } else { $code = $decl . $code; }
+    }
+    warn "[darwinize --fpu-sandbox] FP-mem sites=$fp FP-int-mem sites=$fpi poly-stubs=$poly cache-thunks=$cache\n";
+}
 
 # ===================== [J5m] MOVE TWO-PUSH MERGE NEUTRALISE =====================
 # Applied to M68k_MOVE.c only (--move-no-merge). Emu68's M68k_MOVE.c has a fast path that

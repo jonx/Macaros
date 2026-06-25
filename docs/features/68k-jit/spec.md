@@ -1622,6 +1622,74 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   `HUNK_DEBUG` line→source mapping (symbols suffice); the production host-SIGSEGV→`j5d_raise_
   exception` wiring INSIDE AROS stays the owner's track (the net here is host-side, around the test).
 
+- **`[J5o]` the 68881/68882 FPU CORE — the FP register file + FMOVE/format-conversions + the
+  basic arithmetic — IMPLEMENTED / GREEN.** The FIRST corpus program to use the FPU coprocessor
+  (line-F). It drives Emu68's **REAL** `EMIT_FPU` decoder (the newly vendored, byte-verbatim,
+  quarantined `emu68/M68k_LINEF.c`) — no hand-rolled FP — and asserts the result **bit-exact** vs
+  an INDEPENDENT C-`double` oracle. Files: vendored `emu68/{M68k_LINEF.c, math/libm.h, tlsf.h}`
+  (MPL, verbatim — `diff` vs upstream commit `305f686` is EMPTY, Exhibit-B grep clean); OURS:
+  `hosted/jit68k/{j5o_fpu_shims.c, j5o_test.c}`, the FP-mem + FP-int-mem sandbox helpers appended to
+  `j5d_ea_helpers.c`, the FPU register file + FPCR/FPSR in `j5c_ra.c`, the FPU oracle in
+  `j5d_interp.c`, the `--fpu-sandbox`/`--libm-asm-fix` passes in `emu68_darwinize.pl`, the FP
+  prologue/epilogue + line-F dispatch in `j5d_engine.c`, and `apps68k/j5o.s` (+ committed `j5o.exe`,
+  assembled `-m68882`). Target `make hosted-jit68k-j5o` (marker `[J5o] PASS`, watchdog 40 s).
+
+  - **The FP register file — APPEND-ONLY state (the seam is frozen except this append).** FP0..FP7
+    (`double fp[8]`), `fpcr`, `fpsr` are APPENDED AFTER all existing `struct j5d_m68k_state` fields
+    (exactly as `sr_high`/`exc_count` were appended at `[J5i]`), so **every existing offset is
+    byte-for-byte unchanged** — verified: `d`=0, `a`=32, `ccr`=64, `pc`=68, `sr_high`=72,
+    `exc_count`=74 (all frozen); `fp`=80, `fpcr`=144, `fpsr`=148 (new). The integer engine + the
+    `[J3]`/`[J5i]` seam never touch the new fields; only the FPU path does. The engine emits the FP
+    load/store offsets with `offsetof()` at build time (static-asserted `fpcr==144`/`fpsr==148`), so
+    the compiler-chosen padding before `fp[]` is never hand-encoded and the integer offsets are
+    frozen. FP0..FP7 map to AArch64 **d8..d15** in the JIT'd block (Emu68's `RA_MapFPURegister`:
+    `fp_reg → d8+fp_reg`), saved/restored as AAPCS64 callee-saved around the block; a block touching
+    no FPU emits ZERO FP load/store (the integer corpus is byte-identical).
+
+  - **PRECISION MODEL (documented, mirrors Emu68).** The 68881/68882 register file is architecturally
+    **80-bit extended**, but AArch64 has no 80-bit FP — so (like Emu68) each FP0..FP7 is modeled in
+    IEEE-754 **binary64** (`double`). This is COMPLETE *instruction* coverage at double precision;
+    80-bit extended-precision exactness is **NOT bit-reproducible** on AArch64. For this increment's
+    ops (all IEEE-754-defined: move / format-convert / add / sub / mul / div / sqrt / abs / neg /
+    cmp / tst) the `double` results are deterministic and bit-exact — the gate the oracle asserts.
+
+  - **Ops covered (decoded by Emu68, driven here).** `FMOVE` reg↔reg, mem↔reg, and **every format
+    conversion**: single `.s` and double `.d` (memory ↔ FP, byteswapped through the sandbox), and
+    integer `.l`/`.w`/`.b` ↔ FP (register-direct Dn and memory); `FADD`, `FSUB`, `FMUL`, `FDIV`,
+    `FSQRT`, `FABS`, `FNEG`; `FCMP`, `FTST` (set the FPSR condition byte N/Z/I/NAN, gated by the same
+    `FPSR_Update_Needed` forward-scan Emu68 uses, so the cc byte is computed iff a later FP consumer
+    needs it). **Sandbox re-hosting:** the `.s`/`.d` FP loads/stores route through new
+    `j5d_fpu_f{ldd,std,lds,sts}*` helpers (base-adjust `x12` + per-element `REV64`/`REV`), and the
+    integer-format `.l`/`.w`/`.b` FMOVE↔memory — which Emu68 emits as PLAIN integer `ldr/str` (+h/+b,
+    +ur/pre/post) straight off the resolved 68k address inside `M68k_LINEF.c` (`FPU_FetchData`/
+    `FPU_StoreData` Case 3), NOT via `M68k_EA.c` — route through new `j5d_fpu_i{ldr,str,...}` helpers
+    (the SAME base-adjust + `REV`/`REV16` byteswap, sign-correct for the decoder's `scvtf`/`fcvtzs`).
+    The `--fpu-sandbox` darwinize pass rewrites all such sites in the BUILD-DIR copy only; the
+    quarantine `M68k_LINEF.c` stays byte-verbatim.
+
+  - **VERIFY (the crux — the independent C-`double` oracle).** `j5d_interp.c` computes every FP op
+    DIRECTLY in C `double` — a path that NEVER touches Emu68's emitted AArch64 FP. The test asserts
+    **bit-exact** (the raw `double` bit patterns of FP0..FP7, so NaN/−0.0/inf compare by bits; the
+    FPSR cc byte; and the FP-to-memory `.d`/`.s`/`.l`/`.w`/`.b` stored results) between the JIT and
+    the oracle, plus the integer register file + the whole sandbox memory + `d0`. A THIRD,
+    fully-independent hand-check verifies FP0..FP7 + the stored results against the hand-computed
+    expectations of `j5o.s`. **Negative control bites:** flipping the FADD opcode → FSUB in the JIT
+    copy only makes the JIT compute `45.0` while the oracle computes `95.0` — fp0 + the stored
+    doubles DIVERGE, proving the cross-check is not a tautology. **PASS (observed):** `regs=yes
+    fp=yes mem=yes jit-fpmem=yes`, FPSR `N=1 Z=0` after `FTST(-2.0)`, hand-check "all match",
+    neg-ctrl "DIVERGED", and the WHOLE existing corpus (mul/fact/arraysum/libcall/sumsq/bubsort/
+    mp64/j5l/mandel) re-run through the SAME FPU-enabled engine stays byte-exact (FPU is
+    additive/opcode-gated: a non-FP block emits zero FP load/store). `[J1]`–`[J5n]` re-confirmed
+    green; the engine's `EMIT_lineF` is a WEAK fallback so the integer-only spikes (J5d..J5n) that
+    do not vendor `M68k_LINEF.c` still link (the real strong decoder overrides it in the J5o build).
+
+  - **Deferred to the next FP increment (honest scope):** the **transcendentals** (FSIN/FCOS/FETOX/
+    FLOGN/… — their `blr` math-helper sites are stubbed in `j5o_fpu_shims.c`, abort-on-call so a
+    future increment trips loudly); **FBcc/FScc/FDBcc/FTRAPcc**; **FMOVEM**; the **80-bit extended
+    `.x`** and **packed-decimal `.p`** MEMORY formats (the precision model is double; `.x`/`.p` route
+    to deferred `Load96bit`/`PackedToDouble` stubs, never driven here); and FP **exceptions** (the
+    FPSR exception/accrued bits + FP traps). The integer FPSR condition byte (N/Z/I/NAN) IS live.
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:

@@ -61,5 +61,10 @@ asm j5l     -no-opt              # [J5l] movem save/restore: a compiler-style no
 asm_sym diagfault -no-opt        # div-by-zero inside `divide`, called via bsr (symbol mapping)
 asm     diagill   -no-opt        # ILLEGAL (0x4AFC), no handler -> vector 4
 asm     diagbus   -no-opt        # jmp out of sandbox, no handler -> vector 2 (bus error)
+asm     j5o     -kick1hunks -m68882 -no-opt  # [J5o] 68881/68882 FPU CORE: FMOVE format
+                                 # conversions (.l/.w/.b/.s/.d) + FADD/FSUB/FMUL/FDIV/FSQRT/
+                                 # FABS/FNEG + FCMP/FTST. -m68882 enables the FPU instruction
+                                 # set; -no-opt keeps the exact line-F encodings; -kick1hunks
+                                 # for the RELOC32 of the lea fpconst/result DATA addresses.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

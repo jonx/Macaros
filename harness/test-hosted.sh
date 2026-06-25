@@ -40,6 +40,8 @@ ROWS=(
   "J5k cross-region chaining   : hosted-jit68k-j5k"
   "J5l movem save/restore      : hosted-jit68k-j5l"
   "J5m vbcc C-compiled->JIT    : hosted-jit68k-j5m"
+  "J5n crash-bundle diagnostics: hosted-jit68k-j5n"
+  "J5o 68881/68882 FPU core    : hosted-jit68k-j5o"
   "apps68k real 68k programs  : hosted-jit68k-apps"
   "D1 cocoa/metal present     : hosted-cocoametal"
   "ABI cocoametal dylib seam  : cocoametal-abi"

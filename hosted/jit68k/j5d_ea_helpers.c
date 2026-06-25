@@ -426,3 +426,329 @@ uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
 {
     return movem_load_sh(ptr, base, rt, offset);
 }
+
+/* ============================ [J5o] the FP-MEMORY sandbox EA =======================
+ * The 68881/68882 FMOVE format-conversion to/from MEMORY (FMOVE.d (An),FPn / FMOVE.s ... /
+ * etc). We DRIVE Emu68's REAL EMIT_FPU / FPU_FetchData / FPU_StoreData decoders — they do
+ * the whole FPU-opcode decode, the format selection, the EA-base resolve, and the AArch64
+ * fp arithmetic. Only their final MEMORY TOUCH is sandbox-translated here, exactly as
+ * [J5l] did for movem and [J5d]/[J5g] for the integer EA.
+ *
+ * WHY FP needs its OWN helpers (it does NOT route through j5d_ea_mem / the funnel / movem).
+ * FPU_FetchData/FPU_StoreData resolve the EA base ONCE (EMIT_LoadFromEffectiveAddress with
+ * size 0 -> `int_reg` / `off` holds the 68k ADDRESS, not a host pointer) and then emit their
+ * OWN fp load/store straight off that address:
+ *     *ptr++ = fldd(*reg, int_reg, imm_offset);            // FMOVE.d (mem) -> FPn
+ *     *ptr++ = fldd_preindex/postindex(*reg, int_reg, sz); // -(An)/(An)+
+ *     *ptr++ = flds(*reg, int_reg, imm_offset);            // FMOVE.s (mem) -> FPn (then fcvtds)
+ *     *ptr++ = fstd(reg, int_reg, imm_offset);             // FPn -> FMOVE.d (mem)
+ *     *ptr++ = fsts(vfp_reg, int_reg, imm_offset);         // FPn -> FMOVE.s (mem) (after fcvtsd)
+ * On bare-metal Emu68 these work because An is a 1:1 host pointer and the CPU runs big-endian
+ * (SCTLR.EE). On the little-endian hosted sandbox both are wrong: each FP element needs
+ * host = base_adjust(x12) + (uint32_t)base (UXTW) and a per-element byteswap (REV64 for the
+ * 8-byte double, REV for the 4-byte single — IEEE doubles/singles are byte-reversed across
+ * endianness exactly like integers). emu68_darwinize.pl --fpu-sandbox rewrites each such site
+ * in the BUILD-DIR COPY of M68k_LINEF.c to call one of these helpers; the QUARANTINE
+ * M68k_LINEF.c stays BYTE-VERBATIM. The DECODE + the fp ARITHMETIC stay 100% the REAL decoder.
+ *
+ * PRECISION: the value crossing memory is the 68k operand's NATIVE width — .d is the IEEE
+ * binary64 the FP file already holds (no conversion at the memory boundary, just byteswap);
+ * .s is IEEE binary32 in memory, widened to the d-reg's binary64 by fcvtds on load (the REAL
+ * decoder emits the fcvtds AFTER our flds) / narrowed by fcvtsd before our fsts on store. The
+ * .x (80-bit extended) / .p (packed) memory forms are DEFERRED (the precision model is double;
+ * 80-bit exactness is not bit-reproducible on AArch64) — the decoder's .x/.p paths call the
+ * Load96bit/PackedToDouble runtime helpers, stubbed in j5o_fpu_shims.c and not exercised here.
+ *
+ * Scratch: x3 = host pointer, x2 = GP byteswap value (both RA-reserved, disjoint from the live
+ * 68k file w13..w29 / REG_PC w18 / RA pool w4..w11 / x12 base-adjust — same as the movem/EA
+ * helpers). The FP scratch d-reg for the single conversion is d1 (an AArch64 temporary the FP
+ * file d8..d15 and the d2..d7 scratch pool never alias; the REAL decoder's vfp_reg for stores
+ * is a d2..d7 alloc, passed to us). `base68k` is an An/PC/alloc GP reg, never x2/x3. ===========*/
+
+/* Double (.d) load: d[fpreg] = byteswap64(mem68k[base+offset]). */
+static uint32_t *fpu_load_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
+{
+    g_j5d_ea_emits++;
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    if (offset >= 0)      *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, (int16_t)offset);
+    else                  *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, (int16_t)offset);
+    *ptr++ = rev64(2, 2);
+    *ptr++ = mov_reg_to_simd(fpreg, TS_D, 0, 2);   /* fmov d[fpreg], x2 */
+    return ptr;
+}
+/* Double (.d) store: mem68k[base+offset] = byteswap64(d[fpreg]). */
+static uint32_t *fpu_store_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
+{
+    g_j5d_ea_emits++;
+    *ptr++ = mov_simd_to_reg(2 /*x2*/, fpreg, TS_D, 0);   /* fmov x2, d[fpreg] */
+    *ptr++ = rev64(2, 2);
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    *ptr++ = stur64_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+    return ptr;
+}
+/* Single (.s) load into the d-reg: load 4 bytes, byteswap, fmsr to the single half, then the
+ * REAL decoder emits fcvtds(*reg,*reg) after us to widen to double. We write the single half. */
+static uint32_t *fpu_load_s(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
+{
+    g_j5d_ea_emits++;
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    *ptr++ = ldr_offset(J5D_HOSTPTR, 2 /*w2*/, (uint16_t)(offset >= 0 ? offset : 0));
+    *ptr++ = rev(2, 2);
+    *ptr++ = fmsr(fpreg, 2);                       /* d[fpreg].s = w2 (single half) */
+    return ptr;
+}
+/* Single (.s) store: the REAL decoder already emitted fcvtsd(vfp_reg, reg) before calling us,
+ * so vfp_reg holds the binary32 in its single half — read it, byteswap, store 4 bytes. */
+static uint32_t *fpu_store_s(uint32_t *ptr, uint8_t vfp_reg, uint8_t base68k, int offset)
+{
+    g_j5d_ea_emits++;
+    *ptr++ = fmrs(2 /*w2*/, vfp_reg);              /* w2 = vfp_reg.s */
+    *ptr++ = rev(2, 2);
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    *ptr++ = str_offset(J5D_HOSTPTR, 2, (uint16_t)(offset >= 0 ? offset : 0));
+    return ptr;
+}
+
+/* ---- encoder-shaped entry points the darwinize --fpu-sandbox rewrite calls. Each mirrors
+ * ONE A64.h FP encoder; the pre/post-index ones also update `base` (the 68k An address) by
+ * the element size (8 for .d, 4 for .s). The decoder passes the SAME operands the original
+ * encoder used; the index amount the decoder computed (pre_sz<0 / post_sz>0) is honoured. ---- */
+
+/* was fldd(reg, base, offset)               (.d load, plain offset)            */
+uint32_t *j5d_fpu_fldd(uint32_t *ptr, uint8_t reg, uint8_t base, int offset)
+{ return fpu_load_d(ptr, reg, base, offset); }
+/* was fldd_preindex(reg, base, pre_sz<0)    (base += pre_sz FIRST, then .d load) */
+uint32_t *j5d_fpu_fldd_pre(uint32_t *ptr, uint8_t reg, uint8_t base, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_load_d(ptr, reg, base, 0);
+}
+/* was fldd_postindex(reg, base, post_sz>0)  (.d load, THEN base += post_sz)      */
+uint32_t *j5d_fpu_fldd_post(uint32_t *ptr, uint8_t reg, uint8_t base, int post_sz)
+{
+    ptr = fpu_load_d(ptr, reg, base, 0);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+/* was fldd_pimm(reg, base, offset>>3)       (.d load, unsigned scaled offset)    */
+uint32_t *j5d_fpu_fldd_pimm(uint32_t *ptr, uint8_t reg, uint8_t base, int offset_div8)
+{ return fpu_load_d(ptr, reg, base, offset_div8 * 8); }
+
+/* was fstd(reg, base, offset)               (.d store, plain offset)            */
+uint32_t *j5d_fpu_fstd(uint32_t *ptr, uint8_t reg, uint8_t base, int offset)
+{ return fpu_store_d(ptr, reg, base, offset); }
+uint32_t *j5d_fpu_fstd_pre(uint32_t *ptr, uint8_t reg, uint8_t base, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_store_d(ptr, reg, base, 0);
+}
+uint32_t *j5d_fpu_fstd_post(uint32_t *ptr, uint8_t reg, uint8_t base, int post_sz)
+{
+    ptr = fpu_store_d(ptr, reg, base, 0);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+uint32_t *j5d_fpu_fstd_pimm(uint32_t *ptr, uint8_t reg, uint8_t base, int offset_div8)
+{ return fpu_store_d(ptr, reg, base, offset_div8 * 8); }
+
+/* was flds(reg, base, offset)               (.s load into single half)         */
+uint32_t *j5d_fpu_flds(uint32_t *ptr, uint8_t reg, uint8_t base, int offset)
+{ return fpu_load_s(ptr, reg, base, offset); }
+uint32_t *j5d_fpu_flds_pre(uint32_t *ptr, uint8_t reg, uint8_t base, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_load_s(ptr, reg, base, 0);
+}
+uint32_t *j5d_fpu_flds_post(uint32_t *ptr, uint8_t reg, uint8_t base, int post_sz)
+{
+    ptr = fpu_load_s(ptr, reg, base, 0);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+uint32_t *j5d_fpu_flds_pimm(uint32_t *ptr, uint8_t reg, uint8_t base, int offset_div4)
+{ return fpu_load_s(ptr, reg, base, offset_div4 * 4); }
+
+/* was fsts(vfp_reg, base, offset)           (.s store from single half)        */
+uint32_t *j5d_fpu_fsts(uint32_t *ptr, uint8_t reg, uint8_t base, int offset)
+{ return fpu_store_s(ptr, reg, base, offset); }
+uint32_t *j5d_fpu_fsts_pre(uint32_t *ptr, uint8_t reg, uint8_t base, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_store_s(ptr, reg, base, 0);
+}
+uint32_t *j5d_fpu_fsts_post(uint32_t *ptr, uint8_t reg, uint8_t base, int post_sz)
+{
+    ptr = fpu_store_s(ptr, reg, base, 0);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+uint32_t *j5d_fpu_fsts_pimm(uint32_t *ptr, uint8_t reg, uint8_t base, int offset_div4)
+{ return fpu_store_s(ptr, reg, base, offset_div4 * 4); }
+
+/* ===================== [J5o] FP INTEGER-FORMAT (.l/.w/.b) MEMORY <-> reg ====================
+ * FMOVE with an INTEGER source/destination memory format (.l/.w/.b) does NOT use the fldd/flds
+ * FP load/store: the REAL decoder converts in a GP reg (fcvtzs/scvtf via val_reg) and emits a
+ * plain INTEGER ldr/str (+h/+b, +ur/pre/post) straight off int_reg/off — the same 1:1-MMU +
+ * big-endian assumption the (An) integer EA had, but emitted INLINE in M68k_LINEF.c (not via the
+ * darwinized M68k_EA.c). So these sites need the SAME sandbox base-adjust + byteswap as j5d_ea_mem.
+ * The darwinize --fpu-sandbox rewrite routes each such site (base operand = int_reg / off) here.
+ *
+ *   LOAD (mem -> val_reg, then the decoder does scvtf_32toD(*reg,val_reg)):
+ *     .l : ldur w_val,[x3]      ; rev   w_val           (32-bit, signed by scvtf_32toD)
+ *     .w : ldurh w_val,[x3]     ; rev16 w_val ; sxth    (the decoder used ldrsh -> sign-extend)
+ *     .b : ldurb w_val,[x3]     ; sxtb                  (no byteswap; decoder used ldrsb)
+ *   STORE (val_reg already holds the saturated/converted int, host order):
+ *     .l : rev   w2,w_val ; stur  w2,[x3]
+ *     .w : rev16 w2,w_val ; sturh w2,[x3]
+ *     .b :                  sturb w_val,[x3]
+ * x3 = host pointer (= x12 base-adjust + (uint32_t)base, UXTW); x2 = REV scratch — both
+ * RA-reserved, disjoint from the live 68k file / REG_PC / the RA pool / the FP file, exactly as
+ * j5d_ea_mem + the FP single/double helpers. `base` is int_reg/off (An/PC/alloc GP); never x2/x3.
+ * Sizes: 4 (.l), 2 (.w), 1 (.b). pre/post variants update `base` (the 68k address) by the element
+ * size, as the original *_preindex / *_postindex encoders did. ----------------------------------*/
+
+/* compute x3 = base_adjust + (uint32_t)base68k, with the +offset folded by the access's signed-9. */
+static uint32_t *fpu_int_addr(uint32_t *ptr, uint8_t base68k)
+{
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    return ptr;
+}
+/* integer LOAD of size sz (4/2/1) at base68k+offset into val_reg (sign-correct for scvtf). */
+static uint32_t *fpu_int_load(uint32_t *ptr, uint8_t val, uint8_t base68k, int offset, int sz)
+{
+    g_j5d_ea_emits++;
+    ptr = fpu_int_addr(ptr, base68k);
+    if (sz == 4) {
+        *ptr++ = ldur_offset(J5D_HOSTPTR, val, (int16_t)offset);
+        *ptr++ = rev(val, val);
+    } else if (sz == 2) {
+        *ptr++ = ldursh_offset(J5D_HOSTPTR, val, (int16_t)offset); /* sign-ext halfword load */
+        *ptr++ = rev16(val, val);                                  /* byteswap the 2 low bytes */
+        *ptr++ = sxth(val, val);                                   /* re-sign-extend post-swap */
+    } else { /* sz == 1 */
+        *ptr++ = ldursb_offset(J5D_HOSTPTR, val, (int16_t)offset); /* sign-ext byte; no swap   */
+    }
+    return ptr;
+}
+/* integer STORE of size sz (4/2/1) of val_reg (host order) to base68k+offset (byteswapped). */
+static uint32_t *fpu_int_store(uint32_t *ptr, uint8_t val, uint8_t base68k, int offset, int sz)
+{
+    g_j5d_ea_emits++;
+    ptr = fpu_int_addr(ptr, base68k);
+    if (sz == 4) {
+        *ptr++ = rev(2 /*w2 scratch*/, val);
+        *ptr++ = stur_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+    } else if (sz == 2) {
+        *ptr++ = rev16(2, val);
+        *ptr++ = sturh_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+    } else { /* sz == 1 */
+        *ptr++ = sturb_offset(J5D_HOSTPTR, val, (int16_t)offset);
+    }
+    return ptr;
+}
+
+/* ---- encoder-shaped entry points the darwinize --fpu-sandbox rewrite calls (integer format).
+ * Each mirrors ONE A64.h integer load/store encoder by NAME; the pre/post-index ones update the
+ * 68k base address (sub before / add after) by the element size, exactly as the *_preindex /
+ * *_postindex encoders they replace. The decoder passes (base, val, offset) just as it did to the
+ * original encoder; index amounts come from the decoder's pre_sz<0 / post_sz>0. ----------------*/
+
+/* --- .l (longword, sz=4) --- */
+/* was ldr_offset(int_reg, val_reg, off) / ldur_offset(...) — plain offset .l load */
+uint32_t *j5d_fpu_ildr(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_load(ptr, val, base, off, 4); }
+uint32_t *j5d_fpu_ildr_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_load(ptr, val, base, 0, 4);
+}
+uint32_t *j5d_fpu_ildr_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_load(ptr, val, base, 0, 4);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+/* was str_offset / stur_offset — plain offset .l store */
+uint32_t *j5d_fpu_istr(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_store(ptr, val, base, off, 4); }
+uint32_t *j5d_fpu_istr_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_store(ptr, val, base, 0, 4);
+}
+uint32_t *j5d_fpu_istr_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_store(ptr, val, base, 0, 4);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+
+/* --- .w (word/halfword, sz=2) --- */
+/* was ldrsh_offset / ldursh_offset — sign-extending .w load */
+uint32_t *j5d_fpu_ildrh(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_load(ptr, val, base, off, 2); }
+uint32_t *j5d_fpu_ildrh_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_load(ptr, val, base, 0, 2);
+}
+uint32_t *j5d_fpu_ildrh_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_load(ptr, val, base, 0, 2);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+/* was strh_offset / sturh_offset — .w store */
+uint32_t *j5d_fpu_istrh(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_store(ptr, val, base, off, 2); }
+uint32_t *j5d_fpu_istrh_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_store(ptr, val, base, 0, 2);
+}
+uint32_t *j5d_fpu_istrh_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_store(ptr, val, base, 0, 2);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+
+/* --- .b (byte, sz=1) --- */
+/* was ldrsb_offset / ldursb_offset — sign-extending .b load */
+uint32_t *j5d_fpu_ildrb(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_load(ptr, val, base, off, 1); }
+uint32_t *j5d_fpu_ildrb_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_load(ptr, val, base, 0, 1);
+}
+uint32_t *j5d_fpu_ildrb_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_load(ptr, val, base, 0, 1);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}
+/* was strb_offset / sturb_offset — .b store */
+uint32_t *j5d_fpu_istrb(uint32_t *ptr, uint8_t base, uint8_t val, int off)
+{ return fpu_int_store(ptr, val, base, off, 1); }
+uint32_t *j5d_fpu_istrb_pre(uint32_t *ptr, uint8_t base, uint8_t val, int pre_sz)
+{
+    if (pre_sz < 0) *ptr++ = sub_immed(base, base, (uint16_t)(-pre_sz));
+    else            *ptr++ = add_immed(base, base, (uint16_t)pre_sz);
+    return fpu_int_store(ptr, val, base, 0, 1);
+}
+uint32_t *j5d_fpu_istrb_post(uint32_t *ptr, uint8_t base, uint8_t val, int post_sz)
+{
+    ptr = fpu_int_store(ptr, val, base, 0, 1);
+    *ptr++ = add_immed(base, base, (uint16_t)post_sz);
+    return ptr;
+}

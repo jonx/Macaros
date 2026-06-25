@@ -79,12 +79,38 @@ struct j5d_m68k_state {
                           here is Emu68's INTERNAL bit layout (see J5D_CCR_* below), so the
                           architectural 68k SR is reconstructed by j5d_pack_sr().          */
     uint16_t exc_count;/* [J5i] number of exceptions dispatched so far (test bookkeeping)  */
+    /* ====================== [J5o] THE 68881/68882 FPU REGISTER FILE — APPEND-ONLY ======
+     * The FP state is NEW and is APPENDED AFTER all existing fields (exactly as sr_high /
+     * exc_count were appended at [J5i]), so EVERY existing offset (D/A/CCR/PC and the
+     * J5D_OFF_* macros) is byte-for-byte UNCHANGED. The integer engine and the [J3]/[J5i]
+     * seam never touch these fields; only the FPU path ([J5o]) does. The next field after
+     * exc_count begins at byte offset 72 (the two uint16 land at 68+2 over PC... actually
+     * PC=68, sr_high=72, exc_count=74), so fp[] starts at the first 8-byte-aligned offset
+     * after byte 76 — the compiler inserts 4 bytes of padding to 8-align fp[0]. We do NOT
+     * hardcode fp[]'s byte offset anywhere the JIT'd code reaches via a load-immediate: the
+     * engine emits the FP load/store offsets with offsetof() at build time (see j5d_engine.c
+     * J5O_OFF_FP/FPCR/FPSR), so the padding is irrelevant and the integer offsets are frozen.
+     *
+     * PRECISION MODEL (documented, mirrors Emu68): the 68881/68882 FP register file is
+     * architecturally 80-bit EXTENDED, but AArch64 has no 80-bit FP — so (like Emu68) each
+     * FP0..FP7 is modeled in IEEE-754 binary64 (`double`). This gives COMPLETE *instruction*
+     * coverage at double precision; 80-bit extended-precision exactness is NOT bit-reproducible
+     * on AArch64. For this increment's ops (all IEEE-754-defined: move/format-convert/add/sub/
+     * mul/div/sqrt/abs/neg/cmp/tst) the double results are deterministic and bit-exact, which is
+     * the gate the oracle asserts. FP0..FP7 map to AArch64 d8..d15 (callee-saved) in the JIT'd
+     * block, exactly as Emu68's RA_MapFPURegister does (fp_reg -> d8+fp_reg). */
+    double   fp[8];    /* FP0..FP7 — IEEE-754 binary64 (the precision model above)           */
+    uint32_t fpcr;     /* FP control register (rounding/precision; modeled-stored this incr.) */
+    uint32_t fpsr;     /* FP status register — the CONDITION-CODE byte (N/Z/I/NAN) is live    */
 };
 
 #define J5D_OFF_D(n)   ((uint16_t)((n) * 4u))
 #define J5D_OFF_A(n)   ((uint16_t)(32u + (n) * 4u))
 #define J5D_OFF_CCR    ((uint16_t)64u)
 #define J5D_OFF_PC     ((uint16_t)68u)
+/* [J5o] FP-field offsets are taken with offsetof() at the use site (j5d_engine.c) so the
+ * compiler-chosen padding before fp[] never needs hand-encoding; the integer offsets above
+ * are frozen and unchanged. */
 
 /* ----- [J5i] the SR (status register) supervisor / trace / interrupt-mask bits --------
  * Modeled in sr_high (SR bits 8..15). The S bit (supervisor) is the one with real

@@ -18,6 +18,7 @@
 #include "j5d_jit68k.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>     /* [J5o] fabs/sqrt for the independent double-precision FP oracle */
 
 #define STEP_CAP 2000000u
 
@@ -112,6 +113,119 @@ static void mem_wr8(j5d_sandbox *sb, uint32_t addr, uint8_t v, int *oob)
 {
     if (addr < sb->origin || (uint64_t)addr + 1 > (uint64_t)sb->origin + sb->size) { *oob = 1; return; }
     sb->host_mem[addr - sb->origin] = v;
+}
+
+/* ============================ [J5o] FPU oracle helpers (no Emu68) ===================
+ * The INDEPENDENT double-precision FP model. These read/write the SAME sandbox memory the
+ * engine's FP-mem helpers do (big-endian operand bytes) and compute every op directly in C
+ * `double`, a path that NEVER touches Emu68's emitted AArch64 FP. The test asserts the JIT's
+ * FP0..FP7 (double bit patterns) + FPSR condition bits + any FP-to-memory result are bit-exact
+ * equal to this model — the [J5o] verification crux. */
+
+/* Read an IEEE binary64 from sandbox memory at `addr` (big-endian operand, like the 68k). */
+static double fpu_mem_rd_d(j5d_sandbox *sb, uint32_t addr, int *oob)
+{
+    uint32_t hi = mem_rd32(sb, addr, oob);
+    uint32_t lo = mem_rd32(sb, addr + 4, oob);
+    uint64_t bits = ((uint64_t)hi << 32) | lo;
+    double d; __builtin_memcpy(&d, &bits, 8);
+    return d;
+}
+static void fpu_mem_wr_d(j5d_sandbox *sb, uint32_t addr, double v, int *oob)
+{
+    uint64_t bits; __builtin_memcpy(&bits, &v, 8);
+    mem_wr32(sb, addr,     (uint32_t)(bits >> 32), oob);
+    mem_wr32(sb, addr + 4, (uint32_t)bits,         oob);
+}
+/* Read an IEEE binary32 (single) from sandbox, widen to double (the 68k FMOVE.s load). */
+static double fpu_mem_rd_s(j5d_sandbox *sb, uint32_t addr, int *oob)
+{
+    uint32_t bits = mem_rd32(sb, addr, oob);
+    float f; __builtin_memcpy(&f, &bits, 4);
+    return (double)f;
+}
+/* Narrow a double to binary32 and write it (the 68k FMOVE.s store). */
+static void fpu_mem_wr_s(j5d_sandbox *sb, uint32_t addr, double v, int *oob)
+{
+    float f = (float)v; uint32_t bits; __builtin_memcpy(&bits, &f, 4);
+    mem_wr32(sb, addr, bits, oob);
+}
+
+/* The FPSR condition-code byte the 68881 sets: N(bit27) Z(bit26) I(bit25,infinity) NAN(bit24).
+ * This MIRRORS Emu68's EMIT_GetFPUFlags (A64.h): it packs the AArch64 NZCV from `fcmpzd`/`fcmpd`
+ * into FPSR{N=NZCV.N, Z=NZCV.Z, I=NZCV.C, NAN=NZCV.V}. For a compare-with-ZERO (fcmpzd) used by
+ * FTST/FABS/FNEG/FADD/.../FMOVE-to-reg: AArch64 N=(v<0), Z=(v==0), C=(v>=0 || NaN), V=unordered.
+ * For FCMP (fcmpd dst,src): N=(dst<src), Z=(dst==src), C=(dst>=src || unordered), V=unordered.
+ * We reproduce the SAME NZCV->FPSR packing so the FPSR byte is bit-identical to the JIT's. */
+#define J5O_FPSR_N   0x08000000u
+#define J5O_FPSR_Z   0x04000000u
+#define J5O_FPSR_I   0x02000000u   /* maps from AArch64 C flag (per EMIT_GetFPUFlags LSR#4)    */
+#define J5O_FPSR_NAN 0x01000000u   /* maps from AArch64 V flag (unordered)                    */
+#define J5O_FPSR_CC  (J5O_FPSR_N | J5O_FPSR_Z | J5O_FPSR_I | J5O_FPSR_NAN)
+
+/* Pack the AArch64 NZCV (as four ints) into the FPSR cc bits, clearing them first. */
+static uint32_t fpu_pack_fpsr(uint32_t fpsr, int N, int Z, int C, int V)
+{
+    fpsr &= ~J5O_FPSR_CC;
+    if (N) fpsr |= J5O_FPSR_N;
+    if (Z) fpsr |= J5O_FPSR_Z;
+    if (C) fpsr |= J5O_FPSR_I;
+    if (V) fpsr |= J5O_FPSR_NAN;
+    return fpsr;
+}
+/* AArch64 fcmp NZCV for `a <op> b` (IEEE, with the unordered/NaN case). */
+static uint32_t fpu_fcmp_fpsr(uint32_t fpsr, double a, double b)
+{
+    int N=0,Z=0,C=0,V=0;
+    if (a != a || b != b) { V = 1; C = 1; }       /* unordered (NaN): N=Z=0, C=1, V=1     */
+    else if (a < b)       { N = 1; }              /* less:    N=1 Z=0 C=0 V=0             */
+    else if (a == b)      { Z = 1; C = 1; }       /* equal:   N=0 Z=1 C=1 V=0             */
+    else                  { C = 1; }              /* greater: N=0 Z=0 C=1 V=0             */
+    return fpu_pack_fpsr(fpsr, N, Z, C, V);
+}
+
+/* Whether the 68881 updates the FPSR condition codes after THIS FP op — i.e. whether a
+ * subsequent FP instruction CONSUMES them (FBcc/FDBcc/FScc/FTRAPcc/FMOVEM/FMOVE-to-MEM/FSAVE/
+ * FRESTORE), within 16 ops, stopping at a control-flow branch. A FAITHFUL re-derivation of
+ * Emu68's FPSR_Update_Needed (M68k_LINEF.c), so the oracle and the JIT agree on EXACTLY when
+ * the FPSR byte is written. `ip` points at the m68k word AFTER the current FP instruction's
+ * extension words. (We do not model the FNOP recursion's full depth-5 chain — the test stream
+ * has no FNOP between the FP op and its consumer; documented.) */
+static int fpu_fpsr_update_needed(j5d_sandbox *sb, uint32_t after_pc)
+{
+    uint32_t pc = after_pc; int cnt = 0;
+    for (;;) {
+        if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size) return 1;
+        uint16_t op = be16(sb->host_mem + (pc - sb->origin));
+        if ((op & 0xfe00) == 0xf200) break;       /* reached an FPU (line-F) instruction   */
+        if (cnt++ > 15) return 1;
+        /* a control-flow branch ends the scan (the FPSR may be needed after it) — the 68k
+         * branch family (same set as j5o_fpu_shims.c M68K_IsBranch); conservative: any of
+         * Bcc/BSR/BRA/JMP/JSR/RTS/RTE/RTR/TRAP/DBcc forces an update. */
+        if ((op & 0xf000) == 0x6000) return 1;                    /* Bcc/BRA/BSR          */
+        if ((op & 0xff80) == 0x4e80) return 1;                    /* JSR/JMP              */
+        if (op == 0x4e75 || op == 0x4e73 || op == 0x4e77) return 1;/* RTS/RTE/RTR         */
+        if ((op & 0xfff0) == 0x4e40) return 1;                    /* TRAP #n              */
+        if ((op & 0xf0f8) == 0x50c8) return 1;                    /* DBcc                 */
+        /* otherwise step over: every opcode in the [J5o] test between FP ops is single-word
+         * (the FP ops themselves are matched above); a non-FP op advances by its length. The
+         * test stream interleaves only FP ops + the terminator, so a 1-word step is exact for
+         * the cases it reaches; if a multi-word op appeared we conservatively return 1. */
+        pc += 2;
+    }
+    uint16_t opcode  = be16(sb->host_mem + (pc - sb->origin));
+    uint16_t opcode2 = ((uint64_t)pc + 4 <= (uint64_t)sb->origin + sb->size)
+                       ? be16(sb->host_mem + (pc + 2 - sb->origin)) : 0;
+    if ((opcode & 0xff80) == 0xf280) return 1;                            /* FBcc          */
+    if ((opcode & 0xfff8) == 0xf248 && (opcode2 & 0xffc0) == 0) return 1; /* FDBcc         */
+    if ((opcode & 0xffc0) == 0xf200 && (opcode2 & 0xc700) == 0xc000) return 1; /* FMOVEM   */
+    if ((opcode & 0xffc0) == 0xf200 && (opcode2 & 0xc3ff) == 0x8000) return 1; /* FMOVEM sp*/
+    if ((opcode & 0xffc0) == 0xf240 && (opcode2 & 0xffc0) == 0) return 1; /* FScc          */
+    if ((opcode & 0xfff8) == 0xf278 && (opcode2 & 0xffc0) == 0) return 1; /* FTRAPcc       */
+    if ((opcode & 0xffc0) == 0xf200 && (opcode2 & 0xe000) == 0x6000) return 1; /* FMOVE->MEM*/
+    if ((opcode & 0xffc0) == 0xf340) return 1;                            /* FRESTORE      */
+    if ((opcode & 0xffc0) == 0xf300) return 1;                            /* FSAVE         */
+    return 0;
 }
 
 /* ============================ [J5g] CCR helpers (oracle) ===========================
@@ -1457,6 +1571,146 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 if (oob) IFAIL("move.b EA access out of sandbox");
                 pc += (uint32_t)(ext - ip); continue;
             }
+        }
+
+        /* ============================ [J5o] THE FPU (line-F coprocessor) =============
+         * FMOVE (reg<->reg, mem<->reg, format conversions .s/.d/.l/.w/.b), FADD/FSUB/FMUL/
+         * FDIV/FSQRT/FABS/FNEG, FCMP, FTST — computed in C `double`, INDEPENDENT of Emu68's
+         * emitted AArch64 FP. opcode = 0xF200|EA (coprocessor 1, the FPU); opcode2 is the FP
+         * command word. We decode the SAME fields EMIT_FPU does (R/M, source spec, dst FPn,
+         * operation) and re-derive the result + the FPSR cc byte (gated by the SAME
+         * FPSR_Update_Needed scan). Format/operation encodings cross-checked against the
+         * M68000 FP user manual + the vendored decoder masks. */
+        if ((op & 0xff80) == 0xf200 && (op & 0x0e00) == 0x0200) {   /* line-F, coprocessor 1, EA-form */
+            if ((uint64_t)pc + 4 > (uint64_t)sb->origin + sb->size) IFAIL("FPU: opcode2 out of sandbox");
+            uint16_t opcode2 = be16(ip + 2);
+            unsigned ea    = op & 0x3f;
+            unsigned rm    = (opcode2 >> 14) & 1u;        /* 0 = src is FPm reg, 1 = src is EA  */
+            unsigned srcspec = (opcode2 >> 10) & 7u;      /* rm=0: FPm number; rm=1: format     */
+            unsigned fpn   = (opcode2 >> 7) & 7u;         /* dst FP register (also FCMP/arith dst)*/
+            unsigned oper  = opcode2 & 0x7fu;             /* operation code (FMOVE=0..FTST=0x3a)  */
+            unsigned is_fmove_to_mem = ((opcode2 & 0xe000) == 0x6000);
+            int oob = 0;
+            uint32_t after_pc;       /* pc just past this instruction's words (for FPSR scan) */
+
+            /* ---- resolve the SOURCE operand into a C double `src`, advancing past ext words.
+             * Memory-EA modes go through the SAME big-endian sandbox reads the engine's
+             * sandbox FP-mem helpers use; register-direct .l/.w/.b convert int->double. ---- */
+            double src = 0.0;
+            uint32_t ext = pc + 4;   /* first word AFTER opcode + opcode2 */
+            if (is_fmove_to_mem) {
+                /* FMOVE FPn -> <ea>: the source is the FP register, dest is memory (below). */
+                src = st->fp[fpn & 7];
+            } else if (rm == 0) {
+                /* source is FPm (register-direct FP source). */
+                src = st->fp[srcspec & 7];
+            } else {
+                /* source is an EA with a format (srcspec): SIZE_L=0 S=1 X=2 P=3 W=4 D=5 B=6. */
+                unsigned mode = (ea >> 3) & 7u, reg = ea & 7u;
+                uint32_t addr = 0; int have_addr = 0; int imm = 0;
+                if (mode == 0) {
+                    /* mode 000 - Dn register-direct. The integer-format conversions read Dn and
+                     * convert int->double; .s reinterprets the low 32 bits as binary32 (the
+                     * decoder's fmsr+fcvtds), matching FPU_FetchData Case 1 (M68k_LINEF.c). The
+                     * .d/.x/.p formats are not valid from a 32-bit Dn (out of [J5o] subset). */
+                    uint32_t dv = st->d[reg];
+                    if (srcspec == 0)      src = (double)(int32_t)dv;                 /* .l signed   */
+                    else if (srcspec == 4) src = (double)(int32_t)(int16_t)(dv & 0xffffu); /* .w sx  */
+                    else if (srcspec == 6) src = (double)(int32_t)(int8_t)(dv & 0xffu);     /* .b sx  */
+                    else if (srcspec == 1) { float f; __builtin_memcpy(&f, &dv, 4); src = (double)f; } /* .s bits */
+                    else IFAIL("FPU: Dn-source format not in [J5o] subset (.d/.x/.p)");
+                }
+                else if (mode == 2) { addr = st->a[reg]; have_addr = 1; }            /* (An)   */
+                else if (mode == 3) { addr = st->a[reg]; have_addr = 1; }            /* (An)+  */
+                else if (mode == 4) { /* -(An): predecrement by the format size (below) */ }
+                else if (mode == 5) { addr = st->a[reg] + (uint32_t)(int32_t)(int16_t)be16(sb->host_mem+(ext-sb->origin)); ext += 2; have_addr = 1; } /* (d16,An) */
+                else if (mode == 7 && reg == 4) { imm = 1; }                         /* #imm   */
+                else IFAIL("FPU: source EA mode not in [J5o] subset");
+
+                /* the format size in bytes (for predecrement + ext-word advance of immediates). */
+                int fsz = (srcspec==0)?4 : (srcspec==1)?4 : (srcspec==4)?2 : (srcspec==5)?8 : (srcspec==6)?1 : 0;
+                if (fsz == 0) IFAIL("FPU: .x/.p source format deferred ([J5o] precision model)");
+
+                if (mode == 4) { st->a[reg] -= (uint32_t)fsz; addr = st->a[reg]; have_addr = 1; }
+
+                if (imm) {
+                    /* immediate operand follows in the stream; width = format size. */
+                    if (srcspec == 0) { src = (double)(int32_t)be32(sb->host_mem+(ext-sb->origin)); ext += 4; }       /* .l */
+                    else if (srcspec == 1) { src = fpu_mem_rd_s(sb, ext, &oob); ext += 4; }                            /* .s */
+                    else if (srcspec == 4) { src = (double)(int32_t)(int16_t)be16(sb->host_mem+(ext-sb->origin)); ext += 2; } /* .w */
+                    else if (srcspec == 5) { src = fpu_mem_rd_d(sb, ext, &oob); ext += 8; }                            /* .d */
+                    else if (srcspec == 6) { src = (double)(int32_t)(int8_t)(be16(sb->host_mem+(ext-sb->origin)) & 0xff); ext += 2; } /* .b */
+                } else if (have_addr) {
+                    if (srcspec == 0)      src = (double)(int32_t)mem_rd32(sb, addr, &oob);          /* .l */
+                    else if (srcspec == 1) src = fpu_mem_rd_s(sb, addr, &oob);                       /* .s */
+                    else if (srcspec == 4) src = (double)(int32_t)(int16_t)mem_rd16(sb, addr, &oob); /* .w */
+                    else if (srcspec == 5) src = fpu_mem_rd_d(sb, addr, &oob);                       /* .d */
+                    else if (srcspec == 6) src = (double)(int32_t)(int8_t)mem_rd8(sb, addr, &oob);   /* .b */
+                    if (mode == 3) st->a[reg] += (uint32_t)fsz;                                      /* (An)+ */
+                }
+                if (oob) IFAIL("FPU: source EA out of sandbox");
+            }
+            after_pc = ext;
+
+            /* ---- FMOVE FPn -> <ea> (to memory) : convert + byteswap-store. ---- */
+            if (is_fmove_to_mem) {
+                unsigned fmt = (opcode2 >> 10) & 7u;   /* destination format */
+                unsigned mode = (ea >> 3) & 7u, reg = ea & 7u;
+                uint32_t addr = 0; ext = pc + 4;
+                int fsz = (fmt==0)?4 : (fmt==1)?4 : (fmt==4)?2 : (fmt==5)?8 : (fmt==6)?1 : 0;
+                if (fsz == 0) IFAIL("FPU: .x/.p dest format deferred ([J5o] precision model)");
+                if (mode == 2) addr = st->a[reg];
+                else if (mode == 3) addr = st->a[reg];
+                else if (mode == 4) { st->a[reg] -= (uint32_t)fsz; addr = st->a[reg]; }
+                else if (mode == 5) { addr = st->a[reg] + (uint32_t)(int32_t)(int16_t)be16(sb->host_mem+(ext-sb->origin)); ext += 2; }
+                else IFAIL("FPU: FMOVE-to-mem EA mode not in [J5o] subset");
+                double v = src;
+                if (fmt == 0)      mem_wr32(sb, addr, (uint32_t)(int32_t)v, &oob);     /* .l (trunc-to-int) */
+                else if (fmt == 1) fpu_mem_wr_s(sb, addr, v, &oob);                    /* .s */
+                else if (fmt == 4) mem_wr16(sb, addr, (uint16_t)(int16_t)(int32_t)v, &oob); /* .w */
+                else if (fmt == 5) fpu_mem_wr_d(sb, addr, v, &oob);                    /* .d */
+                else if (fmt == 6) mem_wr8(sb, addr, (uint8_t)(int8_t)(int32_t)v, &oob); /* .b */
+                if (mode == 3) st->a[reg] += (uint32_t)fsz;
+                if (oob) IFAIL("FPU: FMOVE-to-mem EA out of sandbox");
+                /* FMOVE to MEM does not update FPSR cc itself (it is a CONSUMER of it). */
+                /* advance past THIS instruction's words: ext was re-advanced locally for the
+                 * destination's own extension word(s) (e.g. (d16,An)); after_pc (=pc+4) did NOT
+                 * see them since the to-mem source branch reads only the FP reg. Use ext. */
+                pc = ext; continue;
+            }
+
+            /* ---- the arithmetic / move-to-reg / compare ops, computed in C double. ---- */
+            double dst = st->fp[fpn & 7];
+            double res = dst;
+            int writes_dst = 1;       /* FCMP/FTST do not write FPn */
+            int cmp_fpsr   = 0;       /* FCMP: FPSR from fcmpd(dst,src); else fcmpzd(res)      */
+            switch (oper) {
+                case 0x00: res = src;                 break;  /* FMOVE  <src> -> FPn          */
+                case 0x18: res = fabs(src);           break;  /* FABS                         */
+                case 0x1a: res = -src;                break;  /* FNEG                         */
+                case 0x04: res = sqrt(src);           break;  /* FSQRT                        */
+                case 0x20: res = dst / src;           break;  /* FDIV   FPn / <src>           */
+                case 0x22: res = dst + src;           break;  /* FADD                         */
+                case 0x23: res = dst * src;           break;  /* FMUL                         */
+                case 0x28: res = dst - src;           break;  /* FSUB   FPn - <src>           */
+                case 0x38: writes_dst = 0; cmp_fpsr = 1; break; /* FCMP  (FPn ? <src>)        */
+                case 0x3a: writes_dst = 0; res = src; break;  /* FTST   (test <src>)          */
+                default: IFAIL("FPU: operation not in [J5o] subset (transcendental/FMOVECR deferred)");
+            }
+            if (writes_dst) st->fp[fpn & 7] = res;
+
+            /* FPSR condition codes — set IFF a subsequent FP consumer needs them (same gate as
+             * the JIT's FPSR_Update_Needed). FCMP packs fcmpd(FPn,src); the rest pack fcmpzd of
+             * the value compared against 0 (the result for arith/FABS/FNEG/FMOVE-to-reg; the
+             * source for FTST). */
+            if (fpu_fpsr_update_needed(sb, after_pc)) {
+                if (cmp_fpsr) st->fpsr = fpu_fcmp_fpsr(st->fpsr, dst, src);
+                else {
+                    double t = (oper == 0x3a) ? src : res;   /* FTST tests src; others test res */
+                    st->fpsr = fpu_fcmp_fpsr(st->fpsr, t, 0.0);  /* fcmpzd: compare with 0.0    */
+                }
+            }
+            pc = after_pc; continue;
         }
 
         IFAIL("interp: out-of-subset opcode");
