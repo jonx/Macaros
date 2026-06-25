@@ -817,6 +817,13 @@ __attribute__((weak)) int cm__pump_events_appkit(CMContext *cx, CMEvent *out, in
 
 int cm_pump_events(CMContext *cx, CMEvent *out, int maxEvents) {
     if (!cx || !out || maxEvents <= 0) return 0;
+    /* Dequeues NSEvents -> must run on the main thread (AROS calls from its own
+     * thread under the inversion). */
+    if (![NSThread isMainThread]) {
+        __block int r = 0;
+        cm__sync_main(^{ r = cm_pump_events(cx, out, maxEvents); });
+        return r;
+    }
 
     /* Drain pending CM_EV_SETTING first (pull surface for AROS-facing options,
      * §9). These are produced by cm_set_option of an AROS-facing key (including
