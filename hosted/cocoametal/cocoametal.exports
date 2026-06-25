@@ -1,0 +1,23 @@
+# Exported dynamic symbols for build/cocoametal.dylib (INTERFACE.md §1a/§1c).
+#
+# The frozen cm_* ABI entry points HostLib_GetInterface resolves by dlsym, in
+# §1a declaration order. Listed explicitly (not a glob) so the dynamic export
+# table is exactly the frozen contract surface — the internal cm__* accessor
+# helpers (cm__device/cm__set_window/...) shared between the .m files stay
+# link-visible but are NOT exported. Append-only (§1a).
+#
+# v2 (INTERFACE.md §9, append-only): cm_set_option / cm_get_option /
+# cm_open_settings appended as entries 10/11/12 after cm_abi_version (9).
+_cm_open
+_cm_close
+_cm_upload_rect
+_cm_present
+_cm_set_effect
+_cm_pump_events
+_cm_readback
+_cm_target_size
+_cm_render_effect_readback
+_cm_abi_version
+_cm_set_option
+_cm_get_option
+_cm_open_settings
