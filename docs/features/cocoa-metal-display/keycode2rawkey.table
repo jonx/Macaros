@@ -1,0 +1,191 @@
+/*
+ * keycode2rawkey.table -- macOS virtual keycode -> AROS rawkey map
+ * ===============================================================
+ * Item 5 of the frozen cocoametal interface (INTERFACE.md section 5, Input ABI).
+ * Pure ASCII, no nested comment markers: this file is a valid C #include.
+ *
+ * WHAT THIS MAPS
+ *   LEFT  side = the macOS virtual keycode, i.e. EXACTLY CMEvent.code for a
+ *               CM_EV_KEY event. cocoametal.h declares it as:
+ *                 int code;   // button index, or macOS virtual keycode
+ *               These are Apple kVK_* constants from <Carbon/HIToolbox/Events.h>
+ *               -- the value NSEvent.keyCode produces.
+ *   RIGHT side = the AROS "rawkey" code the input.device / keyboard.hidd expects,
+ *               i.e. a RAWKEY_* value from:
+ *                 compiler/include/devices/rawkeycodes.h   (aros-upstream)
+ *               (Standard Amiga / AROS virtual rawkey codes.)
+ *
+ * ADAPTED FROM  (in-tree AROS, free to reuse -- no GPL source consulted)
+ *   arch/all-hosted/hidd/x11/mac-x11-keycode2rawkey.table   (in aros-upstream)
+ *   That file is a raw 256-byte array indexed by the X11 keycode delivered by
+ *   Apple's X11 server (XQuartz), where  X11keycode = macOS_VK + 8. Decoding it
+ *   byte-for-byte and subtracting the +8 XQuartz offset reproduces a clean
+ *   kVK -> rawkey map; the RIGHT-hand rawkey values below are copied verbatim
+ *   from that table. Only the LEFT side is shifted back to the bare macOS VK so
+ *   it indexes CMEvent.code directly (no +8). The "(x11kc ...)" note on each row
+ *   records the original byte offset in the source table for traceability.
+ *
+ * GROUNDED AGAINST
+ *   AROS rawkeys : compiler/include/devices/rawkeycodes.h   (RAWKEY_* macros)
+ *   macOS kVK_*  : <Carbon/.../HIToolbox/Events.h>          (kVK_* constants)
+ *
+ * HOW TO CONSUME  (keyboard hardware-driver class)
+ *   This is a plain C initializer list of {macVK, rawkey} pairs. The input class
+ *   can iterate it, or expand it into a 256-entry lookup indexed by macVK (the
+ *   x11 HIDD runtime form: keycode2rawkey[code], 0xFF = "no mapping"). Either
+ *   way CMEvent.code is the index/key and the rawkey is the value. Idiom:
+ *
+ *       static const struct { unsigned char macVK, rawkey; } cm_kc2rk[] = {
+ *       #include "keycode2rawkey.table"
+ *       };
+ *
+ *   pressed==0 -> set the rawkey up-transition bit (IECODE_UP_PREFIX) the same
+ *   way the x11 kbd class does; that is driver logic, not table data.
+ *
+ * COVERAGE   letters A-Z, digits 0-9, F1-F13, arrows, all modifiers
+ *            (shift/ctrl/alt-option/cmd, caps lock, fn), space/return/escape/
+ *            tab/delete(=backspace)/fwd-delete, the common punctuation keys,
+ *            and the full numeric keypad (0-9, + - * /, decimal, enter, equals).
+ *            102 rows total.
+ *
+ * GAPS / NOT MAPPED (left out exactly as the source x11 table leaves them, i.e.
+ * 0xFF there): kVK_F14..F20, kVK_F16, kVK_F17, kVK_VolumeUp/Down, kVK_Mute,
+ * kVK_ContextualMenu (menu key), kVK_Help, kVK_JIS_* (Yen/Underscore/Kana/Eisu/
+ * KeypadComma). The Mac has no PrintScreen/ScrollLock/Pause/Insert keys, so the
+ * matching RAWKEY_* codes simply have no VK to map from. Add rows here if the
+ * driver later needs them.
+ *
+ * UNVERIFIED entries are tagged inline with the word UNVERIFIED below -- the two
+ * keypad keys the source table sends to rawkey codes 0x5A / 0x5B that have no
+ * named RAWKEY_* macro. The byte value is preserved from the source, but its
+ * meaning on AROS is unconfirmed.
+ *
+ * The Amiga keymap is applied downstream from the rawkey, so US-vs-ISO glyph
+ * differences are a keymap concern, not a concern of this physical-key table.
+ * Two physical-position choices inherited from the source are noted inline
+ * (kVK_ANSI_Grave / kVK_ISO_Section, and kVK_F13 -> HELP).
+ *
+ * Data-only, neutral. Left = CMEvent.code (macOS VK). Right = AROS RAWKEY_*.
+ */
+
+/* --- letters ----------------------------------------------------------- */
+  { 0x00, 0x20 },  /* kVK_ANSI_A               -> RAWKEY_A           (x11kc 0x08) */
+  { 0x0B, 0x35 },  /* kVK_ANSI_B               -> RAWKEY_B           (x11kc 0x13) */
+  { 0x08, 0x33 },  /* kVK_ANSI_C               -> RAWKEY_C           (x11kc 0x10) */
+  { 0x02, 0x22 },  /* kVK_ANSI_D               -> RAWKEY_D           (x11kc 0x0A) */
+  { 0x0E, 0x12 },  /* kVK_ANSI_E               -> RAWKEY_E           (x11kc 0x16) */
+  { 0x03, 0x23 },  /* kVK_ANSI_F               -> RAWKEY_F           (x11kc 0x0B) */
+  { 0x05, 0x24 },  /* kVK_ANSI_G               -> RAWKEY_G           (x11kc 0x0D) */
+  { 0x04, 0x25 },  /* kVK_ANSI_H               -> RAWKEY_H           (x11kc 0x0C) */
+  { 0x22, 0x17 },  /* kVK_ANSI_I               -> RAWKEY_I           (x11kc 0x2A) */
+  { 0x26, 0x26 },  /* kVK_ANSI_J               -> RAWKEY_J           (x11kc 0x2E) */
+  { 0x28, 0x27 },  /* kVK_ANSI_K               -> RAWKEY_K           (x11kc 0x30) */
+  { 0x25, 0x28 },  /* kVK_ANSI_L               -> RAWKEY_L           (x11kc 0x2D) */
+  { 0x2E, 0x37 },  /* kVK_ANSI_M               -> RAWKEY_M           (x11kc 0x36) */
+  { 0x2D, 0x36 },  /* kVK_ANSI_N               -> RAWKEY_N           (x11kc 0x35) */
+  { 0x1F, 0x18 },  /* kVK_ANSI_O               -> RAWKEY_O           (x11kc 0x27) */
+  { 0x23, 0x19 },  /* kVK_ANSI_P               -> RAWKEY_P           (x11kc 0x2B) */
+  { 0x0C, 0x10 },  /* kVK_ANSI_Q               -> RAWKEY_Q           (x11kc 0x14) */
+  { 0x0F, 0x13 },  /* kVK_ANSI_R               -> RAWKEY_R           (x11kc 0x17) */
+  { 0x01, 0x21 },  /* kVK_ANSI_S               -> RAWKEY_S           (x11kc 0x09) */
+  { 0x11, 0x14 },  /* kVK_ANSI_T               -> RAWKEY_T           (x11kc 0x19) */
+  { 0x20, 0x16 },  /* kVK_ANSI_U               -> RAWKEY_U           (x11kc 0x28) */
+  { 0x09, 0x34 },  /* kVK_ANSI_V               -> RAWKEY_V           (x11kc 0x11) */
+  { 0x0D, 0x11 },  /* kVK_ANSI_W               -> RAWKEY_W           (x11kc 0x15) */
+  { 0x07, 0x32 },  /* kVK_ANSI_X               -> RAWKEY_X           (x11kc 0x0F) */
+  { 0x10, 0x15 },  /* kVK_ANSI_Y               -> RAWKEY_Y           (x11kc 0x18) */
+  { 0x06, 0x31 },  /* kVK_ANSI_Z               -> RAWKEY_Z           (x11kc 0x0E) */
+
+/* --- digit row --------------------------------------------------------- */
+  { 0x12, 0x01 },  /* kVK_ANSI_1               -> RAWKEY_1           (x11kc 0x1A) */
+  { 0x13, 0x02 },  /* kVK_ANSI_2               -> RAWKEY_2           (x11kc 0x1B) */
+  { 0x14, 0x03 },  /* kVK_ANSI_3               -> RAWKEY_3           (x11kc 0x1C) */
+  { 0x15, 0x04 },  /* kVK_ANSI_4               -> RAWKEY_4           (x11kc 0x1D) */
+  { 0x17, 0x05 },  /* kVK_ANSI_5               -> RAWKEY_5           (x11kc 0x1F) */
+  { 0x16, 0x06 },  /* kVK_ANSI_6               -> RAWKEY_6           (x11kc 0x1E) */
+  { 0x1A, 0x07 },  /* kVK_ANSI_7               -> RAWKEY_7           (x11kc 0x22) */
+  { 0x1C, 0x08 },  /* kVK_ANSI_8               -> RAWKEY_8           (x11kc 0x24) */
+  { 0x19, 0x09 },  /* kVK_ANSI_9               -> RAWKEY_9           (x11kc 0x21) */
+  { 0x1D, 0x0A },  /* kVK_ANSI_0               -> RAWKEY_0           (x11kc 0x25) */
+
+/* --- punctuation / symbol keys ----------------------------------------- */
+  { 0x1B, 0x0B },  /* kVK_ANSI_Minus           -> RAWKEY_MINUS       (x11kc 0x23) */
+  { 0x18, 0x0C },  /* kVK_ANSI_Equal           -> RAWKEY_EQUAL       (x11kc 0x20) */
+  { 0x21, 0x1A },  /* kVK_ANSI_LeftBracket     -> RAWKEY_LBRACKET    (x11kc 0x29) */
+  { 0x1E, 0x1B },  /* kVK_ANSI_RightBracket    -> RAWKEY_RBRACKET    (x11kc 0x26) */
+  { 0x2A, 0x2B },  /* kVK_ANSI_Backslash       -> RAWKEY_2B          (x11kc 0x32) */
+  { 0x29, 0x29 },  /* kVK_ANSI_Semicolon       -> RAWKEY_SEMICOLON   (x11kc 0x31) */
+  { 0x27, 0x2A },  /* kVK_ANSI_Quote           -> RAWKEY_QUOTE       (x11kc 0x2F) */
+  { 0x2B, 0x38 },  /* kVK_ANSI_Comma           -> RAWKEY_COMMA       (x11kc 0x33) */
+  { 0x2F, 0x39 },  /* kVK_ANSI_Period          -> RAWKEY_PERIOD      (x11kc 0x37) */
+  { 0x2C, 0x3A },  /* kVK_ANSI_Slash           -> RAWKEY_SLASH       (x11kc 0x34) */
+  { 0x32, 0x30 },  /* kVK_ANSI_Grave           -> RAWKEY_LESSGREATER (x11kc 0x3A) US-ANSI backtick/tilde key; source routes it to the AROS 0x30 ("<>") slot */
+  { 0x0A, 0x00 },  /* kVK_ISO_Section          -> RAWKEY_TILDE       (x11kc 0x12) ISO key left of "1"; source routes it to RAWKEY_TILDE (0x00) */
+
+/* --- whitespace / editing ---------------------------------------------- */
+  { 0x31, 0x40 },  /* kVK_Space                -> RAWKEY_SPACE       (x11kc 0x39) */
+  { 0x24, 0x44 },  /* kVK_Return               -> RAWKEY_RETURN      (x11kc 0x2C) */
+  { 0x30, 0x42 },  /* kVK_Tab                  -> RAWKEY_TAB         (x11kc 0x38) */
+  { 0x33, 0x41 },  /* kVK_Delete               -> RAWKEY_BACKSPACE   (x11kc 0x3B) (Mac "delete" key = backspace) */
+  { 0x35, 0x45 },  /* kVK_Escape               -> RAWKEY_ESCAPE      (x11kc 0x3D) */
+
+/* --- modifiers --------------------------------------------------------- */
+  { 0x38, 0x60 },  /* kVK_Shift                -> RAWKEY_LSHIFT      (x11kc 0x40) */
+  { 0x3C, 0x61 },  /* kVK_RightShift           -> RAWKEY_RSHIFT      (x11kc 0x44) */
+  { 0x3B, 0x63 },  /* kVK_Control              -> RAWKEY_LCONTROL    (x11kc 0x43) */
+  { 0x3E, 0x63 },  /* kVK_RightControl         -> RAWKEY_LCONTROL    (x11kc 0x46) source folds Right-Ctrl onto Ctrl (AROS has one CONTROL) */
+  { 0x3A, 0x64 },  /* kVK_Option               -> RAWKEY_LALT        (x11kc 0x42) */
+  { 0x3D, 0x65 },  /* kVK_RightOption          -> RAWKEY_RALT        (x11kc 0x45) */
+  { 0x37, 0x66 },  /* kVK_Command              -> RAWKEY_LAMIGA      (x11kc 0x3F) (Cmd = Amiga key) */
+  { 0x3F, 0x67 },  /* kVK_Function             -> RAWKEY_RAMIGA      (x11kc 0x47) source maps the fn key to Right-Amiga */
+  { 0x39, 0x62 },  /* kVK_CapsLock             -> RAWKEY_CAPSLOCK    (x11kc 0x41) */
+
+/* --- function keys (F1-F13; F14+ not mapped, see header) --------------- */
+  { 0x7A, 0x50 },  /* kVK_F1                   -> RAWKEY_F1          (x11kc 0x82) */
+  { 0x78, 0x51 },  /* kVK_F2                   -> RAWKEY_F2          (x11kc 0x80) */
+  { 0x63, 0x52 },  /* kVK_F3                   -> RAWKEY_F3          (x11kc 0x6B) */
+  { 0x76, 0x53 },  /* kVK_F4                   -> RAWKEY_F4          (x11kc 0x7E) */
+  { 0x60, 0x54 },  /* kVK_F5                   -> RAWKEY_F5          (x11kc 0x68) */
+  { 0x61, 0x55 },  /* kVK_F6                   -> RAWKEY_F6          (x11kc 0x69) */
+  { 0x62, 0x56 },  /* kVK_F7                   -> RAWKEY_F7          (x11kc 0x6A) */
+  { 0x64, 0x57 },  /* kVK_F8                   -> RAWKEY_F8          (x11kc 0x6C) */
+  { 0x65, 0x58 },  /* kVK_F9                   -> RAWKEY_F9          (x11kc 0x6D) */
+  { 0x6D, 0x59 },  /* kVK_F10                  -> RAWKEY_F10         (x11kc 0x75) */
+  { 0x67, 0x4B },  /* kVK_F11                  -> RAWKEY_F11         (x11kc 0x6F) */
+  { 0x6F, 0x6F },  /* kVK_F12                  -> RAWKEY_F12         (x11kc 0x77) */
+  { 0x69, 0x5F },  /* kVK_F13                  -> RAWKEY_HELP        (x11kc 0x71) source choice: F13 sits in the ADB Help/PrtSc slot */
+
+/* --- arrows ------------------------------------------------------------ */
+  { 0x7E, 0x4C },  /* kVK_UpArrow              -> RAWKEY_UP          (x11kc 0x86) */
+  { 0x7D, 0x4D },  /* kVK_DownArrow            -> RAWKEY_DOWN        (x11kc 0x85) */
+  { 0x7B, 0x4F },  /* kVK_LeftArrow            -> RAWKEY_LEFT        (x11kc 0x83) */
+  { 0x7C, 0x4E },  /* kVK_RightArrow           -> RAWKEY_RIGHT       (x11kc 0x84) */
+
+/* --- navigation cluster ------------------------------------------------ */
+  { 0x73, 0x70 },  /* kVK_Home                 -> RAWKEY_HOME        (x11kc 0x7B) */
+  { 0x77, 0x71 },  /* kVK_End                  -> RAWKEY_END         (x11kc 0x7F) */
+  { 0x74, 0x48 },  /* kVK_PageUp               -> RAWKEY_PAGEUP      (x11kc 0x7C) */
+  { 0x79, 0x49 },  /* kVK_PageDown             -> RAWKEY_PAGEDOWN    (x11kc 0x81) */
+  { 0x75, 0x46 },  /* kVK_ForwardDelete        -> RAWKEY_DELETE      (x11kc 0x7D) (Mac "fwd delete" = AROS Del) */
+
+/* --- numeric keypad ---------------------------------------------------- */
+  { 0x52, 0x0F },  /* kVK_ANSI_Keypad0         -> RAWKEY_KP_0        (x11kc 0x5A) */
+  { 0x53, 0x1D },  /* kVK_ANSI_Keypad1         -> RAWKEY_KP_1        (x11kc 0x5B) */
+  { 0x54, 0x1E },  /* kVK_ANSI_Keypad2         -> RAWKEY_KP_2        (x11kc 0x5C) */
+  { 0x55, 0x1F },  /* kVK_ANSI_Keypad3         -> RAWKEY_KP_3        (x11kc 0x5D) */
+  { 0x56, 0x2D },  /* kVK_ANSI_Keypad4         -> RAWKEY_KP_4        (x11kc 0x5E) */
+  { 0x57, 0x2E },  /* kVK_ANSI_Keypad5         -> RAWKEY_KP_5        (x11kc 0x5F) */
+  { 0x58, 0x2F },  /* kVK_ANSI_Keypad6         -> RAWKEY_KP_6        (x11kc 0x60) */
+  { 0x59, 0x3D },  /* kVK_ANSI_Keypad7         -> RAWKEY_KP_7        (x11kc 0x61) */
+  { 0x5B, 0x3E },  /* kVK_ANSI_Keypad8         -> RAWKEY_KP_8        (x11kc 0x63) */
+  { 0x5C, 0x3F },  /* kVK_ANSI_Keypad9         -> RAWKEY_KP_9        (x11kc 0x64) */
+  { 0x41, 0x3C },  /* kVK_ANSI_KeypadDecimal   -> RAWKEY_KP_DECIMAL  (x11kc 0x49) */
+  { 0x45, 0x5E },  /* kVK_ANSI_KeypadPlus      -> RAWKEY_KP_PLUS     (x11kc 0x4D) */
+  { 0x4E, 0x4A },  /* kVK_ANSI_KeypadMinus     -> RAWKEY_KP_MINUS    (x11kc 0x56) */
+  { 0x43, 0x5D },  /* kVK_ANSI_KeypadMultiply  -> RAWKEY_KP_MULTIPLY (x11kc 0x4B) */
+  { 0x4B, 0x5C },  /* kVK_ANSI_KeypadDivide    -> RAWKEY_KP_DIVIDE   (x11kc 0x53) */
+  { 0x4C, 0x43 },  /* kVK_ANSI_KeypadEnter     -> RAWKEY_KP_ENTER    (x11kc 0x54) */
+  { 0x47, 0x5A },  /* kVK_ANSI_KeypadClear     -> 0x5A  UNVERIFIED: source byte, no named RAWKEY_* (NumLock/Clear slot) (x11kc 0x4F) */
+  { 0x51, 0x5B },  /* kVK_ANSI_KeypadEquals    -> 0x5B  UNVERIFIED: source byte, no named RAWKEY_* (Amiga kbd has no KP=) (x11kc 0x59) */
+
+/* end keycode2rawkey.table */

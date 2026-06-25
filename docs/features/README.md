@@ -1,0 +1,79 @@
+# Feature plans — host capabilities for hosted AROS on Apple Silicon
+
+Grounded design/plan docs for things that would be **genuinely useful and don't exist
+yet** for the `aarch64-darwin` hosted port. Each was checked against the upstream tree
+(`/Users/user/Source/aros-upstream`) *and* the web before writing — every AROS contract
+cited points at a real file, every external project at a real repo, and anything that
+couldn't be confirmed is marked **UNVERIFIED**.
+
+All of these are the project thesis applied to one more surface: *macOS owns the
+drivers; AROS reaches them via standard exec I/O.* And all must verify in the
+**unattended loop** — build → run → observe → one PASS/FAIL — with no macOS TCC /
+Screen-Recording manual step. Each carries its own spike plan with greppable markers,
+the same way Phase 1/2 used `[M*]` / `[H*]`.
+
+## Layout
+
+Each feature has its own folder:
+
+```
+<feature>/design.md   — the why, the grounded contracts, the spike plan
+<feature>/spec.md      — clean-room implementation spec for a fresh implementer (as written)
+CLEANROOM.md           — the GPL clean-room process that governs every spec.md
+```
+
+## The features
+
+| Feature | One-line | Status |
+|---------|----------|--------|
+| [68k JIT](68k-jit/design.md) · [spec](68k-jit/spec.md) | A host 68k→AArch64 translator so the hosted AROS runs real classic Amiga binaries at native speed | design + spec done · `[J0]` → adapt Emu68 |
+| [Cocoa/Metal display](cocoa-metal-display/design.md) · [spec](cocoa-metal-display/spec.md) | A live macOS window (Apple-native Metal) replacing H7's render-to-PNG | design + spec done · **`[D1]` shim GREEN** |
+| [Clipboard bridge](clipboard-bridge/design.md) · [spec](clipboard-bridge/spec.md) | Two-way copy/paste between macOS NSPasteboard and AROS `clipboard.device` | design + spec done |
+| [Host volume](host-volume/design.md) · [spec](host-volume/spec.md) | A real macOS folder mounted as an AROS volume, drag-from-Finder | design + spec done · foundation landed |
+| [CoreAudio audio](coreaudio-audio/design.md) · [spec](coreaudio-audio/spec.md) | Real sound via a CoreAudio-backed AHI sub-driver | design + spec done |
+| [Host BSD sockets](bsdsocket-net/design.md) · [spec](bsdsocket-net/spec.md) | Working TCP/IP by forwarding `bsdsocket.library` to the Mac's native sockets | design + spec done |
+
+## How they group
+
+- **The standout** — [68k JIT](68k-jit/design.md). The uniquely-Apple-Silicon payoff and
+  the natural destination of the W^X / `MAP_JIT` work. Prior art exists out-of-tree:
+  **Emu68** (MPL-2.0, adoptable) for the translator, **emumiga** for the AROS integration.
+- **"Make it a real Mac app"** — [display](cocoa-metal-display/design.md),
+  [clipboard](clipboard-bridge/design.md), [host volume](host-volume/design.md).
+- **Infrastructure** — [audio](coreaudio-audio/design.md),
+  [sockets](bsdsocket-net/design.md).
+
+## Reference implementations & licensing
+
+The best worked examples of bridging an Amiga-like to macOS are GPL — the **UAE family**
+(WinUAE/FS-UAE/Amiberry/E-UAE) and **vAmiga** (Apple-Silicon-native Metal). They are
+invaluable to *read for the pattern* but **cannot be copied** into APL/LGPL AROS, so any
+feature that leans on them goes through the **[clean-room process](CLEANROOM.md)**: a
+Role-A author reads the GPL reference and writes a `spec.md`; a fresh Role-B implementer
+who never saw it writes the code from the spec + public APIs + AROS headers. (**Emu68** is
+MPL-2.0 — adoptable as isolated files, a different path; see the 68k-jit design.)
+
+## Shared foundations (build once, several features lean on them)
+
+- **W^X-aware executable memory** (`MAP_JIT` + `pthread_jit_write_protect_np`) — blocks
+  the 68k JIT *and* the deferred native `LoadSeg` path. Spike `[J1]`.
+- **The host-call shim** (H3) and **`hostlib.resource`** — already built.
+- **The device-I/O path** (H10/H11) — the `IORequest → device task → host syscall →
+  reply` shape that clipboard, audio, sockets and the volume handler reuse.
+- **A host-thread → AROS `Signal` pump** — the CoreAudio RT callback, the kqueue socket
+  pump, and the NSPasteboard poll all need it. Factored once as a shared contract:
+  [host-wake-pattern.md](host-wake-pattern.md) (atomics, ownership, lost-wakeup, the
+  `Signal` seam) — all three host shims conform.
+
+## Suggested order
+
+1. **Unblock real software**: `[J1]` (the `MAP_JIT` layer) — unblocks both the JIT and
+   native `LoadSeg`.
+2. **Finish the boot first** where needed: most features can't *run* until `dos.library`
+   + the boot module set exist (kickstart still halts at cold-start — `graft/WORKFLOW.md`).
+   [Host volume](host-volume/design.md)'s code is largely already there — cheapest win once DOS is up.
+3. **Visible wins**: [clipboard](clipboard-bridge/design.md) and the
+   [display window](cocoa-metal-display/design.md).
+4. **Reach the world**: [sockets](bsdsocket-net/design.md), then
+   [audio](coreaudio-audio/design.md).
+5. **The mountain**: the rest of the [68k JIT](68k-jit/design.md).
