@@ -102,6 +102,9 @@ struct j5d_m68k_state {
     double   fp[8];    /* FP0..FP7 — IEEE-754 binary64 (the precision model above)           */
     uint32_t fpcr;     /* FP control register (rounding/precision; modeled-stored this incr.) */
     uint32_t fpsr;     /* FP status register — the CONDITION-CODE byte (N/Z/I/NAN) is live    */
+    uint32_t fpiar;    /* [J5r] FP instruction-address register (moved by FMOVE/FMOVEM, APPENDED
+                          AFTER fpsr at offset 152 — every existing offset, incl. fpcr==144 /
+                          fpsr==148, is byte-for-byte UNCHANGED; the static-asserts hold).      */
 };
 
 #define J5D_OFF_D(n)   ((uint16_t)((n) * 4u))
@@ -187,6 +190,83 @@ static inline int j5q_fp_cond_taken(unsigned predicate, uint32_t fpsr)
     return 0;
 }
 
+/* ===================== [J5r] THE 80-bit EXTENDED (.x) MEMORY FORMAT ================
+ * FMOVEM and FMOVE.x move FP registers to/from memory in the 68881's 96-bit (12-byte)
+ * EXTENDED format. The byte layout in 68k (big-endian) memory:
+ *   bytes 0-1 : bit15 = sign, bits 14-0 = 15-bit biased exponent (bias 16383)
+ *   bytes 2-3 : reserved (zero)
+ *   bytes 4-11: 64-bit mantissa with an EXPLICIT integer bit (bit63 = the leading 1)
+ * Our FP registers are IEEE-754 binary64 (`double`, bias 1023, 52-bit fraction + implicit 1)
+ * — the [J5o] precision model. The conversion below is OURS (no Emu68 source); BOTH the
+ * dispatcher and the oracle call it, so the asserts are bit-exact. **DOUBLE-PRECISION
+ * ROUND-TRIP NOTE:** because the FP regs hold only double precision, double → .x → double is
+ * EXACT for every normal value, ±0, ±inf and NaN: the 52-bit fraction maps to the top 52 bits
+ * of the extended mantissa (the low 11 bits are zero — we carry no extra precision), the
+ * double's 11-bit exponent range fits the extended's 15-bit field, and the integer bit is made
+ * explicit. (Real 68881 .x carries 64 mantissa bits + an 80-bit value; the low bits we cannot
+ * represent are zero on the way out and ignored on the way in — consistent with the [J5o]
+ * double model. Double SUBNORMALs convert forward to extended normals exactly; the reverse to a
+ * double subnormal is a documented edge — not produced by the verified program.) */
+
+/* double -> 12-byte big-endian extended (.x). */
+static inline void j5r_double_to_x(double v, uint8_t out[12])
+{
+    uint64_t b; __builtin_memcpy(&b, &v, 8);
+    unsigned sign = (unsigned)(b >> 63) & 1u;
+    unsigned exp11 = (unsigned)(b >> 52) & 0x7ffu;
+    uint64_t frac52 = b & 0xfffffffffffffULL;
+    uint16_t exp15; uint64_t mant64;
+    if (exp11 == 0x7ffu) {                          /* inf / NaN */
+        exp15 = 0x7fffu;
+        mant64 = (frac52 == 0) ? 0 : ((1ULL << 63) | (frac52 << 11));
+    } else if (exp11 == 0) {                        /* zero or subnormal double */
+        if (frac52 == 0) { exp15 = 0; mant64 = 0; }
+        else {                                      /* subnormal -> extended normal */
+            int lz = __builtin_clzll(frac52) - 11;  /* frac52 occupies <= 52 bits        */
+            int shift = 11 + lz + 1;                /* move leading 1 to bit63 (integer)  */
+            mant64 = frac52 << shift;
+            int p = 51 - lz;                        /* bit position of the leading 1      */
+            int e = -1022 - (52 - p);
+            exp15 = (uint16_t)(e + 16383);
+        }
+    } else {                                        /* normal */
+        exp15 = (uint16_t)((int)exp11 - 1023 + 16383);
+        mant64 = (1ULL << 63) | (frac52 << 11);
+    }
+    uint16_t se = (uint16_t)((sign << 15) | (exp15 & 0x7fffu));
+    out[0] = (uint8_t)(se >> 8); out[1] = (uint8_t)se; out[2] = 0; out[3] = 0;
+    for (int i = 0; i < 8; i++) out[4 + i] = (uint8_t)(mant64 >> (56 - 8 * i));
+}
+
+/* 12-byte big-endian extended (.x) -> double. */
+static inline double j5r_x_to_double(const uint8_t in[12])
+{
+    uint16_t se = (uint16_t)((in[0] << 8) | in[1]);
+    unsigned sign = (se >> 15) & 1u; uint16_t exp15 = se & 0x7fffu;
+    uint64_t mant64 = 0; for (int i = 0; i < 8; i++) mant64 = (mant64 << 8) | in[4 + i];
+    uint64_t b;
+    if (exp15 == 0x7fffu) {                         /* inf / NaN */
+        uint64_t f = (mant64 & ~(1ULL << 63)) >> 11;
+        b = ((uint64_t)sign << 63) | (0x7ffULL << 52) | f;
+    } else if (exp15 == 0 && mant64 == 0) {         /* zero */
+        b = (uint64_t)sign << 63;
+    } else {
+        int e = (int)exp15 - 16383 + 1023;
+        uint64_t f = (mant64 & ~(1ULL << 63)) >> 11;
+        if (e >= 0x7ff) {                           /* overflow -> inf */
+            b = ((uint64_t)sign << 63) | (0x7ffULL << 52);
+        } else if (e > 0) {                         /* normal */
+            b = ((uint64_t)sign << 63) | ((uint64_t)e << 52) | f;
+        } else {                                    /* subnormal/zero (documented edge) */
+            uint64_t m = mant64 >> 11;              /* 53-bit significand incl integer bit */
+            int rs = 1 - e;
+            uint64_t sub = (rs >= 64) ? 0 : (m >> rs);
+            b = ((uint64_t)sign << 63) | (sub & 0xfffffffffffffULL);
+        }
+    }
+    double v; __builtin_memcpy(&v, &b, 8); return v;
+}
+
 /* ----- The sandbox (carried from [J5a]/[J4]) --------------------------------------- */
 typedef struct j5d_sandbox {
     uint8_t  *host_mem;   /* host pointer to 68k address `origin`                 */
@@ -253,6 +333,8 @@ typedef struct j5d_stats {
     uint32_t rte_returns;           /* rte instructions executed (frame popped, resumed) */
     /* [J5q] FP conditional control-flow ops dispatched (FBcc/FScc/FDBcc/FTRAPcc).        */
     uint32_t fp_cc_ops;
+    /* [J5r] FMOVEM (.x reglist) + FP system-register moves dispatched.                   */
+    uint32_t fp_movem_ops;
     /* [J5k] cross-region block chaining (direct AArch64 branches past the C dispatcher,
      * with the 68k register file kept live across the hop). These count what the chaining
      * optimization replaced: a block that ends in a chainable terminator (fall-through /

@@ -79,5 +79,10 @@ asm     j5q     -kick1hunks -m68882 -no-opt  # [J5q] FP CONDITIONAL CONTROL-FLOW
                                  # FTRAPcc->vector7. -m68882 for the FPU set; -no-opt keeps the
                                  # exact line-F encodings; -kick1hunks for the RELOC32 of lea
                                  # fpconst/result + the FTRAPcc handler address.
+asm     j5r     -kick1hunks -m68882 -no-opt  # [J5r] FMOVEM + FP system-register moves + the
+                                 # 80-bit extended (.x) memory format: FMOVEM.x save/restore
+                                 # (FP prologue/epilogue) + FMOVE/FMOVEM FPCR/FPSR/FPIAR. -m68882
+                                 # for the FPU set; -no-opt keeps the exact line-F encodings;
+                                 # -kick1hunks for the RELOC32 of lea fpconst/scratch.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

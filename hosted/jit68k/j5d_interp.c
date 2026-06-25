@@ -1651,6 +1651,88 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             }
         }
 
+        /* ==================== [J5r] FMOVEM + FP SYSTEM-REGISTER MOVES (oracle mirror) =======
+         * Decoded BEFORE the FPU arithmetic block (they share the 0xF2xx encoding). The .x
+         * 96-bit conversion is the SHARED j5r_double_to_x/j5r_x_to_double (j5d_jit68k.h); the
+         * reglist + memory order mirror the dispatcher in j5d_engine.c exactly. */
+        if ((op & 0xffc0) == 0xf200 && (uint64_t)pc + 4 <= (uint64_t)sb->origin + sb->size) {
+            uint16_t oc2 = be16(ip + 2);
+            int is_fmovem  = ((oc2 & 0xc700u) == 0xc000u);
+            int is_sysreg  = ((oc2 & 0xe000u) == 0x8000u) || ((oc2 & 0xe000u) == 0xa000u);
+            if (is_fmovem || is_sysreg) {
+                unsigned mode = (op >> 3) & 7u, areg = op & 7u;
+                /* resolve the EA base + ext bytes (the modes the [J5r] subset uses). */
+                uint32_t base = 0; unsigned ext_bytes = 0; int predec = 0, postinc = 0; int ok = 1;
+                /* count is filled below; for predec base needs `total`, so compute count first. */
+                if (is_fmovem) {
+                    unsigned dir = (oc2 >> 13) & 1u, dynamic = (oc2 >> 11) & 1u;
+                    uint8_t mask = dynamic ? (uint8_t)(st->d[(oc2 >> 4) & 7u] & 0xFFu)
+                                           : (uint8_t)(oc2 & 0xFFu);
+                    int is_predec = (mode == 4);
+                    unsigned fpregs[8]; int count = 0;
+                    for (int fp = 0; fp < 8; fp++) {
+                        int bit = is_predec ? fp : (7 - fp);
+                        if (mask & (1u << bit)) fpregs[count++] = (unsigned)fp;
+                    }
+                    uint32_t total = (uint32_t)(12 * count);
+                    if (mode == 2)      { base = st->a[areg]; }
+                    else if (mode == 3) { base = st->a[areg]; postinc = 1; }
+                    else if (mode == 4) { base = st->a[areg] - total; predec = 1; }
+                    else if (mode == 5) { base = st->a[areg] + (uint32_t)(int32_t)be16s(ip + 4); ext_bytes = 2; }
+                    else if (mode == 7 && areg == 0) { base = (uint32_t)(int32_t)be16s(ip + 4); ext_bytes = 2; }
+                    else if (mode == 7 && areg == 1) { base = be32(ip + 4); ext_bytes = 4; }
+                    else if (mode == 7 && areg == 2) { base = (pc + 4) + (uint32_t)(int32_t)be16s(ip + 4); ext_bytes = 2; }
+                    else { ok = 0; }
+                    if (!ok) IFAIL("FMOVEM EA mode not in the [J5r] subset");
+                    for (int s = 0; s < count; s++) {
+                        uint32_t addr = base + (uint32_t)(12 * s);
+                        if (addr < sb->origin || (uint64_t)addr + 12 > (uint64_t)sb->origin + sb->size)
+                            IFAIL("FMOVEM: .x slot out of sandbox");
+                        uint8_t *p = sb->host_mem + (addr - sb->origin);
+                        if (dir) { uint8_t xb[12]; j5r_double_to_x(st->fp[fpregs[s]], xb); memcpy(p, xb, 12); }
+                        else     { st->fp[fpregs[s]] = j5r_x_to_double(p); }
+                    }
+                    if (predec)  st->a[areg] -= total;
+                    if (postinc) st->a[areg] += total;
+                    pc = pc + 4 + ext_bytes; continue;
+                } else {
+                    /* FP system-register move (FPCR/FPSR/FPIAR), single or control-reg list. */
+                    unsigned to_special = ((oc2 & 0xe000u) == 0x8000u);
+                    int wc = (oc2 & 0x1000u) != 0, ws = (oc2 & 0x0800u) != 0, wi = (oc2 & 0x0400u) != 0;
+                    int count = wc + ws + wi;
+                    if (mode == 0 || mode == 1) {
+                        uint32_t *slot = (mode == 0) ? &st->d[areg] : &st->a[areg];
+                        uint32_t *creg = wc ? &st->fpcr : ws ? &st->fpsr : &st->fpiar;
+                        if (count != 1) IFAIL("FMOVE Dn/An,<ctrl>: expected one ctrl reg");
+                        if (to_special) *creg = *slot; else *slot = *creg;
+                        pc = pc + 4; continue;
+                    }
+                    uint32_t total = (uint32_t)(4 * count);
+                    if (mode == 2)      { base = st->a[areg]; }
+                    else if (mode == 3) { base = st->a[areg]; postinc = 1; }
+                    else if (mode == 4) { base = st->a[areg] - total; predec = 1; }
+                    else if (mode == 5) { base = st->a[areg] + (uint32_t)(int32_t)be16s(ip + 4); ext_bytes = 2; }
+                    else if (mode == 7 && areg == 1) { base = be32(ip + 4); ext_bytes = 4; }
+                    else { IFAIL("FMOVE <ctrl> EA mode not in the [J5r] subset"); }
+                    uint32_t *order[3]; int n = 0;
+                    if (wc) order[n++] = &st->fpcr;
+                    if (ws) order[n++] = &st->fpsr;
+                    if (wi) order[n++] = &st->fpiar;
+                    for (int i = 0; i < n; i++) {
+                        uint32_t addr = base + (uint32_t)(4 * i);
+                        if (addr < sb->origin || (uint64_t)addr + 4 > (uint64_t)sb->origin + sb->size)
+                            IFAIL("FMOVE <ctrl> mem out of sandbox");
+                        uint8_t *p = sb->host_mem + (addr - sb->origin);
+                        if (to_special) *order[i] = ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+                        else { uint32_t v = *order[i]; p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=(uint8_t)v; }
+                    }
+                    if (predec)  st->a[areg] -= total;
+                    if (postinc) st->a[areg] += total;
+                    pc = pc + 4 + ext_bytes; continue;
+                }
+            }
+        }
+
         /* ============================ [J5o] THE FPU (line-F coprocessor) =============
          * FMOVE (reg<->reg, mem<->reg, format conversions .s/.d/.l/.w/.b), FADD/FSUB/FMUL/
          * FDIV/FSQRT/FABS/FNEG, FCMP, FTST — computed in C `double`, INDEPENDENT of Emu68's

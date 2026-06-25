@@ -1853,12 +1853,83 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
     Exhibit-B unchanged/clean): the predicate + the control-flow are OURS in the dispatcher/oracle.
 
   - **Still deferred (honest scope):** **FMOVEM** + FP **system-register moves** (FMOVE to/from
-    FPCR/FPSR/FPIAR as a control-register list), the **80-bit extended `.x`** / **packed-decimal `.p`**
-    MEMORY formats, and FP **exceptions** — including **BSUN** (the trap the *signalling* FP predicate
-    variants raise on an unordered operand; `[J5q]` evaluates the predicate truth correctly but does
-    not raise BSUN). The natural next FP increment is a **vbcc-compiled FP capstone** (a real C program
-    using `float`/`double` through the JIT end-to-end), which would exercise the whole FP stack
-    together.
+    FPCR/FPSR/FPIAR as a control-register list) **— NOW DONE in `[J5r]` below**; the **80-bit extended
+    `.x`** MEMORY format **— NOW DONE in `[J5r]`**; the **packed-decimal `.p`** MEMORY format, and FP
+    **exceptions** — including **BSUN** (the trap the *signalling* FP predicate variants raise on an
+    unordered operand; `[J5q]` evaluates the predicate truth correctly but does not raise BSUN). The
+    natural next FP increment is a **vbcc-compiled FP capstone** (a real C program using `float`/`double`
+    through the JIT end-to-end), which would exercise the whole FP stack together.
+
+- **`[J5r]` FMOVEM + FP SYSTEM-REGISTER MOVES + the 80-bit EXTENDED (`.x`) MEMORY FORMAT —
+  IMPLEMENTED / GREEN.** The last decoder-level FP gap before the capstone. Files: OURS
+  `hosted/jit68k/{j5r_test.c}` + the `.x` 96-bit conversion `j5r_double_to_x()`/`j5r_x_to_double()`
+  + the `fpiar` state field (APPENDED) + the FMOVEM/sys-reg dispatcher handlers (`j5d_engine.c`) and
+  oracle mirror (`j5d_interp.c`) + the `fp_movem_ops` telemetry + `apps68k/j5r.s` (+ committed
+  `j5r.exe`, `-m68882`). Target `make hosted-jit68k-j5r` (marker `[J5r] PASS`, watchdog 40 s).
+
+  - **Ops covered.** **FMOVEM.x** the FP register list to/from memory: `FMOVEM.x <list>,-(An)`
+    (predecrement SAVE — the FP function prologue), `FMOVEM.x (An)+,<list>` (postincrement RESTORE —
+    the epilogue), the control-mode forms (`(An)`/`(d16,An)`/abs.w/abs.l/`(d16,PC)`), and the dynamic
+    (register-specified) list. **FP system-register moves**: `FMOVE.l Dn↔FPCR/FPSR/FPIAR` (single) and
+    `FMOVEM.l <creglist>,<ea>` / the reverse (multiple control regs in one instruction, stored
+    FPCR→FPSR→FPIAR low→high).
+
+  - **THE .x EXTENDED FORMAT (the load-bearing new bit).** The 12-byte 68881 layout (big-endian in
+    sandbox memory): bytes 0–1 = sign + 15-bit biased exponent (bias 16383), bytes 2–3 = reserved/zero,
+    bytes 4–11 = 64-bit mantissa with an EXPLICIT integer bit (bit63). The OURS conversion (shared by
+    BOTH the dispatcher and the oracle, so the asserts are bit-exact): exponent rebiased (double bias
+    1023 ↔ extended 16383), the explicit integer bit set, the double's 52-bit fraction placed in the
+    high mantissa bits (low 11 bits zero — we carry only double precision). **Double-precision
+    ROUND-TRIP NOTE:** because the FP regs hold double, `double → .x → double` is EXACT for every
+    normal value, ±0, ±inf and NaN (verified — e.g. `1.0` → `3FFF 0000 8000000000000000`, `3.0` →
+    `4000 0000 C000000000000000`). ±0/inf/NaN encodings handled (inf = exp 0x7FFF + zero mantissa, NaN
+    = exp 0x7FFF + integer bit + payload). Double SUBNORMALs convert forward to extended normals
+    exactly; the reverse to a double subnormal is a documented edge (not produced by the verified
+    program). The real 68881 `.x` carries 64 mantissa bits / an 80-bit value — the low bits we cannot
+    represent are zero on the way out and ignored on the way in, consistent with the `[J5o]` double
+    model.
+
+  - **DECODED AT THE DISPATCHER LEVEL IN C (the architectural fit, like FBcc/`[J5q]`).** Emu68's
+    verbatim FMOVEM / FMOVE-special bodies in `M68k_LINEF.c` are bare-metal: FMOVEM `blr`s the
+    abort-stub `Load96bit`/`Store96bit` whose address is materialised in only 32 bits (the `[J5p]`
+    class of bug) and which apply no sandbox base-adjust, and the FMOVE-special path manipulates the
+    REAL FPCR via `msr fpcr`/`mrs fpcr` and has explicitly-unsupported modes. So FMOVEM and the
+    sys-reg moves are recognised by opcode2 (the body loop ends the block via `is_fp_mem_terminator`)
+    and decoded in OUR dispatcher: the `.x` conversion + the sandbox memory (bounds-checked) + the
+    reglist semantics, in C. The FP register file is canonical in `st->fp[]` at the block boundary
+    (the `[J5o]` epilogue flushed the dirty d8..d15); FPCR/FPSR/FPIAR are memory-backed. **The mask /
+    memory order** (grounded against the M68000 FPU manual, cross-checked with vasm encodings): the
+    predecrement (`-(An)`) form uses mask bit `i` = FP`i`; every other mode uses mask bit `i` =
+    FP`(7−i)`; in BOTH the lowest-numbered selected register lands at the lowest address — so a `-(An)`
+    save round-trips a `(An)+` restore (the integer-`movem` `[J5l]` discipline). The QUARANTINE
+    `M68k_LINEF.c` stays BYTE-VERBATIM (no `emu68/` edit, no new vendored file, no new darwinize pass).
+
+  - **VERIFY.** `apps68k/j5r.s` is an FP function: it loads fp0–fp7 with distinct values, calls a
+    `clobberer` that `FMOVEM.x fp0-fp7,-(sp)` (save), CLOBBERS every FP reg, `FMOVEM.x (sp)+,fp0-fp7`
+    (restore), returns — so the caller's fp0–fp7 must SURVIVE; then it stores them control-mode (.x) to
+    a scratch frame and round-trips FPCR/FPSR/FPIAR through Dn + a multi-control-reg `FMOVEM.l`. The
+    oracle decodes the same ops with the SAME `.x` conversion. The test asserts **byte-exact** (integer
+    regs + FP regs FP0..FP7 + FPCR/FPSR/FPIAR + the WHOLE sandbox — incl. the `.x` extended bytes the
+    FMOVEM stored + the control-reg longwords) JIT vs oracle, plus an independent hand-check (FP
+    survival + the exact `.x` 12-byte encoding of fp0 + the FPCR/FPSR/FPIAR round-trips). **Negative
+    control bites:** dropping fp7 from the epilogue FMOVEM restore mask in the JIT copy only makes the
+    clobbered fp7 leak (the JIT) where the oracle restores 1234.5 → the FP file + the stored `.x` bytes
+    diverge. **PASS (observed):** `regs=yes fp=yes mem=yes`, hand-check "all match", `fp_movem_ops=10`,
+    38 FP-mem accesses, neg-ctrl "DIVERGED", and the whole corpus + the `[J5o]`/`[J5p]`/`[J5q]` FP
+    programs re-run byte-exact. `[J1]`–`[J5q]` re-confirmed green.
+
+  - **THE SEAM IS UNCHANGED-EXCEPT-AN-APPEND (confirmed).** `fpiar` (the FP instruction-address
+    register the sys-reg moves touch) is APPENDED AFTER `fpsr` at offset 152 — every existing offset is
+    byte-for-byte unchanged (`d`=0/`a`=32/`ccr`=64/`pc`=68/`sr_high`=72/`exc_count`=74/`fp`=80/
+    `fpcr`=144/`fpsr`=148, static-asserts hold). The `.x` conversion is header-only (compile-time);
+    `fp_movem_ops` is a `j5d_stats` telemetry field, not `M68KState`. `jit_region`, the `[J3]` LVO
+    contract, the `[J5i]` exception model are untouched.
+
+  - **Still deferred (honest scope):** FP **exceptions** — including **BSUN** (the trap the signalling
+    FP predicate variants raise on an unordered operand) and the FPSR exception/accrued bits + FP traps
+    — and the **packed-decimal (`.p`)** MEMORY format (FMOVE.p; `PackedToDouble`/`DoubleToPacked` stay
+    the abort stubs, never driven). Then the **vbcc-compiled FP capstone** (a real C program using
+    `float`/`double` through the JIT end-to-end), which exercises the whole FP stack together.
 
 ## Risks
 

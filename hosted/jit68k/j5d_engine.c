@@ -336,6 +336,25 @@ static int is_terminator(uint16_t op)
     return 0;
 }
 
+/* [J5r] FMOVEM (FP register-list move) + FP system-register moves (FMOVE/FMOVEM to/from
+ * FPCR/FPSR/FPIAR) are distinguished only by opcode2 (the command word), so they cannot be
+ * recognised from `op` alone. Like FBcc/FScc, they are decoded at the DISPATCHER level in C
+ * (the .x 96-bit conversion + the sandbox memory + the reglist are OURS; Emu68's verbatim
+ * FMOVEM/FMOVE-special bodies are bare-metal — they `blr` the abort-stub Load96bit/Store96bit
+ * with a 32-bit-truncated helper address and manipulate the real FPCR via `msr fpcr`). When the
+ * body loop sees a line-F op whose opcode2 marks one of these, it ends the block so the
+ * dispatcher handles it. Returns 1 for: FMOVEM (opcode2 & 0xC700 == 0xC000), and FMOVE/FMOVEM
+ * to/from a control register (opcode2 bits 15-13 == 100 or 101 — the to-/from-special forms,
+ * which also cover the multi-control-reg FMOVEM.l list). */
+static int is_fp_mem_terminator(uint16_t op, uint16_t opcode2)
+{
+    if ((op & 0xFFC0u) != 0xF200u) return 0;          /* must be the FP EA-form line-F op */
+    if ((opcode2 & 0xC700u) == 0xC000u) return 1;     /* FMOVEM (.x register list)       */
+    if ((opcode2 & 0xE000u) == 0x8000u) return 1;     /* FMOVE/FMOVEM to a control reg   */
+    if ((opcode2 & 0xE000u) == 0xA000u) return 1;     /* FMOVE/FMOVEM from a control reg */
+    return 0;
+}
+
 /* ============================== [J5i] THE SR / EXCEPTION MODEL =====================
  * Dispatcher-level (C), the spec's "68k exceptions handled in C" (no host VBAR; Emu68's
  * bare-metal EMIT_Exception/VBR path is a no-op stub in our re-hosted runtime). The
@@ -453,6 +472,159 @@ static int bcc_taken(unsigned cc4, uint32_t ccr)
         case 0xF: return  Z || (N != V);    /* LE  */
         default:  return 0;
     }
+}
+
+/* ===================== [J5r] FMOVEM + FP SYSTEM-REGISTER MOVES (OURS, dispatcher) =========
+ * The .x 96-bit conversion (j5r_double_to_x / j5r_x_to_double, j5d_jit68k.h) + the sandbox
+ * memory + the reglist semantics, in C. The FP register file is canonical in st->fp[] at the
+ * block boundary (the epilogue flushed dirty d8..d15); FPCR/FPSR/FPIAR are memory-backed. */
+
+/* Read/write a 12-byte extended (.x) slot at sandbox address `addr` (bounds-checked). */
+static int x_mem_check(j5d_sandbox *sb, uint32_t addr, char *e, unsigned el)
+{
+    if (addr < sb->origin || (uint64_t)addr + 12 > (uint64_t)sb->origin + sb->size) {
+        if (e) snprintf(e, el, "FMOVEM: .x slot %08x out of sandbox", addr);
+        return 1;
+    }
+    return 0;
+}
+
+/* Resolve the FMOVEM / FP-sys-reg destination EA to a BASE 68k address + the post-instruction
+ * PC. Handles the control + predec/postinc modes a real FP prologue/epilogue uses; the An update
+ * for -(An)/(An)+ is applied by the CALLER (it needs the total byte count). `total` = bytes the
+ * whole transfer occupies (12*count for .x, 4*count for control regs). Returns the BASE address
+ * the first element uses (for -(An): An-total; for (An)+ and the rest: the current An / EA). */
+static int fmovem_resolve_ea(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t tpc,
+                             uint16_t op, uint32_t total, unsigned *ext_bytes,
+                             uint32_t *base_out, int *predec, int *postinc,
+                             char *e, unsigned el)
+{
+    unsigned mode = (op >> 3) & 7u, reg = op & 7u;
+    *predec = 0; *postinc = 0; *ext_bytes = 0;
+    const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
+    switch (mode) {
+        case 2: *base_out = st->a[reg]; return 0;                          /* (An)        */
+        case 3: *base_out = st->a[reg]; *postinc = 1; return 0;            /* (An)+       */
+        case 4: *base_out = st->a[reg] - total; *predec = 1; return 0;     /* -(An)       */
+        case 5: { int16_t d16 = be16s(thost + 4); *ext_bytes = 2;          /* (d16,An)    */
+                  *base_out = st->a[reg] + (uint32_t)(int32_t)d16; return 0; }
+        case 7:
+            if (reg == 0) { int16_t d16 = be16s(thost + 4); *ext_bytes = 2;/* abs.w       */
+                            *base_out = (uint32_t)(int32_t)d16; return 0; }
+            if (reg == 1) { *base_out = be32(thost + 4); *ext_bytes = 4; return 0; } /* abs.l */
+            if (reg == 2) { int16_t d16 = be16s(thost + 4); *ext_bytes = 2;/* (d16,PC)    */
+                            *base_out = (tpc + 4) + (uint32_t)(int32_t)d16; return 0; }
+            break;
+    }
+    if (e) snprintf(e, el, "FMOVEM/FP-sys EA mode %u not in the [J5r] subset", mode);
+    return 1;
+}
+
+/* FMOVEM .x — move an FP register list to/from memory in 96-bit extended format. */
+static int j5d_fmovem_x(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t tpc,
+                        uint16_t op, uint16_t opcode2, uint32_t *after, char *e, unsigned el)
+{
+    unsigned dir     = (opcode2 >> 13) & 1u;   /* 0 = mem->FP, 1 = FP->mem                  */
+    unsigned dynamic = (opcode2 >> 11) & 1u;   /* 0 = static list, 1 = register-specified   */
+    unsigned mode    = (op >> 3) & 7u, reg = op & 7u;
+    uint8_t  mask;
+    if (dynamic) mask = (uint8_t)(st->d[(opcode2 >> 4) & 7u] & 0xFFu);  /* dynamic: Dn low byte */
+    else         mask = (uint8_t)(opcode2 & 0xFFu);
+
+    /* Map the 8 mask bits to FP register numbers in ascending memory order. Predecrement (-(An))
+     * uses mask bit i = FPi; every other mode uses mask bit i = FP(7-i). In BOTH cases the
+     * lowest-numbered selected FP register lands at the LOWEST address (the [J5l]-style order),
+     * so a -(An) save round-trips a (An)+ restore. */
+    int is_predec = (mode == 4);
+    unsigned fpregs[8]; int count = 0;
+    for (int fp = 0; fp < 8; fp++) {
+        int bit = is_predec ? fp : (7 - fp);          /* the mask bit testing this FP reg */
+        if (mask & (1u << bit)) fpregs[count++] = (unsigned)fp;
+    }
+    uint32_t total = (uint32_t)(12 * count);
+
+    int predec, postinc; unsigned ext_bytes; uint32_t base;
+    if (fmovem_resolve_ea(sb, st, tpc, op, total, &ext_bytes, &base, &predec, &postinc, e, el))
+        return 1;
+    (void)mode; (void)reg;
+
+    for (int s = 0; s < count; s++) {
+        uint32_t addr = base + (uint32_t)(12 * s);
+        if (x_mem_check(sb, addr, e, el)) return 1;
+        uint8_t *p = sb->host_mem + (addr - sb->origin);
+        if (dir) {                                    /* FP -> mem (.x store)             */
+            uint8_t xb[12]; j5r_double_to_x(st->fp[fpregs[s]], xb);
+            memcpy(p, xb, 12);
+        } else {                                      /* mem -> FP (.x load)             */
+            st->fp[fpregs[s]] = j5r_x_to_double(p);
+        }
+        g_stats.mem_accesses++;
+    }
+    if (predec)  st->a[reg] -= total;                 /* -(An): commit the predecrement   */
+    if (postinc) st->a[reg] += total;                 /* (An)+: commit the postincrement  */
+
+    *after = tpc + 4 + ext_bytes;                     /* opcode + command word + EA ext   */
+    return 0;
+}
+
+/* FMOVE / FMOVEM to/from FPCR/FPSR/FPIAR (the control-register move forms). The control regs are
+ * each a 32-bit longword in memory; multiple regs in one instruction are stored FPCR, FPSR, FPIAR
+ * (low->high address). The Dn/An-direct single-register forms are also handled. */
+static int j5d_fmove_sysreg(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t tpc,
+                            uint16_t op, uint16_t opcode2, uint32_t *after, char *e, unsigned el)
+{
+    unsigned to_special = ((opcode2 & 0xE000u) == 0x8000u);  /* 100 = Dn/mem -> ctrl reg  */
+    unsigned mode = (op >> 3) & 7u, reg = op & 7u;
+    /* control-register select bits: FPCR=bit12, FPSR=bit11, FPIAR=bit10 (stored low->high). */
+    int want_fpcr = (opcode2 & 0x1000u) != 0;
+    int want_fpsr = (opcode2 & 0x0800u) != 0;
+    int want_fpiar= (opcode2 & 0x0400u) != 0;
+    int count = want_fpcr + want_fpsr + want_fpiar;
+
+    /* Dn-direct (mode 0) / An-direct (mode 1) single-register forms. */
+    if (mode == 0 || mode == 1) {
+        uint32_t *slot = (mode == 0) ? &st->d[reg] : &st->a[reg];
+        uint32_t *creg = want_fpcr ? &st->fpcr : want_fpsr ? &st->fpsr : &st->fpiar;
+        if (count != 1) { if (e) snprintf(e, el, "FMOVE Dn/An,<ctrl>: expected one ctrl reg"); return 1; }
+        if (to_special) *creg = *slot; else *slot = *creg;
+        *after = tpc + 4;
+        return 0;
+    }
+
+    /* memory forms: resolve the EA base + ext words; control regs are 4 bytes each, big-endian. */
+    uint32_t total = (uint32_t)(4 * count);
+    int predec, postinc; unsigned ext_bytes; uint32_t base;
+    if (fmovem_resolve_ea(sb, st, tpc, op, total, &ext_bytes, &base, &predec, &postinc, e, el))
+        return 1;
+
+    uint32_t off = 0;
+    /* the canonical order in memory is FPCR, then FPSR, then FPIAR (ascending address). */
+    uint32_t *order[3]; int sel[3], n = 0;
+    if (want_fpcr)  { order[n] = &st->fpcr;  sel[n] = 1; n++; }
+    if (want_fpsr)  { order[n] = &st->fpsr;  sel[n] = 1; n++; }
+    if (want_fpiar) { order[n] = &st->fpiar; sel[n] = 1; n++; }
+    for (int i = 0; i < n; i++) {
+        uint32_t addr = base + off;
+        if (addr < sb->origin || (uint64_t)addr + 4 > (uint64_t)sb->origin + sb->size) {
+            if (e) snprintf(e, el, "FMOVE <ctrl> mem %08x out of sandbox", addr); return 1;
+        }
+        uint8_t *p = sb->host_mem + (addr - sb->origin);
+        if (to_special) {                            /* mem -> ctrl reg (load)           */
+            *order[i] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                        ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+        } else {                                     /* ctrl reg -> mem (store)          */
+            uint32_t v = *order[i];
+            p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+            p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+        }
+        (void)sel;
+        g_stats.mem_accesses++;
+        off += 4;
+    }
+    if (predec)  st->a[reg] -= total;
+    if (postinc) st->a[reg] += total;
+    *after = tpc + 4 + ext_bytes;
+    return 0;
 }
 
 /* ============================ [J5k] CROSS-REGION CHAINING ==========================
@@ -594,6 +766,11 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         uint16_t op = be16(ophost);
 
         if (is_terminator(op)) { *end_pc = cur_pc; break; }
+        /* [J5r] FMOVEM / FP system-register moves are opcode2-distinguished; end the block so
+         * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist). */
+        if ((op & 0xFFC0u) == 0xF200u &&
+            (uint64_t)cur_pc + 4 <= (uint64_t)sb->origin + sb->size &&
+            is_fp_mem_terminator(op, be16(ophost + 2))) { *end_pc = cur_pc; break; }
 
         uint8_t group = op >> 12;
         uint16_t insn_consumed = 0;
@@ -1370,6 +1547,25 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                  ? (uint32_t)((int64_t)disp_pc + disp)
                  : after;
             g_stats.fp_cc_ops++;
+        }
+        /* =================== [J5r] FMOVEM + FP SYSTEM-REGISTER MOVES (dispatcher-level C) =====
+         * Decoded here in OUR code (the .x 96-bit conversion + the sandbox memory + the reglist
+         * are OURS — see j5d_jit68k.h j5r_double_to_x/j5r_x_to_double + j5d_fmovem_* below). The
+         * FP register file is canonical in st->fp[] at this boundary (the block epilogue flushed
+         * the dirty d8..d15); FPCR/FPSR are memory-backed in st->fpcr/st->fpsr; FPIAR in
+         * st->fpiar. opcode2 selects the form. */
+        else if ((top & 0xFFC0u) == 0xF200u) {
+            uint16_t opcode2 = be16(thost + 2);
+            char e2[120] = {0};
+            uint32_t after = 0;
+            int rc2;
+            if ((opcode2 & 0xC700u) == 0xC000u)
+                rc2 = j5d_fmovem_x(sb, st, tpc, top, opcode2, &after, e2, sizeof e2);     /* FMOVEM .x  */
+            else /* (opcode2 & 0xE000) == 0x8000 (to ctrl) or 0xA000 (from ctrl) */
+                rc2 = j5d_fmove_sysreg(sb, st, tpc, top, opcode2, &after, e2, sizeof e2); /* sys-reg    */
+            if (rc2) RFAIL(e2);
+            g_stats.fp_movem_ops++;
+            pc = after;
         }
         else {
             RFAIL("unknown terminator opcode");
