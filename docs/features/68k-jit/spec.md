@@ -670,25 +670,224 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   the emitter. The opcode subset is `moveq`/`add.l`/`subq.l`/`bne.s`/`rts`; `moveq` still
   uses the `<0x80` zero/sign-extend shortcut (enforced — rejects `≥0x80`).
 
-- **`[J5c]` the rest of the decoder/RA mountain — DEFERRED.** What `[J5b]` does NOT do, and
-  `[J5c]`/beyond still needs: **cross-region block chaining + an instruction cache**
-  (`[J5b]` is one self-contained region; no block-to-block linking, no `M68KTranslationUnit`
-  `ICache`/`LRU`); **full `Bcc`/`DBcc` condition coverage** (`[J5b]` does `bne.s` only) and
-  **forward branches across blocks**; **full opcode + addressing-mode coverage** (the rest
-  of `move`, the `(d16,An)`/`(d8,An,Xn)`/absolute/PC-relative EA modes, `MULDIV`, the line
-  decoders) with **real per-opcode CCR** generalised across opcodes and **`moveq`
-  sign-extend** generalised; **OUR register allocator built around the emitter** (still
-  memory-backed here — the `[J5a]` finding: Emu68's `RegisterAllocator64.c` is not
-  adoptable: 1:1-MMU / software-ICACHE / EL0-system-register coupling); the **real
-  `jsr`-through-vector decode from a stream** wired to the `[J3]` recognition math at the
-  dispatcher funnel; **library calls FROM the running program** (the `[J3]` bridge invoked
-  on a decoded `jsr`, with sandbox-pointer marshalling of `An` args); and a **sandbox-backed
-  allocator** for native-call return-pointers that lie *outside* the sandbox. Whatever lift
-  remains (the `M68k_LINE*`/`M68k_CC`/`M68k_SR`/`M68k_Exception` decoders,
-  `M68k_Translator.c`/`ExecutionLoop.c` block cache + `MainLoop` funnel, PC in x18) must
-  re-run the Exhibit-B grep (`Incompatible With Secondary Licenses`) before vendoring each
-  new Emu68 file and record it in `hosted/jit68k/emu68/NOTICE`. This is large-scale Emu68
-  adoption + re-hosting, not a session-sized spike.
+- **`[J5c]` RE-HOST Emu68's REAL decoder + register allocator — IMPLEMENTED / GREEN.**
+  The make-or-break experiment: instead of hand-rolling (as `[J2]`..`[J5b]` did), `[J5c]`
+  DRIVES Emu68's **REAL per-opcode decoders** (the verbatim, MPL-quarantined
+  `emu68/M68k_LINE{8,9,B,C,D}.c` + `M68k_MOVE.c` + `M68k_MULDIV.c` + `M68k_EA.c`) behind
+  hosted replacements for exactly the three `[J5a]` couplings, and verifies a **richer
+  block** the hand-rolled path can't reach, byte-exact against our independent
+  interpreter. Files: `hosted/jit68k/{j5c_jit68k.h,j5c_shims.c,j5c_ra.c,j5c_build.c,
+  j5c_interp.c,j5c_test.c}` + `hosted/jit68k/emu68_darwinize.pl`; vendored decoders in
+  `hosted/jit68k/emu68/` (NOTICE updated, Exhibit-B re-run = clean); target
+  `make hosted-jit68k-j5c` (plain ad-hoc, MAP_JIT works). **The block (8 opcodes across 6
+  real LINE decoders):** `moveq #-5,d2 ; add.l d2,d0 ; sub.l d3,d0 ; and.l d4,d0 ;
+  or.l d5,d0 ; eor.l d6,d1 ; muls.w d7,d1 ; cmp.l d1,d0 ; and.l d2,d2 ; rts`. **PASS
+  (observed):** the REAL-decoder-emitted block run under W^X gives `d0..d7` =
+  `12000feb 00000027 fffffffb 00000010 0000ffff 12000000 0000000a 00000003`, **byte-exact
+  equal to the independent interpreter** on all 16 D/A registers; `d2 == 0xFFFFFFFB`
+  (Emu68's REAL `moveq` sign-extend — generalising the `[J2]`/`[J4]`/`[J5b]` `imm<0x80`
+  shortcut); the final CCR `0x08` (N set, Z clear) matches the reference byte-exact; and a
+  **negative control** that corrupts the decoded opcode stream makes the REAL decoder emit
+  a different (valid) instruction so `d0` diverges (`12000fe9` vs `12000feb`) — proving the
+  asserts bite. Watchdog 10 s → `[J5c] FAIL`. `[J1]`–`[J5b]` + `apps68k` re-confirmed green.
+
+  *THE RE-HOSTING VERDICT (the key deliverable). RE-HOSTING WORKS — for the register /
+  ALU / control opcode class — and broad coverage of that class is now "vendor more
+  `M68k_LINE*.c` + extend the interpreter oracle".* The `[J5a]` finding ("the EA decode +
+  RA do not lift incrementally") stands, but `[J5c]` shows it is a **scoped** block, not a
+  wall: the three couplings each have a small hosted hook, and once hooked, Emu68's REAL
+  decoders + REAL condition-code derivation run correctly and verify byte-exact.
+  - **HOOK 2 — instruction fetch (`cache_read_16`).** Provided as a direct big-endian read
+    from the host instruction stream (`j5c_shims.c`); no Emu68 software ICache (`cache.c`)
+    is linked. **A deeper sub-finding than `[J5a]` named:** `cache_read_16(enum, uint32_t
+    address)` takes a **32-bit** address (bare-metal the 68k space is 32-bit and 1:1 with
+    low physical RAM), which **truncates** a 64-bit host pointer; the shim splices back the
+    constant high 32 bits of the stream's host base. Cheap, but it confirms the fetch path
+    is coupled to a ≤32-bit address space.
+  - **HOOK 3 — RA SR/CTX.** Provided as OUR register allocator (`j5c_ra.c`) implementing
+    the `RA_*` interface, with a **memory-backed CCR** (`ldr/str` from the `struct
+    j5c_m68k_state` via x0) instead of Emu68's `mrs/msr TPIDR_EL0`/`TPIDRRO_EL0`. The RA
+    interface turned out **thin enough to re-host** (Dn/An are always-mapped; only the
+    EL0-sysreg SR/CTX bodies needed replacing) — so the `[J5a]` "RA is OURS" conclusion is
+    realised as a clean ~200-line file that *drives the real decoders*, not a from-scratch
+    decoder.
+  - **HOOK 1 — sandbox memory / EA — STILL THE ONE REAL BLOCKER, now precisely bounded.**
+    The register/ALU/control opcodes touch **no 68k memory**, so the REAL EA decoder
+    (`EMIT_LoadFromEffectiveAddress` mode 0/1) lifts cleanly and `[J5c]` drives it as-is.
+    The **memory-EA modes** (`(An)`/`(An)+`/`-(An)`/`(d16,An)`/absolute/PC-rel) remain
+    blocked by TWO assumptions baked into the per-opcode emit, with **no hook inside it**:
+    (a) `An` is dereferenced as a raw host pointer (no `sandbox_base` add —
+    `M68k_EA.c:635-639` `ldr w,[x_An]`), and (b) **Emu68 runs the whole AArch64 CPU
+    big-endian** (`src/aarch64/start.c` sets `SCTLR.EE|E0E` under `EMU68_HOST_BIG_ENDIAN`),
+    so the emitted `ldr/str` are big-endian by hardware — which `macOS`/Apple-silicon EL0
+    cannot be. Fixing either needs **editing `M68k_EA.c` at the load/store site** (the
+    `[J5a]`/`[J5b]` hand-rolled sandbox-base + `REV` byteswap), i.e. surgery *inside* the
+    opcode emit, not at the unit boundary. Cost estimate to instead build OUR full decoder
+    from scratch: large (re-deriving the ISA-complete `M68k_LINE*` decode + per-opcode CCR
+    that Emu68 already encodes) — so the right path is **edit `M68k_EA.c`'s ~6 load/store
+    sites** (a disclosed MPL edit) and keep adopting everything else.
+  - **A FOURTH coupling `[J5c]` surfaced (portability, not runtime):** the decoder SOURCE is
+    not byte-portable to the macOS toolchain — Emu68 uses GNU `__attribute__((alias(...)))`
+    function aliases, which clang/Mach-O rejects outright. Bridged WITHOUT editing the
+    verbatim files by `emu68_darwinize.pl` (OURS), which rewrites the alias chains into
+    plain-C tail-call forwarders in build-dir copies; the quarantine stays byte-verbatim
+    (`diff` vs upstream is empty for every file). The `M68k_SR.c` all-16-line
+    `GetSRMask`/`INSNLength` fan-out is severed by stubbing `M68K_GetSRMask`→`SR_CCR` (the
+    conservative "compute all flags" answer).
+
+  *What broad coverage now requires (the one-line path).* For non-memory opcodes: **vendor
+  the remaining `M68k_LINE{0,4,5,6,E}.c` + `M68k_CC.c` (for `Bcc`/`Scc`/`DBcc` via
+  `EMIT_TestCondition`) + `M68k_Exception.c`, Exhibit-B-grep each, and extend
+  `j5c_interp.c`** — the hooks are already in place. For memory opcodes: additionally apply
+  the disclosed `M68k_EA.c` load/store edit (sandbox-base add + `REV` byteswap, the `[J5a]`
+  logic) so adopted `(An)`-class EA routes through the sandbox. Cross-region chaining +
+  `M68KTranslationUnit` `ICache`/`LRU` + the `MainLoop` funnel (PC in x18) + the real
+  `jsr`-through-vector decode wired to the `[J3]` recognition + library-calls-from-the-
+  program + a sandbox-backed allocator for out-of-sandbox return-pointers remain the
+  larger, separately-scoped adoption beyond `[J5c]`.
+
+- **`[J5d]` THE WHOLE apps68k CORPUS THROUGH THE JIT — IMPLEMENTED / GREEN.** `[J5d]`
+  walks the "one-line path" above to its conclusion: it broadens the `[J5c]` re-hosting
+  into a little **engine** that runs *all four* real vasm-assembled hunk binaries
+  (`mul`/`fact`/`arraysum`/`libcall`) through the REAL Emu68 decoders. Files:
+  `hosted/jit68k/{j5d_jit68k.h,j5d_engine.c,j5d_ea_helpers.c,j5d_interp.c,j5d_test.c}` +
+  the rewritten `apps68k/runner.c`; vendored `emu68/{M68k_LINE5.c,M68k_CC.c}` (NOTICE
+  updated, Exhibit-B re-grep clean); targets `make hosted-jit68k-j5d` (marker `[J5d]
+  PASS`) and `make hosted-jit68k-apps` (marker `[apps68k] PASS`, the REAL `.exe`
+  binaries). **PASS (observed, all four THROUGH THE JIT, byte-exact vs an independent
+  from-scratch interpreter `j5d_interp.c`):** `mul`→`d0=42` (3 blocks), `fact`→`d0=120`
+  (reg-to-reg `move.l` + `cmp.l` + nested loops, 5 blocks), `arraysum`→`d0=150`
+  (relocated `lea` DATA + `add.l (a0)+,d0` through the REAL EA decoder — 2 sandbox memory
+  accesses, byteswapped), `libcall`→`d0=0` with `AllocMem(256,MEMF_CLEAR)`/`PutChar('A')`/
+  `FreeMem(ptr,256)` observed via the REAL `[J3]` marshaller with the right args/returns
+  and `bytes_outstanding=0`. A corrupt-decode negative control makes the REAL decoder
+  emit a different valid instruction so `d0` diverges (asserts bite); watchdog → FAIL.
+
+  *The architecture — Emu68's own block/dispatch split, re-hosted.* `[J5c]` drove the
+  real decoders for ONE straight-line block; `[J5d]` turns that into a **per-basic-block
+  translator + OUR re-hosted dispatcher**. The translator drives the REAL decoders
+  (`EMIT_move`/`line5`/`line8`/`line9`/`lineB`/`lineC`/`lineD`/`moveq`) for *every*
+  register/ALU/flag/move/memory opcode — the heavy semantic work — up to a control-flow
+  terminator, emits the block into a MAP_JIT region, and caches it by entry PC (OUR
+  `[J5d]` ICache). The dispatcher (`j5d_engine.c`) is Emu68's `MainLoop` re-hosted: it
+  runs a block, then decodes the terminator in C to compute the next PC, looping until
+  the top-level `RTS`. This is exactly the spec's section (3) split — the LVO bridge +
+  the inter-block PC funnel are OURS, behind the translator; Emu68's blocks already exit
+  via RET to a central C MainLoop, so no block-to-block chaining had to be patched.
+  - **Memory EA (HOOK 1, the `[J5a]` blocker — now bridged).** The disclosed `M68k_EA.c`
+    edit is realised as a *build-dir* transform: `emu68_darwinize.pl --ea-sandbox`
+    rewrites each `(An)`-class load/store site in the build copy to call OUR `j5d_ea_mem`
+    emitter (`j5d_ea_helpers.c`) — `host = sandbox_base_adjust + An` (UXTW, from a fixed
+    callee-saved reg the prologue seeds) + `REV` byteswap + the post/pre index. The
+    **quarantine `M68k_EA.c` stays BYTE-VERBATIM** (`diff` vs upstream empty); only the
+    build copy is patched, and the patch is a pure call-substitution (KIND derived
+    mechanically from the original encoder name). `arraysum`'s `add.l (a0)+,d0` runs
+    through the REAL EA decoder this way.
+  - **`jsr`-through-vector → `[J3]` from the DECODED stream.** The dispatcher decodes
+    `jsr d16(A6)` (0x4EAE), maps the target to `(libbase, LVO n)` via the REAL
+    negative-offset rule `n=(libbase−target)/6` (`j3_vector_recognise`), and invokes the
+    registered bridge — which marshals the 68k regs into the native stub through the REAL
+    `[J3]` marshaller (`j3_build_marshal_thunk`). The `jsr` is decoded from the
+    instruction stream, not hand-constructed — the "library-calls-from-the-running-
+    program" item `[J3]` deferred.
+  - **What the dispatcher decodes itself (not re-hosted from LINE4/6).** `Bcc`/`BRA`
+    (8-bit), `JSR d16(A6)`, `LEA abs.l,An`, `RTS`. Re-hosting Emu68's LINE4/LINE6 faithful
+    (its REG_PC select + `M68K_PushReturnAddress` + `EMIT_LocalExit` branch-target model)
+    is entangled with `M68k_Translator.c`'s funnel — that funnel IS what our dispatcher
+    re-hosts, so for the corpus we decode these few control-flow ops in C (reading the
+    branch decision from the REAL CCR the real decoders produced). LINE4/LINE6 themselves
+    were therefore NOT vendored.
+
+  *What a BIGGER app would still need (honest debt beyond `[J5d]`).* A real return stack
+  for nested `bsr`/`jsr`/`rts` + computed `jmp(An)` + `bcc.W/.L` (the dispatcher's PC
+  model is currently flat); OUR own SR/exception model (a host SIGSEGV inside translated
+  code → a 68k bus/illegal/divide-by-zero vector, the SECOND mapping layer in Risks);
+  dirty-page SMC invalidation (`M68K_VerifyUnit`/CRC32 we did not re-host); the FPU
+  (`LINEF`) + privileged ISA; and a sandbox-backed allocator so a native call returning
+  memory *outside* the 32-bit sandbox is reachable by the 68k program. The `[J5d]` engine
+  is integer-user-mode, single-region-flat-PC, single-thread (R-JIT-THREAD) — enough for
+  the corpus and for the LoadSeg→RunCommand hook, not yet for an arbitrary Amiga binary.
+
+- **`[J5e]` BLOCK-SCOPED REGISTER ALLOCATOR — the "optimize" pass — IMPLEMENTED / GREEN.**
+  The `[J5d]` engine runs the corpus, but it bracketed *every* basic block with a FIXED
+  frame: a prologue loading **all 16** Dn/An from `struct j5d_m68k_state` and an epilogue
+  storing **all 16** back, unconditionally (32 state-struct `ldr`/`str` per block) no matter
+  what the block touched. `[J5e]` replaces that with a real **block-scoped allocator** that
+  keeps the 68k register file live in host registers across the block and minimises the
+  state-memory traffic at the frame. Files: `hosted/jit68k/j5e_test.c` (the measure/verify
+  driver) + the RA in `hosted/jit68k/j5c_ra.c` (liveness) + the minimal frame in
+  `hosted/jit68k/j5d_engine.c`; target `make hosted-jit68k-j5e` (marker `[J5e] PASS`).
+  **PASS (observed, the WHOLE corpus byte-exact AND a measured reduction):** AArch64 words
+  emitted **918 → 451 (−51%)**, state-struct `ldr`/`str` **512 → 45 (−91%)** across the four
+  programs; per program: mul 173→85 words / 96→8 state-accesses, fact 309→167 / 160→18,
+  arraysum 225→107 / 128→10, libcall 211→92 / 128→9. Every program's JIT register file +
+  sandbox memory + the libcall stub-call log stay byte-exact equal to the independent
+  interpreter (`j5d_interp.c`, OURS, no Emu68), and the corrupt-decode negative control
+  still bites — **correctness gates the marker, not the smaller instruction count**.
+
+  *The key finding — "RA is a perf pass, not correctness", confirmed concretely.* The REAL
+  Emu68 decoders ALREADY keep the architectural file in the fixed Emu68 host-register map
+  (D0–D7→w19–w26, A0–A4→w13–w17, A5–A7→w27–w29) across the whole block — `RA_MapM68kRegister`
+  returns the fixed reg and reg-to-reg ops emit directly against it, with **no per-op
+  `ldr`/`str` to the state struct inside the decoders** (verified: `M68k_EA.c` mode-0/1
+  register-direct, the `LINE*` ALU paths). So the per-block win is entirely at the FRAME:
+  load only what the block *reads* before writing, store back only what it *writes*.
+  - **Liveness/dirty tracking (OURS, in `j5c_ra.c`).** As the decoders run, the RA records
+    two 16-bit masks (bit i = Di for i<8, A(i−8) for i≥8): **live-in** (a register read via
+    `RA_MapM68kRegister`/`RA_CopyFromM68kRegister` *before* it was written this block) and
+    **dirty** (a register written via `RA_MapM68kRegisterForWrite` or `RA_SetDirtyM68kRegister`).
+    A "written-so-far" gate implements read-before-write so a read *after* an in-block write
+    does **not** become live-in (the value is already in the host reg). The masks are exposed
+    by `j5c_ra_get_masks`.
+  - **The read-before-write rule is the load-bearing correctness point.** A FULL `.L` write
+    (`moveq #imm,Dn`, `move.l #imm,Dn`, sign-extended `.W`/`.B`) goes through
+    `RA_MapM68kRegisterForWrite` with **no prior read** → NOT live-in → the prologue **skips
+    its load** (that load was pure waste). A PARTIAL `.W`/`.B` write (no sign-extend) must
+    preserve the upper bits, so the decoder maps it **for read first** (`bfi`/`bfxil`) → it
+    IS live-in (loaded) AND dirty (stored). A read-modify-write (`addq`, `add.l Dm,Dn`)
+    reads then dirties → live-in and dirty. The decoders are already written this way, so
+    the masks are exact without touching the MPL files.
+  - **The minimal frame (`j5d_engine.c`).** `translate_block` now emits the decoder body
+    into a temporary buffer FIRST (so the masks are complete — they are only final after the
+    last opcode), then composes: callee-saved preserve → seed x12 (sandbox base-adjust) →
+    **prologue loads only live-in regs** → body → **epilogue stores only dirty regs** →
+    callee-saved restore → `ret`. The body is position-independent (a `[J5d]` straight-line
+    block has no intra-block branches — branches are inter-block via the dispatcher), so the
+    body-buffer + `memcpy` after the prologue is sound. The AAPCS64 x19..x28 + x29/x30
+    preserve (the `[J4]` fix) is kept in full — cheap, off the per-op path, and keeps the
+    frame well-formed for any Dn/An set; the `[J5e]` win is the eliminated *state-struct*
+    traffic, which is exactly the per-op memory-traffic the optimize clause targets.
+
+  *SPILL POLICY at boundaries (the correctness contract).*
+  - **Block exit (RTS / fall-through / Bcc/BRA):** the epilogue stores all **dirty** regs to
+    `struct j5d_m68k_state` before returning to the dispatcher. A clean (read-only) register
+    was never modified in its host copy, so memory already holds its value — no store needed,
+    and the next block reloads it as a live-in if it reads it.
+  - **The `jsr`-through-vector library-call bridge (`[J3]`):** the block ENDS at the `jsr`
+    (it is a terminator, not inside the block), so the block's epilogue has already stored
+    every dirty reg to memory **before** the dispatcher invokes the bridge. The bridge
+    marshals the 68k argument registers **from the memory state**, which is therefore fully
+    consistent for *any* register at the call boundary. There is no partial-store hazard: a
+    register that carries an argument was either written in the block (dirty → stored) or
+    only loaded/untouched (memory already correct). The native return is written into
+    `st->d[0]` in memory, which the next block reloads as a live-in.
+  - **`(An)` memory access (which may alias code/data):** the access is emitted by OUR
+    sandbox EA helper (`j5d_ea_mem`), which dereferences `host_mem` directly — it does **not**
+    touch the state struct, so it cannot race the deferred register file. The An register
+    itself, when modified by `(An)+`/`-(An)`, is marked **dirty** by the REAL EA decoder's
+    `RA_SetDirtyM68kRegister`, so it is correctly stored at the block exit.
+
+  *What is still deferred (honest, named in `j5e_test.c`).* (i) **Cross-block register
+  caching:** today each block reloads its live-ins from memory even if the previous block
+  left them in the same host regs — because blocks exit through the C dispatcher (Emu68's
+  MainLoop model) and the host regs are not guaranteed preserved across that funnel. Caching
+  live registers across the dispatcher hop (or chaining hot blocks directly) is the next
+  optimization and pairs with the `[J5d]`-deferred cross-region chaining / block cache.
+  (ii) **Linear-scan spilling under register pressure:** not needed yet — there are enough
+  host callee-saved registers for the entire 68k file (8 Dn + 8 An), so the "all-live,
+  no-spill" allocation never runs out of registers. A future ABI that frees fewer host regs,
+  or FP/wide state, would need spill-under-pressure. The current RA is correct and minimal
+  for the integer file; it is a **perf pass layered on the already-correct `[J5d]` engine**.
 
 ## Risks
 
