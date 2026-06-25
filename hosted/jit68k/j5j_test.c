@@ -171,6 +171,17 @@ int main(void)
            s.blocks_translated, s.blocks_executed, s.block_cache_hits, s.insns_decoded,
            s.mem_accesses, s.lib_calls, s.arm_words_emitted);
     printf("    output stream: %d bytes (JIT) / %d bytes (oracle)\n", jlib.outlen, rlib.outlen);
+    /* [J5k] CROSS-REGION CHAINING telemetry: the deliverable. Before chaining, EVERY block
+     * execution round-tripped the C dispatcher (~42k). With chaining, hot blocks branch
+     * block->block past C, keeping the 68k register file live across the hop. */
+    printf("    [J5k] chaining: %u block executions, %u C-dispatcher round-trips, %u direct-chain\n"
+           "                    branches, %u edges linked, %u register memory-ops elided at chained\n"
+           "                    boundaries (was: all %u executions round-tripped C)\n",
+           s.blocks_executed, s.dispatcher_roundtrips, s.chain_branches_taken,
+           s.chain_links_patched, s.chain_spills_elided, s.blocks_executed);
+    printf("    [J5k] dispatcher round-trips %u -> %u (%.1f%% fewer via chaining)\n",
+           s.blocks_executed, s.dispatcher_roundtrips,
+           100.0 * (1.0 - (double)s.dispatcher_roundtrips / (double)s.blocks_executed));
     printf("    asserts: output-stream(JIT==oracle)=%s  regs=%s  sandbox-mem=%s  d0=%s  shape=%s  "
            "has '#'=%s  has ' '=%s -> %s\n",
            out_ok ? "byte-exact" : "DIVERGE", regs_ok ? "byte-exact" : "DIVERGE",

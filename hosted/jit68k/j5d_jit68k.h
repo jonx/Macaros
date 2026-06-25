@@ -176,6 +176,19 @@ typedef struct j5d_stats {
     /* [J5i] the exception / SR model. */
     uint32_t exceptions_dispatched; /* 68k exceptions vectored (TRAP/div0/illegal/bus)  */
     uint32_t rte_returns;           /* rte instructions executed (frame popped, resumed) */
+    /* [J5k] cross-region block chaining (direct AArch64 branches past the C dispatcher,
+     * with the 68k register file kept live across the hop). These count what the chaining
+     * optimization replaced: a block that ends in a chainable terminator (fall-through /
+     * BRA / Bcc / jmp abs.l) whose static target is translated branches DIRECTLY into the
+     * target's chain entry instead of returning to the C MainLoop. */
+    uint32_t dispatcher_roundtrips; /* block runs that RETURNED to the C dispatcher (the
+                                       quantity chaining reduces — was == blocks_executed) */
+    uint32_t chain_branches_taken;  /* direct block->block branches executed (no C hop)    */
+    uint32_t chain_links_patched;   /* lazy links resolved: a tail branch backpatched to a
+                                       now-translated target's chain entry                 */
+    uint32_t chain_spills_elided;   /* register-file stores SKIPPED at chained boundaries:
+                                       sum over chained hops of the dirty regs that did NOT
+                                       go through memory (kept live in host regs instead)  */
 } j5d_stats;
 void j5d_get_stats(j5d_stats *out);
 

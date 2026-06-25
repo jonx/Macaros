@@ -97,19 +97,97 @@ static const uint8_t reg_a[8] = { REG_A0, REG_A1, REG_A2, REG_A3, REG_A4, REG_A5
 
 #define J5D_BASEADJ_X  12u   /* x12 = sandbox base-adjust (host_mem - origin)        */
 
+/* [J5k] chaining scratch host regs for the inline Bcc condition eval + the patch-slot
+ * fallback. These are AArch64 caller-saved temporaries NOT in the 68k file map (D0..D7=
+ * w19..w26, A0..A4=w13..w17, A5..A7=w27..w29, CCR scratch=w4..w11), so using them in the
+ * tail cannot clobber any live 68k register. w0..w3 are free at the tail (the body's last
+ * act, RA_FlushCC, leaves no live scratch; w0 is Emu68's 1-shot flag scratch, dead here). */
+#define J5K_T0  2u
+#define J5K_T1  3u
+#define J5K_T2  6u
+#define J5K_T3  7u
+#define J5K_T4  8u
+#define J5K_T5  9u
+#define J5K_T6  10u  /* extra scratch: holds the CCR source for emit_cond_bool (must NOT
+                      * alias the V/C/Z/N/T/ONE regs that emit_cond_bool overwrites) */
+
 /* ================================ stats / trace ================================ */
 static j5d_stats g_stats;
+
+/* [J5k] total block-execution counter, bumped by an emitted ldr/add/str at EVERY block's
+ * CHAIN ENTRY (reached by both the cold fall-through and a chained `b` from a predecessor).
+ * So it counts total block runs; chain_branches_taken = this - dispatcher_roundtrips. Kept
+ * OUTSIDE struct j5d_m68k_state (the frozen seam) — a private engine global addressed by an
+ * immediate baked into the block. */
+static volatile uint64_t g_block_exec_count;
+
+/* [J5k] which cached block a chain actually ENDED at. When the C dispatcher calls block A
+ * and A's tail is linked to B (and B's to C, ...), the JIT'd code runs the whole chain past
+ * the dispatcher and only re-enters C at the first UNLINKED tail's epilogue. That terminal
+ * block's epilogue writes its own cache index here (an immediate baked at translate time), so
+ * the dispatcher decodes the TERMINAL block's terminator — not block A's. Without this the
+ * dispatcher would mis-handle the wrong terminator (the head's, not the tail's). */
+static volatile uint32_t g_chain_terminal_idx;
+
 void j5d_get_stats(j5d_stats *out) { *out = g_stats; }
+
+/* [J5k] fold the JIT-side exec counter into the public stats at run exit. blocks_executed is
+ * the TOTAL block runs (the JIT-emitted chain-entry bump counts cold AND chained entries);
+ * chain_branches_taken is the runs that arrived via a direct block->block branch (i.e. the
+ * runs that did NOT cost a C round-trip). chain_spills_elided is the register-file memory ops
+ * those chained hops removed: a chained hop A->B branches from A's tail straight into B's
+ * chain entry, SKIPPING A's epilogue 16-register store AND B's outer-prologue 16-register
+ * reload — 32 register memory ops per chained hop that never hit struct j5d_m68k_state. */
+static void finalize_stats(void)
+{
+    g_stats.blocks_executed = (uint32_t)g_block_exec_count;
+    g_stats.chain_branches_taken =
+        (g_stats.blocks_executed > g_stats.dispatcher_roundtrips)
+        ? (g_stats.blocks_executed - g_stats.dispatcher_roundtrips) : 0;
+    g_stats.chain_spills_elided = g_stats.chain_branches_taken * 32u;
+}
+
+/* Emit `*(uint64_t*)addr += 1` using two scratch host regs (caller guarantees they are dead
+ * here): materialize the 64-bit `addr` into `wa`'s X reg via movz/movk, ldr/add/str. */
+static uint32_t *emit_counter_bump(uint32_t *p, uint64_t addr, uint8_t ra, uint8_t rv)
+{
+    *p++ = mov64_immed_u16(ra, (uint16_t)(addr        & 0xffff), 0);
+    *p++ = movk64_immed_u16(ra, (uint16_t)((addr>>16) & 0xffff), 1);
+    *p++ = movk64_immed_u16(ra, (uint16_t)((addr>>32) & 0xffff), 2);
+    *p++ = movk64_immed_u16(ra, (uint16_t)((addr>>48) & 0xffff), 3);
+    *p++ = ldr64_offset(ra, rv, 0);     /* rv = *addr        */
+    *p++ = add64_immed(rv, rv, 1);      /* rv += 1           */
+    *p++ = str64_offset(ra, rv, 0);     /* *addr = rv        */
+    return p;
+}
 
 /* ============================ the [J5d] block ICache =========================== */
 /* One MAP_JIT region per distinct entry PC. The compiled block is a C function
- * `void block(struct j5d_m68k_state *st, uint64_t base_adjust)`. */
+ * `void block(struct j5d_m68k_state *st, uint64_t base_adjust)` entered at its OUTER
+ * entry (offset 0). [J5k] adds a second entry point — the CHAIN ENTRY — that a chaining
+ * predecessor branches to directly (see translate_block for the layout). */
 #define J5D_MAX_BLOCKS 256
+#define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
+
+/* [J5k] one chainable tail-branch slot inside a translated block. At translate time the
+ * slot holds a fall-back sequence that returns to the C dispatcher (st->pc = target_pc);
+ * once the target block is translated the slot's `b` word is BACKPATCHED to jump straight
+ * into the target's chain entry. `taken` distinguishes the two Bcc outcomes for stats. */
+typedef struct {
+    uint32_t  target_pc;    /* the 68k PC this tail transfers to (statically known)        */
+    uint32_t  slot_word;    /* word index into region.base of the BACKPATCHABLE `b` slot   */
+    uint8_t   linked;       /* 1 once backpatched to the target's chain entry             */
+} j5k_link;
+
 typedef struct {
     uint32_t   pc;          /* entry PC of this block         */
     uint32_t   end_pc;      /* PC of the terminator opcode    */
     jit_region region;      /* the MAP_JIT code               */
+    uint32_t   chain_off;   /* word offset of the CHAIN ENTRY (regs already live)         */
+    uint16_t   dirty_mask;  /* [J5k] which 68k regs this block writes (for spill accounting)*/
+    uint8_t    nlinks;      /* number of chainable tail slots (0,1,2)                      */
+    j5k_link   link[J5K_MAX_LINKS];
     int        live;
 } j5d_cached_block;
 static j5d_cached_block g_cache[J5D_MAX_BLOCKS];
@@ -280,16 +358,108 @@ static int bcc_taken(unsigned cc4, uint32_t ccr)
     }
 }
 
+/* ============================ [J5k] CROSS-REGION CHAINING ==========================
+ * A block whose terminator is a STATIC-TARGET control transfer can branch DIRECTLY to the
+ * target block (past the C dispatcher), keeping the 68k register file live in host regs.
+ * The chainable terminators are exactly those whose next PC is computable at translate time
+ * AND that do not touch the (dynamic) return stack / library bridge / exception model:
+ *   - BRA  (.B/.W/.L)           : one target  (always taken)
+ *   - jmp abs.l (0x4EF9)        : one target
+ *   - Bcc  (.B/.W/.L)           : two targets (taken PC, fall-through PC)
+ * NOT chainable (stay C-dispatcher round-trips, by design): rts (return stack pop), bsr/jsr
+ * abs.l + jsr/jmp (An) (push and/or computed target), jsr d16(A6) (library bridge), TRAP/
+ * ILLEGAL/divu0/rte (exception model), nop/lea (handled in C — rare, no win). The spill
+ * policy (docs [J5k]): regs stay live ONLY across a chained hop; EVERY dispatcher exit
+ * (incl. an unresolved chain link) stores the dirty file to struct j5d_m68k_state, so the
+ * memory-consistent-state boundaries (rts/library/exception/(An)) are unaffected. */
+
+/* Decode a chainable terminator at tpc into up to two (target_pc) entries + the condition
+ * field. Returns the number of targets (0 = not chainable), with targets[0] = the TAKEN /
+ * unconditional target and (for Bcc) targets[1] = the FALL-THROUGH target. `*cc4` is the
+ * 68k condition (>=2) for a Bcc, or 0/1 sentinel for BRA (unconditional). */
+static int chain_targets(const uint8_t *thost, uint32_t tpc, uint32_t targets[2], unsigned *cc4)
+{
+    uint16_t top = be16(thost);
+    if (top == 0x4EF9u) { targets[0] = be32(thost + 2); *cc4 = 0; return 1; }  /* jmp abs.l */
+    if ((top & 0xF000u) == 0x6000u) {                                           /* Bcc/BRA   */
+        unsigned c = (top >> 8) & 0xFu;
+        if (c == 0x1) return 0;                       /* BSR pushes -> dispatcher-owned       */
+        int8_t disp8 = (int8_t)(top & 0xFFu);
+        uint32_t base = tpc + 2, target, after;
+        if (disp8 == 0x00)            { int16_t d = be16s(thost + 2); target = (uint32_t)((int64_t)base + d); after = tpc + 4; }
+        else if ((uint8_t)disp8==0xFF){ int32_t d = (int32_t)be32(thost + 2); target = (uint32_t)((int64_t)base + d); after = tpc + 6; }
+        else                          { target = (uint32_t)((int64_t)base + disp8); after = tpc + 2; }
+        if (c == 0x0) { targets[0] = target; *cc4 = 0; return 1; }  /* BRA: 1 static target  */
+        targets[0] = target; targets[1] = after; *cc4 = c;          /* Bcc: taken + fall      */
+        return 2;
+    }
+    return 0;
+}
+
+/* [J5k] emit `w_dst = (cc4 condition taken ? nonzero : 0)` from the 68k CCR word in w_cc
+ * (Emu68-internal layout V=bit0,C=bit1,Z=bit2,N=bit3). VALIDATED against bcc_taken for all
+ * 14 conditions x 32 CCR values (the chaining condition eval must agree with the C decision
+ * the dispatcher fallback uses). Uses chaining scratch regs only (J5K_T*), never a 68k-file
+ * reg. Result is strictly 0/1. cc4 must be >= 2 (a real condition; BRA never calls this). */
+static uint32_t *emit_cond_bool(uint32_t *p, unsigned cc4, uint8_t w_cc, uint8_t w_dst)
+{
+    const uint8_t V = J5K_T0, C = J5K_T1, Z = J5K_T2, N = J5K_T3, T = J5K_T4, ONE = J5K_T5;
+    *p++ = movw_immed_u16(ONE, 1);
+    *p++ = ubfx(V, w_cc, 0, 1);
+    *p++ = ubfx(C, w_cc, 1, 1);
+    *p++ = ubfx(Z, w_cc, 2, 1);
+    *p++ = ubfx(N, w_cc, 3, 1);
+    switch (cc4) {
+        case 0x2: *p++ = orr_reg(T, C, Z, LSL, 0); *p++ = eor_reg(w_dst, T, ONE, LSL, 0); break; /* HI: !C&&!Z */
+        case 0x3: *p++ = orr_reg(w_dst, C, Z, LSL, 0); break;                                    /* LS: C||Z   */
+        case 0x4: *p++ = eor_reg(w_dst, C, ONE, LSL, 0); break;                                  /* CC: !C     */
+        case 0x5: *p++ = mov_reg(w_dst, C); break;                                               /* CS: C      */
+        case 0x6: *p++ = eor_reg(w_dst, Z, ONE, LSL, 0); break;                                  /* NE: !Z     */
+        case 0x7: *p++ = mov_reg(w_dst, Z); break;                                               /* EQ: Z      */
+        case 0x8: *p++ = eor_reg(w_dst, V, ONE, LSL, 0); break;                                  /* VC: !V     */
+        case 0x9: *p++ = mov_reg(w_dst, V); break;                                               /* VS: V      */
+        case 0xA: *p++ = eor_reg(w_dst, N, ONE, LSL, 0); break;                                  /* PL: !N     */
+        case 0xB: *p++ = mov_reg(w_dst, N); break;                                               /* MI: N      */
+        case 0xC: *p++ = eor_reg(T, N, V, LSL, 0); *p++ = eor_reg(w_dst, T, ONE, LSL, 0); break; /* GE: N==V   */
+        case 0xD: *p++ = eor_reg(w_dst, N, V, LSL, 0); break;                                    /* LT: N!=V   */
+        case 0xE: *p++ = eor_reg(T, N, V, LSL, 0); *p++ = orr_reg(T, T, Z, LSL, 0);
+                  *p++ = eor_reg(w_dst, T, ONE, LSL, 0); break;                                  /* GT         */
+        case 0xF: *p++ = eor_reg(T, N, V, LSL, 0); *p++ = orr_reg(w_dst, T, Z, LSL, 0); break;   /* LE         */
+        default:  *p++ = movw_immed_u16(w_dst, 0); break;
+    }
+    return p;
+}
+
 /* ====================== translate ONE straight-line basic block ================
  * From entry PC, drive the REAL decoders over the opcodes until (and excluding) the
  * first terminator. Emits the AArch64 into `out`; returns word count, sets *end_pc to
- * the terminator's PC. 0 + errbuf on a decode/emit error. */
+ * the terminator's PC. 0 + errbuf on a decode/emit error.
+ *
+ * [J5k] LAYOUT (two entry points + a chainable tail):
+ *   [0]            OUTER ENTRY (the C function pointer): save callee regs (incl. A0..A4 =
+ *                  w13..w17, which AAPCS treats as caller-saved temporaries), set x12/x1,
+ *                  then LOAD ALL 16 Dn/An from the state. Loading the full file (not just
+ *                  [J5e] live-in) establishes the chaining invariant "all 16 regs live at a
+ *                  chain entry"; cold entries are rare next to chained hops.
+ *   [chain_off]    CHAIN ENTRY: a chaining predecessor `b`-branches here. The 16 regs are
+ *                  already live (left by the predecessor), x1=state, x12=base_adjust; CCR is
+ *                  in memory (the predecessor flushed it), reloaded by the body's RA_GetCC.
+ *   [body]         the REAL Emu68 decoders + RA_FlushCC + EMIT_FlushPC.
+ *   [tail]         for a chainable terminator (BRA/jmp abs.l/Bcc): the inline condition eval
+ *                  (Bcc) + the BACKPATCHABLE branch slot(s), each initially a `b` to EPI.
+ *   [EPI]          EPILOGUE: store the DIRTY 68k regs to the state, restore callee, ret to
+ *                  the C dispatcher (the universal fallback: unresolved link, rts, library,
+ *                  exception, computed jump — every memory-consistent boundary).
+ * The chain metadata (chain_off, the link slots' word offsets + target PCs, the dirty mask)
+ * is returned via *cb so the dispatcher can lazily link + account the spills. */
 static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
-                                uint32_t *end_pc, char *errbuf, unsigned errlen)
+                                uint32_t *end_pc, j5d_cached_block *cb, unsigned self_idx,
+                                char *errbuf, unsigned errlen)
 {
 #define TFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s @pc=%08x", (msg), pc); return 0; } while (0)
     j5c_ra_reset();
     _pc_rel = 0;
+    cb->chain_off = 0; cb->nlinks = 0; cb->dirty_mask = 0;
 
     /* ========================== [J5e] THE BLOCK-SCOPED REGISTER ALLOCATOR ==========
      * Emu68's REAL decoders already keep the 68k file in fixed host regs across the whole
@@ -364,49 +534,122 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     bp = EMIT_FlushPC(bp);
     unsigned body_words = (unsigned)(bp - body);
 
-    /* Now the live-in/dirty masks are complete. Compose the minimal frame. */
+    /* Now the live-in/dirty masks are complete. Compose the frame. */
     uint16_t live = 0, dirty = 0;
     j5c_ra_get_masks(&live, &dirty);
+    cb->dirty_mask = dirty;
+
+    /* Decode the terminator: is it a CHAINABLE static-target transfer? */
+    const uint8_t *thost = sb->host_mem + (*end_pc - sb->origin);
+    uint32_t ctgt[2]; unsigned ccc4 = 0;
+    int ntargets = ((uint64_t)*end_pc + 2 <= (uint64_t)sb->origin + sb->size)
+                   ? chain_targets(thost, *end_pc, ctgt, &ccc4) : 0;
 
     uint32_t *ptr = out;
 
-    /* AAPCS64 callee-saved preserve (the [J4]/[J5c] fix): w19..w28 + x29/x30. We keep the
-     * FULL preserve set (cheap, 6 stp/6 ldp, off the per-op hot path) so the frame is
-     * always well-formed regardless of which Dn/An the block uses; the [J5e] win is the
-     * eliminated STATE-STRUCT traffic (the prologue/epilogue ldr/str below), which is what
-     * the per-op memory-traffic measurement targets. */
+    /* ---- OUTER ENTRY: AAPCS64 callee-saved preserve. [J5k]: the preserve set now INCLUDES
+     * w13..w17 (A0..A4) — they are AAPCS caller-saved temporaries, so without saving them the
+     * chained-register invariant ("all 16 live across a hop") would be unsafe the moment any
+     * non-leaf host code ran between blocks; saving them makes the whole 68k file genuinely
+     * callee-preserved across this block's activation. w19..w28 + x29/x30 as before. */
     *ptr++ = stp64_preindex(31, 29, 30, -16);
     *ptr++ = stp64_preindex(31, 19, 20, -16);
     *ptr++ = stp64_preindex(31, 21, 22, -16);
     *ptr++ = stp64_preindex(31, 23, 24, -16);
     *ptr++ = stp64_preindex(31, 25, 26, -16);
     *ptr++ = stp64_preindex(31, 27, 28, -16);
+    *ptr++ = stp64_preindex(31, 13, 14, -16);   /* [J5k] A0,A1 */
+    *ptr++ = stp64_preindex(31, 15, 16, -16);   /* [J5k] A2,A3 */
+    *ptr++ = stp64_preindex(31, 17, 18, -16);   /* [J5k] A4, x18(REG_PC scratch) — keep pair */
 
     /* The block is entered as block(state in x0, base_adjust in x1).  [J5g]: the STATE
-     * pointer is kept in x1 for the whole block (NOT x0), because Emu68's decoders hardcode
-     * w0 as a 1-shot flag-extraction scratch (cset w0,cond -- EMIT_BTST / EMIT_ASx). So:
-     * save base_adjust (x1) into x12 FIRST, then move the state (x0) into x1.  Order
-     * matters: base_adjust must be banked before x1 is overwritten. */
+     * pointer is kept in x1 for the whole block (NOT x0). Save base_adjust (x1) into x12
+     * FIRST, then move the state (x0) into x1. */
     *ptr++ = mov64_reg(J5D_BASEADJ_X, 1 /*x1 = base_adjust*/);   /* x12 := base_adjust */
     *ptr++ = mov64_reg(1 /*x1*/, 0 /*x0 = state*/);              /* x1  := state ptr   */
 
-    /* [J5e] PROLOGUE: load ONLY the live-in 68k regs (read before written) from the
-     * state (x1). A register the block writes before reading (e.g. moveq #imm,Dn) is NOT
-     * loaded — its prologue ldr was pure waste in the naive frame. */
-    unsigned reg_loads = 0;
-    for (int i = 0; i < 8; i++) if (live & (1u << i))      { *ptr++ = ldr_offset(1, reg_d[i], J5D_OFF_D(i)); reg_loads++; }
-    for (int i = 0; i < 8; i++) if (live & (1u << (i+8)))  { *ptr++ = ldr_offset(1, reg_a[i], J5D_OFF_A(i)); reg_loads++; }
+    /* [J5k] OUTER PROLOGUE: load ALL 16 Dn/An from the state (x1) — the cold-entry full load
+     * that makes the chain entry's "all 16 live" precondition hold. (A chained predecessor
+     * skips this entirely, branching to chain_off below with the file already live.) */
+    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_d[i], J5D_OFF_D(i));
+    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_a[i], J5D_OFF_A(i));
+
+    /* ---- CHAIN ENTRY: regs already live (cold path loaded them just above; chained path was
+     * left them live by the predecessor). x2/x3 are dead here (the body has not run; the EA
+     * helpers' x2/x3 scratch use is later), so the execution-counter bump can use them. */
+    cb->chain_off = (uint32_t)(ptr - out);
+    ptr = emit_counter_bump(ptr, (uint64_t)(uintptr_t)&g_block_exec_count, J5K_T0, J5K_T1);
 
     /* The decoder body (every register/ALU/flag/move/memory opcode, REAL Emu68 decoders). */
     memcpy(ptr, body, body_words * sizeof(uint32_t));
     ptr += body_words;
 
-    /* [J5e] EPILOGUE: store back ONLY the dirty 68k regs (written by the block). A register
-     * the block only read keeps the value the caller's state already holds, so no store. */
-    unsigned reg_stores = 0;
-    for (int i = 0; i < 8; i++) if (dirty & (1u << i))     { *ptr++ = str_offset(1, reg_d[i], J5D_OFF_D(i)); reg_stores++; }
-    for (int i = 0; i < 8; i++) if (dirty & (1u << (i+8))) { *ptr++ = str_offset(1, reg_a[i], J5D_OFF_A(i)); reg_stores++; }
+    /* ---- [J5k] CHAINABLE TAIL: the inline condition (Bcc) + backpatchable branch slot(s),
+     * each emitted initially as `b EPI` (a fall to the epilogue = the C-dispatcher return).
+     * The dispatcher backpatches a slot to `b <target chain entry>` once the target exists. */
+    if (ntargets == 1) {
+        /* BRA / jmp abs.l: one unconditional slot. */
+        cb->link[0].target_pc = ctgt[0];
+        cb->link[0].slot_word = (uint32_t)(ptr - out);
+        cb->link[0].linked    = 0;
+        cb->nlinks = 1;
+        *ptr++ = b(0); /* placeholder: patched in finalize to `b EPI` (relative) below */
+    } else if (ntargets == 2) {
+        /* Bcc: the CCR is in MEMORY at the tail (the body's RA_FlushCC stored it). Load it
+         * into a chaining scratch reg, evaluate the 68k condition inline into J5K_T2 (this
+         * is byte-for-byte the bcc_taken decision the C fallback uses — VALIDATED), then:
+         *   cbz w_dst, S_fall     ; not taken -> fall slot
+         *   S_taken: b EPI        ; (patched -> b taken.chain_entry)
+         *   S_fall:  b EPI        ; (patched -> b fall.chain_entry)
+         * On the TAKEN path the cbz falls through to S_taken; on the NOT-taken path it jumps
+         * to S_fall (the next-but-one word). */
+        *ptr++ = ldr_offset(1, J5K_T6, J5D_OFF_CCR);          /* w10 = CCR (distinct from the
+                                                               * V/C/Z/N/T/ONE scratch below) */
+        ptr = emit_cond_bool(ptr, ccc4, J5K_T6, J5K_T2);      /* J5K_T2 = taken?1:0          */
+        *ptr++ = cbz(J5K_T2, 2);                              /* not taken -> S_fall (+2 wd) */
+        cb->link[0].target_pc = ctgt[0];                      /* TAKEN target                */
+        cb->link[0].slot_word = (uint32_t)(ptr - out);
+        cb->link[0].linked    = 0;
+        *ptr++ = b(0);                                        /* S_taken (patched to b EPI)  */
+        cb->link[1].target_pc = ctgt[1];                      /* FALL-THROUGH target         */
+        cb->link[1].slot_word = (uint32_t)(ptr - out);
+        cb->link[1].linked    = 0;
+        *ptr++ = b(0);                                        /* S_fall  (patched to b EPI)  */
+        cb->nlinks = 2;
+    }
 
+    /* ---- EPILOGUE (EPI): store back the 68k file to the state, then restore callee, ret.
+     * SPILL POLICY (the correctness-critical point of [J5k]): store ALL 16 Dn/An, not just
+     * this block's dirty set. Reason — a chain A->...->Z reaches EXACTLY ONE epilogue (Z's);
+     * the intermediate blocks' epilogues are jumped over. The 68k file mutated by ANY block
+     * in the chain is live in the host regs, but Z's `ldp` is about to restore those host
+     * regs to the values the chain's HEAD (A) saved on entry from C. So Z must flush the WHOLE
+     * file to st->* BEFORE the ldp, or a register written upstream (and not by Z) would be
+     * lost. Storing all 16 makes st->* memory-consistent at every dispatcher exit regardless
+     * of chain history — which is exactly what the rts / library bridge / exception / (An)
+     * boundaries require. (The CCR is already memory-consistent: each block's body flushes it
+     * via RA_FlushCC before the tail, so the last block in the chain left it current.) */
+    uint32_t epi_word = (uint32_t)(ptr - out);
+    /* [J5k] record THIS block as the chain-terminal block (its index, baked as an immediate),
+     * so the dispatcher decodes this block's terminator after a chained run, not the head's.
+     * x2/x3 are dead here (body + tail finished). */
+    *ptr++ = mov64_immed_u16(J5K_T0, (uint16_t)(self_idx & 0xffff), 0);
+    {
+        uint64_t a = (uint64_t)(uintptr_t)&g_chain_terminal_idx;
+        *ptr++ = mov64_immed_u16(J5K_T1, (uint16_t)(a        & 0xffff), 0);
+        *ptr++ = movk64_immed_u16(J5K_T1, (uint16_t)((a>>16) & 0xffff), 1);
+        *ptr++ = movk64_immed_u16(J5K_T1, (uint16_t)((a>>32) & 0xffff), 2);
+        *ptr++ = movk64_immed_u16(J5K_T1, (uint16_t)((a>>48) & 0xffff), 3);
+        *ptr++ = str_offset(J5K_T1, J5K_T0, 0);   /* g_chain_terminal_idx = self_idx (32-bit) */
+    }
+    unsigned reg_stores = 0;
+    for (int i = 0; i < 8; i++) { *ptr++ = str_offset(1, reg_d[i], J5D_OFF_D(i)); reg_stores++; }
+    for (int i = 0; i < 8; i++) { *ptr++ = str_offset(1, reg_a[i], J5D_OFF_A(i)); reg_stores++; }
+    (void)dirty;
+
+    *ptr++ = ldp64_postindex(31, 17, 18, 16);   /* [J5k] restore A4,x18 */
+    *ptr++ = ldp64_postindex(31, 15, 16, 16);   /* [J5k] A2,A3 */
+    *ptr++ = ldp64_postindex(31, 13, 14, 16);   /* [J5k] A0,A1 */
     *ptr++ = ldp64_postindex(31, 27, 28, 16);
     *ptr++ = ldp64_postindex(31, 25, 26, 16);
     *ptr++ = ldp64_postindex(31, 23, 24, 16);
@@ -415,10 +658,18 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     *ptr++ = ldp64_postindex(31, 29, 30, 16);
     *ptr++ = ret();
 
-    /* [J5e] metrics: per-block state-struct traffic, before vs after. */
-    g_stats.state_ldrstr_naive += 32;                       /* old: 16 loads + 16 stores  */
-    g_stats.state_ldrstr_ra    += reg_loads + reg_stores;   /* new: live-in + dirty        */
-    g_stats.reg_loads_emitted  += reg_loads;
+    /* Resolve every chain slot's INITIAL word to `b EPI` (a relative branch to the epilogue).
+     * A B's imm26 is the signed word distance (target - slot). EPI is always AFTER the slot. */
+    for (unsigned k = 0; k < cb->nlinks; k++) {
+        int32_t d = (int32_t)epi_word - (int32_t)cb->link[k].slot_word;
+        out[cb->link[k].slot_word] = b((uint32_t)d & 0x3ffffffu);
+    }
+
+    /* [J5e] metrics: per-block state-struct traffic (the dirty-store half is what survives;
+     * the full-file load at the cold outer entry is rare relative to chained hops). */
+    g_stats.state_ldrstr_naive += 32;
+    g_stats.state_ldrstr_ra    += 16 + reg_stores;          /* full load + dirty stores    */
+    g_stats.reg_loads_emitted  += 16;
     g_stats.reg_stores_emitted += reg_stores;
 
     return (unsigned)(ptr - out);
@@ -436,7 +687,11 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     uint32_t staging[8192];
     uint32_t end_pc = pc;
     unsigned long ea_before = g_j5d_ea_emits;
-    unsigned nwords = translate_block(sb, pc, staging, &end_pc, errbuf, errlen);
+    j5d_cached_block tmp; memset(&tmp, 0, sizeof tmp);
+    /* translate into a temp cb (chain metadata is region-relative word offsets, so it stays
+     * valid after the staging->MAP_JIT memcpy below). self_idx = g_cache_n (this block's slot
+     * index, baked into its epilogue so the dispatcher can identify a chain's terminal block). */
+    unsigned nwords = translate_block(sb, pc, staging, &end_pc, &tmp, (unsigned)g_cache_n, errbuf, errlen);
     if (nwords == 0) return NULL;
     g_stats.mem_accesses += (uint32_t)(g_j5d_ea_emits - ea_before);
     if (nwords > sizeof(staging)/sizeof(staging[0])) { if (errbuf) snprintf(errbuf, errlen, "emit overflow"); return NULL; }
@@ -451,10 +706,54 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     jit_finalize(&b->region, b->region.base, nwords * sizeof(uint32_t));
 
     b->pc = pc; b->end_pc = end_pc; b->live = 1;
+    b->chain_off  = tmp.chain_off;     /* [J5k] carry the chain metadata into the cache slot */
+    b->dirty_mask = tmp.dirty_mask;
+    b->nlinks     = tmp.nlinks;
+    for (unsigned k = 0; k < tmp.nlinks; k++) b->link[k] = tmp.link[k];
     g_cache_n++;
     g_stats.blocks_translated++;
     g_stats.arm_words_emitted += nwords;
     return b;
+}
+
+/* ============================ [J5k] LAZY LINKING / BACKPATCH ======================
+ * Patch src->link[k]'s `b` slot to jump straight into tgt's CHAIN ENTRY (a cross-region
+ * direct branch past the C dispatcher). A64 `b` reaches +-128 MiB (signed 26-bit word
+ * offset); if the two MAP_JIT regions are farther apart the slot stays its fall-to-EPI
+ * default and the edge keeps routing through C — correctness is never reachability-gated.
+ * The patch is one word inside a pthread_jit write window + an i-cache invalidate of that
+ * word (R-JIT-WRITE/R-JIT-ICACHE). Returns 1 if it linked, 0 if left unlinked. */
+static int try_link(j5d_cached_block *src, unsigned k, j5d_cached_block *tgt)
+{
+    if (src->link[k].linked) return 1;
+    uint32_t *slot = (uint32_t *)src->region.base + src->link[k].slot_word;
+    uint32_t *dst  = (uint32_t *)tgt->region.base + tgt->chain_off;
+    int64_t  word_off = (int64_t)(dst - slot);                 /* signed word distance        */
+    if (word_off >  ((int64_t)1 << 25) - 1 ||                  /* out of B's +-128 MiB range  */
+        word_off < -((int64_t)1 << 25)) return 0;
+    jit_write_begin(&src->region);
+    *slot = b((uint32_t)((int32_t)word_off) & 0x3ffffffu);
+    jit_write_end(&src->region);
+    jit_finalize(&src->region, slot, sizeof(uint32_t));
+    src->link[k].linked = 1;
+    g_stats.chain_links_patched++;
+    return 1;
+}
+
+/* After a block returned to the dispatcher with a chainable terminator, the dispatcher has
+ * computed the next PC. If that PC is one of the block's chain targets and its block exists,
+ * link the edge so the NEXT pass branches directly (and accounts the spills the chained hop
+ * will elide: the source's dirty regs that no longer round-trip through memory). */
+static void link_if_resolved(j5d_sandbox *sb, j5d_cached_block *src, uint32_t next_pc)
+{
+    (void)sb;
+    if (!src || src->nlinks == 0) return;
+    for (unsigned k = 0; k < src->nlinks; k++) {
+        if (src->link[k].linked || src->link[k].target_pc != next_pc) continue;
+        j5d_cached_block *tgt = cache_find(next_pc);
+        if (!tgt) return;                 /* not translated yet — link on a later pass        */
+        try_link(src, k, tgt);
+    }
 }
 
 /* ============================ the real 68k return stack =======================
@@ -501,6 +800,7 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 {
 #define RFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg)); return 1; } while (0)
     memset(&g_stats, 0, sizeof(g_stats));
+    g_block_exec_count = 0;                         /* [J5k] reset the JIT-side exec counter */
     st->a[6] = a6_libbase;                          /* A6 = library base (AmigaOS)  */
 
     /* Seed the return stack: a7 = top of sandbox (16-byte aligned), recorded as the
@@ -551,10 +851,17 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         st->pc = pc;
         if (getenv("J5G_TRACE"))      /* opt-in per-block PC trace (debug aid, off by default) */
             fprintf(stderr, "[blk] pc=%08x end=%08x\n", pc, b->end_pc);
+        /* [J5k] enter the block at its OUTER entry. If its tail was already linked to a cached
+         * successor, the JIT'd code branches block->block past this dispatcher (counted by the
+         * chain-entry exec bump), and only RE-ENTERS C at the end of the chain — so one C call
+         * here may run a whole CHAIN of blocks. */
+        g_chain_terminal_idx = (uint32_t)(b - g_cache);   /* default: no chaining ran          */
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
-        g_stats.blocks_executed++;
+        g_stats.dispatcher_roundtrips++;             /* [J5k] one C-dispatcher round-trip      */
 
-        /* (3): decode the terminator in C and take the next PC. */
+        /* (3): the chain may have run past `b`; the TERMINAL block's epilogue recorded its own
+         * index. Decode the TERMINAL block's terminator (not the head's) and take the next PC. */
+        b = &g_cache[g_chain_terminal_idx];
         uint32_t tpc = b->end_pc;
         if (tpc + 2 > sb->origin + sb->size) RFAIL("terminator pc out of sandbox");
         const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
@@ -563,6 +870,7 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         if (top == 0x4E75u) {                        /* rts -> POP the return stack */
             if (st->a[7] >= initial_sp) {            /* back at the initial SP: exit */
                 *exit_d0 = st->d[0];
+                finalize_stats();                    /* [J5k] derive chaining metrics         */
                 return 0;
             }
             uint32_t ret;
@@ -736,6 +1044,13 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         else {
             RFAIL("unknown terminator opcode");
         }
+
+        /* [J5k] LAZY LINK: this block ended in a chainable terminator (BRA/Bcc/jmp abs.l) and
+         * we just computed the next PC. If the successor block is translated, backpatch this
+         * block's tail slot to branch directly into it, so the NEXT pass over this edge skips
+         * the C round-trip and keeps the register file live. No-op for non-chainable
+         * terminators (b->nlinks==0: rts/jsr/library/computed-jump/exception). */
+        link_if_resolved(sb, b, pc);
     }
 #undef RFAIL
 }

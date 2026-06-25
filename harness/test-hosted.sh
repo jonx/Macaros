@@ -37,6 +37,7 @@ ROWS=(
   "J5h X-bit multi-precision   : hosted-jit68k-j5h"
   "J5i 68k exception/SR model  : hosted-jit68k-j5i"
   "J5j Mandelbrot capstone     : hosted-jit68k-j5j"
+  "J5k cross-region chaining   : hosted-jit68k-j5k"
   "apps68k real 68k programs  : hosted-jit68k-apps"
   "D1 cocoa/metal present     : hosted-cocoametal"
   "ABI cocoametal dylib seam  : cocoametal-abi"
@@ -44,6 +45,8 @@ ROWS=(
   "D2t cocoametal threading   : cocoametal-d2t"
   "D4D5 cocoametal input pump  : cocoametal-input"
   "SET cocoametal settings    : cocoametal-settings"
+  "FS cocoametal fullscreen   : cocoametal-fullscreen"
+  "LIVE cocoametal live present : cocoametal-livedraw"
 )
 
 mkdir -p run

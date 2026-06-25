@@ -302,8 +302,16 @@ spec.md Risks "Endianness / 32-bit sandbox".
   addressing modes, real condition codes.
 - A PC-driven dispatcher with a **real 68k return stack** (nested `bsr`/`jsr`/`rts`,
   computed `jmp(An)`/`jsr(An)`, full `Bcc`/`BRA`/`BSR` widths) over a PC-keyed block
-  cache (`[J5f]`); a block-scoped register allocator that cut emitted words ~51%
-  (`[J5e]`).
+  cache (`[J5f]`); a block-scoped register allocator (`[J5e]`).
+- **Cross-region block chaining + cross-block register caching** (`[J5k]`): static-target
+  terminators (fall-through/`BRA`/`jmp abs.l`/`Bcc`) chain block→block with **direct
+  AArch64 branches past the C dispatcher** (lazy backpatch/linking), with the 68k register
+  file **pinned live in host regs across the hop** — the file spills to `struct M68KState`
+  ONLY at a dispatcher boundary (`rts`/the `[J3]` LVO bridge/exception/computed jump). On the
+  Mandelbrot this cut C-dispatcher round-trips **41 757 → 1 728 (95.9 % fewer)**, byte-exact.
+  **This is entirely INTERNAL to the engine's block dispatcher — it does NOT touch this seam:**
+  the `jit_region` API, the `struct M68KState` field layout, the `[J3]` LVO-call marshalling
+  contract, and the `[J5i]` exception/SR model are all unchanged (`[J5k]` is below them).
 - The **LVO-call bridge** decoded from a real `jsr` stream into a stub `exec`
   (`[J3]`, `[J5d]`).
 - The **68k exception/SR model** + the `graft/cpu_aarch64.h` seam stated (`[J5i]`).

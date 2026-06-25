@@ -186,11 +186,14 @@ The lifted files that we *do* edit stay MPL and are disclosed (banner).
   instruction cap `var_EMU68_M68K_INSN_DEPTH` (`JIT_CONTROL`-tunable, ≤255). Cached in
   `struct M68KTranslationUnit { mt_M68kAddress; mt_ARMEntryPoint; mt_CRC32; mt_ARMCode[]; … }`
   in a PC-keyed hash table `ICache[]` + an `LRU` list.
-- **Exit is a central-dispatcher RET, no chaining.** A block ends with `bx_lr()` after the
-  epilogue flushes live state (`EMIT_FlushPC`, `RA_StoreDirtyM68kRegs`, `RA_StoreCC`).
-  `MainLoop` calls the block via a C function pointer (`mt_ARMEntryPoint`), then re-reads
-  the m68k PC and loops. The only intra-block "chain" is a self-loop guarded by a
-  `cbz ctx->INT` interrupt poll. **This single funnel is our intercept point** (§3).
+- **Exit is a central-dispatcher RET, no chaining** *(in Emu68 master; OUR engine adds chaining
+  in `[J5k]`).* A block ends with `bx_lr()` after the epilogue flushes live state
+  (`EMIT_FlushPC`, `RA_StoreDirtyM68kRegs`, `RA_StoreCC`). `MainLoop` calls the block via a C
+  function pointer (`mt_ARMEntryPoint`), then re-reads the m68k PC and loops. The only intra-block
+  "chain" is a self-loop guarded by a `cbz ctx->INT` interrupt poll. **This single funnel is our
+  intercept point** (§3). *(`[J5k]` keeps this RET funnel as the fallback but adds direct block→
+  block branches past it for static-target terminators, with the register file pinned across the
+  hop — see the `[J5k]` bullet.)*
 - **Register state at the funnel** (Emu68's fixed map, from
   `internals/RegisterMapping.html`, cross-checked against the `mrs`/`msr` encodings in
   source `[EMU68]`): m68k D0–D7 → W19–W26, A0–A4 → W13–W17, A5–A7 → W27–W29, **PC → x18
@@ -1300,6 +1303,99 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   code. The single coverage delta is the immediate-source ALU oracle forms above. The larger
   debt (cross-region chaining, SMC invalidation, the FPU/privileged ISA, the boot-gated real
   AROS library env) is unchanged from `[J5i]`.
+
+- **`[J5k]` CROSS-REGION BLOCK CHAINING + CROSS-BLOCK REGISTER CACHING — IMPLEMENTED / GREEN.**
+  The perf-maturity step: chain cached blocks with **direct AArch64 branches past the C
+  dispatcher**, and keep the 68k register file **live in host regs across the hop** instead of
+  storing-then-reloading through `struct j5d_m68k_state`. This is the `[J5d]`/`[J5e]`/`[J5j]`-
+  deferred "cross-region chaining / block cache" + "cross-block register caching" debt, now paid.
+  Files: `hosted/jit68k/j5d_engine.c` (the chaining engine — OURS, below the seam) +
+  `hosted/jit68k/j5k_test.c` (the chain-heavy measure/verify driver) + the stat fields in
+  `hosted/jit68k/j5d_jit68k.h`; target `make hosted-jit68k-j5k` (marker `[J5k] PASS`, watchdog
+  20 s), added to `harness/test-hosted.sh`. **PASS (observed):** the Mandelbrot (`[J5j]`)
+  renders **byte-identically** to the independent interpreter (PutChar stream 1690 bytes, final
+  register file, full sandbox memory all byte-exact; `d0==0`; the negative control bites), while
+  the **C-dispatcher round-trips collapse from 41 757 (every block execution) to 1 728 — 95.9 %
+  fewer**, replaced by **40 029 direct block→block chain branches** over **21 lazily-linked
+  edges**, **eliding 1 280 928 register memory-ops** at the chained boundaries. The whole corpus
+  (`mul`/`fact`/`arraysum`/`libcall`/`sumsq`/`bubsort`/`mp64`/`j5i`/`mandel` + the `[J5*]`
+  standalone tests) stays byte-exact; `[J1]`–`[J5j]` + `apps68k` re-confirmed green.
+
+  *The chaining scheme (two-entry blocks + lazy linking).* Each cached block gets two entry
+  points: the **outer entry** (the C function-pointer target — saves the callee frame, loads ALL
+  16 Dn/An from memory) and, just after that full load, the **chain entry** (a chaining
+  predecessor `b`-branches here with the file already live, `x1`=state, `x12`=base-adjust). A
+  block whose terminator is a **static-target** control transfer — **fall-through / BRA / `jmp
+  abs.l` / Bcc** — emits a **backpatchable tail branch** (each slot initially a `b` to the block's
+  own epilogue = the C-dispatcher return). The first time the edge is taken and the target block
+  exists, the dispatcher **lazily links** the slot to a cross-region `b` into the target's chain
+  entry (a single word patched inside a `pthread_jit` write window + an i-cache invalidate of that
+  word); thereafter the JIT'd code runs block→block **past C**. A Bcc emits an **inline 68k
+  condition evaluation** (the CCR read from memory, in Emu68's internal C/V-swapped layout) into a
+  cbz + two slots (taken-target, fall-through-target); the inline evaluator was **validated
+  exhaustively against the dispatcher's `bcc_taken` for all 14 conditions × 32 CCR values** before
+  wiring, so the inline decision and the C fallback always agree. `b` reaches ±128 MiB; if two
+  MAP_JIT regions are farther apart the slot stays its fall-to-dispatcher default — **correctness
+  is never reachability-gated.** Non-static terminators (`rts`, `bsr`/`jsr abs.l`, `jsr`/`jmp
+  (An)`, the `jsr d16(A6)` library bridge, TRAP/illegal/divu0/`rte`) are **NOT** chained — they
+  stay C-dispatcher round-trips by design (the return stack, the `[J3]` bridge, and the `[J5i]`
+  exception model all live in the dispatcher). A chain that runs A→…→Z re-enters C only at Z's
+  epilogue; Z records its own cache index (baked as an immediate) in an engine global so the
+  dispatcher decodes the **terminal** block's terminator, not the head's.
+
+  *SPILL POLICY at chained boundaries (the correctness-critical contract).* The 68k integer file
+  (D0–D7, A0–A7) is **pinned in the fixed Emu68 host-register map** (`w19..w26` / `w13..w17,
+  w27..w29`) across a chained region — the same fixed map the decoders already use for the whole
+  translation unit. To make that map genuinely callee-preserved across the region, the block frame
+  now **also saves `w13..w17` (A0–A4)** (AAPCS caller-saved temporaries) alongside `w19..w28` +
+  `x29/x30`. The spill rules:
+  - **Across a chained hop A→B (`b` past the dispatcher):** the file is **NOT** spilled. A's tail
+    branches straight into B's chain entry; A's epilogue store-16 and B's prologue load-16 are
+    both skipped — 32 register memory-ops per hop that never touch `struct j5d_m68k_state`. This
+    is the cross-block register caching.
+  - **At EVERY dispatcher exit (the universal epilogue):** the **WHOLE 16-register file** is
+    stored to memory before the callee frame is restored — **not** just that block's dirty set.
+    This is load-bearing: a chain reaches exactly one epilogue (the terminal block's), and any
+    block upstream may have written any register, all of which are live in host regs; storing only
+    the terminal block's dirty set would lose an upstream write when the `ldp` restores the head's
+    saved callee regs. Storing all 16 makes `struct j5d_m68k_state` memory-consistent at every
+    dispatcher boundary regardless of chain history — which is exactly what the boundaries that
+    need a memory-consistent file require: **`rts`** (the dispatcher pops the return stack from
+    sandbox memory), the **`jsr d16(A6)` `[J3]` LVO bridge** (the marshaller reads the 68k arg
+    registers from the memory state — a non-chainable terminator, so the block's epilogue has
+    already flushed the full file), an **exception dispatch** (the frame push + vector read), a
+    **computed `jmp/jsr (An)`** (the target is read from the live `An`, then the file is flushed at
+    the epilogue), and any **unresolved/dynamic target** falling back to C.
+  - **The CCR** is synced through `struct j5d_m68k_state` memory at **every** block boundary
+    (chained or not): the body's `RA_FlushCC` stores it (if modified) before the tail, and the
+    next block's `RA_GetCC` / the inline Bcc evaluator re-read it from memory. One byte, cheap, and
+    unconditionally correct — so the inline condition and the C `bcc_taken` always see the same
+    CCR.
+  - **The `(An)` sandbox memory access** is unaffected: OUR EA helper dereferences `host_mem`
+    directly (independent of the file's memory image), and an `(An)+`/`-(An)` update lives in the
+    live host `An` reg until the next dispatcher-exit full-file spill — so a memory access that may
+    alias code/data still sees a consistent sandbox.
+
+  *INVALIDATION / SAFETY policy.* There is **no mid-run cache eviction** (a full block cache is a
+  clean dispatcher error, not an LRU eviction), so a linked branch can never dangle within a run;
+  `j5d_run_free()` frees all MAP_JIT regions and drops all links between runs (the `[J5j]` negative
+  control re-translates from a patched stream after a free, and bites). **SMC / dirty-code-page
+  invalidation stays DEFERRED:** we do not chain across writable-code regions that rewrite their
+  own translated blocks — no corpus program does, and the `M68K_VerifyUnit`/CRC32 re-host is the
+  separately-scoped SMC pass (Risks "Self-modifying code"). If that lands, an evicted/invalidated
+  block must have its inbound links un-chained (re-pointed at the dispatcher) — the link table
+  (`j5k_link` slot word-offsets per block) already records exactly the patch sites needed.
+
+  *The frozen seam is UNCHANGED (confirmed).* `[J5k]` is entirely **internal to the engine's
+  block dispatcher**, below the frozen integration seam (INTERFACE.md). Untouched: the `jit_region`
+  API (`jit_region.h` — the chaining backpatch uses the existing `jit_write_begin`/`jit_write_end`/
+  `jit_finalize` window), the **`struct M68KState`/`struct j5d_m68k_state` field layout** (the
+  chaining counters are engine globals + `j5d_stats` fields, never new state-struct fields — the
+  `[J3]` LVO bridge + the `[J5i]` exception model depend on those offsets and read the same memory
+  image), the **`[J3]` LVO-call marshalling contract** (`jsr d16(A6)` stays a non-chainable
+  dispatcher terminator that flushes the full file first), and the **`[J5i]` exception/SR model**
+  (exceptions stay dispatcher-decoded terminators). No `emu68/` file is touched; the Exhibit-B grep
+  is unchanged/clean.
 
 ## Risks
 
