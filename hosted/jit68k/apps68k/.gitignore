@@ -1,0 +1,7 @@
+# The vasm toolchain is built from source by tools/build-vasm.sh (a 650 KB
+# platform-specific binary we do NOT commit). The *.exe hunk binaries in bin/ ARE
+# committed (small, the real artifacts the runner consumes).
+.toolchain/
+
+# vasm default output if -o is omitted
+a.out
