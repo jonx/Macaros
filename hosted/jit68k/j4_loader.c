@@ -140,9 +140,13 @@ int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
     for (;;) {
         uint32_t htype;
         if (cur_u32(&c, &htype)) {
-            /* End of stream without HUNK_END is tolerated only if we already hit
-             * HUNK_END; otherwise it's a truncated file. */
-            FAIL("unexpected end of hunk stream (no HUNK_END)");
+            /* End of stream. The real loader's main read loop (internalloadseg_aos.c:
+             * 224 `while(!read_block_buffered(...))`) terminates when the file is
+             * exhausted; that is the NORMAL way a hunk file ends once every payload
+             * hunk has been read. So EOF here is success IFF all declared payload
+             * hunks were loaded (curhunk > last); otherwise the file is truncated. */
+            if (curhunk > last) break;
+            FAIL("unexpected end of hunk stream (missing payload hunks)");
         }
         htype &= 0xFFFFFFu;       /* internalloadseg_aos.c:229 mask off flag bits */
 
@@ -216,9 +220,44 @@ int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
             continue;
         }
 
+        if (htype == J4_HUNK_SYMBOL) {
+            /* internalloadseg_aos.c:231-252 — SKIP the debug symbol table. The
+             * SYMBOL hunk is a repeated group: a BE32 name-length-in-longs `n`
+             * (0 ends the hunk), then `n` longwords of name + 1 longword value.
+             * The real loader seek_forwards (lcount+1) longs per symbol; we
+             * advance the cursor identically. Real Amiga executables are usually
+             * stripped (vasm -nosym), but tolerating symbols here matches the real
+             * loader and lets un-stripped hunk files load. */
+            for (;;) {
+                uint32_t n;
+                if (cur_u32(&c, &n)) FAIL("short HUNK_SYMBOL name length");
+                if (n == 0) break;                  /* 0 => end of symbol hunk */
+                c.pos += ((size_t)n + 1u) * 4u;     /* n name longs + 1 value long */
+                if (c.pos > c.len) FAIL("HUNK_SYMBOL runs off end");
+            }
+            continue;
+        }
+
+        if (htype == J4_HUNK_DEBUG) {
+            /* internalloadseg_aos.c:478-488 — SKIP the debug-info hunk: a BE32
+             * length-in-longs, then that many longwords, all ignored. */
+            uint32_t longs;
+            if (cur_u32(&c, &longs)) FAIL("short HUNK_DEBUG length");
+            c.pos += (size_t)longs * 4u;
+            if (c.pos > c.len) FAIL("HUNK_DEBUG runs off end");
+            continue;
+        }
+
         if (htype == J4_HUNK_END) {
-            /* internalloadseg_aos.c:450-460. End of this program's hunks. */
-            break;
+            /* internalloadseg_aos.c:450-460. HUNK_END terminates ONE hunk, NOT the
+             * whole program: the real loader merely `break`s the switch and the main
+             * while-loop reads the next hunk. (A multi-hunk file such as CODE +
+             * RELOC32 + END + DATA + END has an END after EACH hunk.) We stop only
+             * once every declared payload hunk has been loaded (curhunk > last),
+             * mirroring the real loader's `curhunk > last` exit test; otherwise we
+             * continue to the next hunk. */
+            if (curhunk > last) break;
+            continue;
         }
 
         FAIL("unsupported hunk type in spike loader");

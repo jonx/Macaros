@@ -36,7 +36,7 @@
 
 /* The single external symbol A64.h's ASSERT_REG macro references (never called for
  * valid register numbers — we only pass registers < 32). No-op satisfies the link. */
-void kprintf(const char *format, ...) { (void)format; }
+__attribute__((weak)) void kprintf(const char *format, ...) { (void)format; }
 
 static jit_region g_region;
 static int        g_region_live = 0;

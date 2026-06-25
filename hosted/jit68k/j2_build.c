@@ -59,7 +59,7 @@
 /* [J0]-evidence item 2: the single external symbol A64.h's ASSERT_REG macro
  * references. Never actually called for valid register numbers; a no-op satisfies
  * the link. (We pass only REG_D0..REG_D7 / x0, all < 32, so ASSERT never fires.) */
-void kprintf(const char *format, ...) { (void)format; }
+__attribute__((weak)) void kprintf(const char *format, ...) { (void)format; }
 
 /* The one region this spike uses. Kept module-static so jit68k_free_block can
  * release it; the [J1] R-JIT-THREAD rule (emit+exec on one thread) is satisfied

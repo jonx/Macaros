@@ -36,7 +36,7 @@
 /* [J2]-evidence item 2, carried over: the single external symbol A64.h's
  * ASSERT_REG macro references. Never called for valid register numbers (we only
  * pass registers < 32). A no-op satisfies the link. */
-void kprintf(const char *format, ...) { (void)format; }
+__attribute__((weak)) void kprintf(const char *format, ...) { (void)format; }
 
 /* AArch64 register numbers we use for the thunk frame/scratch. The arg registers
  * x0..x7 are the AAPCS64 call args; x19/x20 are callee-saved (survive the blr). */

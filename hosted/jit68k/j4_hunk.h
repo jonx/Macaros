@@ -72,6 +72,8 @@
 #define J4_HUNK_DATA     1002u
 #define J4_HUNK_BSS      1003u
 #define J4_HUNK_RELOC32  1004u
+#define J4_HUNK_SYMBOL   1008u   /* debug symbol table — SKIPPED (internalloadseg_aos.c:231) */
+#define J4_HUNK_DEBUG    1009u   /* debug info        — SKIPPED (internalloadseg_aos.c:478) */
 #define J4_HUNK_END      1010u
 
 /* ----- The 32-bit sandbox -----------------------------------------------------
