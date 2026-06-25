@@ -23,6 +23,18 @@ ROWS=(
   "H10 exec message ports     : hosted-msgport"
   "H11 device -> real file    : hosted-device"
   "H12 exec.library boot      : hosted-execboot"
+  "J1 MAP_JIT exec memory     : hosted-jit68k"
+  "J2 Emu68 emitter hosted    : hosted-jit68k-j2"
+  "J3 68k->native LVO bridge  : hosted-jit68k-j3"
+  "J4 load->relocate->run     : hosted-jit68k-j4"
+  "J5a memory load/store+sbox : hosted-jit68k-j5a"
+  "J5b loop+real cond codes   : hosted-jit68k-j5b"
+  "D1 cocoa/metal present     : hosted-cocoametal"
+  "ABI cocoametal dylib seam  : cocoametal-abi"
+  "HIDDSIM cocoametal D3 harness : cocoametal-hiddsim"
+  "D2t cocoametal threading   : cocoametal-d2t"
+  "D4D5 cocoametal input pump  : cocoametal-input"
+  "SET cocoametal settings    : cocoametal-settings"
 )
 
 mkdir -p run
