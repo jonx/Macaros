@@ -136,6 +136,8 @@ int        cm_render_effect_readback(CMContext *, CMEffect effect,
 /* ---- Settings & options (v2, append-only — see "Settings & options" below) --
    #define CM_ABI_VERSION 2 (was 1). */
 typedef enum { CM_SCALE_FIT=0, CM_SCALE_INTEGER_NEAREST, CM_SCALE_PIXEL_PERFECT,
+               CM_SCALE_ASPECT_FIT,  /* =3, appended at [LIVE]; DEFAULT: aspect-preserving
+                                        fill + BLACK letterbox (no distortion, no white) */
                CM_SCALE__COUNT } CMScaleMode;
 typedef enum { CM_FILTER_NEAREST=0, CM_FILTER_LINEAR, CM_FILTER__COUNT } CMFilter;
 typedef enum {                       /* numbered with gaps so each group grows alone */
@@ -265,6 +267,19 @@ window scale works. The **offscreen oracle target** is sized `w*S × h*S` for an
 oracle scale `S` (rounded backing factor, ≥1) — integer keeps the readback block-exact and
 deterministic; the live drawable is decoupled from `S` and uses the fractional drawableSize.
 Headless (no window server) → `S = 1`. `cm_target_size` reports `S` and the oracle dims.
+
+> **The live drawable MUST track the content view (`[LIVE]`).** `layer.drawableSize`
+> is **not** a one-time value: the `CAMetalLayer` is the content view's **backing
+> layer** and the view's geometry hooks (`-layout` / `-setFrameSize:` /
+> `-viewDidChangeBackingProperties`), the `windowDidEnterFullScreen:`/`…ExitFullScreen:`
+> delegate callbacks, and a resync in `cm_present` (just before `nextDrawable`) all
+> recompute `contentsScale` + `drawableSize` from the view's **current** backing size.
+> A user-reported bug (2026-06-25) was a drawable frozen at the windowed size across a
+> fullscreen enter → the framebuffer rendered into a small corner ("small white rect in
+> a black fullscreen window"). The **offscreen oracle was blind** (it is never resized);
+> the **live-drawable readback** (`make cocoametal-livedraw` → `[LIVE] PASS`) catches it.
+> The default present mode is `CM_SCALE_ASPECT_FIT`: aspect-preserving fill with a
+> **black** letterbox; window + content-view backgrounds are black so **no white shows**.
 
 ## Pixel format mapping — `[AROS]` + `[PUB]`
 
@@ -443,12 +458,25 @@ asserts **values**, never "it didn't crash":
   `CM_EV_SETTING` events from `cm_pump_events` (pull-only); (3) **NSUserDefaults**
   persistence round-trips (seed defaults → fresh `cm_open` re-applies them → restored).
   See "Settings & options" below.
+- **LIVE (the present FILLS the drawable) — GREEN.** Host test
+  `hosted/cocoametal/livedraw_test.m` (`make cocoametal-livedraw`, marker `[LIVE] PASS`),
+  under the D2t threading model. The **live-drawable readback** the offscreen oracle was
+  blind to: sets the live layer `framebufferOnly=NO`, composes the 4-quadrant+marker scene
+  into the live drawable via the real present pass, **reads the live drawable back**, and
+  asserts — **windowed AND after entering fullscreen** — drawable == content-view backing
+  size, the scene fills the aspect-fit content rect at full size, and the letterbox is
+  **black, never white**. Fixes a user-reported fullscreen bug (small white rect): the
+  `CAMetalLayer` now tracks the content view (backing layer + geometry hooks + fullscreen
+  delegate + `cm_present` resync). Plus `make cocoametal-show` — a persistent human-facing
+  "look at it" build (bounded, auto-exits). Host-only; `CM_SCALE_ASPECT_FIT` appended
+  (append-only, no `cm_*` symbol moved).
 
 ## Settings & options (v2 — host/AROS ownership split)
 
 A native host **settings panel** + a key/value option ABI (`cm_set_option` /
 `cm_get_option` / `cm_open_settings`). **Host owns presentation** — effect, scale mode
-(`CM_SCALE_FIT`/`INTEGER_NEAREST`/`PIXEL_PERFECT`), fullscreen, filter
+(`CM_SCALE_ASPECT_FIT` (**default** — aspect-preserving fill + black letterbox; the
+`[LIVE]` fix) / `FIT` / `INTEGER_NEAREST` / `PIXEL_PERFECT`), fullscreen, filter
 (`CM_FILTER_NEAREST`/`LINEAR`) — and applies those to the **live present only** (never
 the offscreen oracle, so `cm_readback` is unaffected). **AROS owns everything
 functional** — mode/keymap/volume; the panel can only *request* those, and the shim
@@ -459,9 +487,18 @@ shim never calls into AROS (matches the threading model). The panel
 **persists host-owned state via `NSUserDefaults`** (loaded+applied at `cm_open`, saved on
 change), and routes its AROS-owned resolution picker through the `CM_EV_SETTING` enqueue.
 It lives on the display-server / main thread under the manual `CFRunLoop` (D2t model),
-degrading to a no-op headless. **UNVERIFIED:** `CM_OPT_FULLSCREEN` is recorded/persisted
-but not yet an entered AppKit fullscreen state (left for D3 wiring). Frozen detail in
-INTERFACE.md §9.
+degrading to a no-op headless. `CM_OPT_FULLSCREEN` is now **REAL** native AppKit
+fullscreen — `cm_set_option(CM_OPT_FULLSCREEN,1)` issues `-[NSWindow toggleFullScreen:]`
+(enter), `0` exits, while still recording/persisting the flag; the request is async +
+non-blocking (issues the toggle and returns). Verified `make cocoametal-fullscreen` →
+**`[FS] PASS`** (entered/exited asserted via `styleMask & NSWindowStyleMaskFullScreen`,
+not a screencapture; the §6 oracle byte-exact across the transition). **Hand-pumped-
+transition finding (the graft must honor):** ENTER completes under the hand-pumped
+`CFRunLoopRunInMode(...,0,true)` model (the `styleMask` bit flips at the toggle), but
+the fullscreen **EXIT** state machine needs the **app run loop** to advance — bare
+hand-pumping never clears it, so the display-server task must spin a *bounded* `[NSApp
+run]` for the exit transition (or accept it lands on a later cycle). Frozen detail +
+the full finding in INTERFACE.md §9 / §9f.
 
 ## Build / integration
 

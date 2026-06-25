@@ -215,6 +215,8 @@ int cm__open_settings_appkit(CMContext *cx) {
         /* --- HOST-OWNED: scale mode --- */
         [cv addSubview:cm__label(@"Scale:", yScale)];
         c.scalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(132, yScale, 174, 24)];
+        [c.scalePopup addItemWithTitle:@"Aspect fit (letterbox)"];
+        [[c.scalePopup lastItem] setTag:CM_SCALE_ASPECT_FIT];
         [c.scalePopup addItemWithTitle:@"Fit (stretch)"];
         [[c.scalePopup lastItem] setTag:CM_SCALE_FIT];
         [c.scalePopup addItemWithTitle:@"Integer nearest"];

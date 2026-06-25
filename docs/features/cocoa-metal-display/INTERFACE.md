@@ -183,6 +183,57 @@ shim's `cm_try_window` performs this same pair idempotently, so omitting it stil
 works — but the boot task should do it explicitly so the activation policy is set
 before any window.
 
+### 2a-4. The live present FILLS the drawable — host-side geometry contract (`[LIVE]`)
+
+The on-screen present is host-side geometry and is **not** part of the `cm_*` ABI,
+but it is the part the **user actually looks at**, so it has its own contract and its
+own verification marker.
+
+**The contract.** On every frame and across every transition (windowed, live resize,
+Retina/scale change, and especially **fullscreen enter/exit**):
+
+1. **The `CAMetalLayer` fills the content view.** The layer is the content view's
+   **backing layer** (`CMContentView -makeBackingLayer` returns the `CAMetalLayer`),
+   so AppKit autoresizes `layer.frame` to the view bounds, and the view's geometry
+   hooks (`-layout` / `-setFrameSize:` / `-viewDidChangeBackingProperties`, plus the
+   `windowDidEnterFullScreen:` / `windowDidExitFullScreen:` delegate callbacks)
+   recompute `layer.contentsScale` + `layer.drawableSize` from the view's **current
+   backing-pixel size**. `cm_present` also resyncs immediately before `nextDrawable`,
+   so the live drawable matches the window/screen even if AppKit deferred a `-layout`
+   pass under the hand-pumped run loop.
+2. **The present scales the framebuffer to fill the drawable, aspect-preserved, with
+   a BLACK letterbox.** The default scale mode is **`CM_SCALE_ASPECT_FIT`** (§9b):
+   the framebuffer is upscaled to the largest centred rect of the **logical** aspect
+   that fits the drawable; the surrounding letterbox/pillarbox is **black**. The
+   window + content view backgrounds are black, so **no white ever shows**.
+
+**The bug this fixed (2026-06-25).** The `CAMetalLayer.drawableSize` was set **once**
+at `cm_open` and never updated when the content view resized. On a fullscreen enter
+the content view grew to fill the screen but the drawable stayed the small windowed
+pixel size, so the framebuffer rendered into only a small corner — a **small rect in
+a black fullscreen window**, with the view's default (white) background showing
+around it. **The offscreen oracle (`cm_readback`) was blind to this**: the oracle
+target is rendered full-size and never resized, so it stayed byte-exact while the
+live drawable was wrong. Measured before/after (backgrounded CLI; a real foreground
+Space is screen-sized): on fullscreen enter `view.backing` 640×400→640×**464** while
+`layer.drawableSize` stayed frozen at 640×**400** before the fix; after the fix the
+drawable tracks the view (640×**464**).
+
+**Verification — `[LIVE] PASS` (`make cocoametal-livedraw`).** A live-drawable
+readback test the oracle could not provide: the TEST build sets the live layer
+`framebufferOnly=NO` (production keeps it `YES`), uploads the 4-quadrant + marker
+scene, composes it into the live drawable via the **real present pass**, **reads the
+live drawable back**, and asserts — **windowed AND after entering fullscreen** — that
+(a) `drawable == content-view backing size` (it fills the view), (b) the four
+quadrant colours land in the aspect-fit content rect at full drawable size (not a
+tiny corner), and (c) every letterbox pixel is **black, never white**. Headless-safe
+(skips the live asserts, keeps the §6 oracle). Plus **`make cocoametal-show`** — a
+persistent, human-facing build (NOT in the regression matrix): it opens the window,
+draws an obvious scene (4 quadrants + a 1px bright-white edge border so edge-fill is
+visible + a moving marker), stays windowed a few seconds, then goes fullscreen and
+stays so the user can *see* it fill the screen; bounded (auto-exits ~20s or on a
+keypress) so it can't hang.
+
 ---
 
 ## 3. Threading & call contract — FROZEN
@@ -362,6 +413,12 @@ prompt. Rules:
 - When I wire D3, the same oracle re-verifies the scene *after a sequence of real
   `HIDD_BM_*` calls* — so the contract carries from host spike to AROS path
   unchanged.
+- **The oracle is necessary but not sufficient for the on-screen present.** The
+  oracle target is rendered full-size and is **never resized**, so it stays
+  byte-exact even when the **live drawable** geometry is wrong. A user-reported
+  fullscreen bug (content shown as a small rect, white surround) was invisible to the
+  oracle — it is the **live-drawable readback** (`[LIVE]`, §2a-4: `framebufferOnly=NO`
+  + read the live drawable back, assert it fills) that catches on-screen geometry.
 
 ---
 
@@ -402,17 +459,22 @@ asserts `cm_abi_version() == 2` with 13 names resolving, errcount 0.
 | 6 | `CM_ABI_VERSION` + `cm_abi_version()` in the header (§7) | John | ✅ `#define CM_ABI_VERSION 2` (v1→v2 at the settings ABI) + `int cm_abi_version(void)` in `cocoametal.h`; implemented in `cocoametal.m`; symbol-array entry 9 (append-only) |
 | 7 | **Settings panel + key/value option ABI (§9)** — `cm_set_option`/`cm_get_option`/`cm_open_settings` (entries 10/11/12), `CM_EV_SETTING`, host-acted vs AROS-pull split, `NSUserDefaults` persistence | John | ✅ `make cocoametal-settings` → `[SET] PASS`; host-owned option acts on the live present (oracle unchanged), AROS-facing key surfaces as `CM_EV_SETTING`, `NSUserDefaults` round-trips — `hosted/cocoametal/cocoametal_settings.m` + `settings_test.m`. ABI v2; `[ABI] PASS` now 13 symbols / `cm_abi_version()==2` |
 | 8 | **D3 host-support: pixfmt pinned (§2a) + HIDD-shaped harness green** | John | ✅ §2a pins the exact `CMPixelDesc` + call-mapping table; `make cocoametal-hiddsim` → `[HIDDSIM] PASS` — dlopens `build/cocoametal.dylib` (real boundary), AROS-owned framebuffer, lazy `cm_open` on first Show, a dirty-rect stream of partial/overlapping `cm_upload_rect`+`cm_present` composes **byte-exact** vs an independent host reference (256000 B), and a known-pixel round-trip proves B@0/G@1/R@2/A@3 with no swizzle — `hosted/cocoametal/hiddsim_test.c`. Additive (no ABI change). |
+| 9 | **`CM_OPT_FULLSCREEN` REAL native AppKit fullscreen (§9f)** — `toggleFullScreen:` enter/exit (no longer a stored-flag stub), oracle byte-exact across the transition, the hand-pumped-`toggleFullScreen:` finding documented | John | ✅ `make cocoametal-fullscreen` → `[FS] PASS`; `cm_set_option(CM_OPT_FULLSCREEN,1/0)` enters/exits real native fullscreen, asserted programmatically via `styleMask & NSWindowStyleMaskFullScreen` (not a screencapture); §6 oracle byte-exact while fullscreen AND windowed; **ENTER completes hand-pumped, EXIT needs the app run loop** (§9f) — `hosted/cocoametal/fullscreen_test.m` + the `cm__set_fullscreen_appkit` strong override in `cocoametal_window.m`. No ABI change (additive impl behind an existing v2 key). |
+| 10 | **Live present FILLS the drawable (§2a-4)** — the user-reported fullscreen "small white rect" fix: the `CAMetalLayer` tracks the content view (backing layer + geometry hooks + fullscreen delegate + `cm_present` resync), the present aspect-fits with a **black** letterbox (default `CM_SCALE_ASPECT_FIT`), backgrounds black | John | ✅ `make cocoametal-livedraw` → `[LIVE] PASS`; the **live-drawable readback** (oracle was blind) asserts drawable == content-view backing size + the scene fills the aspect-fit content rect + letterbox black, **windowed AND fullscreen**. Plus `make cocoametal-show` (persistent human-facing look). Host-only; `CM_SCALE_ASPECT_FIT=3` appended (append-only, no `cm_*` symbol moved) — `hosted/cocoametal/{cocoametal,cocoametal_window}.m` + `livedraw_test.m` + `show.m`. |
 | A | `arch/all-darwin/hidd/cocoa/` — `CocoaGfx`/`CocoaBM`, `HostLib_Open`+`GetInterface`, `UpdateRect→cm_present`, `Show→cm_open`, `CreateObject` injects `aHidd_BitMap_ClassPtr` | me | ☐ — starts after the CLI prompt is banked. Host reference: §2a call-mapping table + `[HIDDSIM]` |
 | B | Input kbd/mouse hardware drivers consuming `CMEvent` | me | ☐ — also the interactivity hedge for the console. **Host side ready:** `cm_pump_events` is now REAL (`make cocoametal-input` → `[D4D5] PASS`; mouse + keyboard CMEvents asserted field-exact, in-process synthetic injection, no TCC — §5 note) |
 | C | `AddDisplayDriverA` + pixfmt/sync/mode taglists; kickstart/monitor integration | me | ☐ |
 
 D1/D2 host shim already proven green (`run/d1-`, `d2-cocoametal.png`). **The seam
-items 1–3 (+ 6, 7) are now green** (`[ABI] PASS` at v2, `[D2t] PASS`, `[SET] PASS`,
-`build/cocoametal.dylib` exports all 13 `cm_*`): the dylib loads via `dlopen`+`dlsym`
-with `errcount==0`, the ABI version handshakes, the §6 oracle is exact, and
-`cm_open`/`cm_present`/`cm_pump_events`/`cm_open_settings` run under the real
-main-pthread/manual-CFRunLoop model (no `NSApplicationMain`). D3 (rows A–C) is now
-pure wiring against this contract.
+items 1–3 (+ 6, 7, 9) are now green** (`[ABI] PASS` at v2, `[D2t] PASS`, `[SET] PASS`,
+`[FS] PASS`, `build/cocoametal.dylib` exports all 13 `cm_*`): the dylib loads via
+`dlopen`+`dlsym` with `errcount==0`, the ABI version handshakes, the §6 oracle is
+exact, and `cm_open`/`cm_present`/`cm_pump_events`/`cm_open_settings`/the real
+`CM_OPT_FULLSCREEN` toggle run under the real main-pthread/manual-CFRunLoop model
+(no `NSApplicationMain`). **The last open host-side display item — real fullscreen —
+is now closed** (item 9, §9f; with the documented "EXIT needs the app run loop"
+finding the graft must honor). D3 (rows A–C) is now pure wiring against this
+contract.
 
 ---
 
@@ -445,8 +507,8 @@ never acted on by the host (keeps §3's no-callbacks-into-AROS rule).
 | Key | Value | Group | Host behaviour |
 |---|---|---|---|
 | `CM_OPT_EFFECT` = 0x00 | a `CMEffect` (`CM_FX_*`) | **host-acted** | sets the present-time effect (== `cm_set_effect`) |
-| `CM_OPT_SCALE_MODE` = 0x01 | a `CMScaleMode` | **host-acted** | live-present viewport: `FIT` (stretch) / `INTEGER_NEAREST` (largest integer multiple, centred) / `PIXEL_PERFECT` (1:1, centred) |
-| `CM_OPT_FULLSCREEN` = 0x02 | 0/1 | **host-acted** | recorded for the live present (the present path consults it) |
+| `CM_OPT_SCALE_MODE` = 0x01 | a `CMScaleMode` | **host-acted** | live-present viewport: `ASPECT_FIT` (**default** — aspect-preserving fill, largest centred rect of the logical aspect, **black** letterbox; §2a-4) / `FIT` (stretch) / `INTEGER_NEAREST` (largest integer multiple, centred) / `PIXEL_PERFECT` (1:1, centred). `ASPECT_FIT` = `3` was **appended** at `[LIVE]` (append-only; the oracle is unaffected — §6) |
+| `CM_OPT_FULLSCREEN` = 0x02 | 0/1 | **host-acted** | **REAL** native AppKit fullscreen: `1` → `-[NSWindow toggleFullScreen:]` (enter), `0` → exit; the flag is also recorded/persisted. The request is **async + non-blocking** (§3): `cm_set_option` issues the toggle and returns; the present path keeps composing to whatever the live drawable becomes. (Was a stored-flag stub through `[SET]`; made real at `[FS]`.) |
 | `CM_OPT_FILTER` = 0x03 | a `CMFilter` | **host-acted** | live-present sampler: `NEAREST` / `LINEAR` (oracle stays nearest) |
 | 0x04–0x0F | — | reserved (host) | future host-acted keys |
 | `CM_OPT_REQUEST_MODE_W` = 0x10 | width px | **AROS-facing (stub)** | NOT acted on → `CM_EV_SETTING` |
@@ -501,10 +563,67 @@ strong override of a weak stub so the AppKit-free TU pulls no AppKit headers.
   re-reads + applies the defaults), assert the four host options restored; cleans
   the test keys afterward.
 
-**UNVERIFIED / deviations:** `CM_OPT_FULLSCREEN` is **recorded** but the live
-present does not yet enter a real AppKit fullscreen mode (no
-`toggleFullScreen:`/`NSWindowStyleMaskFullScreen` plumbing under the manual-
-CFRunLoop model — left for the D3 wiring); the option round-trips and persists, but
-visually it is a stored flag, not yet an entered fullscreen state. The panel
-degrades to a no-op (returns nonzero) in a headless launch context, same caveat as
-`cm_open`'s window (§3).
+### 9f. `CM_OPT_FULLSCREEN` is now REAL — `[FS] PASS` (`make cocoametal-fullscreen`)
+
+**Done (2026-06-25, John — `[FS]` green).** `cm_set_option(CM_OPT_FULLSCREEN,1)`
+now enters **REAL native AppKit fullscreen** via `-[NSWindow toggleFullScreen:]`
+(no longer a stored-flag stub); `0` exits. Implementation:
+
+- The live window is created with `NSWindowCollectionBehaviorFullScreenPrimary`
+  (`cocoametal_window.m`) so it can take over its own Space on a toggle — without
+  it the window only "zooms" and `styleMask` never gains
+  `NSWindowStyleMaskFullScreen`.
+- `cm_set_option(CM_OPT_FULLSCREEN,v)` records/persists the flag (as before, so
+  `cm_get_option`/the panel reflect it) **then** calls a strong override
+  `cm__set_fullscreen_appkit(cx, v)` (`cocoametal_window.m`; weak no-op in
+  `cocoametal.m` for the headless / no-AppKit / no-window build — same weak/strong
+  split as `cm_try_window`/`cm_pump_events`). The override reads the window's
+  **current** `styleMask & NSWindowStyleMaskFullScreen` and only issues the toggle
+  when it differs from the request (`-toggleFullScreen:` is an UNCONDITIONAL
+  toggle, so this makes `cm_set_option` idempotent). It is **async + non-blocking
+  (§3):** it requests the (animated) transition and returns at once — no `cm_*`
+  blocks waiting for the animation.
+- The present path is unchanged plumbing: `cm_present` already reads
+  `d.texture.width/height` per frame, so a now-fullscreen drawable upscales
+  correctly with no extra code. The **offscreen oracle is untouched** by fullscreen
+  (§6) — it is byte-exact across the whole enter→present→exit sequence (asserted at
+  `[FS]`).
+
+**THE HAND-PUMPED-`toggleFullScreen:` FINDING (this Mac, M-series / macOS 26.5, GUI
+session, the backgrounded CLI test harness) — the answer the graft needs:**
+
+- **ENTER works hand-pumped.** Under exactly the §3/D2t model (main pthread, manual
+  `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true)`, **no** `NSApplicationMain` /
+  **no** `[NSApp run]`), `toggleFullScreen:` enter flips
+  `styleMask & NSWindowStyleMaskFullScreen` to set **essentially at the toggle call
+  (0 extra pump iterations observed)** — that bit is the authoritative "fullscreen
+  now" signal and the test asserts on it. The on-screen Space animation itself is
+  driven by the window server.
+- **EXIT needs the APP run loop.** Bare hand-pumping (even an aggressive
+  NSEvent-drain + `CFRunLoopRunInMode(...,timeout=0.02)` loop) **never** clears the
+  fullscreen bit — AppKit's fullscreen *exit* state machine only advances when the
+  **app run loop** runs. The `[FS]` test therefore drives a **bounded `[NSApp run]`
+  stopped by a watchdog timer** purely to observe the completed exit
+  deterministically; **the production shim never does this** (it stays non-blocking
+  per §3). **Graft consequence:** the display-server task's hand-pumped loop will
+  enter fullscreen fine, but to *exit* cleanly it must either (a) spin a **bounded**
+  `[NSApp run]` for the transition (stopped on the `windowDidExitFullScreen:`
+  delegate or a deadline), or (b) accept that exit lands on a later real pump cycle.
+  This is a property of AppKit, not the shim.
+- **Backgrounded non-frontmost CLI quirk (test-harness only).** A bare CLI binary
+  launched in the background (`run-hosted.sh` runs it with `&`) cannot become the
+  **active/frontmost app** (`NSApp.isActive == 0` even after
+  `activateIgnoringOtherApps:`/`TransformProcessType`), so the **first** exit toggle
+  can be a no-op; the `[FS]` driver retries the toggle once and exit is then
+  deterministic across runs. The graft's display-server runs as a proper app in the
+  user's session (frontmost-capable), so this retry is a harness artifact, not a
+  shim requirement. The `window.frame == screen.frame` geometry is **not** a
+  reliable "is fullscreen" oracle in this process context (the fullscreen window
+  keeps a windowed-looking frame) — `styleMask & NSWindowStyleMaskFullScreen` is the
+  authoritative bit and the one `[FS]` asserts.
+
+**Headless:** with no window server `cm__set_fullscreen_appkit` is a no-op (the flag
+is merely recorded, as before) and `[FS]` skips the window asserts but still asserts
+the oracle, so a headless run passes. The settings panel still degrades to a no-op
+(returns nonzero) in a headless launch context, same caveat as `cm_open`'s window
+(§3).

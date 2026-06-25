@@ -149,6 +149,27 @@ void cm_destroy_window(CMContext *cx);
  * Forward-declared here so cm_open can call it before the stub's definition. */
 void cm__apply_persisted_options(CMContext *cx);
 
+/* §9 CM_OPT_FULLSCREEN: enter/exit REAL AppKit native fullscreen on the live
+ * window. Strong override in cocoametal_window.m (does the toggleFullScreen: under
+ * the hand-pumped CFRunLoop, §3); weak no-op stub below for the headless / no-
+ * AppKit build. cm_set_option calls it after recording the flag. Async + non-
+ * blocking: it REQUESTS the (animated) transition and returns — it never waits for
+ * the animation to finish (no cm_* may block, §3). cm__window_is_fullscreen
+ * reports the window's CURRENT styleMask state (so tests/the present path can see
+ * whether the transition has completed). Both are forward-declared here so
+ * cm_set_option can call them before the stubs' definitions. */
+void cm__set_fullscreen_appkit(CMContext *cx, int on);
+int  cm__window_is_fullscreen(CMContext *cx);
+
+/* Resync the live CAMetalLayer's drawableSize/contentsScale to the content view's
+ * current backing-pixel size (INTERFACE.md §2a: the layer-fills-the-content-view
+ * contract). Strong override in cocoametal_window.m; weak no-op stub below for the
+ * headless / no-AppKit build. cm_present calls it just before nextDrawable so the
+ * live drawable always matches the window/screen even if AppKit deferred a -layout
+ * pass under the hand-pumped run loop (which is what left the framebuffer a small
+ * rect after a fullscreen enter). Non-blocking; pure geometry. */
+void cm__resync_layer(CMContext *cx);
+
 /* Build a texture descriptor for a BGRA8 shared texture. */
 static MTLTextureDescriptor *bgra8_desc(int w, int h, MTLTextureUsage usage) {
     MTLTextureDescriptor *d =
@@ -239,7 +260,11 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
      * NSUserDefaults (§9: load at cm_open, save on change) — the strong override
      * in cocoametal_settings.m applies them via cm_set_option; the headless weak
      * stub is a no-op so the defaults above stand. */
-    cx->scaleMode = CM_SCALE_FIT;
+    /* Default live-present scaling: aspect-preserving fill with a BLACK letterbox
+     * (§2a). FILLS the window/screen as much as possible without distorting the
+     * logical 320x200; the bars are black, never white. The offscreen oracle is
+     * never touched by this (§6 — the oracle pass always uses the full-target FIT). */
+    cx->scaleMode = CM_SCALE_ASPECT_FIT;
     cx->fullscreen = 0;
     cx->filter = CM_FILTER_NEAREST;
     cx->setHead = cx->setTail = 0;
@@ -332,7 +357,7 @@ static void encode_pass(CMContext *cx, id<MTLCommandBuffer> cb,
  * drawable) so cm_readback is unaffected (§6). */
 static MTLViewport scale_viewport(CMScaleMode mode, int logW, int logH,
                                   int dstW, int dstH) {
-    int vw = dstW, vh = dstH;     /* CM_SCALE_FIT: fill the whole drawable */
+    int vw = dstW, vh = dstH;     /* CM_SCALE_FIT: stretch to fill the whole drawable */
     if (mode == CM_SCALE_INTEGER_NEAREST && logW > 0 && logH > 0) {
         int kx = dstW / logW, ky = dstH / logH;
         int k = (kx < ky) ? kx : ky;
@@ -342,6 +367,21 @@ static MTLViewport scale_viewport(CMScaleMode mode, int logW, int logH,
         vw = logW; vh = logH;
         if (vw > dstW) vw = dstW;
         if (vh > dstH) vh = dstH;
+    } else if (mode == CM_SCALE_ASPECT_FIT && logW > 0 && logH > 0) {
+        /* Largest rect with the LOGICAL aspect ratio that fits the drawable, centred.
+         * Compare logW*dstH vs dstW*logH (cross-multiply, no float) to decide which
+         * dimension is the binding constraint; the clear MTLLoadActionClear fills the
+         * surrounding letterbox/pillarbox BLACK. This is the default — it fills the
+         * window/screen as much as possible with no distortion and no white. */
+        if ((long)logW * dstH <= (long)dstW * logH) {
+            vh = dstH;                          /* height-bound: pillarbox L/R */
+            vw = (int)((long)logW * dstH / logH);
+        } else {
+            vw = dstW;                          /* width-bound: letterbox T/B */
+            vh = (int)((long)logH * dstW / logW);
+        }
+        if (vw < 1) vw = 1;
+        if (vh < 1) vh = 1;
     }
     MTLViewport vp;
     vp.originX = (double)((dstW - vw) / 2);
@@ -395,6 +435,12 @@ void cm_present(CMContext *cx) {
      *    effect; the live window is presentation-only. Non-fatal. */
     if (cx->layer) {
         @autoreleasepool {
+            /* Keep the live drawable glued to the content view BEFORE acquiring it
+             * (§2a). CMContentView resyncs on -layout / fullscreen, but under the
+             * hand-pumped run loop a layout pass can be deferred; doing it here
+             * guarantees the drawable is window/screen-sized this frame — the fix
+             * for the small-rect-in-fullscreen bug. No-op headless (weak stub). */
+            cm__resync_layer(cx);
             id<CAMetalDrawable> d = [cx->layer nextDrawable];
             if (d) {
                 cx->drawableCount++;       /* D2t diagnostic: nextDrawable worked */
@@ -416,6 +462,40 @@ int cm_set_effect(CMContext *cx, CMEffect effect) {
     if (!cx) return 1;
     if (effect < 0 || effect >= CM_FX__COUNT) return 2;
     cx->effect = effect;
+    return 0;
+}
+
+/* ---- TEST-ONLY live-drawable readback (NOT the frozen ABI, NOT exported) -----
+ * Resync the layer, acquire the live drawable, compose the framebuffer into it via
+ * the SAME present pass cm_present uses (so this reads exactly what the user would
+ * see), getBytes it into a freshly-malloc'd *dst (BGRA8, caller frees), and report
+ * the drawable's pixel size. The live layer must have framebufferOnly=NO (set by
+ * cm__live_set_framebuffer_only in the test). Returns 0 on success; nonzero if there
+ * is no live layer / nextDrawable yielded nil. Used only by the [LIVE] readback test
+ * to prove the present FILLS the drawable — the offscreen oracle alone was blind to
+ * the small-rect-in-fullscreen bug. */
+int cm__live_readback(CMContext *cx, void **dst, int *dw, int *dh) {
+    if (dst) *dst = NULL; if (dw) *dw = 0; if (dh) *dh = 0;
+    if (!cx || !cx->layer || !dst) return 1;
+    cm__resync_layer(cx);
+    @autoreleasepool {
+        id<CAMetalDrawable> d = [cx->layer nextDrawable];
+        if (!d) return 2;
+        int tw = (int)d.texture.width, th = (int)d.texture.height;
+        id<MTLCommandBuffer> cb = [cx->queue commandBuffer];
+        encode_present_pass(cx, cb, d.texture, cx->effect, tw, th);   /* same as present */
+        [cb commit];
+        [cb waitUntilCompleted];      /* synchronous so getBytes sees the composed image */
+
+        size_t stride = (size_t)tw * 4;
+        uint8_t *buf = (uint8_t *)malloc(stride * (size_t)th);
+        if (!buf) return 3;
+        MTLRegion all = MTLRegionMake2D(0, 0, (NSUInteger)tw, (NSUInteger)th);
+        [d.texture getBytes:buf bytesPerRow:stride fromRegion:all mipmapLevel:0];
+        if (dst) *dst = buf;
+        if (dw) *dw = tw;
+        if (dh) *dh = th;
+    }
     return 0;
 }
 
@@ -462,6 +542,14 @@ int cm_set_option(CMContext *cx, int key, long value) {
         return 0;
     case CM_OPT_FULLSCREEN:
         cx->fullscreen = value ? 1 : 0;
+        /* REAL native AppKit fullscreen (§9): record the flag (above, so
+         * cm_get_option/the panel reflect it and it persists), then REQUEST the
+         * window enter/exit native fullscreen. The toggle is async (an animated
+         * transition) and non-blocking — it returns immediately; the present path
+         * keeps composing to whatever the live drawable size becomes. Headless /
+         * no window: the weak stub below is a no-op, so the flag is still recorded
+         * (visually a stored flag, as before) without any window work. */
+        cm__set_fullscreen_appkit(cx, cx->fullscreen);
         return 0;
     case CM_OPT_FILTER:
         if (value < 0 || value >= CM_FILTER__COUNT) return 2;
@@ -635,6 +723,26 @@ int cm_open_settings(CMContext *cx) {
  * cm_open can call it). Strong override in cocoametal_settings.m loads from
  * NSUserDefaults; headless / no AppKit keeps the cm_open defaults. */
 __attribute__((weak)) void cm__apply_persisted_options(CMContext *cx) {
+    (void)cx;
+}
+
+/* Weak stubs for the REAL fullscreen toggle (forward-declared near the top so
+ * cm_set_option can call them). Strong override in cocoametal_window.m does the
+ * [window toggleFullScreen:] under the hand-pumped CFRunLoop; headless / no
+ * AppKit (no window) is a no-op so the flag is merely recorded and the window
+ * is reported as never-fullscreen. */
+__attribute__((weak)) void cm__set_fullscreen_appkit(CMContext *cx, int on) {
+    (void)cx; (void)on;
+}
+__attribute__((weak)) int cm__window_is_fullscreen(CMContext *cx) {
+    (void)cx;
+    return 0;
+}
+
+/* Weak no-op for cm__resync_layer (forward-declared near the top so cm_present can
+ * call it). Strong override in cocoametal_window.m glues the live drawable to the
+ * content view; headless / no AppKit has no layer so this is a no-op. */
+__attribute__((weak)) void cm__resync_layer(CMContext *cx) {
     (void)cx;
 }
 

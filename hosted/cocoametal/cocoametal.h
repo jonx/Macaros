@@ -86,9 +86,16 @@ typedef enum {
 
 /* Value for CM_OPT_SCALE_MODE: how the framebuffer maps onto the drawable. */
 typedef enum {
-    CM_SCALE_FIT = 0,            /* stretch to fill the drawable (current behaviour) */
+    CM_SCALE_FIT = 0,            /* stretch to fill the drawable (ignores aspect) */
     CM_SCALE_INTEGER_NEAREST = 1,/* largest integer multiple that fits, centred */
     CM_SCALE_PIXEL_PERFECT = 2,  /* 1:1 logical->drawable pixels, centred (no scale) */
+    /* APPEND-ONLY (INTERFACE.md §1a/§9): aspect-preserving fill — scale the
+     * framebuffer up to the LARGEST size that fits the drawable while keeping the
+     * logical aspect ratio, centred, with a BLACK letterbox/pillarbox filling the
+     * rest. This is the DEFAULT live-present mode: it FILLS the window/screen as
+     * much as possible without distorting 320x200, and the surrounding bars are
+     * black (never white). The offscreen oracle is unaffected (§6, always FIT). */
+    CM_SCALE_ASPECT_FIT = 3,
     CM_SCALE__COUNT
 } CMScaleMode;
 
