@@ -1,0 +1,164 @@
+/*
+ * cocoametal_control.m — host-side control channel for driving AROS headlessly.
+ *
+ * When $AROS_CM_CONTROL names a path (a FIFO), cm__control_init opens it and a
+ * dispatch source on the MAIN queue reads line commands. Keyboard/mouse commands
+ * are turned into synthetic CMEvents that cm__pump_events_appkit drains FIRST —
+ * i.e. they travel the exact same path real NSEvents do, into the AROS input
+ * HIDD. A screenshot command reads back the rendered framebuffer to a PPM.
+ *
+ * This lets a process with no window-server session (e.g. an automation/CI
+ * harness) puppet the running AROS: type, click, capture. It is also the seed of
+ * the embeddable-library input/capture API — same protocol, callable in-process.
+ *
+ * Pulls no AROS headers; uses only the public cm_* ABI (cocoametal.h).
+ *
+ * Command grammar (one per line):
+ *   K <vk> <pressed>     key event   (vk = macOS virtual keycode, pressed 1/0)
+ *   M <x> <y>            mouse move  (logical, top-left)
+ *   B <button> <pressed> mouse button(0=left 1=right 2=middle)
+ *   S <path>             screenshot the framebuffer to <path> (binary PPM)
+ */
+
+#import <Foundation/Foundation.h>
+#include <dispatch/dispatch.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "cocoametal.h"
+
+/* ---- injection ring (main-thread only: reader + drainer both run there) ---- */
+#define CM_INJ_MAX 256
+static CMEvent g_inj[CM_INJ_MAX];
+static int     g_injHead, g_injTail;
+
+static void cm__inj_push(const CMEvent *e) {
+    int next = (g_injTail + 1) % CM_INJ_MAX;
+    if (next == g_injHead) return;      /* full: drop (caller is faster than AROS) */
+    g_inj[g_injTail] = *e;
+    g_injTail = next;
+}
+
+/* Drain queued injected events into out[]; returns count written. Main thread.
+ * Declared (extern) and called at the top of cm__pump_events_appkit. */
+int cm__control_drain(CMEvent *out, int maxEvents) {
+    int n = 0;
+    while (n < maxEvents && g_injHead != g_injTail) {
+        out[n++] = g_inj[g_injHead];
+        g_injHead = (g_injHead + 1) % CM_INJ_MAX;
+    }
+    return n;
+}
+
+/* ---- screenshot: framebuffer -> binary PPM (P6) via the public readback ---- */
+static void cm__control_shot(CMContext *cx, const char *path) {
+    int tw = 0, th = 0, scale = 0;
+    if (cm_target_size(cx, &tw, &th, &scale) != 0 || scale <= 0) {
+        NSLog(@"[cm-control] shot: target_size failed");
+        return;
+    }
+    /* cm_readback wants the LOGICAL size (backing / scale). */
+    int w = tw / scale, h = th / scale;
+    if (w <= 0 || h <= 0)
+        return;
+    int stride = w * 4;
+    unsigned char *buf = malloc((size_t)stride * h);
+    if (!buf) return;
+    if (cm_readback(cx, buf, stride, w, h) != 0) {
+        NSLog(@"[cm-control] shot: readback failed");
+        free(buf);
+        return;
+    }
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fprintf(f, "P6\n%d %d\n255\n", w, h);
+        for (int i = 0; i < w * h; i++) {           /* BGRA -> RGB */
+            unsigned char rgb[3] = { buf[i*4+2], buf[i*4+1], buf[i*4+0] };
+            fwrite(rgb, 1, 3, f);
+        }
+        fclose(f);
+        NSLog(@"[cm-control] shot %dx%d -> %s", w, h, path);
+    }
+    free(buf);
+}
+
+/* ---- command parsing ---- */
+static void cm__control_exec(CMContext *cx, char *line) {
+    CMEvent e;
+    memset(&e, 0, sizeof e);
+    switch (line[0]) {
+    case 'K': {
+        int vk, pressed;
+        if (sscanf(line + 1, "%d %d", &vk, &pressed) == 2) {
+            e.type = CM_EV_KEY; e.code = vk; e.pressed = pressed;
+            cm__inj_push(&e);
+        }
+        break;
+    }
+    case 'M': {
+        int x, y;
+        if (sscanf(line + 1, "%d %d", &x, &y) == 2) {
+            e.type = CM_EV_MOUSEMOVE; e.x = x; e.y = y;
+            cm__inj_push(&e);
+        }
+        break;
+    }
+    case 'B': {
+        int b, pressed;
+        if (sscanf(line + 1, "%d %d", &b, &pressed) == 2) {
+            e.type = CM_EV_MOUSEBTN; e.code = b; e.pressed = pressed;
+            cm__inj_push(&e);
+        }
+        break;
+    }
+    case 'S': {
+        char path[1024];
+        if (sscanf(line + 1, " %1023s", path) == 1)
+            cm__control_shot(cx, path);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+/* ---- FIFO reader on the main queue ---- */
+static dispatch_source_t g_ctlSrc;
+static char g_lineBuf[4096];
+static int  g_lineLen;
+
+void cm__control_init(CMContext *cx, const char *path) {
+    if (!path || !*path)
+        return;
+    /* O_RDWR so the FIFO always has a writer end open here — the reader never
+       sees EOF when an external writer closes after a one-shot `echo`. */
+    int fd = open(path, O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        NSLog(@"[cm-control] open(%s) failed (errno %d)", path, errno);
+        return;
+    }
+    dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0,
+                                                   dispatch_get_main_queue());
+    dispatch_source_set_event_handler(src, ^{
+        char tmp[1024];
+        ssize_t r = read(fd, tmp, sizeof tmp);
+        if (r <= 0)
+            return;
+        for (ssize_t i = 0; i < r; i++) {
+            if (tmp[i] == '\n' || g_lineLen >= (int)sizeof(g_lineBuf) - 1) {
+                g_lineBuf[g_lineLen] = 0;
+                if (g_lineLen > 0)
+                    cm__control_exec(cx, g_lineBuf);
+                g_lineLen = 0;
+            } else {
+                g_lineBuf[g_lineLen++] = tmp[i];
+            }
+        }
+    });
+    dispatch_resume(src);
+    g_ctlSrc = src;
+    NSLog(@"[cm-control] listening on %s", path);
+}

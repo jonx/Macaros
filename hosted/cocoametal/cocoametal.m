@@ -330,6 +330,11 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
     /* §9: load persisted host-owned options now (no-op headless). */
     cm__apply_persisted_options(cx);
 
+    /* Headless control channel (input injection + screenshots) when requested
+     * via $AROS_CM_CONTROL. Non-fatal, no-op when unset. */
+    extern void cm__control_init(CMContext *cx, const char *path);
+    cm__control_init(cx, getenv("AROS_CM_CONTROL"));
+
     return cx;
 }
 

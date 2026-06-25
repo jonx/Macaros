@@ -1,0 +1,135 @@
+#!/bin/bash
+#
+# aros-ctl — drive hosted AROS in the Cocoa/Metal window from the command line.
+#
+# Boots AROS with cocoametal's control FIFO ($AROS_CM_CONTROL) so a process with
+# no window-server session can puppet it: type, click, move the mouse, capture
+# the framebuffer, read logs. Injected input travels the same path as real
+# NSEvents (into the AROS keyboard/mouse HIDD), so it faithfully reproduces input
+# behaviour. This is both an automation harness and the seed of the embeddable
+# library's input/capture API.
+#
+# Usage:
+#   aros-ctl run            boot AROS windowed (background), log to $LOG
+#   aros-ctl stop           kill it
+#   aros-ctl type TEXT...   type text (lowercase/digits/space/punct; Up=shift)
+#   aros-ctl enter          press Return
+#   aros-ctl key VK P       raw key: macOS virtual keycode VK, pressed P (1/0)
+#   aros-ctl mouse X Y      move pointer to logical X,Y
+#   aros-ctl click [BTN]    click (0=left default,1=right,2=middle)
+#   aros-ctl button BTN P   raw mouse button BTN pressed P
+#   aros-ctl shot [PATH]    screenshot -> PATH (.png via sips, else .ppm)
+#   aros-ctl log [N]        last N log lines (default 40)
+#   aros-ctl crash          extract crash/alert lines from the log
+#   aros-ctl wait [SECS]    sleep, letting AROS run/render (default 1)
+set -u
+
+BOOTD="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-4959-b0ec-f7720da95bb3/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin"
+ENT="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-4959-b0ec-f7720da95bb3/scratchpad/scratchpad/cocoa-test-ent.plist"
+DYLIB_SRC="/Users/user/Source/aros-aarch64/build/cocoametal.dylib"
+
+FIFO=/tmp/aros-cm.ctl
+LOG=/tmp/aros-window.log
+PIDF=/tmp/aros-cm.pid
+
+ctl() { [ -p "$FIFO" ] && printf '%s\n' "$*" > "$FIFO"; }
+
+# char -> "VK SHIFT"  (macOS virtual keycodes). SHIFT=1 means hold left-shift.
+char2vk() {
+    case "$1" in
+        a) echo "0 0";;  b) echo "11 0";; c) echo "8 0";;  d) echo "2 0";;
+        e) echo "14 0";; f) echo "3 0";;  g) echo "5 0";;  h) echo "4 0";;
+        i) echo "34 0";; j) echo "38 0";; k) echo "40 0";; l) echo "37 0";;
+        m) echo "46 0";; n) echo "45 0";; o) echo "31 0";; p) echo "35 0";;
+        q) echo "12 0";; r) echo "15 0";; s) echo "1 0";;  t) echo "17 0";;
+        u) echo "32 0";; v) echo "9 0";;  w) echo "13 0";; x) echo "7 0";;
+        y) echo "16 0";; z) echo "6 0";;
+        0) echo "29 0";; 1) echo "18 0";; 2) echo "19 0";; 3) echo "20 0";;
+        4) echo "21 0";; 5) echo "23 0";; 6) echo "22 0";; 7) echo "26 0";;
+        8) echo "28 0";; 9) echo "25 0";;
+        ' ') echo "49 0";; '.') echo "47 0";; ',') echo "43 0";; '/') echo "44 0";;
+        ';') echo "41 0";; "'") echo "39 0";; '-') echo "27 0";; '=') echo "24 0";;
+        '[') echo "33 0";; ']') echo "30 0";; '\') echo "42 0";; '`') echo "50 0";;
+        ':') echo "41 1";; '_') echo "27 1";; '+') echo "24 1";; '?') echo "44 1";;
+        '!') echo "18 1";; '@') echo "19 1";; '#') echo "20 1";; '$') echo "21 1";;
+        '%') echo "23 1";; '^') echo "22 1";; '&') echo "26 1";; '*') echo "28 1";;
+        '(') echo "25 1";; ')') echo "29 1";; '"') echo "39 1";;
+        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk "$lc" | cut -d' ' -f1) 1";;
+        *) echo "";;
+    esac
+}
+
+LSHIFT=56   # macOS kVK_Shift
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+
+case "$cmd" in
+run)
+    if [ ! -x "$BOOTD/AROSBootstrap" ]; then echo "no AROSBootstrap at $BOOTD" >&2; exit 1; fi
+    AROS="$(cd "$BOOTD/../.." && pwd)"
+    mkdir -p "$HOME/lib"; [ -f "$DYLIB_SRC" ] && cp -f "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib"
+    mkdir -p "$AROS/Devs/Monitors"
+    [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
+    rm -f "$AROS/Devs/Monitors/headless"
+    grep -v '^arguments ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
+        && mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
+    for M in Devs/shell.resource \
+        Devs/Drivers/hiddclass.hidd Devs/Drivers/gfx.hidd \
+        Devs/Drivers/inputclass.hidd Devs/Drivers/keyboard.hidd Devs/Drivers/mouse.hidd \
+        Devs/console.device Devs/input.device Devs/keyboard.device Devs/gameport.device \
+        Libs/keymap.library Libs/graphics.library Libs/layers.library \
+        Libs/intuition.library Libs/gadtools.library L/con-handler ; do
+        if [ -e "$AROS/$M" ] && ! grep -q "/$M\$" "$BOOTD/AROSBootstrap.conf"; then
+            echo "module $AROS/$M" >> "$BOOTD/AROSBootstrap.conf"
+        fi
+    done
+    printf 'Version\n' > "$AROS/S/Startup-Sequence"
+    [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/AROSBootstrap" 2>/dev/null \
+                  || codesign -s - -f "$BOOTD/AROSBootstrap" 2>/dev/null
+    rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
+    ( cd "$BOOTD" && AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
+        DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
+        ./AROSBootstrap -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
+    echo $! > "$PIDF"
+    echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
+    ;;
+stop)
+    [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null
+    pkill -KILL AROSBootstrap 2>/dev/null
+    rm -f "$PIDF" "$FIFO"
+    echo "stopped"
+    ;;
+key)    ctl "K ${1:-0} ${2:-1}";;
+button) ctl "B ${1:-0} ${2:-1}";;
+mouse)  ctl "M ${1:-0} ${2:-0}";;
+click)  b="${1:-0}"; ctl "B $b 1"; ctl "B $b 0";;
+enter)  ctl "K 36 1"; ctl "K 36 0";;
+type)
+    text="$*"
+    for (( i=0; i<${#text}; i++ )); do
+        ch="${text:$i:1}"
+        vs="$(char2vk "$ch")"; [ -z "$vs" ] && continue
+        vk="${vs% *}"; sh="${vs#* }"
+        [ "$sh" = "1" ] && ctl "K $LSHIFT 1"
+        ctl "K $vk 1"; ctl "K $vk 0"
+        [ "$sh" = "1" ] && ctl "K $LSHIFT 0"
+    done
+    ;;
+shot)
+    out="${1:-/tmp/aros-shot.png}"
+    ppm="${out%.png}.ppm"
+    ctl "S $ppm"
+    sleep 0.4
+    if [ "${out##*.}" = "png" ] && [ -f "$ppm" ]; then
+        sips -s format png "$ppm" --out "$out" >/dev/null 2>&1 && echo "shot -> $out" || echo "shot -> $ppm (sips failed)"
+    else
+        echo "shot -> $ppm"
+    fi
+    ;;
+log)    tail -n "${1:-40}" "$LOG" 2>/dev/null;;
+crash)  grep -nE "Trap signal|Alert|stack limits|Module |Function |supervisor mode|Privilege" "$LOG" 2>/dev/null | head -40;;
+wait)   sleep "${1:-1}";;
+*)
+    echo "usage: aros-ctl {run|stop|type|enter|key|mouse|click|button|shot|log|crash|wait}" >&2
+    exit 1;;
+esac

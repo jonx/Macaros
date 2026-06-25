@@ -433,7 +433,9 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
     NSApplication *app = NSApp;
     if (!app) return 0;                      /* no NSApp -> no event source */
 
-    int n = 0;
+    /* Injected (headless control-channel) events first, then live NSEvents. */
+    extern int cm__control_drain(CMEvent *out, int maxEvents);
+    int n = cm__control_drain(out, maxEvents);
     @autoreleasepool {
         /* Window-management transitions first (set by the delegate, not NSEvents):
          * a pending live-resize, then a pending close. Edge-triggered / one-shot. */
