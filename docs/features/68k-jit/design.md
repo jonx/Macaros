@@ -2,6 +2,12 @@
 
 > Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
 
+> **The JIT↔AROS seam is frozen in [INTERFACE.md](INTERFACE.md)** — the LoadSeg/
+> RunCommand hook + seglist tagging, the `jit_region`→`hostlib.resource` routing,
+> the LVO bridge to the real library bases, the exception bridge, and the sandbox/
+> pointer boundary, each splitting JIT side (host-proven) vs AROS side (to wire).
+> Read it before wiring the AROS side; this design.md is the rationale behind it.
+
 ## What & why
 
 Hosted AROS on Apple Silicon can already load and run AROS's own *native* AArch64
