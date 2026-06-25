@@ -138,6 +138,55 @@ struct j5d_m68k_state {
 #define J5D_CCR_N 0x08u
 #define J5D_CCR_X 0x10u
 
+/* ===================== [J5q] THE 68881 FP CONDITIONAL PREDICATE ====================
+ * FBcc/FScc/FDBcc/FTRAPcc select one of 32 conditional predicates by a 6-bit selector
+ * (the low 6 bits of the FBcc opcode / of the command word for FScc/FDBcc/FTRAPcc). The
+ * predicate is a boolean function of the FPSR condition byte the preceding FCMP/FTST (or
+ * any FP op) computed — bits N (bit27), Z (bit26), NAN (bit24). [J5o]/[J5p] established
+ * (and verified empirically against the JIT) that EMIT_GetFPUFlags sets {N=v<0, Z=v==0,
+ * NAN=unordered}, and NEVER the I/infinity bit (the AArch64 C is bic'd out). So the FP
+ * predicate is defined over {N, Z, NAN} exactly.
+ *
+ * The 6-bit selector's bit5 (the IEEE-aware/SIGNALLING variant) does NOT change the truth
+ * value — only whether an unordered operand raises BSUN (an FP trap, DEFERRED). So the
+ * truth table is over the low 4 bits (`predicate & 0x0f`) — the 16 base conditions. This
+ * is OUR re-derivation of the table Emu68's verbatim FBcc decoder emits in AArch64
+ * (M68k_LINEF.c FBcc/FScc cases, tst/orr/eor against FPSR_N/FPSR_Z/FPSR_NAN) — the same
+ * boolean per case, evaluated here in C at the dispatcher level (the way the integer Bcc
+ * is, not through the bare-metal REG_PC branch funnel). Grounded against the M68000 FPU
+ * conditional-predicate table; the unordered (NaN) cases are the load-bearing part:
+ * the ORDERED predicates are FALSE on NaN, the UNORDERED predicates are TRUE on NaN. */
+#define J5Q_FPSR_N    0x08000000u   /* bit27 */
+#define J5Q_FPSR_Z    0x04000000u   /* bit26 */
+#define J5Q_FPSR_NAN  0x01000000u   /* bit24 */
+
+/* Returns 1 if the FP condition `predicate` (6-bit selector) is TRUE for `fpsr`. */
+static inline int j5q_fp_cond_taken(unsigned predicate, uint32_t fpsr)
+{
+    int N   = (fpsr & J5Q_FPSR_N)   != 0;
+    int Z   = (fpsr & J5Q_FPSR_Z)   != 0;
+    int NAN_= (fpsr & J5Q_FPSR_NAN) != 0;
+    switch (predicate & 0x0fu) {
+        case 0x0: return 0;                              /* F      — never (also SF)         */
+        case 0x1: return  Z;                             /* EQ / SEQ                          */
+        case 0x2: return !NAN_ && !Z && !N;              /* OGT / GT                          */
+        case 0x3: return  Z || (!N && !NAN_);            /* OGE / GE                          */
+        case 0x4: return  N && !NAN_ && !Z;              /* OLT / LT                          */
+        case 0x5: return  Z || (N && !NAN_);             /* OLE / LE                          */
+        case 0x6: return !NAN_ && !Z;                    /* OGL / GL  (ordered greater|less)  */
+        case 0x7: return !NAN_;                          /* OR  / GLE (ordered)               */
+        case 0x8: return  NAN_;                          /* UN  / NGLE (unordered)            */
+        case 0x9: return  Z || NAN_;                     /* UEQ / NGL                         */
+        case 0xa: return  NAN_ || (!N && !Z);            /* UGT / NLE                         */
+        case 0xb: return  NAN_ || Z || !N;               /* UGE / NLT                         */
+        case 0xc: return  NAN_ || (N && !Z);             /* ULT / NGE                         */
+        case 0xd: return  NAN_ || Z || N;                /* ULE / NGT                         */
+        case 0xe: return !Z;                             /* NE  / SNE                         */
+        case 0xf: return 1;                              /* T   — always (also ST)            */
+    }
+    return 0;
+}
+
 /* ----- The sandbox (carried from [J5a]/[J4]) --------------------------------------- */
 typedef struct j5d_sandbox {
     uint8_t  *host_mem;   /* host pointer to 68k address `origin`                 */
@@ -202,6 +251,8 @@ typedef struct j5d_stats {
     /* [J5i] the exception / SR model. */
     uint32_t exceptions_dispatched; /* 68k exceptions vectored (TRAP/div0/illegal/bus)  */
     uint32_t rte_returns;           /* rte instructions executed (frame popped, resumed) */
+    /* [J5q] FP conditional control-flow ops dispatched (FBcc/FScc/FDBcc/FTRAPcc).        */
+    uint32_t fp_cc_ops;
     /* [J5k] cross-region block chaining (direct AArch64 branches past the C dispatcher,
      * with the 68k register file kept live across the hop). These count what the chaining
      * optimization replaced: a block that ends in a chainable terminator (fall-through /
@@ -264,6 +315,7 @@ void j5d_get_stats(j5d_stats *out);
 #define J5I_VEC_ADDRESS_ERROR    3u    /* misaligned / bad address    (group 0)          */
 #define J5I_VEC_ILLEGAL          4u    /* illegal instruction         (group 1)          */
 #define J5I_VEC_DIV_BY_ZERO      5u    /* divu/divs by zero           (group 2)          */
+#define J5I_VECTOR_TRAPcc        7u    /* TRAPcc / FTRAPcc on TRUE    (group 2) [J5q]    */
 #define J5I_VEC_TRAP_BASE        32u   /* TRAP #n -> vector 32+n      (group 2)          */
 
 /* The sandbox-space base of the 256-longword vector table (our fixed stand-in for the VBR;

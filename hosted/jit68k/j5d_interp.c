@@ -789,6 +789,78 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             continue;
         }
 
+        /* ==================== [J5q] FP CONDITIONAL CONTROL-FLOW (the oracle mirror) =========
+         * Same predicate table (j5q_fp_cond_taken, shared header) + the same FPSR cc the FP
+         * ops produced (st->fpsr). Decoded here BEFORE the line-F FPU arithmetic block so the
+         * control ops don't fall into the FMOVE/arith decoder. Mirrors the dispatcher in
+         * j5d_engine.c exactly (the byte-exact + control-flow gate). Order: FDBcc (mode 001)
+         * and FTRAPcc (mode 111) carve out of the FScc EA range, so test them first. */
+        if ((op & 0xFFF8u) == 0xF248u) {                         /* FDBcc Dn,disp16    */
+            unsigned dn = op & 7u;
+            unsigned pred = be16(ip + 2) & 0x3fu;
+            int16_t disp16 = be16s(ip + 4);
+            uint32_t disp_pc = pc + 4;
+            uint32_t after = pc + 6;
+            if (j5q_fp_cond_taken(pred, st->fpsr)) {
+                pc = after;
+            } else {
+                uint16_t cnt = (uint16_t)((st->d[dn] & 0xFFFFu) - 1u);
+                st->d[dn] = (st->d[dn] & 0xFFFF0000u) | cnt;
+                pc = (cnt == 0xFFFFu) ? after : (uint32_t)((int64_t)disp_pc + disp16);
+            }
+            continue;
+        }
+        if ((op & 0xFFF8u) == 0xF278u) {                         /* FTRAPcc -> vector 7 */
+            unsigned mode = op & 7u;
+            unsigned pred = be16(ip + 2) & 0x3fu;
+            uint32_t after = pc + 4;
+            if (mode == 2) after += 2; else if (mode == 3) after += 4;
+            if (j5q_fp_cond_taken(pred, st->fpsr)) {
+                uint32_t h;
+                if (iraise(sb, st, J5I_VECTOR_TRAPcc, after, &h, errbuf, errlen)) return 1;
+                pc = h;
+            } else {
+                pc = after;
+            }
+            continue;
+        }
+        if ((op & 0xFFC0u) == 0xF240u) {                         /* FScc <ea> (set byte) */
+            unsigned pred = be16(ip + 2) & 0x3fu;
+            unsigned mode = (op >> 3) & 7u, regn = op & 7u;
+            uint8_t val = j5q_fp_cond_taken(pred, st->fpsr) ? 0xFFu : 0x00u;
+            uint32_t after = pc + 4;
+            if (mode == 0) {
+                st->d[regn] = (st->d[regn] & 0xFFFFFF00u) | val;
+            } else if (mode == 2) {
+                uint32_t a = st->a[regn];
+                if (a < sb->origin || (uint64_t)a + 1 > (uint64_t)sb->origin + sb->size)
+                    IFAIL("FScc (An) destination out of sandbox");
+                sb->host_mem[a - sb->origin] = val;
+            } else if (mode == 5) {
+                int16_t d16 = be16s(ip + 4); after += 2;
+                uint32_t a = st->a[regn] + (uint32_t)(int32_t)d16;
+                if (a < sb->origin || (uint64_t)a + 1 > (uint64_t)sb->origin + sb->size)
+                    IFAIL("FScc (d16,An) destination out of sandbox");
+                sb->host_mem[a - sb->origin] = val;
+            } else {
+                IFAIL("FScc destination EA mode not in the [J5q] subset");
+            }
+            pc = after;
+            continue;
+        }
+        if ((op & 0xFF80u) == 0xF280u) {                         /* FBcc (.W/.L)        */
+            unsigned pred = op & 0x3fu;
+            int is_long = (op & 0x40u) != 0;
+            uint32_t disp_pc = pc + 2;
+            int64_t disp; uint32_t after;
+            if (is_long) { disp = (int32_t)be32(ip + 2); after = pc + 6; }
+            else         { disp = (int16_t)be16s(ip + 2); after = pc + 4; }
+            pc = j5q_fp_cond_taken(pred, st->fpsr)
+                 ? (uint32_t)((int64_t)disp_pc + disp)
+                 : after;
+            continue;
+        }
+
         /* ============================ [J5g] move.l with an EA operand ===============
          * move.l <ea>,Dn  and  move.l Dn,<ea>  where <ea> is mode 5 (d16,An) or mode 6
          * (d8,An,Xn.L) — the bubble-sort array element access. opcode bits:

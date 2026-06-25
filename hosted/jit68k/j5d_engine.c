@@ -324,6 +324,15 @@ static int is_terminator(uint16_t op)
     if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
     if ((op & 0xF1FFu) == 0x41F9u) return 1;     /* lea abs.l,An (dispatcher-decoded)*/
     if ((op & 0xF1FFu) == 0x41FAu) return 1;     /* lea (d16,pc),An (dispatcher-decoded)*/
+    /* [J5q] FP conditional control-flow — decoded at the DISPATCHER (like integer Bcc),
+     * NOT through EMIT_lineF (Emu68's FBcc/FScc emit the bare-metal REG_PC funnel + the
+     * 0xfffffffe sentinel; FDBcc/FTRAPcc have NO decoder body at all). The dispatcher reads
+     * the FPSR cc the FP body produced and evaluates the FP predicate in C. Note the order:
+     * FDBcc (mode 001) + FTRAPcc (mode 111) carve out of the FScc EA range. */
+    if ((op & 0xFFF8u) == 0xF248u) return 1;     /* FDBcc (cpDBcc)                  */
+    if ((op & 0xFFF8u) == 0xF278u) return 1;     /* FTRAPcc (cpTRAPcc -> vector 7)  */
+    if ((op & 0xFFC0u) == 0xF240u) return 1;     /* FScc (set byte, Dn or memory)   */
+    if ((op & 0xFF80u) == 0xF280u) return 1;     /* FBcc (.W/.L) incl FNOP (0xF280) */
     return 0;
 }
 
@@ -1269,6 +1278,98 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             int16_t d16 = be16s(thost + 2);          /* PC = address of the ext word   */
             st->a[an] = (uint32_t)((int64_t)(tpc + 2) + d16);
             pc = tpc + 4;                            /* lea (d16,pc) is 4 bytes        */
+        }
+        /* =================== [J5q] FP CONDITIONAL CONTROL-FLOW (dispatcher-level C) ===========
+         * Read the FPSR cc the preceding FCMP/FTST computed (memory-backed in st->fpsr) and
+         * evaluate the 68881 FP predicate (j5q_fp_cond_taken). Same funnel as integer Bcc: the
+         * decode + the predicate are OURS in C, NOT the bare-metal REG_PC branch funnel Emu68's
+         * FBcc/FScc emit (FDBcc/FTRAPcc have no decoder body at all). Order: FDBcc (mode 001) +
+         * FTRAPcc (mode 111) carve out of the FScc EA range, so test them first. */
+        else if ((top & 0xFFF8u) == 0xF248u) {       /* FDBcc Dn,disp16                */
+            /* opcode2 = command word (predicate6 in low 6 bits); a 16-bit displacement follows.
+             * Semantics (FP-condition DBcc): if cond TRUE -> fall through; else Dn.W -= 1, and
+             * if Dn.W != -1 -> branch to (PC-of-disp) + disp16, else fall through. */
+            unsigned dn = top & 7u;
+            unsigned pred = be16(thost + 2) & 0x3fu;
+            int16_t disp16 = be16s(thost + 4);
+            uint32_t disp_pc = tpc + 4;              /* disp is relative to the disp word  */
+            uint32_t after = tpc + 6;                /* FDBcc is opcode+cmdword+disp = 6 B */
+            if (j5q_fp_cond_taken(pred, st->fpsr)) {
+                pc = after;                          /* condition true -> terminate the loop */
+            } else {
+                uint16_t cnt = (uint16_t)(st->d[dn] & 0xFFFFu);
+                cnt = (uint16_t)(cnt - 1);
+                st->d[dn] = (st->d[dn] & 0xFFFF0000u) | cnt;   /* .W counter, hi word kept   */
+                pc = (cnt == 0xFFFFu)                /* counter expired (-1) -> fall through */
+                     ? after
+                     : (uint32_t)((int64_t)disp_pc + disp16);
+            }
+            g_stats.fp_cc_ops++;
+        }
+        else if ((top & 0xFFF8u) == 0xF278u) {       /* FTRAPcc (vector 7 on condition) */
+            /* mode = top & 7: 2 = .W operand (1 ext word), 3 = .L operand (2 ext words),
+             * 4 = no operand. opcode2 = predicate. The operand word(s) are ignored (the trap
+             * itself carries no data here). On a TRUE condition raise vector 7 (TRAPcc). */
+            unsigned mode = top & 7u;
+            unsigned pred = be16(thost + 2) & 0x3fu;
+            uint32_t after = tpc + 4;                /* opcode + command word            */
+            if (mode == 2) after += 2;               /* + .W operand                     */
+            else if (mode == 3) after += 4;          /* + .L operand                     */
+            if (j5q_fp_cond_taken(pred, st->fpsr)) {
+                uint32_t handler;
+                /* TRAPcc is a group-2 exception: the saved PC is the instruction AFTER. */
+                if (raise_exception(sb, st, J5I_VECTOR_TRAPcc, after, &handler, errbuf, errlen)) {
+                    char dt[96]; snprintf(dt, sizeof dt, "FTRAPcc with no handler (vector %u)", J5I_VECTOR_TRAPcc);
+                    J5N_FUNNEL(J5N_FAULT_ENGINE, dt, st, sb);
+                    return 1;
+                }
+                pc = handler;
+            } else {
+                pc = after;
+            }
+            g_stats.fp_cc_ops++;
+        }
+        else if ((top & 0xFFC0u) == 0xF240u) {       /* FScc <ea> (set byte on condition) */
+            /* opcode2 = predicate. dest EA = top & 0x3f. Set the byte to 0xFF (true) / 0x00
+             * (false). Only the Dn-direct + (An)/(d16,An) forms the test uses are decoded; an
+             * unsupported EA mode is a clean error. FScc does NOT transfer control — it falls
+             * through to the next instruction (it is a terminator only because it is line-F). */
+            unsigned pred = be16(thost + 2) & 0x3fu;
+            unsigned mode = (top >> 3) & 7u, regn = top & 7u;
+            uint8_t val = j5q_fp_cond_taken(pred, st->fpsr) ? 0xFFu : 0x00u;
+            uint32_t after = tpc + 4;                /* opcode + command word            */
+            if (mode == 0) {                         /* Dn direct: low byte              */
+                st->d[regn] = (st->d[regn] & 0xFFFFFF00u) | val;
+            } else if (mode == 2) {                  /* (An)                              */
+                uint32_t a = st->a[regn];
+                if (a < sb->origin || (uint64_t)a + 1 > (uint64_t)sb->origin + sb->size)
+                    RFAIL("FScc (An) destination out of sandbox");
+                sb->host_mem[a - sb->origin] = val;
+            } else if (mode == 5) {                  /* (d16,An)                         */
+                int16_t d16 = be16s(thost + 4); after += 2;
+                uint32_t a = st->a[regn] + (uint32_t)(int32_t)d16;
+                if (a < sb->origin || (uint64_t)a + 1 > (uint64_t)sb->origin + sb->size)
+                    RFAIL("FScc (d16,An) destination out of sandbox");
+                sb->host_mem[a - sb->origin] = val;
+            } else {
+                RFAIL("FScc destination EA mode not in the [J5q] subset");
+            }
+            pc = after;                              /* fall through (no control transfer) */
+            g_stats.fp_cc_ops++;
+        }
+        else if ((top & 0xFF80u) == 0xF280u) {       /* FBcc (.W/.L) incl FNOP (0xF280) */
+            /* predicate = low 6 bits of the opcode; bit6 = size (0=.W disp16, 1=.L disp32).
+             * disp is relative to the address of the first displacement word (PC+2). */
+            unsigned pred = top & 0x3fu;
+            int is_long = (top & 0x40u) != 0;
+            uint32_t disp_pc = tpc + 2;
+            int64_t disp; uint32_t after;
+            if (is_long) { disp = (int32_t)be32(thost + 2); after = tpc + 6; }
+            else         { disp = (int16_t)be16s(thost + 2); after = tpc + 4; }
+            pc = j5q_fp_cond_taken(pred, st->fpsr)
+                 ? (uint32_t)((int64_t)disp_pc + disp)
+                 : after;
+            g_stats.fp_cc_ops++;
         }
         else {
             RFAIL("unknown terminator opcode");

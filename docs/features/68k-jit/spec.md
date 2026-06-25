@@ -1768,12 +1768,97 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
     so bit-exact verifies the translation. The real 68881 used 80-bit extended + its own polynomials
     (not bit-reproducible on AArch64), consistent with the `[J5o]` precision model.
 
-  - **Still deferred (honest scope):** **FBcc/FScc/FDBcc/FTRAPcc** (FP branches/sets/traps), **FMOVEM**
-    (FP register-list move), the **80-bit extended `.x`** and **packed-decimal `.p`** MEMORY formats
-    (precision model is double; `.x`/`.p` still route to the abort `Load96bit`/`my_pow10`/`my_log10`
-    stubs, never driven), and FP **exceptions** (the FPSR exception/accrued bits + FP traps; the
-    integer FPSR condition byte N/Z/Inf-not-set/NAN is live). The FMOD/FREM FPSR **quotient byte** is
-    computed by the decoder but is NOT part of the asserted cc byte.
+  - **Still deferred (honest scope):** **FBcc/FScc/FDBcc/FTRAPcc** (FP branches/sets/traps)
+    **— NOW DONE in `[J5q]` below**; **FMOVEM** (FP register-list move), the **80-bit extended `.x`**
+    and **packed-decimal `.p`** MEMORY formats (precision model is double; `.x`/`.p` still route to the
+    abort `Load96bit`/`my_pow10`/`my_log10` stubs, never driven), and FP **exceptions** (the FPSR
+    exception/accrued bits + FP traps; the integer FPSR condition byte N/Z/Inf-not-set/NAN is live).
+    The FMOD/FREM FPSR **quotient byte** is computed by the decoder but is NOT part of the asserted
+    cc byte.
+
+- **`[J5q]` the 68881/68882 FP CONDITIONAL CONTROL-FLOW family — IMPLEMENTED / GREEN.** Builds
+  directly on the FPSR condition byte `[J5o]`/`[J5p]` made live + verified. The four ops read that
+  FPSR cc and branch/set/trap on the 68881 FP predicate: **FBcc** (`.W`/`.L` displacement branch),
+  **FScc** (set a byte true/false — Dn or memory), **FDBcc** (decrement-and-branch loop), **FTRAPcc**
+  (trap-on-condition → the `[J5i]` exception path, vector 7). Files: OURS `hosted/jit68k/{j5q_test.c}`
+  + the shared FP predicate `j5q_fp_cond_taken()` + the FPSR cc constants + vector-7 constant in
+  `j5d_jit68k.h` + the four ops in the dispatcher (`j5d_engine.c`) and the oracle (`j5d_interp.c`) +
+  the `fp_cc_ops` telemetry field + `apps68k/j5q.s` (+ committed `j5q.exe`, `-m68882`). Target
+  `make hosted-jit68k-j5q` (marker `[J5q] PASS`, watchdog 40 s).
+
+  - **Decoded at the DISPATCHER level in C, NOT through Emu68's decoder (the architectural fit).**
+    Emu68's verbatim `M68k_LINEF.c` emits FBcc/FScc through its **bare-metal `REG_PC` branch funnel**
+    (the `csel REG_PC` + the embedded `tmpptr/branch_target/0xfffffffe` sentinel words) — the same
+    machine-owning model the `[J5f]` dispatcher re-hosts in C for the integer Bcc; and **FDBcc/FTRAPcc
+    have NO decoder body at all** in `M68k_LINEF.c` (only the `FPSR_Update_Needed` recognition scan
+    mentions them). So all four are added to `is_terminator()` (so the body loop stops before them)
+    and decoded in the dispatcher's C terminator loop, exactly like the integer Bcc: read `st->fpsr`
+    (memory-backed, flushed by the preceding FCMP/FTST whose `FPSR_Update_Needed` forward-scan already
+    recognises these consumers — so the cc byte is computed), evaluate the predicate, take the next PC
+    / set the byte / decrement-and-branch / raise vector 7. FBcc is never a chain SOURCE (only
+    Bcc/BRA/jmp-abs.l are in `chain_targets`), so chaining is unaffected.
+
+  - **THE PREDICATE TABLE (`j5q_fp_cond_taken`, shared by the dispatcher AND the oracle).** The 6-bit
+    conditional selector picks one of 32 predicates; bit 5 (the IEEE-aware/signalling variant) does
+    NOT change the truth value — only whether an unordered operand raises **BSUN** (an FP trap,
+    deferred) — so the truth table is over the low 4 bits (16 base conditions), a boolean of the FPSR
+    bits **N (bit27), Z (bit26), NAN (bit24)** (the I/infinity bit is never set — `[J5o]`/`[J5p]`).
+    This is OUR re-derivation of the table Emu68's verbatim FBcc decoder emits in AArch64
+    (`tst`/`orr`/`eor` against `FPSR_N`/`FPSR_Z`/`FPSR_NAN`), evaluated in C; grounded against the
+    M68000 FPU conditional-predicate table. **The IEEE UNORDERED (NaN) cases are the load-bearing
+    part — the ordered predicates are FALSE on NaN, the unordered ones TRUE:**
+
+    | sel `&0xf` | mnem | predicate (TRUE iff) | on NaN (N=Z=0, NAN=1) |
+    |---|---|---|---|
+    | 0x0 | F   | never | F |
+    | 0x1 | EQ  | Z | F |
+    | 0x2 | OGT | `!NAN && !Z && !N` | **F** (ordered) |
+    | 0x3 | OGE | `Z \|\| (!N && !NAN)` | **F** |
+    | 0x4 | OLT | `N && !NAN && !Z` | **F** |
+    | 0x5 | OLE | `Z \|\| (N && !NAN)` | **F** |
+    | 0x6 | OGL | `!NAN && !Z` | **F** |
+    | 0x7 | OR  | `!NAN` | **F** (ordered) |
+    | 0x8 | UN  | `NAN` | **T** (unordered) |
+    | 0x9 | UEQ | `Z \|\| NAN` | **T** |
+    | 0xa | UGT | `NAN \|\| (!N && !Z)` | **T** |
+    | 0xb | UGE | `NAN \|\| Z \|\| !N` | **T** |
+    | 0xc | ULT | `NAN \|\| (N && !Z)` | **T** |
+    | 0xd | ULE | `NAN \|\| Z \|\| N` | **T** (unordered) |
+    | 0xe | NE  | `!Z` | T |
+    | 0xf | T   | always | T |
+
+    (GT/GE/LT/LE/GL/GLE and NGT/… etc. share these truth tables via `sel & 0x0f`; the difference is
+    only the signalling/BSUN behaviour, deferred.) The 16 ordered-vs-unordered pairs differ EXACTLY on
+    NaN, which the test asserts takes opposite paths.
+
+  - **VERIFY.** `apps68k/j5q.s` does FCMP/FTST then FBcc branches (ordered AND unordered, incl. a NaN
+    operand), FScc to Dn + memory, an FDBcc decrement loop, and an FTRAPcc that raises vector 7 to a
+    planted handler. The oracle (`j5d_interp.c`) decodes the same four ops with the SAME predicate
+    function. The test asserts **byte-exact** (integer regs + FP regs + FPSR cc byte + the WHOLE
+    sandbox — the FScc-stored bytes, the FDBcc count, the FTRAPcc frame — + the exit `d0 == 0x000103FF`,
+    every FBcc path bit OR the trap marker) JIT vs oracle, plus an independent hand-check of the FScc
+    bytes / FDBcc count / the ordered-vs-unordered NaN paths / the FTRAPcc handler. **Negative control
+    bites:** flipping `FBOR` (predicate 0x07, ordered) → `FBUN` (0x08, unordered) in the JIT copy only
+    makes the JIT take the unordered path on the NaN FTST (`d0 = -1`) where the oracle stays ordered
+    (`d0 = 0x103FF`) → diverged. **PASS (observed):** `regs=yes fp=yes mem=yes`, hand-check "all match",
+    `fp_cc_ops=21`, `FTRAPcc->vector7 fired=1`, neg-ctrl "DIVERGED", and the whole corpus + the
+    `[J5o]`/`[J5p]` FP programs re-run byte-exact. `[J1]`–`[J5p]` re-confirmed green.
+
+  - **THE SEAM IS UNCHANGED (confirmed).** `[J5q]` adds NO state field — the predicate + the FPSR cc
+    constants + the vector-7 constant + the shared `j5q_fp_cond_taken()` go in the header (compile-time
+    only); `fp_cc_ops` is appended to the `j5d_stats` TELEMETRY struct, not `struct M68KState`/
+    `j5d_m68k_state` (offsets `fpcr==144`/`fpsr==148` static-asserts hold). The `jit_region` API, the
+    `[J3]` LVO contract, and the `[J5i]` exception model are untouched. The Emu68 quarantine stays
+    **byte-verbatim** (no `emu68/` file touched, no new vendored file, no new darwinize pass —
+    Exhibit-B unchanged/clean): the predicate + the control-flow are OURS in the dispatcher/oracle.
+
+  - **Still deferred (honest scope):** **FMOVEM** + FP **system-register moves** (FMOVE to/from
+    FPCR/FPSR/FPIAR as a control-register list), the **80-bit extended `.x`** / **packed-decimal `.p`**
+    MEMORY formats, and FP **exceptions** — including **BSUN** (the trap the *signalling* FP predicate
+    variants raise on an unordered operand; `[J5q]` evaluates the predicate truth correctly but does
+    not raise BSUN). The natural next FP increment is a **vbcc-compiled FP capstone** (a real C program
+    using `float`/`double` through the JIT end-to-end), which would exercise the whole FP stack
+    together.
 
 ## Risks
 

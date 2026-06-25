@@ -73,5 +73,11 @@ asm     j5p     -kick1hunks -m68882 -no-opt  # [J5p] 68881/68882 TRANSCENDENTAL 
                                  # NaN edge cases (FACOS(10)/FLOGN(-1)/FATANH(10)). -m68882 for
                                  # the FPU set; -no-opt keeps the exact line-F encodings;
                                  # -kick1hunks for the RELOC32 of lea fpconst/result.
+asm     j5q     -kick1hunks -m68882 -no-opt  # [J5q] FP CONDITIONAL CONTROL-FLOW: FBcc/FScc/
+                                 # FDBcc/FTRAPcc reading the FPSR cc; incl. NaN/unordered cases
+                                 # (ordered vs unordered predicates take opposite paths) +
+                                 # FTRAPcc->vector7. -m68882 for the FPU set; -no-opt keeps the
+                                 # exact line-F encodings; -kick1hunks for the RELOC32 of lea
+                                 # fpconst/result + the FTRAPcc handler address.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"
