@@ -135,7 +135,13 @@ static void cm__sync_layer_to_view(NSView *view) {
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     (void)sender;
     if (self.cx) cm__set_close_pending(self.cx);
-    return NO;   /* report, don't destroy: AROS owns the lifecycle */
+    /* Windowed-app behaviour: closing the window quits the process. AROS runs on
+       another thread; there is no clean cross-thread shutdown path yet, so exit
+       here (the user expects the close button to terminate, not require a kill).
+       An embedder that wants to handle CM_EV_CLOSE itself would install its own
+       delegate / not use cm_try_window. */
+    exit(0);
+    return YES;
 }
 - (void)windowDidResize:(NSNotification *)note {
     (void)note;
