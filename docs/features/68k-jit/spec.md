@@ -1466,6 +1466,95 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   are decoded by the REAL `EMIT_MOVEM` but **not exercised** by the verified program (the rule "don't
   assert what the test doesn't run"); `movep` (the LINE0 peripheral-move) remains vendored-but-undriven.
 
+- **`[J5m]` A C CROSS-COMPILER ON THIS MAC → COMPILER-GENERATED 68k CODE THROUGH THE JIT —
+  IMPLEMENTED / GREEN.** The milestone the prior spikes built toward: not a hand-assembled
+  corpus program but **real C lowered by a real compiler**, run through the JIT and proven
+  byte-exact. Files: `hosted/jit68k/{j5m_test.c, j5d_interp.c (oracle extended),
+  j5d_ea_helpers.c (byte-EA + pea/link/unlk helpers), emu68_darwinize.pl (--move-no-merge +
+  the pea/link/unlk movem-sandbox rules + the LEA/byte kind fix), apps68k/{j5m.c, crt0.s,
+  tools/build-vbcc.sh, tools/compile-j5m.sh}, apps68k/bin/j5m.exe}`; target
+  `make hosted-jit68k-j5m` (marker `[J5m] PASS`, watchdog 30 s), added to
+  `harness/test-hosted.sh`. **PASS (observed):**
+  1. **The toolchain — vbcc + vlink built FROM SOURCE on this Mac** (`apps68k/tools/build-vbcc.sh`,
+     binaries gitignored under `apps68k/.toolchain/` like vasm): **vbcc** (Volker Barthelmann's
+     portable C compiler, V0.9i pre / m68k code-gen V1.15, same author as vasm) targeting
+     **m68k/AmigaOS**, and **vlink** (Frank Wille, V0.18a) emitting the `-bamigahunk` executable.
+     The pipeline: `vbcc (C → vasm-mot asm) → vasm 2.0e (asm → vobj) → vlink (vobj → hunk .exe)`.
+     The one non-obvious build step: vbcc's `dtgen` (target-datatype generator) is interactive
+     ("Are you building a cross-compiler?"); per vbcc's own `doc/interface.texi`, the answer is
+     **`n`** when a NATIVE host compiler (clang) builds a vbcc binary that runs on the host (even
+     though it TARGETS m68k) — that uses host-native integer types, which is correct for INTEGER
+     constant folding (the m68k code-gen accesses integer constants only through arithmetic
+     functions, so host endianness is irrelevant; FP would need big-endian host floats, so the
+     program is integer-only). The script pipes `n` to make it non-interactive. Licenses: vbcc is
+     the same family as vasm (free for non-commercial AND an explicit commercial exception for
+     M68k/AmigaOS targets — exactly our use); vlink is freeware. Both are the TOOLCHAIN, not
+     emulators — no GPL/MPL emulator source involved.
+  2. **The program — a self-contained C compute kernel** (`apps68k/j5m.c`, no Amiga SDK, no real
+     libc): an iterative AND a recursive Fibonacci, a factorial table, an in-place bubble sort, a
+     hand-written unsigned/signed integer-to-decimal printer, and a 32-bit checksum returned from
+     `main` as the exit code. A hand-written `crt0.s` provides the entry (`_start: jsr _main; rts`
+     = the top-level RTS the engine treats as program exit, d0 = exit code) and the **PutChar LVO
+     shim** (`_putch: move.l 4(a7),d0; jsr -30(a6); rts` — the classic AmigaOS negative-offset
+     `jsr LVO(a6)`), so all output flows through the EXISTING `[J3]` LVO bridge into the stub
+     PutChar sink. Compiled with `-cpu=68020` so the 32-bit multiply/divide lower to NATIVE
+     `mulu.l`/`muls.l`/`divu.l`/`divul.l`/`divsl.l` (the 68000 would call `__mulu`/`__divu` library
+     helpers we do not ship), making the binary fully self-contained — only `_putch` needs linking.
+     The compiler lowers the C to the **full m68k calling convention**: `movem.l` prologue/epilogue,
+     stack frames (`suba.w #N,a7` + `(d,a7)` frame EAs), `jsr`/`bsr` nesting, `Bcc`, `pea`/`lea`,
+     indexed `(d8,An,Xn)` array EAs, byte/word memory ops, and the 68020 muldiv set.
+  3. **Through the JIT, byte-exact.** `j5m_test.c` loads `bin/j5m.exe` via the `[J4]` loader,
+     relocates it into the sandbox, and runs it through the `[J5d]` engine (REAL Emu68 decoders +
+     our dispatcher + the sandbox EA + the `[J3]` PutChar bridge): **81 blocks translated, 6018
+     block executions, 264 m68k instructions, 117 (An)/EA memory accesses, 235 PutChar calls
+     bridged, 7331 AArch64 words**. The JITed code prints the correct
+     `fib(iter): 0 1 1 2 … 610` / `fib(rec): … 144` / `fact: 1 2 6 … 479001600` /
+     `sorted: 167 178 … 924` / `checksum=654980065` and returns **d0 = 13281 (0x33E1)** — the low
+     16 bits of the checksum, matching an INDEPENDENT 32-bit-semantics C reference. The run is
+     **BYTE-EXACT vs the independent interpreter** (`j5d_interp.c`, OURS, no Emu68) on the full
+     register file, the WHOLE sandbox memory, the entire 235-byte PutChar output stream, AND the
+     exit d0. A **negative control** (flip one code byte in BOTH runs) makes the JIT and interpreter
+     **diverge**, so the byte-exact assert genuinely bites.
+
+  *The gaps the compiler surfaced (found + FIXED — diagnosed precisely, then re-verified).* The
+  hand-written corpus never produced these patterns; the compiler did, exposing real bugs BELOW the
+  seam — all fixed in `j5d_ea_helpers.c` + the `emu68_darwinize.pl` transform (the quarantine stays
+  byte-verbatim):
+  1. **Two-push MOVE merge (`--move-no-merge`).** Emu68's `M68k_MOVE.c` merges two consecutive
+     `move.l Reg,±(An)` into a single AArch64 `stp`/`ldp` PAIR accessed through the RAW 68k address
+     register — bypassing the sandbox base-adjust AND the big-endian `REV`. The C compiler emits
+     exactly that (pushing call args: `move.l X,-(a7); move.l Y,-(a7)`), which faulted (a `str` to a
+     raw 68k a7). FIX: a darwinize pass neutralises ONLY the merge guard so every move falls through
+     to the sandbox-aware `EMIT_StoreToEffectiveAddress` general path (semantics-preserving; only the
+     AArch64 word count changes).
+  2. **`pea`/`link`/`unlk` stack-frame pushes.** Their `-(a7)`/`(a7)+` accesses in `M68k_LINE4.c` go
+     through the raw `sp`, same bypass as movem. FIX: extend the `--movem-sandbox` transform to route
+     the `pea`/`link`/`unlk` `sp`-based push/pop through the same `j5d_movem_*` sandbox helpers (a new
+     `j5d_movem_ldr_post` for the `unlk` pop); the control-flow `sp` sites (RTS/JSR/RTE/RTD/RTR,
+     dispatcher-owned, never emitted) are deliberately left alone.
+  3. **Byte-sized funnel EA mis-decoded as LEA (the subtle one).** The `[J5g]` funnel-helper KIND
+     encoding overloaded `sz == 0` to mean BOTH "byte access" (J5D size 0 = B) AND "LEA (size 0 = no
+     memory touch)". The corpus only used the funnel for LONGWORD modes (bubsort's `(d8,An,Xn.L)`), so
+     the collision was latent; the compiler's `move.b X,(d8,An,Xn)` / `move.b (An),Dn` byte ops were
+     wrongly treated as LEA and SKIPPED THE STORE entirely (integer-to-decimal digits came out as
+     garbage). FIX: a dedicated `J5D_EA_LEA` flag bit (bit 6) for the LEA case; the helpers branch on
+     it, not on `sz == 0`, so byte funnel accesses do a real `strb`/`ldrb`.
+  4. **The oracle (`j5d_interp.c`) extended** to decode the compiler ISA the corpus lacked:
+     `suba.w/adda.w` + `addq.w/subq.w` to An (no CCR, .w sign-extended), the 68020
+     `mulu.l/muls.l/divu.l/divul.l/divsl.l` (incl. the `divul.l #imm,Dr:Dq` quotient/remainder
+     register split), `lsl.w/.l #count`, `extb.l`, `pea`/`lea` with displacement/indexed EAs,
+     `cmp.l`/`cmpa.l`/`tst` with memory/indexed operands, and the byte/word `move` forms.
+
+  *Honest scope / what `[J5m]` does NOT add.* The toolchain is integer-only (`-no-fp`; no 68881 FP —
+  the engine is integer-user-mode anyway, and host-native datatypes make FP constant folding
+  big-endian-wrong); no real Amiga SDK or libc (a hand `crt0.s` + the one PutChar LVO); `link`/`unlk`
+  are transformed but `j5m` itself uses `move.l #N,a7` + `movem` stack frames (the link/unlk path is
+  covered defensively, not exercised by this program). **The frozen seam is UNCHANGED (confirmed by
+  SHA-256):** `[J5m]` is host-toolchain + test + decoder/EA/oracle coverage BELOW the seam —
+  untouched are the `jit_region` API (`jit_region.h`), the `struct M68KState`/`struct j5d_m68k_state`
+  field layout (`j5d_jit68k.h`), the `[J3]` LVO-call marshalling contract, and the `[J5i]`
+  exception/SR model (`INTERFACE.md`). The whole corpus + `[J1]`–`[J5l]` re-confirmed green.
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:

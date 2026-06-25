@@ -28,6 +28,31 @@ only (in vasm's own code), no errors. vasm license: free for non-commercial use 
 for use/distribution in or with vasm (Barthelmann/Wille) — built from source, not
 modified.
 
+### A C cross-compiler too (`[J5m]`): vbcc + vlink from source
+
+For `[J5m]` — running **compiler-generated** 68k code through the JIT — we also build
+a full C cross-toolchain from source on this Mac:
+
+```
+tools/build-vbcc.sh     # fetch + build vbcc (C compiler) + vlink (linker) into .toolchain/
+tools/compile-j5m.sh    # vbcc -> vasm -> vlink : j5m.c (+ crt0.s) -> bin/j5m.exe
+```
+
+- **vbcc** (Volker Barthelmann, V0.9i / m68k code-gen V1.15) — the portable C compiler,
+  same author as vasm, targeting **m68k/AmigaOS**. The one build subtlety: vbcc's
+  `dtgen` asks "Are you building a cross-compiler?" interactively; per vbcc's own
+  `doc/interface.texi` the answer is **`n`** when a native host compiler (clang) builds
+  a vbcc that runs on the host (host-native integer types — correct for integer code;
+  the program is integer-only so host-endian FP folding never applies). The script pipes
+  `n` to keep the build non-interactive.
+- **vlink** (Frank Wille, V0.18a) — the linker, emits the `-bamigahunk` executable.
+- The pipeline: `vbcc (C → vasm-mot asm) → vasm (asm → vobj) → vlink (vobj → hunk .exe)`.
+- Licenses: vbcc is the same family as vasm (free for non-commercial + an explicit
+  **commercial exception for M68k/AmigaOS targets** — exactly our use); vlink is freeware.
+  Both are TOOLS (compiler/linker), not emulators — no GPL/MPL emulator source involved.
+  License text is captured in `.toolchain/{VBCC,VLINK}-LICENSE.txt`. Binaries are
+  gitignored under `.toolchain/`; only the small `bin/j5m.exe` is committed.
+
 ## 2. The programs (source `*.s` + assembled `bin/*.exe`)
 
 | program        | exercises                                              | exit | status |
@@ -38,6 +63,7 @@ modified.
 | `libcall.s`    | **`jsr -off(a6)`** library calls (AllocMem/PutChar/FreeMem) via the negative-offset LVO ABI | d0=0 | needs `[J5c]` |
 | `sumsq.s`      | **nested `bsr`/`jsr`/`rts` over a REAL return stack** + a **computed `jsr (a0)`** + a `cmp.l`/`bne.s` loop (a `square` subroutine nesting a `mul` helper, called from a loop) | d0=55 | **JIT `[J5f]`** |
 | `mandel.s`     | **the `[J5j]` CAPSTONE** — fixed-point Mandelbrot ASCII renderer: three nested loops, `muls.w` Q11 fixed point + `asr.l` shifts, `add`/`sub`/`cmp` reg+**`#imm`**, `Bcc`, **`(d16,a5)` displacement EA** (load+store), and a `PutChar` per cell via `jsr -off(a6)`. Prints the recognisable fractal; the 1690-byte output stream + regs + memory are byte-exact vs the oracle | d0=0 | **JIT `[J5j]`** |
+| `j5m.c`+`crt0.s` | **the `[J5m]` MILESTONE — REAL C COMPILED by vbcc** (not hand-asm): iterative+recursive Fibonacci, factorial table, bubble sort, integer printing, a 32-bit checksum. The compiler lowers it to the full m68k convention — `movem.l` prologues, stack frames (`suba.w`/`(d,a7)`), `jsr`/`bsr`, `Bcc`, `pea`/`lea`, indexed `(d8,An,Xn)` array EAs, byte/word mem, 68020 `mulu.l`/`divu.l`/`divul.l`/`divsl.l`. Run through the JIT, byte-exact (regs+memory+the 235-byte PutChar stream+d0) vs the oracle; output `fib…/fact…/sorted…/checksum=…` | d0=13281 | **JIT `[J5m]`** (`make hosted-jit68k-j5m`) |
 
 `mul.exe` stays entirely inside the opcode subset the `[J5b]` single-block decoder
 handles, so the runner **translates it to AArch64 and runs it under W^X TODAY**,

@@ -56,6 +56,14 @@
 #define J5D_EA_STORE(k)   (((k) >> 2) & 1u)
 #define J5D_EA_SIGNED(k)  (((k) >> 3) & 1u)
 #define J5D_EA_INDEX(k)   (((k) >> 4) & 3u) /* 0 none 1 post 2 pre */
+/* [J5m] bit6 = "load effective address" (lea/pea: compute the 68k addr into val, NO
+ * memory touch, NO base-add, NO byteswap). This was PREVIOUSLY signalled by sz==0 — but
+ * sz==0 ALSO means a BYTE-sized access (J5D_EA_SZ 0=B), so a real BYTE displacement/
+ * indexed/abs store or load (Emu68 size==1) was MIS-decoded as LEA and skipped its memory
+ * touch. The corpus only ever used the funnel for LONGWORD modes (bubsort's (d8,An,Xn.L)),
+ * so the collision was latent; the C compiler's `move.b X,(d8,An,Xn)` / `move.b (An),Dn`
+ * surfaced it. The LEA case now carries this EXPLICIT flag instead of overloading sz==0. */
+#define J5D_EA_LEA(k)     (((k) >> 6) & 1u)
 
 /* Fixed registers the engine prologue seeds / reserves (see header comment). */
 #define J5D_BASEADJ  12u    /* x12 = host_mem - origin (sandbox base-adjust)        */
@@ -189,6 +197,7 @@ uint32_t *j5d_ea_addr_offset(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t
                              int32_t offset, int offset_32bit)
 {
     unsigned sz = kind & 3u, is_store = (kind >> 2) & 1u, is_signed = (kind >> 3) & 1u;
+    unsigned is_lea = J5D_EA_LEA(kind);
     uint8_t addr = 2; /* x2 holds the computed 32-bit 68k address */
 
     if (base == 0xff) {
@@ -211,7 +220,7 @@ uint32_t *j5d_ea_addr_offset(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t
         *ptr++ = add_reg(addr, base, addr, LSL, 0);
     }
 
-    if (sz == 0 /* LEA: just leave the 68k address in val, no memory touch */) {
+    if (is_lea /* LEA: just leave the 68k address in val, no memory touch */) {
         if (addr != val) *ptr++ = mov_reg(val, addr);
         return ptr;
     }
@@ -225,6 +234,7 @@ uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t 
                             uint8_t index, uint8_t shift)
 {
     unsigned sz = kind & 3u, is_store = (kind >> 2) & 1u, is_signed = (kind >> 3) & 1u;
+    unsigned is_lea = J5D_EA_LEA(kind);
 
     /* index == 0xff means "no index register" — this funnel was used purely as a base+0
      * load (Emu68's load_reg_from_addr(size, base, reg, 0xff, ...)). Defer to the offset
@@ -234,7 +244,7 @@ uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t 
 
     if (base == 0xff) { *ptr++ = movw_immed_u16(2, 0); base = 2; }
 
-    if (sz == 0 /* LEA-with-index: compute addr into val, no memory touch */) {
+    if (is_lea /* LEA-with-index: compute addr into val, no memory touch */) {
         *ptr++ = add_reg(val, base, index, LSL, shift);
         return ptr;
     }
@@ -401,6 +411,15 @@ uint32_t *j5d_movem_ldp_post(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t r
 uint32_t *j5d_movem_ldr(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
 {
     return movem_load_w(ptr, base, rt, offset);
+}
+/* was ldr_offset_postindex(base, rt, amt)    (single 32-bit load, THEN base += amt)
+ * [J5m]: the (An)+ pop EMIT_UNLK emits — load the longword at (An), byteswap, then
+ * post-increment the 68k An. Used by the --movem-sandbox unlk rule. */
+uint32_t *j5d_movem_ldr_post(uint32_t *ptr, uint8_t base, uint8_t rt, int amt)
+{
+    ptr = movem_load_w(ptr, base, rt, 0);
+    *ptr++ = add_immed(base, base, (uint16_t)amt);     /* post-increment the 68k An */
+    return ptr;
 }
 /* was ldrsh_offset(base, rt, offset)         (single signed-16 load, sign-extend to long) */
 uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)

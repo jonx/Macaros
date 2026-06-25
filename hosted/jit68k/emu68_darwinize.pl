@@ -83,10 +83,37 @@ sub ea_kind {
 #                    M68k_LINE4.c stays BYTE-VERBATIM; only the build-dir copy is patched.
 use strict; use warnings;
 my ($src, $out, @opts) = @ARGV;
-die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox]\n" unless $src && $out;
+die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge]\n" unless $src && $out;
 my $ea_sandbox    = grep { $_ eq '--ea-sandbox' } @opts;
 my $movem_sandbox = grep { $_ eq '--movem-sandbox' } @opts;
+my $move_no_merge = grep { $_ eq '--move-no-merge' } @opts;
 local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close $fh;
+
+# ===================== [J5m] MOVE TWO-PUSH MERGE NEUTRALISE =====================
+# Applied to M68k_MOVE.c only (--move-no-merge). Emu68's M68k_MOVE.c has a fast path that
+# MERGES two consecutive `move.l Reg,-(An)` / `(An)+` / `-(An),Reg` / `(An)+,Reg` into a
+# single AArch64 stp/ldp PAIR access (M68k_MOVE.c:142-324). That merged pair accesses
+# memory through the RAW 68k address register (e.g. stp_preindex(a7,...)), bypassing
+# EMIT_StoreToEffectiveAddress / EMIT_LoadFromEffectiveAddress — so it gets NEITHER the
+# sandbox base-adjust NOR the big-endian REV that the darwinized M68k_EA.c applies. The
+# hand-written corpus never produced back-to-back register pushes to the same -(An), so it
+# was latent; the vbcc C compiler emits exactly that (pushing call args: move.l X,-(a7) ;
+# move.l Y,-(a7)), which faulted (str to a raw 68k a7).
+#
+# FIX (semantics-preserving, NO quarantine edit): neutralise ONLY the outer merge guard so
+# `done` stays 0 and EVERY move falls through to the `if (!done)` general path — which uses
+# EMIT_Load/StoreFromEffectiveAddress and IS sandbox-transformed (via the --ea-sandbox
+# M68k_EA.c). Unmerging changes only HOW MANY AArch64 words are emitted, never the 68k
+# semantics. The guard line `if ((opcode & 0xf000) == 0x2000)` is unique in the file. The
+# quarantine M68k_MOVE.c stays byte-verbatim; only the build-dir copy is patched.
+if ($move_no_merge) {
+    # Match ONLY the unique merge-guard condition; rewrite it to a never-true form. The
+    # following `{` block and all four inner candidate tests stay intact but never run, so
+    # `done` is always 0 and the move falls through to the sandbox-aware `if (!done)` path.
+    my $repl = 'if (0 /* [J5m] darwinize: merge disabled, route via sandbox EA */ && (opcode & 0xf000) == 0x2000)';
+    my $n = ($code =~ s!\Qif ((opcode & 0xf000) == 0x2000)\E!$repl!g);
+    die "!! --move-no-merge: expected exactly 1 merge guard, matched $n\n" unless $n == 1;
+}
 
 # ===================== [J5l] EMIT_MOVEM SANDBOX REWRITE =====================
 # Applied to M68k_LINE4.c only (--movem-sandbox). Each rewrite is a pure call-substitution
@@ -120,6 +147,22 @@ if ($movem_sandbox) {
               {$mv++; "ptr = j5d_movem_strh(ptr, base, $1, $2); /* [J5l] was strh_offset */"}gex;
     $code =~ s{\*ptr\+\+\s*=\s*ldrsh_offset\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
               {$mv++; "ptr = j5d_movem_ldrsh(ptr, base, $1, $2); /* [J5l] was ldrsh_offset */"}gex;
+
+    # [J5m] pea/link/unlk stack-frame ops: their -(a7) push / (a7)+ pop go through the RAW
+    # 68k a7 (`sp`) — same bypass as movem, never reached by the hand-written corpus but
+    # emitted by the C COMPILER (vbcc): `pea label` (push a string-literal address), and
+    # `link`/`unlk` stack frames. These use `sp` + operand names `ea`/`reg`, which are UNIQUE
+    # to EMIT_PEA / EMIT_LINK16/32 / EMIT_UNLK; the control-flow sp sites (RTS/JSR/RTE/RTD/RTR)
+    # push/pop `REG_PC`/`tmp2` and are owned by OUR dispatcher (decoded as terminators, never
+    # emitted here), so they are deliberately NOT matched. Route through the SAME sandbox-aware
+    # movem helpers (base-adjust + REV + pre/post index).
+    $code =~ s{\*ptr\+\+\s*=\s*str_offset_preindex\(\s*sp\s*,\s*ea\s*,\s*-(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_str_pre(ptr, sp, ea, $1); /* [J5m] PEA push: was str_offset_preindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*str_offset_preindex\(\s*sp\s*,\s*reg\s*,\s*-(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_str_pre(ptr, sp, reg, $1); /* [J5m] LINK push: was str_offset_preindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*ldr_offset_postindex\(\s*sp\s*,\s*reg\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_ldr_post(ptr, sp, reg, $1); /* [J5m] UNLK pop: was ldr_offset_postindex */"}gex;
+
     if ($mv) {
         my $decl = "\n/* [J5l] darwinize: movem sandbox-memory helpers (OURS, j5d_ea_helpers.c) */\n"
                  . "uint32_t *j5d_movem_stp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset);\n"
@@ -131,6 +174,7 @@ if ($movem_sandbox) {
                  . "uint32_t *j5d_movem_ldp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset);\n"
                  . "uint32_t *j5d_movem_ldp_post(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int amt);\n"
                  . "uint32_t *j5d_movem_ldr(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n"
+                 . "uint32_t *j5d_movem_ldr_post(uint32_t *ptr, uint8_t base, uint8_t rt, int amt);\n"
                  . "uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n";
         if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
             my $head = $1; substr($code, length($head), 0) = $decl;
@@ -168,17 +212,22 @@ if ($ea_sandbox) {
     # offset/size/sign exactly. The DECODE (mode select, extension-word reads, index
     # sign/scale) stays the REAL decoder; only the memory touch is sandbox-translated.
     # KIND bit layout (mirrors ea_kind / j5d_ea_helpers.c): bit0..1 size(0=B,1=H,2=W),
-    # bit2 store, bit3 signed.  size 0 == "load effective address" (lea/pea: no memory).
+    # bit2 store, bit3 signed, bit6 = LEA (compute the 68k address only, no memory touch).
+    # [J5m] Emu68 `size==0` is the LEA case AND `size==1` is a BYTE access — both used to map
+    # to kind 0u, so a byte funnel access was wrongly treated as LEA (no store/load emitted).
+    # Now size==1 -> 0u (byte, sz bits) and size==0 -> 0x40u (the LEA flag, sz bits 0); the
+    # helpers branch on J5D_EA_LEA, not sz==0.
+    my $szk = '((size==4)?2u:(size==2)?1u:(size==1)?0u:0x40u)';
     my %funnel = (
-        # name => [is_store, body-call-template using the helper's own args]
+        # name => body-call-template using the helper's own args
         'load_reg_from_addr_offset' =>
-            'return j5d_ea_addr_offset(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | (sign_ext?8u:0u), base, reg, offset, offset_32bit);',
+            "return j5d_ea_addr_offset(ptr, $szk | (sign_ext?8u:0u), base, reg, offset, offset_32bit);",
         'store_reg_to_addr_offset'  =>
-            'return j5d_ea_addr_offset(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | 4u, base, reg, offset, offset_32bit);',
+            "return j5d_ea_addr_offset(ptr, $szk | 4u, base, reg, offset, offset_32bit);",
         'load_reg_from_addr'        =>
-            'return j5d_ea_addr_index(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | (sign_ext?8u:0u), base, reg, index, shift);',
+            "return j5d_ea_addr_index(ptr, $szk | (sign_ext?8u:0u), base, reg, index, shift);",
         'store_reg_to_addr'         =>
-            'return j5d_ea_addr_index(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | 4u, base, reg, index, shift);',
+            "return j5d_ea_addr_index(ptr, $szk | 4u, base, reg, index, shift);",
     );
     my $funnel_rewrites = 0;
     for my $name (keys %funnel) {

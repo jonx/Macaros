@@ -39,6 +39,7 @@ ROWS=(
   "J5j Mandelbrot capstone     : hosted-jit68k-j5j"
   "J5k cross-region chaining   : hosted-jit68k-j5k"
   "J5l movem save/restore      : hosted-jit68k-j5l"
+  "J5m vbcc C-compiled->JIT    : hosted-jit68k-j5m"
   "apps68k real 68k programs  : hosted-jit68k-apps"
   "D1 cocoa/metal present     : hosted-cocoametal"
   "ABI cocoametal dylib seam  : cocoametal-abi"

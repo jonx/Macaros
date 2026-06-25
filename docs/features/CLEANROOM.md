@@ -77,6 +77,7 @@ stand on their independent justification alone.
 | **Emu68** | **MPL-2.0** | **Adoptable as isolated files** (file-level copyleft): keep its files verbatim with their MPL header in a quarantined dir, don't intermix with AROS source. Clean-room *not* required, but a clean integration boundary is. See `68k-jit/design.md` `[J0]`. |
 | AROS tree | APL / LGPL-2.1 | Ours. Cite and build on directly. |
 | Apple frameworks | proprietary, public API | Link against; implement to the published interface. |
+| **vbcc / vasm / vlink** (Barthelmann/Wille) | free for non-commercial **+ explicit commercial exception for M68k/AmigaOS targets** (vbcc/vasm); vlink freeware | **Build TOOLS, not emulators — not GPL/MPL emulator source.** Built from source on this Mac (`hosted/jit68k/apps68k/tools/{build-vasm,build-vbcc}.sh`, binaries gitignored under `.toolchain/`), used to COMPILE the `[J5m]` C test program into a 68k AmigaOS hunk executable (`vbcc → vasm → vlink`). No emulator/decoder source is read or copied; these are a C compiler + assembler + linker. License text captured in `.toolchain/{VBCC,VLINK}-LICENSE.txt`. |
 
 ## Spec status
 
