@@ -83,20 +83,69 @@ local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close
 # --ea-sandbox so the [J5c] build (no j5d_ea_mem linked) is unaffected.
 if ($ea_sandbox) {
     my $ea_rewrites = 0;
+    # Direct sites: the (An)/(An)+/-(An) class on `reg_An` (modes 2/3/4, [J5d]) AND the
+    # absolute-long (mode 7.1) class on `tmp_reg` ([J5g]) — Emu68 emits abs.l as a separate
+    # `ldr_offset(tmp_reg, *arm_reg, 0)` that does NOT route through the funnel helpers.
+    # Both are a raw `<ldst>_offset(<base>, *arm_reg, <imm>)` whose <base> holds a 68k
+    # address; rewrite each to OUR sandbox emitter (base-adjust + REV + post/pre index).
     $code =~ s{
         \*ptr\+\+\s*=\s*
         (ld[rsu][a-z]*_offset(?:_postindex|_preindex)?|st[ru][a-z]*_offset(?:_postindex|_preindex)?)
-        \(\s*reg_An\s*,\s*\*arm_reg\s*,\s*(-?\d+)\s*\)\s*;
+        \(\s*(reg_An|tmp_reg)\s*,\s*\*arm_reg\s*,\s*(-?\d+)\s*\)\s*;
     }{
-        my ($enc, $imm) = ($1, $2);
+        my ($enc, $base, $imm) = ($1, $2, $3);
         my $kind = ea_kind($enc, $imm + 0);
         $ea_rewrites++;
-        "ptr = j5d_ea_mem(ptr, ${kind}u, reg_An, *arm_reg, ${imm}); /* [J5d] EA: was ${enc} */";
+        "ptr = j5d_ea_mem(ptr, ${kind}u, ${base}, *arm_reg, ${imm}); /* [J5d]/[J5g] EA: was ${enc} */";
     }gex;
-    if ($ea_rewrites) {
-        # Forward-declare our helper after the includes so the rewritten calls resolve.
-        my $decl = "\n/* [J5d] darwinize: sandbox-memory EA helper (OURS, j5d_ea_helpers.c) */\n"
-                 . "uint32_t *j5d_ea_mem(uint32_t *ptr, unsigned kind, uint8_t reg_An, uint8_t val, int index_amount);\n";
+    # ===================== [J5g] FUNNEL-HELPER body rewrite =======================
+    # The (d16,An)/(d8,An,Xn)/abs/PC-relative memory modes do NOT use the direct
+    # ldr_offset(reg_An,...) sites above — the REAL Emu68 EA decoder routes them through
+    # four inline funnel helpers. We replace the BODY of each with a single tail-call to
+    # OUR sandbox emitter (j5d_ea_helpers.c), preserving the decoder's computed base/index/
+    # offset/size/sign exactly. The DECODE (mode select, extension-word reads, index
+    # sign/scale) stays the REAL decoder; only the memory touch is sandbox-translated.
+    # KIND bit layout (mirrors ea_kind / j5d_ea_helpers.c): bit0..1 size(0=B,1=H,2=W),
+    # bit2 store, bit3 signed.  size 0 == "load effective address" (lea/pea: no memory).
+    my %funnel = (
+        # name => [is_store, body-call-template using the helper's own args]
+        'load_reg_from_addr_offset' =>
+            'return j5d_ea_addr_offset(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | (sign_ext?8u:0u), base, reg, offset, offset_32bit);',
+        'store_reg_to_addr_offset'  =>
+            'return j5d_ea_addr_offset(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | 4u, base, reg, offset, offset_32bit);',
+        'load_reg_from_addr'        =>
+            'return j5d_ea_addr_index(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | (sign_ext?8u:0u), base, reg, index, shift);',
+        'store_reg_to_addr'         =>
+            'return j5d_ea_addr_index(ptr, ((size==4)?2u:(size==2)?1u:(size==1)?0u:0u) | 4u, base, reg, index, shift);',
+    );
+    my $funnel_rewrites = 0;
+    for my $name (keys %funnel) {
+        # Find:  ... uint32_t * <name> ( <args> ) {  ...balanced...  }
+        # and replace the {...} body with our forwarding call. Balanced-brace scan.
+        if ($code =~ /(\b\Q$name\E\s*\([^)]*\)\s*)\{/g) {
+            my $hdr_end = pos($code);                 # just after the opening brace
+            my $open    = $hdr_end - 1;               # index of the '{'
+            # scan to the matching close brace
+            my $depth = 1; my $i = $hdr_end;
+            while ($i < length($code) && $depth) {
+                my $ch = substr($code, $i, 1);
+                $depth++ if $ch eq '{';
+                $depth-- if $ch eq '}';
+                $i++;
+            }
+            my $body_len = $i - $open;                # length of {...}
+            substr($code, $open, $body_len) =
+                "{ /* [J5g] darwinize: sandbox EA funnel */ $funnel{$name} }";
+            $funnel_rewrites++;
+        }
+        pos($code) = 0;
+    }
+    if ($ea_rewrites || $funnel_rewrites) {
+        # Forward-declare our helpers after the includes so the rewritten calls resolve.
+        my $decl = "\n/* [J5d]/[J5g] darwinize: sandbox-memory EA helpers (OURS, j5d_ea_helpers.c) */\n"
+                 . "uint32_t *j5d_ea_mem(uint32_t *ptr, unsigned kind, uint8_t reg_An, uint8_t val, int index_amount);\n"
+                 . "uint32_t *j5d_ea_addr_offset(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t val, int offset, int offset_32bit);\n"
+                 . "uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t val, uint8_t index, uint8_t shift);\n";
         if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
             my $head = $1; substr($code, length($head), 0) = $decl;
         } else { $code = $decl . $code; }

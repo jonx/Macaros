@@ -92,6 +92,37 @@ Files taken for [J5d] (verbatim — broadening the corpus through the JIT)
     hosted/jit68k/j5d_interp.c      — the INDEPENDENT from-scratch oracle (no Emu68).
   These call/link the vendored decoders but copy NO Emu68 source (MPL FAQ Q11-Q13).
 
+Files taken for [J5g] (verbatim — broaden the ISA + addressing-mode coverage)
+-----------------------------------------------------------------------------
+  [J5g] BROADENS the driven decoder set toward running any self-contained 68k program.
+  Three MORE files are vendored BYTE-VERBATIM from the same pin (commit 305f686); the
+  Exhibit-B re-grep is clean (Exhibit-A header only) and `diff` vs upstream is empty:
+  M68k_LINE0.c    <- Emu68 src/M68k_LINE0.c   (immediates/bit ops: ORI/ANDI/EORI/SUBI/
+                                               ADDI/CMPI/BTST/BCHG/BCLR/BSET/MOVEP/CAS)
+  M68k_LINE4.c    <- Emu68 src/M68k_LINE4.c   (misc: CLR/NEG/NOT/TST/EXT/SWAP/LEA/PEA/
+                                               MOVEM/JMP/JSR/RTS/LINK/TRAP/... dispatch)
+  M68k_LINEE.c    <- Emu68 src/M68k_LINEE.c   (shifts/rotates: ASL/ASR/LSL/LSR/ROL/ROR/
+                                               ROXL/ROXR + the BFxxx bitfield ops)
+  The engine dispatcher (j5d_engine.c) drives EMIT_line0 / EMIT_line4 / EMIT_lineE for
+  groups 0/4/E (and EMIT_move for the .b/.w move groups 1/3). The flag helpers they call
+  (EMIT_GetNZCV / EMIT_GetNZxx / EMIT_ClearFlags / EMIT_SetFlagsConditional ...) are
+  `static inline` in the already-vendored A64.h. [J5g] also adds OUR (AROS-licensed,
+  NON-MPL) glue:
+    hosted/jit68k/j5g_shims.c       — link stubs for the un-driven LINE4 sub-ops the
+                                      verbatim files reference (the debug/disasm trace
+                                      gate read by EMIT_MOVEC; M68K_PopReturnAddress used
+                                      by EMIT_RTS) — never on a hot path; the dispatcher
+                                      owns all control flow.
+    hosted/jit68k/j5d_ea_helpers.c  — EXTENDED with j5d_ea_addr_offset / j5d_ea_addr_index
+                                      (the (d16,An)/(d8,An,Xn)/abs/PC-rel sandbox EA the
+                                      funnel-helper rewrite calls; see darwinize below).
+    hosted/jit68k/{j5g_test.c,j5d_interp.c} — the [J5g] driver + the oracle (extended to
+                                      every new opcode/mode/size).
+  These call/link the vendored decoders but copy NO Emu68 source (MPL FAQ Q11-Q13). The
+  w0->x1 state-pointer fix (a fourth bare-metal coupling: Emu68 hardcodes w0 as a flag-
+  extraction scratch) and the C/V CCR-layout fix are entirely in OUR files (j5c_ra.c,
+  j5d_engine.c, j5c_build.c, j5d_jit68k.h) — no quarantine edit.
+
 Build-time darwinize (NO edit to the verbatim files)
 ----------------------------------------------------
   The vendored decoders use GNU __attribute__((alias(...))) function aliases, which
@@ -103,18 +134,34 @@ Build-time darwinize (NO edit to the verbatim files)
   Only the build-dir copies are compiled. This is a portability finding, not a licence
   edit: the quarantine stays byte-verbatim.
 
-  [J5d] SECOND build-time transform (the disclosed [J5a]/M68k_EA.c edit) — applied to the
-  BUILD-DIR COPY of M68k_EA.c ONLY, gated by emu68_darwinize.pl's `--ea-sandbox` flag
-  (the [J5d]/apps builds pass it; the [J5c] build does NOT, so its copy is alias-only and
-  links no helper). Each (An)-class load/store site
-      *ptr++ = ldr_offset(reg_An, *arm_reg, 0);            // (An)
-      *ptr++ = ldr_offset_postindex(reg_An, *arm_reg, 4);  // (An)+   ... str/pre likewise
+  [J5d]/[J5g] SECOND build-time transform (the disclosed [J5a]/M68k_EA.c edit) — applied to
+  the BUILD-DIR COPY of M68k_EA.c ONLY, gated by emu68_darwinize.pl's `--ea-sandbox` flag
+  (the [J5d]/[J5g]/apps builds pass it; the [J5c] build does NOT, so its copy is alias-only
+  and links no helper). Each DIRECT load/store site whose base register holds a 68k address
+      *ptr++ = ldr_offset(reg_An, *arm_reg, 0);            // (An)   modes 2/3/4 ([J5d])
+      *ptr++ = ldr_offset_postindex(reg_An, *arm_reg, 4);  // (An)+  ... str/pre likewise
+      *ptr++ = ldr_offset(tmp_reg, *arm_reg, 0);           // abs.l  mode 7.1 ([J5g])
   is rewritten to a call to OUR sandbox-translating emitter
-      ptr = j5d_ea_mem(ptr, KIND, reg_An, *arm_reg, IMM);  // j5d_ea_helpers.c (OURS)
-  which adds the sandbox base (host = base_adjust + An, UXTW), byteswaps with REV, and
+      ptr = j5d_ea_mem(ptr, KIND, <base>, *arm_reg, IMM);  // j5d_ea_helpers.c (OURS)
+  which adds the sandbox base (host = base_adjust + <base>, UXTW), byteswaps with REV, and
   applies the post/pre index. KIND is derived MECHANICALLY from the original encoder name
   (size/sign/index), so the patch is a pure call-substitution preserving operand order.
-  The QUARANTINE M68k_EA.c is NOT touched — `diff` against upstream stays empty (verified).
+  abs.l (mode 7.1) is an Emu68 inconsistency — it does NOT use the funnel helpers below, it
+  materialises the address in `tmp_reg` and emits a direct ldr/str, so the direct-site match
+  covers `tmp_reg` as well as `reg_An`. The QUARANTINE M68k_EA.c is NOT touched — `diff`
+  against upstream stays empty (verified).
+
+  [J5g] THIRD build-time transform (the EA FUNNEL-HELPER rewrite, also --ea-sandbox-gated)
+  — the (d16,An)/(d8,An,Xn)/abs.w/abs.l/(d16,PC)/(d8,PC,Xn) modes do NOT use the direct
+  (An)-class sites above; the REAL Emu68 EA decoder routes them through FOUR inline funnel
+  helpers (load_reg_from_addr / load_reg_from_addr_offset / store_reg_to_addr / store_reg_
+  to_addr_offset). The script replaces the BODY of each (a name-based, whole-body call-
+  substitution) with a tail-call to OUR j5d_ea_addr_offset / j5d_ea_addr_index (j5d_ea_
+  helpers.c), which compute base+offset or base+index<<shift, add the sandbox base-adjust
+  (UXTW), byteswap with REV, and do the size-correct load/store (size 0 = LEA address-
+  compute, NO memory). The DECODE stays the REAL decoder; only the memory touch is
+  sandboxed. Applied to the BUILD-DIR copy ONLY; the QUARANTINE M68k_EA.c stays BYTE-
+  VERBATIM (`diff` vs upstream empty, verified).
 
 NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
 -----------------------------------------------------------------------------
@@ -125,8 +172,10 @@ NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
   src/ExecutionLoop.c (the ICache/LRU + MainLoop funnel — re-hosted minimally as OUR
   per-PC block cache + dispatcher in j5d_engine.c), src/M68k_SR.c (the all-16-line
   GetSRMask/INSNLength fan-out — severed by M68K_GetSRMask=>SR_CCR in j5c_shims.c), and
-  the line decoders NOT yet needed (M68k_LINE{0,4,6,E,F}.c — the [J5d] dispatcher decodes
-  Bcc/BRA/JSR/LEA itself rather than re-host LINE4/6's REG_PC/branch-target model;
+  the line decoders NOT yet needed (M68k_LINE{0,4,6,E,F}.c — the [J5d]/[J5f] dispatcher
+  decodes Bcc/BRA/BSR/JSR/JMP/LEA itself, including the [J5f] real return stack
+  (bsr/jsr/rts push/pop on a7), computed jmp(An)/jsr(An), and the full Bcc .B/.W/.L
+  widths, rather than re-host LINE4/6's REG_PC/branch-target/M68K_PushReturnAddress model;
   M68k_Exception.c, M68k_FPU.c).
 
 Exhibit-B (MPL <-> LGPL compatibility) check
@@ -139,6 +188,9 @@ Exhibit-B (MPL <-> LGPL compatibility) check
   itself quotes the phrase, so restrict to source):
     grep -rn "Incompatible With Secondary Licenses" hosted/jit68k/emu68/ --include='*.c' --include='*.h'
   (Confirmed empty for the [J5c] AND [J5d] vendoring — M68k_LINE5.c, M68k_CC.c — on 2026-06-25.)
+  ([J5f] vendored NO new file — the PC-driven dispatcher / real return stack / computed
+  jumps / full Bcc widths are dispatcher-level C in OUR files (j5d_engine.c, j5d_interp.c)
+  — so the Exhibit-B set is unchanged; re-grep on 2026-06-25 still empty.)
 
 Local edits to these files
 --------------------------

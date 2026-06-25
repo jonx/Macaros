@@ -8,7 +8,7 @@
  * authored from the documented contract + the [J5a] finding. In particular the SR/CTX
  * functions do NOT use `mrs/msr TPIDR_EL0/TPIDRRO_EL0` (Emu68's bare-metal convention,
  * the third [J5a] coupling) — they keep the CCR in an ARM scratch register loaded from /
- * stored to struct j5c_m68k_state (x0) in MEMORY.
+ * stored to struct j5c_m68k_state (x1, [J5g]) in MEMORY.
  *
  * ===================== THE FIXED m68k->ARM REGISTER MAP (Emu68 ABI) =================
  * The decoders + EA assume Dn/An are ALWAYS mapped to fixed ARM registers (RA_Map* just
@@ -20,20 +20,30 @@
  * back, so memory-backing the architectural regs needs nothing here.
  *
  * Scratch (temporary) ARM registers: the allocator hands out w4..w11 (bits 0..3 are
- * reserved — crucially x0 stays free to hold the state pointer across the whole block,
- * which is how RA_GetCC reaches struct j5c_m68k_state.ccr). This matches Emu68's own
- * __int_arm_alloc_reg (`~(register_pool | 15)` => first free bit >= 4).
- * ===============================================================================
+ * reserved). This matches Emu68's own __int_arm_alloc_reg (`~(register_pool | 15)` =>
+ * first free bit >= 4).
+ *
+ * THE STATE POINTER IS IN x1, NOT x0 ([J5g] FIX — a FOURTH bare-metal coupling).
+ * Emu68's decoders treat w0 as a hardcoded 1-shot SCRATCH for flag extraction — e.g.
+ * EMIT_BTST / EMIT_ASx do `cset(0, cond); bfi(cc, 0, SRB_Z, 1)` (M68k_LINE0.c:1748,
+ * M68k_LINEE.c:869, ...) — because bare-metal the CTX lives in a system register
+ * (TPIDRRO_EL0), so w0 is genuinely free. The [J5c]/[J5d] re-host overloaded w0 as the
+ * MEMORY-backed state pointer, which those `cset(0,...)` sites silently clobbered (the
+ * register/ALU corpus never hit them; the [J5g] demanding program's btst does). The fix:
+ * keep the state pointer in x1 (the decoders NEVER hardcode w1/w2/w3 — verified), so w0
+ * is free exactly as Emu68 expects. RA_GetCC/RA_GetCTX + the engine prologue/epilogue use
+ * x1 as the state base; the EA helpers use x12 (base-adjust) + x2/x3 (scratch).
  *
  * ============================= THE CCR (the [J5a] coupling, re-hosted) ==============
  * Emu68's RA_GetCC does `mrs reg, TPIDR_EL0` to load the CCR and RA_StoreCC does `msr`.
- * Ours instead does `ldr w_cc,[x0,#J5C_OFF_CCR]` / `str w_cc,[x0,#J5C_OFF_CCR]`. The
+ * Ours instead does `ldr w_cc,[x1,#J5C_OFF_CCR]` / `str w_cc,[x1,#J5C_OFF_CCR]`. The
  * decoders use the CCR register in Emu68's swapped representation (C/V swapped vs the 68k
  * SR bit order in some paths — documented in A64.h). We store/restore the byte verbatim:
  * the INTERPRETER oracle (j5c_interp.c) and the test assert the architectural registers
  * byte-exact (the real proof) and check the Z/N CCR bits, which are layout-stable.
  * ===============================================================================
  */
+#define J5C_STATE_X  1u    /* x1 = struct j5c_m68k_state* for the whole block */
 #include <stdint.h>
 #include "emu68/RegisterAllocator.h"
 #include "emu68/A64.h"            /* encoders: ldr_offset/str_offset/mov_reg; REG_* map  */
@@ -140,7 +150,7 @@ void     RA_ClearChangedMask(void) { changed_mask = 0; }
 /* ===================================================================================
  * HOOK 3 — the CCR, MEMORY-BACKED (NOT TPIDR_EL0).  reg_CC holds a scratch register that
  * mirrors struct j5c_m68k_state.ccr; loaded lazily on first use, stored if modified.
- * x0 holds the state pointer for the whole block (see header), so the offset load works.
+ * x1 holds the state pointer for the whole block ([J5g]); the offset load works.
  * =================================================================================== */
 static uint8_t reg_CC = 0xff;
 static uint8_t mod_CC = 0;
@@ -150,7 +160,7 @@ uint8_t RA_GetCC(uint32_t **ptr)
     if (reg_CC == 0xff) {
         reg_CC = alloc_scratch();
         /* ldr w_cc, [x0, #CCR]  — load the CCR from the state struct (NOT mrs TPIDR). */
-        **ptr = ldr_offset(0 /*x0 = state*/, reg_CC, J5C_OFF_CCR);
+        **ptr = ldr_offset(J5C_STATE_X /*x1 = state*/, reg_CC, J5C_OFF_CCR);
         (*ptr)++;
         mod_CC = 0;
     }
@@ -163,7 +173,7 @@ void RA_StoreCC(uint32_t **ptr)
 {
     if (reg_CC != 0xff && mod_CC) {
         /* str w_cc, [x0, #CCR]  — store the CCR back to the state struct (NOT msr). */
-        **ptr = str_offset(0, reg_CC, J5C_OFF_CCR);
+        **ptr = str_offset(J5C_STATE_X, reg_CC, J5C_OFF_CCR);
         (*ptr)++;
     }
 }
@@ -171,7 +181,7 @@ void RA_StoreCC(uint32_t **ptr)
 void RA_FlushCC(uint32_t **ptr)
 {
     if (reg_CC != 0xff) {
-        if (mod_CC) { **ptr = str_offset(0, reg_CC, J5C_OFF_CCR); (*ptr)++; }
+        if (mod_CC) { **ptr = str_offset(J5C_STATE_X, reg_CC, J5C_OFF_CCR); (*ptr)++; }
         RA_FreeARMRegister(ptr, reg_CC);
     }
     reg_CC = 0xff;
@@ -198,7 +208,7 @@ void j5c_ra_reset(void)
  * but provide it for completeness / future memory opcodes. ----------------------------- */
 static uint8_t reg_CTX = 0xff;
 uint8_t RA_TryCTX(uint32_t **ptr) { (void)ptr; return reg_CTX; }
-uint8_t RA_GetCTX(uint32_t **ptr) { (void)ptr; reg_CTX = 0 /*x0*/; return reg_CTX; }
+uint8_t RA_GetCTX(uint32_t **ptr) { (void)ptr; reg_CTX = J5C_STATE_X /*x1*/; return reg_CTX; }
 void    RA_FlushCTX(uint32_t **ptr) { (void)ptr; reg_CTX = 0xff; }
 
 /* ---- FPU RA (unused by the [J5c] integer block; trivial like Emu68's) -------------- */

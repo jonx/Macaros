@@ -83,9 +83,15 @@ static unsigned emit_block(const uint8_t *code, uint32_t code_len, int neg_corru
     *ptr++ = stp64_preindex(31, 25, 26, -16);
     *ptr++ = stp64_preindex(31, 27, 28, -16);
 
-    /* Prologue: load D0..D7 and A0..A7 from the state struct (x0). */
-    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(0, reg_d[i], J5C_OFF_D(i));
-    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(0, reg_a[i], J5C_OFF_A(i));
+    /* The block is entered as block(struct j5c_m68k_state *st) -> state in x0.  [J5g]: the
+     * shared RA (j5c_ra.c) now keeps the state pointer in x1 (so w0 is free for Emu68's
+     * hardcoded `cset(0,...)` flag-extraction scratch). Move state x0 -> x1 here so the
+     * RA's memory-backed CCR (ldr/str [x1,#CCR]) reaches the right struct. */
+    *ptr++ = mov64_reg(1 /*x1*/, 0 /*x0 = state arg*/);
+
+    /* Prologue: load D0..D7 and A0..A7 from the state struct (x1). */
+    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_d[i], J5C_OFF_D(i));
+    for (int i = 0; i < 8; i++) *ptr++ = ldr_offset(1, reg_a[i], J5C_OFF_A(i));
 
     /* ---- DRIVE THE REAL EMU68 DECODERS over the 68k stream ---- */
     /* m68k_ptr points DIRECTLY at the sandbox host bytes; HOOK 2 reads them big-endian. */
@@ -137,8 +143,8 @@ static unsigned emit_block(const uint8_t *code, uint32_t code_len, int neg_corru
      * flush any pending PC delta, then store the architectural registers. */
     RA_FlushCC(&ptr);
     ptr = EMIT_FlushPC(ptr);
-    for (int i = 0; i < 8; i++) *ptr++ = str_offset(0, reg_d[i], J5C_OFF_D(i));
-    for (int i = 0; i < 8; i++) *ptr++ = str_offset(0, reg_a[i], J5C_OFF_A(i));
+    for (int i = 0; i < 8; i++) *ptr++ = str_offset(1, reg_d[i], J5C_OFF_D(i));
+    for (int i = 0; i < 8; i++) *ptr++ = str_offset(1, reg_a[i], J5C_OFF_A(i));
 
     /* Restore callee-saved registers (reverse) + ret. */
     *ptr++ = ldp64_postindex(31, 27, 28, 16);

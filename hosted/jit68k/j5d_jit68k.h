@@ -75,10 +75,20 @@ struct j5d_m68k_state {
 #define J5D_OFF_CCR    ((uint16_t)64u)
 #define J5D_OFF_PC     ((uint16_t)68u)
 
-/* 68k CCR bit positions (M68000 PRM): bit4=X bit3=N bit2=Z bit1=V bit0=C. The real
- * decoders keep this exact 68k SR layout in the memory-backed CCR (j5c_ra.c). */
-#define J5D_CCR_C 0x01u
-#define J5D_CCR_V 0x02u
+/* CCR bit positions — EMU68's INTERNAL representation (a [J5g] finding). Emu68's
+ * memory-backed CCR (RA_StoreCC writes the byte the decoders' EMIT_GetNZCV / EMIT_GetNZxx
+ * produced, A64.h) uses the m68k SR bit order for N/Z/X but SWAPS C and V:
+ *     bit0 = V , bit1 = C , bit2 = Z , bit3 = N , bit4 = X
+ * (cf. SRB_Calt=1 / SRB_Valt=0 in M68k.h, and bfi(cc,..,1,1) for C / bfi(cc,..,0,1) for V
+ * in A64.h EMIT_GetNZCV). The earlier corpus only ever consumed Z/N (layout-stable), so
+ * this swap was latent; [J5g]'s ble.s/blt.s/bcc/bcs branches consume C and V, so the
+ * dispatcher's bcc_taken + the independent oracle MUST both use Emu68's actual layout for
+ * the byte-exact CCR check and the branch decisions to agree. The register RESULTS (the
+ * real proof) are still byte-exact-verified; only the CCR bit POSITIONS for C/V follow
+ * Emu68's storage. (A future normalisation pass could re-emit a standard-68k SR byte at
+ * the SR-read boundary; not needed while the CCR is internal to the JIT+oracle.) */
+#define J5D_CCR_V 0x01u
+#define J5D_CCR_C 0x02u
 #define J5D_CCR_Z 0x04u
 #define J5D_CCR_N 0x08u
 #define J5D_CCR_X 0x10u
@@ -129,6 +139,13 @@ typedef struct j5d_stats {
     uint32_t arm_words_emitted;   /* total AArch64 words written to MAP_JIT           */
     uint32_t lib_calls;           /* jsr-through-vector library calls bridged          */
     uint32_t mem_accesses;        /* (An)-class sandbox memory accesses the JIT ran    */
+    /* [J5f] PC-driven dispatch + real return stack + block cache. */
+    uint32_t block_cache_hits;    /* block lookups that hit a cached translation        */
+    uint32_t block_cache_misses;  /* block lookups that translated (== blocks_translated)*/
+    uint32_t calls_pushed;        /* bsr/jsr-to-code -> 68k return addresses pushed      */
+    uint32_t returns_popped;      /* rts -> 68k return addresses popped (incl. nested)   */
+    uint32_t computed_jumps;      /* jmp(An)/jsr(An) computed-target control transfers   */
+    uint32_t max_call_depth;      /* deepest nested call depth reached (return-stack)    */
     /* [J5e] register-allocator (block-scoped reg file) before/after metrics. The naive
      * scheme loaded all 16 Dn/An in the prologue + stored all 16 back in the epilogue,
      * unconditionally: 32 state-struct ldr/str per block. The [J5e] RA loads only live-in

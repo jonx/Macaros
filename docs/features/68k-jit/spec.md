@@ -800,7 +800,9 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
 
   *What a BIGGER app would still need (honest debt beyond `[J5d]`).* A real return stack
   for nested `bsr`/`jsr`/`rts` + computed `jmp(An)` + `bcc.W/.L` (the dispatcher's PC
-  model is currently flat); OUR own SR/exception model (a host SIGSEGV inside translated
+  model is currently flat) — **DONE by `[J5f]` below** (the PC-driven dispatcher + the real
+  68k return stack + the full Bcc widths + computed jumps + a reported block-cache win);
+  OUR own SR/exception model (a host SIGSEGV inside translated
   code → a 68k bus/illegal/divide-by-zero vector, the SECOND mapping layer in Risks);
   dirty-page SMC invalidation (`M68K_VerifyUnit`/CRC32 we did not re-host); the FPU
   (`LINEF`) + privileged ISA; and a sandbox-backed allocator so a native call returning
@@ -888,6 +890,186 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   no-spill" allocation never runs out of registers. A future ABI that frees fewer host regs,
   or FP/wide state, would need spill-under-pressure. The current RA is correct and minimal
   for the integer file; it is a **perf pass layered on the already-correct `[J5d]` engine**.
+
+- **`[J5f]` PC-DRIVEN DISPATCHER + a REAL 68k RETURN STACK + a BLOCK CACHE — IMPLEMENTED /
+  GREEN.** Generalises the `[J5d]`/`[J5e]` flat-PC engine toward real subroutine-structured
+  programs: the dispatcher becomes a PC-driven loop with a genuine 68k return stack (nested
+  `bsr`/`jsr`/`rts` + computed `jmp(An)`/`jsr(An)` + the full `Bcc`/`BRA`/`BSR` `.B`/`.W`/`.L`
+  displacement widths), over the PC-keyed block cache. Files: `hosted/jit68k/j5f_test.c`
+  (the measure/verify driver) + the generalised dispatcher in `hosted/jit68k/j5d_engine.c`
+  + the SP/stack/control-flow model in the independent reference `hosted/jit68k/j5d_interp.c`
+  + the new program `hosted/jit68k/apps68k/sumsq.s` → `bin/sumsq.exe`; target
+  `make hosted-jit68k-j5f` (marker `[J5f] PASS`); also wired into the `apps68k` runner so
+  the REAL `.exe` runs through the loader. **PASS (observed):** sumsq — sum of squares
+  `1²+2²+3²+4²+5² = 55` via a `square` subroutine (which nests a `mul` helper, 2-deep) called
+  from a loop **plus** once through a **computed `jsr (a0)`** — runs through the REAL Emu68
+  decoders to `d0 = 55`, **byte-exact equal to the independent interpreter** on the full
+  register file (incl. `a7` back at the initial SP `0x250000`) AND the **sandbox memory
+  including the return-stack region**; the return-stack telemetry is `pushed == popped == 12`,
+  `max nest depth == 2`, `computed jumps == 1`; the **block cache** translated **8** distinct
+  blocks (cache misses) for **31** executions = **23 cache hits / re-translations avoided**.
+  Negative controls bite: a corrupt subroutine argument (`move.l d6,d0`→`d5,d0`) makes the
+  loop pass `0` so `d0 = 0 ≠ 55` (the byte-exact assert is not a tautology), and a wild
+  computed `jmp (a1)` with `a1 = 0` (out of sandbox) is **caught cleanly** by the dispatcher's
+  sandbox bound (`rc != 0`, no host crash). Watchdog 15 s → FAIL. `[J1]`–`[J5e]` + `apps68k`
+  re-confirmed green.
+
+  *The generalisation (the `[J5d]`-deferred control-flow debt, now paid).* `[J5d]`'s
+  dispatcher was **flat-PC**: `rts` = top-level exit, `jsr d16(A6)` = library vector, `Bcc`
+  8-bit only, no SP. `[J5f]` keeps that as a strict subset (the flat corpus is unchanged) and
+  adds, all **decoded from the instruction stream** (not hand-constructed), at the dispatcher
+  level (OURS — these are exactly the control-flow ops whose Emu68 LINE4/6 decoders are
+  entangled with `M68k_Translator.c`'s funnel, which our dispatcher *is*):
+  - **The real return stack.** `a7` (`st->a[7]`) is a sandbox address; the dispatcher seeds it
+    to the top of the sandbox (the initial SP) and records that baseline. `bsr`/`jsr abs.l`/
+    `jsr (An)` **push** the 4-byte 68k return address **big-endian** to `(a7-4)` and set
+    `a7 -= 4` (68k predecrement-push); `rts` reads the longword big-endian at `(a7)`, sets
+    `a7 += 4`, and resumes there. A `rts` that pops back to the initial SP is the **top-level
+    return = program exit** — so the flat corpus, which never pushes, hits its first `rts` at
+    the initial SP and exits exactly as under `[J5d]`. The pushed bytes live in the sandbox the
+    test inspects, so the **return-stack contents are byte-exact-verifiable**. Push/pop run in
+    the dispatcher C, not inside translated blocks, because they occur at the terminator
+    boundary the dispatcher already owns (Emu68's MainLoop re-reads the PC there); inlining the
+    push/pop is the cross-region-chaining engine's job, deferred.
+  - **Computed `jmp(An)`/`jsr(An)`.** The target is read from the register `st->a[n]` after the
+    block ran; `jsr (An)` also pushes the return address. sumsq's `jsr (a0)` exercises this.
+  - **Full `Bcc` widths.** `.B` (disp in the opcode), `.W` (disp `0x00` → next word), `.L`
+    (disp `0xFF` → next longword), for the whole condition table (`bcc_taken`, M68000 PRM,
+    reading the REAL 68k CCR the decoders produced) plus `BRA`/`BSR`. Also `lea (d16,pc),An`
+    (vasm resolves the in-hunk `square` label PC-relative) is decoded.
+  - **The block cache** was already present (PC-keyed `g_cache`); `[J5f]` enlarges it
+    (64→256 entries) and reports the win: a loop body / repeatedly-called subroutine translates
+    **once** and is re-run (8 translated vs 31 executed = 23 re-translations avoided on sumsq).
+
+  *Verification (value-asserting) + the independent reference.* The reference interpreter
+  (`j5d_interp.c`, OURS, no Emu68) is **extended to model the same SP/stack/control-flow** —
+  it seeds `a7` to the same initial SP, pushes/pops big-endian on the same sandbox, and decodes
+  the same `bsr`/`jsr`/`rts`/`jmp(An)`/full-`Bcc`/`lea(pc)` set — so the test compares the JITed
+  register file AND the JITed sandbox memory (**including the stack**) byte-exact against it, plus
+  the return-stack telemetry and the block-cache counts. This made the `[J5d]`/`[J5e]` regression
+  tests assert `a7` too (both now seed it identically); they stay byte-exact green.
+
+  *Honest deferrals (still beyond `[J5f]`, stated in `j5f_test.c` + below).* OUR SR/exception
+  model (host `SIGSEGV` inside translated code → a 68k bus/illegal/divide-by-zero **vector**,
+  the second mapping layer in Risks); **self-modifying-code / dirty-page block-cache
+  invalidation** (a write into a cached code page must drop the stale translation — we do not
+  `M68K_VerifyUnit`/CRC32 yet); the **FPU (`LINEF`) + privileged ISA**; the rest of the ISA /
+  addressing modes (the new program exercises register-direct + `(An)`-class EA + the control
+  flow above, not the full mode set); and the **boot-gated real AROS library environment** (the
+  `LoadSeg`→`RunCommand`/`CallEntry` hook + real libraries — `[J5f]` still uses the stub `exec`).
+  What sumsq does/doesn't exercise: it DOES exercise nested `bsr`/`rts` (2 deep) over the real
+  return stack, a computed `jsr(An)`, a `cmp.l`/`bne.s` loop with genuine condition codes, and
+  the block cache; it does NOT make a library call, dereference memory, or self-modify. No new
+  Emu68 file was vendored (the return stack / branch decode / computed jumps are dispatcher-level
+  C, in OUR files) — the quarantine still holds the `[J5d]` set, Exhibit-B grep unchanged/clean.
+
+- **`[J5g]` BROADEN the ISA + addressing-mode coverage — IMPLEMENTED / GREEN.** A substantial,
+  honest batch toward running any self-contained 68k program: vendor + drive three MORE real
+  Emu68 decoders and the full M68000 addressing modes, with the independent interpreter kept
+  byte-exact for everything executed. Files: `hosted/jit68k/{j5g_test.c,j5g_shims.c}` + the new
+  decoders in `j5d_engine.c`/`j5d_interp.c`/`j5d_ea_helpers.c`/`emu68_darwinize.pl` + the program
+  `apps68k/bubsort.s`→`bin/bubsort.exe`; target `make hosted-jit68k-j5g` (marker `[J5g] PASS`),
+  also wired into the `apps68k` runner (now SIX programs). **PASS (observed):** bubsort — a bubble
+  sort of `{17,3,42,8,99,23}` in place via `(0,a0,Dn.L)` indexed load/store → `{3,8,17,23,42,99}`,
+  then a checksum/mixer over the sorted array using the full shift/rotate + immediate + misc set →
+  **`d0 = 0x00F5B9F5`** — runs through the REAL Emu68 decoders, **byte-exact equal to the
+  independent interpreter** on the FULL register file AND the sandbox memory (including the in-place
+  sorted array) AND the **full CCR**; the negative control (flip the sort branch `ble.s`→`bgt.s`)
+  makes the array sort wrong so the checksum diverges (the byte-exact assert is not a tautology).
+  `[J1]`–`[J5f]` + `apps68k` re-confirmed green. Watchdog 15 s → FAIL.
+
+  *EXACTLY what coverage `[J5g]` adds (the honest scope statement).*
+  - **`M68k_LINE0.c` (VENDORED VERBATIM, driven):** `addi.l/subi.l/andi.l/ori.l/eori.l/cmpi.l
+    #imm,Dn` + `btst #bit,Dn` (static bit test → Z). The file also defines `bset/bclr/bchg/movep/
+    cas` etc. — present (it links verbatim) but NOT exercised by the verified program.
+  - **`M68k_LINE4.c` (VENDORED VERBATIM, driven):** `clr.l / tst.l / swap / ext.l Dn` and `lea
+    (d16,An)/(d8,An,Xn),An`. `neg.l/not.l` are decoded-correctly but DELIBERATELY NOT in the
+    verified program (see the X-bit deferral below). `movem/pea/movec/jmp/jsr/rts/link/unlk/trap`
+    are present (link verbatim) but the dispatcher owns the control-flow ones; the rest are not
+    exercised.
+  - **`M68k_LINEE.c` (VENDORED VERBATIM, driven):** `lsl.l/lsr.l/asl.l/asr.l/rol.l/ror.l
+    #count,Dn` (all six, immediate count, `.L`). `roxl/roxr` + the bitfield ops (`bfXXX`) are
+    present (link verbatim) but NOT exercised (ROXL/ROXR are X-chain ops, deferred).
+  - **ADDRESSING MODES now routed through the sandbox EA:** `(An)`, `(An)+`, `-(An)` (carried from
+    `[J5d]`) **plus the new** `(d16,An)`, `(d8,An,Xn.L)` indexed (the bubble-sort array access, LOAD
+    *and* STORE), `abs.w`/`abs.l`, `(d16,PC)`/`(d8,PC,Xn)`, and `#imm`. byte/word/long sizes are all
+    handled by the EA helper (the program is `.L`; `.W`/`.B` paths exist and are size-parameterised).
+  - **SIZES:** `.L` throughout the verified program; the EA + the move decoders handle `.B`/`.W`
+    too (the engine routes groups 1/3 = `move.b`/`move.w` to `EMIT_move`).
+
+  *THE EA broadening (the primary new mechanism).* `[J5d]`'s `j5d_ea_mem` bridged only the DIRECT
+  `(An)`/`(An)+`/`-(An)` sites (modes 2/3/4) in `M68k_EA.c`. The displacement/indexed/PC-relative
+  modes — `(d16,An)` (mode 5), `(d8,An,Xn)` (mode 6), `(d16,PC)`/`(d8,PC,Xn)` (mode 7.2/7.3), and
+  `abs.w` (mode 7.0) — route through FOUR inline funnel helpers (`load_reg_from_addr[_offset]` /
+  `store_reg_to_addr[_offset]`). `emu68_darwinize.pl --ea-sandbox` replaces the BODY of each of those
+  four (a name-based, whole-body call-substitution) with a tail-call to OUR
+  `j5d_ea_addr_offset`/`j5d_ea_addr_index` (`j5d_ea_helpers.c`): compute the 68k address
+  (`base + offset` or `base + index<<shift`), add the sandbox base-adjust (`host = base_adjust + addr`,
+  UXTW), big-endian `REV`, the size-correct load/store; `size==0` is the "load effective address"
+  case (LEA/PEA — compute the 68k address into the destination, NO memory touch, NO base-adjust, NO
+  REV). The **`abs.l` (mode 7.1)** path is an Emu68 inconsistency: it does NOT use the funnel — it
+  materialises the 32-bit address into a scratch `tmp_reg` and emits a DIRECT
+  `ldr_offset(tmp_reg, *arm_reg, 0)`, so the `--ea-sandbox` DIRECT-site rewrite is extended to match
+  `tmp_reg` (not just `reg_An`) and routes it through `j5d_ea_mem` too. The DECODE (which mode, the
+  extension-word reads via `cache_read_16`, the index sign/scale) stays 100% the REAL Emu68 decoder;
+  the QUARANTINE `M68k_EA.c` stays BYTE-VERBATIM (diff vs upstream empty); only the build copy is
+  patched. **All five new memory modes are verified byte-exact** in `j5g_test.c`'s `ea-modes`
+  sub-test (abs.l + `(d16,An)` loads + a `(d8,An,Xn)` store, register file + the written cell
+  byte-exact vs the oracle) on top of bubsort's `(d8,An,Xn)` + `(An)`.
+
+  *A FOURTH bare-metal coupling found + fixed (beyond the three `[J5a]`/`[J5c]` named).* Emu68's
+  decoders hardcode **w0 as a 1-shot scratch for flag extraction** — `cset(0,cond); bfi(cc,0,…)`
+  (`EMIT_BTST`, `EMIT_ASx`, the `EMIT_GetNZ*` helpers) — because bare-metal the CTX/CCR live in EL0
+  system registers (`TPIDRRO_EL0`/`TPIDR_EL0`), so w0 is genuinely free. The `[J5c]`/`[J5d]` re-host
+  had overloaded **w0 as the memory-backed state pointer**; the register/ALU corpus never hit a
+  `cset(0,…)` site (it took the `EMIT_GetNZCV` fast path), so this was LATENT — `[J5g]`'s `btst`
+  surfaced it as a host SIGSEGV (the epilogue's `str w_cc,[x0,#CCR]` faulted with x0=0). **Fix:** keep
+  the state pointer in **x1** for the whole block (the decoders never hardcode w1/w2/w3 — verified by
+  grep), freeing w0 exactly as Emu68 expects. Realised in `j5c_ra.c` (CCR/CTX hooks use x1), the
+  engine prologue/epilogue (`mov x12,x1; mov x1,x0`; Dn/An ldr/str base x1) and `j5c_build.c`.
+
+  *A CCR-layout finding (the second latent issue `[J5g]` surfaced).* Emu68's internal CCR byte SWAPS
+  C and V relative to the standard 68k SR order: **bit0=V, bit1=C, bit2=Z, bit3=N, bit4=X** (cf.
+  `SRB_Valt=0`/`SRB_Calt=1` in `M68k.h`, and `bfi(cc,..,1,1)` for C / `bfi(cc,..,0,1)` for V in
+  `A64.h`'s `EMIT_GetNZCV`; sub/cmp use the `…alt` swapped representation). The earlier corpus only
+  ever consumed Z/N (layout-stable), so the swap was latent; `[J5g]`'s `ble.s`/`blt.s`/`bcc`/`bcs`
+  branches consume C and V, so the dispatcher's `bcc_taken` AND the independent oracle were updated to
+  use Emu68's actual layout (the `J5D_CCR_C`/`J5D_CCR_V` constants are swapped). The register RESULTS
+  (the load-bearing proof) are still byte-exact; only the CCR bit POSITIONS for C/V follow Emu68's
+  storage — a future SR-read normalisation pass could re-emit a standard-68k SR byte at the boundary.
+
+  *Verification (value-asserting) + the negative control.* The independent reference `j5d_interp.c`
+  (OURS, no Emu68) is extended to decode + execute EVERY new opcode/mode/size: the move.l EA modes
+  0–6 (load + store, big-endian, sandbox-bounds-checked), `move.w Dm,Dn`, `lea (d16,An)/(d8,An,Xn)`,
+  the six LINE0 immediates + `btst`, the six LINE4 misc ops, and the six LINEE shifts/rotates with
+  their exact N/Z/V/C/X rules. The test asserts `d0 == 0x00F5B9F5` (JIT == oracle), the FULL register
+  file byte-exact, the sandbox memory (incl. the sorted array) byte-exact, the full CCR byte-exact,
+  the sorted array reads back `{3,8,17,23,42,99}`, and ≥1 `(An)`-class sandbox access went through the
+  JIT. The negative control flips the sort comparison's branch so the array sorts the wrong way and
+  the checksum diverges — proving the byte-exact assert genuinely bites.
+
+  *Honest deferrals / what `[J5g]` does NOT cover (stated in source + here).* (i) **`neg.l`/`not.l`
+  in a long block:** decoded correctly, but their **X bit** in a multi-instruction block does not
+  match the textbook 68k X byte-exact (Emu68's X handling in context diverges) — so they are
+  DELIBERATELY excluded from the verified program (the rule "don't run what the oracle can't check
+  byte-exact"). This is exactly the deferred **X-bit multi-precision chain**. (ii) **`roxl`/`roxr`**
+  (the X-rotate-through-carry ops) and the **`bfXXX` bitfield** + **`movem`/`movep`/BCD** opcodes are
+  vendored (the files link verbatim) but not driven/oracled. (iii) **The SR/exception model** (host
+  SIGSEGV inside translated code → a 68k bus/illegal/divide-by-zero vector), **SMC / dirty-page
+  block-cache invalidation** (no `M68K_VerifyUnit`/CRC32 yet), the **FPU (`LINEF`) + privileged +
+  line-A/F** ISA, and the **boot-gated real AROS library environment** (the `LoadSeg`→`RunCommand`/
+  `CallEntry` hook + real libraries vs the stub `exec`) all remain. (iv) `j5g_shims.c` (OURS) supplies
+  link stubs for the un-driven LINE4 sub-ops it references (the `debug`/`disasm` trace gate +
+  `M68K_PopReturnAddress` for `EMIT_MOVEC`/`EMIT_RTS`, never on a hot path — the dispatcher owns RTS).
+
+  *Quarantine / licence.* `M68k_LINE0.c`, `M68k_LINE4.c`, `M68k_LINEE.c` vendored BYTE-VERBATIM
+  (`diff` vs upstream `305f686` empty for each), Exhibit-A header present, **Exhibit-B grep clean**
+  (no "Incompatible With Secondary Licenses"), `emu68/NOTICE` updated. The flag helpers
+  (`EMIT_GetNZCV` etc.) they call are `static inline` in the already-vendored `A64.h`. The EA funnel
+  rewrite + the x1-state fix + the CCR-layout fix are all in OUR (AROS-licensed) files; no Emu68
+  source is copied. **NEXT coverage gap:** the deferred X-bit multi-precision chain (`neg`/`not`/
+  `roxl`/`roxr`/`addx`/`subx`/`negx` with byte-exact X) — needed before a `move.l`-with-X-carry
+  decompressor-style program can be verified.
 
 ## Risks
 

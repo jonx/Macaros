@@ -1,6 +1,8 @@
-/* j5d_engine.c — [J5d] the little JIT engine: a per-basic-block translator driving
- * Emu68's REAL decoders + OUR re-hosted dispatcher ("MainLoop") owning inter-block
- * control flow + the (An) sandbox-memory EA + the jsr-through-vector [J3] bridge.
+/* j5d_engine.c — the little JIT engine: a per-basic-block translator driving Emu68's
+ * REAL decoders + OUR re-hosted dispatcher ("MainLoop") owning inter-block control flow
+ * + the (An) sandbox-memory EA + the jsr-through-vector [J3] bridge.  [J5f] generalises
+ * the dispatcher into a PC-DRIVEN loop with a REAL 68k RETURN STACK (nested bsr/jsr/rts +
+ * computed jmp(An)/jsr(An) + the full Bcc displacement widths) over a PC-keyed BLOCK CACHE.
  * (GLUE, OURS, AROS-licensed.)
  *
  * LICENCE BOUNDARY (see emu68/NOTICE, docs/features/CLEANROOM.md): THIS FILE is OURS.
@@ -13,25 +15,45 @@
  * ============================== THE DISPATCH MODEL =============================
  * Emu68's own model: each translated block exits via RET to a central C MainLoop that
  * re-reads the m68k PC. We re-host exactly that. j5d_run():
- *   1. translate_block(pc): pre-decode the straight-line opcodes from `pc` up to a
- *      control-flow TERMINATOR (Bcc/BRA/JSR/RTS) or a dispatcher-handled opcode (LEA),
- *      driving the REAL Emu68 decoders for each data/ALU/move/memory opcode, into a
- *      MAP_JIT region. Cache by entry PC (the [J5d] ICache).
+ *   1. get_block(pc): look the block up in the PC-keyed BLOCK CACHE; on a miss,
+ *      translate_block(pc) pre-decodes the straight-line opcodes from `pc` up to a
+ *      control-flow TERMINATOR, driving the REAL Emu68 decoders for each data/ALU/move/
+ *      memory opcode, into a MAP_JIT region, and caches it by entry PC. A loop body or a
+ *      repeatedly-called subroutine therefore translates ONCE — a cache HIT thereafter.
  *   2. run the block under W^X (it updates D/A/CCR in struct j5d_m68k_state).
- *   3. decode the terminator in C and compute the next PC:
- *        rts          -> pop nothing (top-level): DONE, exit_d0 = d0.
- *        bra.s        -> pc = target.
- *        bcc.s        -> read the REAL CCR the decoders produced; branch or fall.
- *        jsr d16(A6)  -> map to (libbase,LVO) via the negative-offset rule; call the
- *                        library bridge ([J3] marshaller into the native stub); fall
- *                        through to the return address (jsr is 4 bytes).
+ *   3. decode the terminator in C and take the NEXT PC the block resolves to:
+ *        rts          -> POP the 68k return address off the real return stack (a7/SP);
+ *                        when SP is back at the initial SP this is the TOP-LEVEL return
+ *                        (program exit, exit_d0 = d0); otherwise resume at the popped PC.
+ *        bsr.B/.W/.L  -> PUSH the 68k return address big-endian to (a7-=4); pc = target.
+ *        jsr abs.l    -> like bsr to an absolute target.
+ *        jsr (An)     -> computed: target from the register; PUSH return; pc = An.
+ *        jmp abs.l    -> pc = absolute target (no push).
+ *        jmp (An)     -> computed: pc = An (no push).
+ *        bra.B/.W/.L  -> pc = target.
+ *        bcc.B/.W/.L  -> read the REAL CCR the decoders produced; branch or fall.
+ *        jsr d16(A6)  -> a LIBRARY VECTOR (negative-offset rule): call the [J3] bridge
+ *                        (marshals 68k regs into the native stub); resume after the jsr.
+ *                        This is a host-C call that returns immediately — NO stack push.
  *        lea abs.l,An -> set An = the relocated abs32 (an address compute, not memory).
- *   4. loop. A step cap + a translated-block cap bound runaway.
+ *   4. loop. A step cap bounds runaway; a corrupt return address that escapes the
+ *      sandbox is caught (clean error, no host crash).
+ *
+ * THE REAL 68k RETURN STACK. a7 (== A0..A7's index 7, st->a[7]) is a SANDBOX address.
+ * The dispatcher seeds it to the top of the sandbox at entry, records that as the initial
+ * SP, and on a bsr/jsr-to-code PUSHES the 4-byte return address BIG-ENDIAN into the
+ * sandbox at (a7-4) then sets a7-=4 (68k predecrement push semantics). rts reads the
+ * longword big-endian at (a7), sets a7+=4, and jumps there. The pushed bytes live in the
+ * sandbox the test inspects, so the return-stack contents are byte-exact-verifiable. The
+ * push/pop happen in the dispatcher (C), not inside translated blocks, because they occur
+ * at the terminator boundary the dispatcher already owns — exactly where Emu68's MainLoop
+ * re-reads the PC. (A future cross-region-chaining engine would emit the push/pop inline.)
  *
  * The heavy SEMANTIC work (every register/ALU/flag/memory opcode) is the REAL Emu68
  * decoders'. The dispatcher only owns block boundaries, the branch decision (using the
- * REAL flags), the (An) sandbox addressing setup, the LEA address compute, and the LVO
- * bridge. lea/bcc/bra/jsr are decoded straight from the instruction stream.
+ * REAL flags), the return stack, the computed jump targets, the (An) sandbox addressing
+ * setup, the LEA address compute, and the LVO bridge. All control-flow terminators are
+ * decoded straight from the instruction stream, not hand-constructed.
  * ===============================================================================
  */
 #include "j5d_jit68k.h"
@@ -42,16 +64,20 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /* ---- the REAL Emu68 line-decoder entry points (linked decoder objects) ---- */
 extern uint32_t *EMIT_moveq(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_move (uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
+extern uint32_t *EMIT_line0(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);  /* [J5g] */
+extern uint32_t *EMIT_line4(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);  /* [J5g] */
 extern uint32_t *EMIT_line5(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_line8(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_line9(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_lineB(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_lineC(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
 extern uint32_t *EMIT_lineD(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);
+extern uint32_t *EMIT_lineE(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed);  /* [J5g] */
 
 /* The (An)-class EA-emit counter (j5d_ea_helpers.c): each sandbox memory access the
  * rewritten EA decoder emits bumps it, so the engine can report real memory traffic. */
@@ -78,7 +104,7 @@ void j5d_get_stats(j5d_stats *out) { *out = g_stats; }
 /* ============================ the [J5d] block ICache =========================== */
 /* One MAP_JIT region per distinct entry PC. The compiled block is a C function
  * `void block(struct j5d_m68k_state *st, uint64_t base_adjust)`. */
-#define J5D_MAX_BLOCKS 64
+#define J5D_MAX_BLOCKS 256
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
 typedef struct {
     uint32_t   pc;          /* entry PC of this block         */
@@ -106,17 +132,53 @@ static j5d_cached_block *cache_find(uint32_t pc)
 /* ============================ big-endian stream reads ========================== */
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static int16_t  be16s(const uint8_t *p){ return (int16_t)be16(p); }
+static uint32_t be32(const uint8_t *p)
+{ return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 
-/* Is `op` a terminator the DISPATCHER handles (not driven through a real decoder)? */
+/* Is `op` a terminator the DISPATCHER handles (not driven through a real decoder)?
+ * [J5f] broadens this from the [J5d] flat-PC subset to the full control-flow set:
+ * rts, bsr/bra/Bcc (all .B/.W/.L widths), jmp/jsr absolute + computed (An), the
+ * library jsr d16(A6) vector, and lea abs.l,An. */
 static int is_terminator(uint16_t op)
 {
     if (op == 0x4E75u) return 1;                 /* rts                            */
-    if (op == 0x4EAEu) return 1;                 /* jsr d16(A6)                    */
-    if ((op & 0xFF00u) == 0x6000u) return 1;     /* bra.s  (0x60xx, disp != 00/ff) */
-    if ((op & 0xFF00u) == 0x6600u) return 1;     /* bne.s                          */
-    if ((op & 0xFF00u) == 0x6700u) return 1;     /* beq.s                          */
+    if (op == 0x4E71u) return 1;                 /* nop (dispatcher steps over it) */
+    if (op == 0x4EAEu) return 1;                 /* jsr d16(A6)  (library vector)  */
+    if (op == 0x4EB9u) return 1;                 /* jsr abs.l                      */
+    if (op == 0x4EF9u) return 1;                 /* jmp abs.l                      */
+    if ((op & 0xFFF8u) == 0x4E90u) return 1;     /* jsr (An)   (computed)          */
+    if ((op & 0xFFF8u) == 0x4ED0u) return 1;     /* jmp (An)   (computed)          */
+    if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
     if ((op & 0xF1FFu) == 0x41F9u) return 1;     /* lea abs.l,An (dispatcher-decoded)*/
+    if ((op & 0xF1FFu) == 0x41FAu) return 1;     /* lea (d16,pc),An (dispatcher-decoded)*/
     return 0;
+}
+
+/* [J5f] the AArch64 condition each 68k Bcc tests, evaluated against the 68k CCR the REAL
+ * decoders produced (J5D_CCR_* bit layout). Returns 1 = branch taken, 0 = fall through.
+ * `cc4` is the 4-bit condition field (op>>8 & 0xF); 0/1 (BRA/BSR) are handled by the
+ * caller. Grounded on the M68000 PRM condition-code table. */
+static int bcc_taken(unsigned cc4, uint32_t ccr)
+{
+    int N = (ccr & J5D_CCR_N) != 0, Z = (ccr & J5D_CCR_Z) != 0;
+    int V = (ccr & J5D_CCR_V) != 0, C = (ccr & J5D_CCR_C) != 0;
+    switch (cc4) {
+        case 0x2: return !C && !Z;          /* HI  */
+        case 0x3: return  C ||  Z;          /* LS  */
+        case 0x4: return !C;                /* CC/HS */
+        case 0x5: return  C;                /* CS/LO */
+        case 0x6: return !Z;                /* NE  */
+        case 0x7: return  Z;                /* EQ  */
+        case 0x8: return !V;                /* VC  */
+        case 0x9: return  V;                /* VS  */
+        case 0xA: return !N;                /* PL  */
+        case 0xB: return  N;                /* MI  */
+        case 0xC: return  N == V;           /* GE  */
+        case 0xD: return  N != V;           /* LT  */
+        case 0xE: return !Z && (N == V);    /* GT  */
+        case 0xF: return  Z || (N != V);    /* LE  */
+        default:  return 0;
+    }
 }
 
 /* ====================== translate ONE straight-line basic block ================
@@ -172,7 +234,11 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         uint16_t *before = m68k_ptr;
 
         switch (group) {
+            case 0x0: bp = EMIT_line0(bp, &m68k_ptr, &insn_consumed); break; /* [J5g] ori/andi/eori/subi/addi/cmpi/btst/bset/bclr/bchg */
+            case 0x1: bp = EMIT_move (bp, &m68k_ptr, &insn_consumed); break; /* [J5g] move.b */
             case 0x2: bp = EMIT_move (bp, &m68k_ptr, &insn_consumed); break; /* move.l/movea.l */
+            case 0x3: bp = EMIT_move (bp, &m68k_ptr, &insn_consumed); break; /* [J5g] move.w/movea.w */
+            case 0x4: bp = EMIT_line4(bp, &m68k_ptr, &insn_consumed); break; /* [J5g] clr/neg/not/tst/ext/swap/lea/pea */
             case 0x7: bp = EMIT_moveq(bp, &m68k_ptr, &insn_consumed); break; /* moveq          */
             case 0x5: bp = EMIT_line5(bp, &m68k_ptr, &insn_consumed); break; /* addq/subq      */
             case 0x8: bp = EMIT_line8(bp, &m68k_ptr, &insn_consumed); break; /* or/div         */
@@ -180,7 +246,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
             case 0xB: bp = EMIT_lineB(bp, &m68k_ptr, &insn_consumed); break; /* cmp/eor        */
             case 0xC: bp = EMIT_lineC(bp, &m68k_ptr, &insn_consumed); break; /* and/mul        */
             case 0xD: bp = EMIT_lineD(bp, &m68k_ptr, &insn_consumed); break; /* add            */
-            default:  TFAIL("opcode line not in the [J5d] driven set (2/5/7/8/9/B/C/D + terminators)");
+            case 0xE: bp = EMIT_lineE(bp, &m68k_ptr, &insn_consumed); break; /* [J5g] asl/asr/lsl/lsr/rol/ror */
+            default:  TFAIL("opcode line not in the [J5g] driven set (0/2/4/5/7/8/9/B/C/D/E + terminators)");
         }
         if (insn_consumed == 0) TFAIL("decoder consumed 0 insns (unimplemented opcode?)");
 
@@ -216,15 +283,20 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     *ptr++ = stp64_preindex(31, 25, 26, -16);
     *ptr++ = stp64_preindex(31, 27, 28, -16);
 
-    /* x12 := x1 (the sandbox base-adjust), used by j5d_ea_mem for (An) accesses. */
-    *ptr++ = mov64_reg(J5D_BASEADJ_X, 1 /*x1*/);
+    /* The block is entered as block(state in x0, base_adjust in x1).  [J5g]: the STATE
+     * pointer is kept in x1 for the whole block (NOT x0), because Emu68's decoders hardcode
+     * w0 as a 1-shot flag-extraction scratch (cset w0,cond -- EMIT_BTST / EMIT_ASx). So:
+     * save base_adjust (x1) into x12 FIRST, then move the state (x0) into x1.  Order
+     * matters: base_adjust must be banked before x1 is overwritten. */
+    *ptr++ = mov64_reg(J5D_BASEADJ_X, 1 /*x1 = base_adjust*/);   /* x12 := base_adjust */
+    *ptr++ = mov64_reg(1 /*x1*/, 0 /*x0 = state*/);              /* x1  := state ptr   */
 
     /* [J5e] PROLOGUE: load ONLY the live-in 68k regs (read before written) from the
-     * state (x0). A register the block writes before reading (e.g. moveq #imm,Dn) is NOT
+     * state (x1). A register the block writes before reading (e.g. moveq #imm,Dn) is NOT
      * loaded — its prologue ldr was pure waste in the naive frame. */
     unsigned reg_loads = 0;
-    for (int i = 0; i < 8; i++) if (live & (1u << i))      { *ptr++ = ldr_offset(0, reg_d[i], J5D_OFF_D(i)); reg_loads++; }
-    for (int i = 0; i < 8; i++) if (live & (1u << (i+8)))  { *ptr++ = ldr_offset(0, reg_a[i], J5D_OFF_A(i)); reg_loads++; }
+    for (int i = 0; i < 8; i++) if (live & (1u << i))      { *ptr++ = ldr_offset(1, reg_d[i], J5D_OFF_D(i)); reg_loads++; }
+    for (int i = 0; i < 8; i++) if (live & (1u << (i+8)))  { *ptr++ = ldr_offset(1, reg_a[i], J5D_OFF_A(i)); reg_loads++; }
 
     /* The decoder body (every register/ALU/flag/move/memory opcode, REAL Emu68 decoders). */
     memcpy(ptr, body, body_words * sizeof(uint32_t));
@@ -233,8 +305,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     /* [J5e] EPILOGUE: store back ONLY the dirty 68k regs (written by the block). A register
      * the block only read keeps the value the caller's state already holds, so no store. */
     unsigned reg_stores = 0;
-    for (int i = 0; i < 8; i++) if (dirty & (1u << i))     { *ptr++ = str_offset(0, reg_d[i], J5D_OFF_D(i)); reg_stores++; }
-    for (int i = 0; i < 8; i++) if (dirty & (1u << (i+8))) { *ptr++ = str_offset(0, reg_a[i], J5D_OFF_A(i)); reg_stores++; }
+    for (int i = 0; i < 8; i++) if (dirty & (1u << i))     { *ptr++ = str_offset(1, reg_d[i], J5D_OFF_D(i)); reg_stores++; }
+    for (int i = 0; i < 8; i++) if (dirty & (1u << (i+8))) { *ptr++ = str_offset(1, reg_a[i], J5D_OFF_A(i)); reg_stores++; }
 
     *ptr++ = ldp64_postindex(31, 27, 28, 16);
     *ptr++ = ldp64_postindex(31, 25, 26, 16);
@@ -258,7 +330,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
 static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, unsigned errlen)
 {
     j5d_cached_block *b = cache_find(pc);
-    if (b) return b;
+    if (b) { g_stats.block_cache_hits++; return b; }     /* [J5f] block-cache HIT: no re-translate */
+    g_stats.block_cache_misses++;                        /* MISS: translate once, cache by PC      */
     if (g_cache_n >= J5D_MAX_BLOCKS) { if (errbuf) snprintf(errbuf, errlen, "block cache full"); return NULL; }
 
     uint32_t staging[8192];
@@ -285,7 +358,44 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     return b;
 }
 
-/* ============================== the dispatcher ================================= */
+/* ============================ the real 68k return stack =======================
+ * a7 (st->a[7]) is a SANDBOX address. push: a7-=4 then write the 4-byte 68k return
+ * address BIG-ENDIAN at (a7). pop: read big-endian at (a7) then a7+=4. Both validate
+ * the access stays in the sandbox (a corrupt SP / return address is a clean dispatcher
+ * error, NOT a host out-of-bounds write). */
+static int sp_push(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t value,
+                   char *errbuf, unsigned errlen)
+{
+    uint32_t sp = st->a[7] - 4u;
+    if (sp < sb->origin || (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size) {
+        if (errbuf) snprintf(errbuf, errlen, "return-stack push: a7=%08x out of sandbox", sp);
+        return 1;
+    }
+    uint8_t *p = sb->host_mem + (sp - sb->origin);
+    p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8);  p[3] = (uint8_t)value;          /* big-endian */
+    st->a[7] = sp;
+    return 0;
+}
+static int sp_pop(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t *out,
+                  char *errbuf, unsigned errlen)
+{
+    uint32_t sp = st->a[7];
+    if (sp < sb->origin || (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size) {
+        if (errbuf) snprintf(errbuf, errlen, "return-stack pop: a7=%08x out of sandbox", sp);
+        return 1;
+    }
+    *out = be32(sb->host_mem + (sp - sb->origin));                  /* big-endian */
+    st->a[7] = sp + 4u;
+    return 0;
+}
+
+/* ============================== the dispatcher =================================
+ * [J5f] PC-driven loop with the real return stack. SIGNATURE IS UNCHANGED from [J5d]:
+ * the dispatcher seeds a7 to the top of the sandbox (the initial SP) and records it; a
+ * top-level RTS (which pops back to that initial SP) is the program exit — so the
+ * existing flat-PC corpus (which never pushes) hits its first RTS at the initial SP and
+ * exits exactly as before. A subroutine program pushes/pops in between. */
 int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             struct j5d_m68k_state *st, uint32_t *exit_d0,
             j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
@@ -293,32 +403,54 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 #define RFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg)); return 1; } while (0)
     memset(&g_stats, 0, sizeof(g_stats));
     st->a[6] = a6_libbase;                          /* A6 = library base (AmigaOS)  */
+
+    /* Seed the return stack: a7 = top of sandbox (16-byte aligned), recorded as the
+     * initial SP. A top-level RTS returns to here = program exit. A caller may preset
+     * st->a[7] to an explicit SP (nonzero); we honour it but still record it as the
+     * top-of-stack baseline. */
+    uint32_t initial_sp = st->a[7];
+    if (initial_sp == 0)
+        initial_sp = (sb->origin + sb->size) & ~0xFu;   /* default: top of sandbox */
+    st->a[7] = initial_sp;
     st->pc   = entry_pc;
 
     uint64_t base_adjust = (uint64_t)(uintptr_t)sb->host_mem - (uint64_t)sb->origin;
     uint32_t pc = entry_pc;
     uint32_t steps = 0;
+    uint32_t depth = 0;                              /* current nested-call depth   */
 
     for (;;) {
         if (++steps > 2000000u) RFAIL("dispatcher step cap (runaway)");
 
-        /* (1)+(2): translate (if needed) + run the straight-line block at pc. */
+        /* (1)+(2): look up (translate-on-miss + cache) + run the block at pc. */
         j5d_cached_block *b = get_block(sb, pc, errbuf, errlen);
         if (!b) return 1;                            /* errbuf set                  */
 
         st->pc = pc;
+        if (getenv("J5G_TRACE"))      /* opt-in per-block PC trace (debug aid, off by default) */
+            fprintf(stderr, "[blk] pc=%08x end=%08x\n", pc, b->end_pc);
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
         g_stats.blocks_executed++;
 
-        /* (3): decode the terminator in C and compute the next PC. */
+        /* (3): decode the terminator in C and take the next PC. */
         uint32_t tpc = b->end_pc;
         if (tpc + 2 > sb->origin + sb->size) RFAIL("terminator pc out of sandbox");
         const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
         uint16_t top = be16(thost);
 
-        if (top == 0x4E75u) {                        /* rts (top-level) -> DONE     */
-            *exit_d0 = st->d[0];
-            return 0;
+        if (top == 0x4E75u) {                        /* rts -> POP the return stack */
+            if (st->a[7] >= initial_sp) {            /* back at the initial SP: exit */
+                *exit_d0 = st->d[0];
+                return 0;
+            }
+            uint32_t ret;
+            if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+            g_stats.returns_popped++;
+            if (depth) depth--;
+            pc = ret;
+        }
+        else if (top == 0x4E71u) {                   /* nop                          */
+            pc = tpc + 2;
         }
         else if (top == 0x4EAEu) {                   /* jsr d16(A6) -> [J3] bridge  */
             int16_t d16 = be16s(thost + 2);
@@ -328,7 +460,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             if (!lvo)  RFAIL("jsr(A6): library call but no bridge registered");
             char e2[160] = {0};
             /* The bridge marshals 68k regs (in *st) into the native stub via the REAL
-             * [J3] marshaller and writes any return into st->d[0]. */
+             * [J3] marshaller and writes any return into st->d[0]. A host-C call that
+             * returns immediately — NO return-stack push (the 68k program never sees a
+             * pushed frame for a library vector). */
             if (lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2)) {
                 if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
                 return 1;
@@ -336,26 +470,67 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             g_stats.lib_calls++;
             pc = tpc + 4;                            /* jsr d16(A6) is 4 bytes      */
         }
-        else if ((top & 0xFF00u) == 0x6000u ||       /* bra.s                       */
-                 (top & 0xFF00u) == 0x6600u ||       /* bne.s                       */
-                 (top & 0xFF00u) == 0x6700u) {       /* beq.s                       */
-            int8_t disp8 = (int8_t)(top & 0xFFu);
-            if (disp8 == 0)  RFAIL("bcc.W/.L not in the [J5d] subset (8-bit only)");
-            if (disp8 == -1) RFAIL("bcc.L not in the [J5d] subset");
-            uint32_t taken = (uint32_t)((int64_t)tpc + 2 + disp8);
-            uint32_t fall  = tpc + 2;
-            int take;
-            if      ((top & 0xFF00u) == 0x6000u) take = 1;                       /* bra */
-            else if ((top & 0xFF00u) == 0x6600u) take = !(st->ccr & J5D_CCR_Z);  /* bne */
-            else                                 take =  (st->ccr & J5D_CCR_Z);  /* beq */
-            pc = take ? taken : fall;
+        else if (top == 0x4EB9u) {                   /* jsr abs.l -> push + jump    */
+            uint32_t target = be32(thost + 2);
+            if (sp_push(sb, st, tpc + 6, errbuf, errlen)) return 1;  /* ret = after the jsr */
+            g_stats.calls_pushed++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if ((top & 0xFFF8u) == 0x4E90u) {       /* jsr (An) -> computed push+jump */
+            unsigned an = top & 7u;
+            uint32_t target = st->a[an];
+            if (sp_push(sb, st, tpc + 2, errbuf, errlen)) return 1;  /* jsr (An) is 2 bytes */
+            g_stats.calls_pushed++;
+            g_stats.computed_jumps++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if (top == 0x4EF9u) {                   /* jmp abs.l -> jump (no push) */
+            pc = be32(thost + 2);
+        }
+        else if ((top & 0xFFF8u) == 0x4ED0u) {       /* jmp (An) -> computed (no push) */
+            unsigned an = top & 7u;
+            g_stats.computed_jumps++;
+            pc = st->a[an];
+        }
+        else if ((top & 0xF000u) == 0x6000u) {       /* Bcc/BRA/BSR, any .B/.W/.L    */
+            unsigned cc4 = (top >> 8) & 0xFu;        /* 0=BRA 1=BSR else condition  */
+            int8_t  disp8 = (int8_t)(top & 0xFFu);
+            uint32_t base = tpc + 2;                 /* disp is relative to (PC+2)  */
+            uint32_t target; uint32_t after;         /* `after` = instruction end   */
+            if (disp8 == 0x00) {                     /* .W : 16-bit displacement    */
+                int16_t d16 = be16s(thost + 2);
+                target = (uint32_t)((int64_t)base + d16);
+                after  = tpc + 4;
+            } else if ((uint8_t)disp8 == 0xFFu) {    /* .L : 32-bit displacement    */
+                int32_t d32 = (int32_t)be32(thost + 2);
+                target = (uint32_t)((int64_t)base + d32);
+                after  = tpc + 6;
+            } else {                                 /* .B : 8-bit displacement     */
+                target = (uint32_t)((int64_t)base + disp8);
+                after  = tpc + 2;
+            }
+            if (cc4 == 0x1) {                        /* BSR -> push + jump          */
+                if (sp_push(sb, st, after, errbuf, errlen)) return 1;
+                g_stats.calls_pushed++;
+                if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+                pc = target;
+            } else {                                 /* BRA (cc4==0) or Bcc         */
+                int take = (cc4 == 0x0) ? 1 : bcc_taken(cc4, st->ccr);
+                pc = take ? target : after;
+            }
         }
         else if ((top & 0xF1FFu) == 0x41F9u) {       /* lea abs.l,An (address compute) */
             unsigned an = (top >> 9) & 7u;
-            uint32_t abs32 = ((uint32_t)thost[2] << 24) | ((uint32_t)thost[3] << 16) |
-                             ((uint32_t)thost[4] << 8)  |  (uint32_t)thost[5];
-            st->a[an] = abs32;                       /* the loader already relocated it */
+            st->a[an] = be32(thost + 2);             /* the loader already relocated it */
             pc = tpc + 6;                            /* lea abs.l is 6 bytes        */
+        }
+        else if ((top & 0xF1FFu) == 0x41FAu) {       /* lea (d16,pc),An (PC-relative)  */
+            unsigned an = (top >> 9) & 7u;
+            int16_t d16 = be16s(thost + 2);          /* PC = address of the ext word   */
+            st->a[an] = (uint32_t)((int64_t)(tpc + 2) + d16);
+            pc = tpc + 4;                            /* lea (d16,pc) is 4 bytes        */
         }
         else {
             RFAIL("unknown terminator opcode");

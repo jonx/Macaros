@@ -29,5 +29,8 @@ asm mul
 asm fact
 asm arraysum -kick1hunks      # has a relocated DATA section
 asm libcall
+asm sumsq -kick1hunks         # subroutines: nested bsr/jsr/rts + computed jsr(a0) ([J5f])
+asm bubsort -kick1hunks -no-opt  # [J5g] bubble sort (indexed EA) + checksum (shifts/imm/misc);
+                                 # -no-opt keeps the exact opcodes (vasm would fold addi->addq etc.)
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"
