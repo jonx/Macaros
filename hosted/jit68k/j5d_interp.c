@@ -68,6 +68,18 @@ static void mem_wr32(j5d_sandbox *sb, uint32_t addr, uint32_t v, int *oob)
     uint8_t *p = sb->host_mem + (addr - sb->origin);
     p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=(uint8_t)v;
 }
+/* [J5l] word (16-bit) sandbox access — movem.w transfers one word per register, big-endian. */
+static uint16_t mem_rd16(j5d_sandbox *sb, uint32_t addr, int *oob)
+{
+    if (addr < sb->origin || (uint64_t)addr + 2 > (uint64_t)sb->origin + sb->size) { *oob = 1; return 0; }
+    return be16(sb->host_mem + (addr - sb->origin));
+}
+static void mem_wr16(j5d_sandbox *sb, uint32_t addr, uint16_t v, int *oob)
+{
+    if (addr < sb->origin || (uint64_t)addr + 2 > (uint64_t)sb->origin + sb->size) { *oob = 1; return; }
+    uint8_t *p = sb->host_mem + (addr - sb->origin);
+    p[0]=(uint8_t)(v>>8); p[1]=(uint8_t)v;
+}
 
 /* ============================ [J5g] CCR helpers (oracle) ===========================
  * Logical ops (and/or/eor/not/tst/move/swap/ext/clr): N,Z from result; V=0; C=0; X kept. */
@@ -761,6 +773,105 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 st->ccr = ccr;
                 pc += 4; continue;
             }
+        }
+
+        /* ============================ [J5l] movem (move-multiple) ===================
+         * The opcode every compiler-generated 68k function uses in its prologue/epilogue.
+         * Encoding: 0100 1d00 1s mmm rrr  where d=dir (0 reg->mem store, 1 mem->reg load),
+         * s=size (0 .w, 1 .l), mmm/rrr = the destination/source EA. A register-list MASK
+         * word follows the opcode; then the EA's own extension words.
+         *
+         * THE TWO MASK ORDERS (the load-bearing subtlety, M68000 PRM "MOVEM"):
+         *   - PREDECREMENT store -(An) (mode 4): the mask is REVERSED — bit0=A7, bit1=A6,
+         *     ..., bit7=A0, bit8=D7, ..., bit15=D0. Registers are stored high-to-low toward
+         *     DECREASING addresses (An is predecremented by `size` before each store).
+         *   - ALL OTHER modes (control store, every load incl. (An)+): the mask is NORMAL —
+         *     bit0=D0, ..., bit7=D7, bit8=A0, ..., bit15=A7. Transfer ascends from the EA.
+         * (An)+ postincrement bumps An by size*count AFTER; -(An) leaves An at the lowest slot.
+         * .w LOADS sign-extend word->long into the full 32-bit register; .w STORES write the
+         * low 16 bits. movem does NOT affect the condition codes.
+         * We drive the SAME modes the JIT does (the engine drives Emu68's REAL EMIT_MOVEM);
+         * this is the independent oracle that makes the byte-exact check complete. */
+        /* NOTE the mode>=2 guard: mode 0 (Dn direct) of this pattern is ext.w/ext.l
+         * (0x4880|dn / 0x48C0|dn), handled below — movem requires a memory/control EA. */
+        if ((op & 0xFB80u) == 0x4880u && ((op >> 3) & 7u) >= 2u) {  /* movem reg<->mem */
+            unsigned dir  = (op >> 10) & 1u;          /* 0 store (reg->mem), 1 load (mem->reg) */
+            unsigned size = (op >> 6) & 1u;           /* 0 .w, 1 .l                            */
+            unsigned mode = (op >> 3) & 7u;
+            unsigned ereg =  op       & 7u;
+            unsigned step = size ? 4u : 2u;
+            uint16_t mask = be16(ip + 2);
+            const uint8_t *ext = ip + 4;              /* EA extension words follow the mask    */
+            int oob = 0;
+            unsigned popcount = 0;
+            for (unsigned i = 0; i < 16; i++) if (mask & (1u << i)) popcount++;
+
+            /* helper: read/write one 68k register file slot by index 0..15 (D0..D7, A0..A7) */
+            #define MV_RDREG(idx) ((idx) < 8 ? st->d[(idx)] : st->a[(idx) - 8])
+            #define MV_WRREG(idx, v) do { if ((idx) < 8) st->d[(idx)] = (v); else st->a[(idx) - 8] = (v); } while (0)
+
+            if (dir == 0) {
+                /* ---- STORE: registers -> memory ---- */
+                if (mode == 4) {
+                    /* PREDECREMENT -(An), REVERSED mask. Iterate i=0..15 => reg index
+                     * (15 - i) in normal order: bit0 maps to reg 15 (A7), bit15 to reg 0
+                     * (D0). For each set bit predecrement An then store the mapped register. */
+                    uint32_t an = st->a[ereg];
+                    for (unsigned i = 0; i < 16 && !oob; i++) {
+                        if (!(mask & (1u << i))) continue;
+                        unsigned ridx = 15u - i;                 /* reversed: A7..A0,D7..D0 */
+                        an -= step;
+                        if (size) mem_wr32(sb, an, MV_RDREG(ridx), &oob);
+                        else      mem_wr16(sb, an, (uint16_t)MV_RDREG(ridx), &oob);
+                    }
+                    if (!oob) st->a[ereg] = an;                  /* An ends at the lowest slot */
+                } else {
+                    /* CONTROL store ((An) / (d16,An) / abs), NORMAL mask, ascending. */
+                    uint32_t addr; int handled = 1;
+                    if (mode == 2) { addr = st->a[ereg]; }
+                    else if (mode == 5) { int16_t d16 = be16s(ext); ext += 2; addr = st->a[ereg] + (uint32_t)(int32_t)d16; }
+                    else if (mode == 7 && ereg == 0) { addr = (uint32_t)(int32_t)be16s(ext); ext += 2; }
+                    else if (mode == 7 && ereg == 1) { addr = be32(ext); ext += 4; }
+                    else { handled = 0; addr = 0; }
+                    if (!handled) IFAIL("movem: unsupported store EA mode");
+                    for (unsigned ridx = 0; ridx < 16 && !oob; ridx++) {
+                        if (!(mask & (1u << ridx))) continue;
+                        if (size) mem_wr32(sb, addr, MV_RDREG(ridx), &oob);
+                        else      mem_wr16(sb, addr, (uint16_t)MV_RDREG(ridx), &oob);
+                        addr += step;
+                    }
+                }
+            } else {
+                /* ---- LOAD: memory -> registers, NORMAL mask, ascending ---- */
+                uint32_t addr; int handled = 1; int postinc = 0;
+                if (mode == 3) { addr = st->a[ereg]; postinc = 1; }       /* (An)+ */
+                else if (mode == 2) { addr = st->a[ereg]; }               /* (An)  */
+                else if (mode == 5) { int16_t d16 = be16s(ext); ext += 2; addr = st->a[ereg] + (uint32_t)(int32_t)d16; }
+                else if (mode == 7 && ereg == 0) { addr = (uint32_t)(int32_t)be16s(ext); ext += 2; }
+                else if (mode == 7 && ereg == 1) { addr = be32(ext); ext += 4; }
+                else if (mode == 7 && ereg == 2) {                        /* (d16,PC) */
+                    uint32_t pcbase = pc + (uint32_t)(ext - ip);
+                    int16_t d16 = be16s(ext); ext += 2; addr = pcbase + (uint32_t)(int32_t)d16;
+                }
+                else { handled = 0; addr = 0; }
+                if (!handled) IFAIL("movem: unsupported load EA mode");
+                for (unsigned ridx = 0; ridx < 16 && !oob; ridx++) {
+                    if (!(mask & (1u << ridx))) continue;
+                    if (size) {
+                        uint32_t v = mem_rd32(sb, addr, &oob);
+                        if (!oob) MV_WRREG(ridx, v);
+                    } else {
+                        uint16_t w = mem_rd16(sb, addr, &oob);
+                        if (!oob) MV_WRREG(ridx, (uint32_t)(int32_t)(int16_t)w);  /* sign-extend */
+                    }
+                    addr += step;
+                }
+                if (!oob && postinc) st->a[ereg] += step * popcount;      /* An += size*count */
+            }
+            #undef MV_RDREG
+            #undef MV_WRREG
+            if (oob) IFAIL("movem: EA access out of sandbox");
+            pc += (uint32_t)(ext - ip); continue;
         }
 
         /* ============================ [J5g] LINE4 misc =============================

@@ -242,3 +242,168 @@ uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t 
     *ptr++ = add_reg(2 /*x2*/, base, index, LSL, shift);
     return ea_access(ptr, sz, is_store, is_signed, 2, val);
 }
+
+/* ============================ [J5l] the MOVEM sandbox EA ============================
+ * movem (move-multiple-registers) is the opcode every compiler-generated 68k function uses
+ * in its prologue/epilogue (`movem.l d2-d7/a2-a6,-(sp)` save + `movem.l (sp)+,d2-d7/a2-a6`
+ * restore). We drive Emu68's REAL EMIT_MOVEM decoder (M68k_LINE4.c) — it does the whole
+ * register-mask / predecrement-reversed-order / post-increment-An-update work — and route
+ * ONLY its memory touches through the sandbox here, exactly as [J5d]/[J5g] did for the
+ * (An)-class and displacement EAs.
+ *
+ * WHY movem needs its OWN helpers (it does NOT route through j5d_ea_mem / the funnel above).
+ * EMIT_MOVEM does NOT use M68k_EA.c's `ldr_offset(reg_An,*arm_reg,imm)` sites that
+ * emu68_darwinize.pl --ea-sandbox rewrites. Instead it resolves the EA base ONCE (via
+ * EMIT_LoadFromEffectiveAddress with size 0 — so `base` holds the 68k ADDRESS, not a host
+ * pointer) and then emits its OWN inner loop of raw, often PAIRED, sequential transfers
+ * straight off `base`:
+ *     stp/stp_preindex (a 32-bit W-register PAIR), str/str_offset_preindex, strh,
+ *     ldr, ldp/ldp_postindex, ldrsh
+ * On bare-metal Emu68 these work because An is a 1:1 host pointer and the CPU runs
+ * big-endian (SCTLR.EE). On the little-endian hosted sandbox both are wrong — each access
+ * needs host = base_adjust(x12) + (uint32_t)base (UXTW) and a per-register REV byteswap.
+ * The A64.h stp/ldp here are the 32-bit pair forms (encoding 0x29.../0x28..., imm scaled /4),
+ * so each .l element is a 32-bit value that must be byteswapped individually.
+ *
+ * emu68_darwinize.pl --movem-sandbox rewrites each of EMIT_MOVEM's memory encoder sites in
+ * the BUILD-DIR COPY of M68k_LINE4.c to call one of these helpers (a pure call-substitution
+ * preserving operand order). The QUARANTINE M68k_LINE4.c stays BYTE-VERBATIM. The DECODE
+ * (mask order — REVERSED for predecrement, normal otherwise — block sizing, the base-on-the-
+ * list `tmp_base_reg` save, the An post/pre update) is 100% the REAL decoder; only the memory
+ * touch is sandbox-translated. The non-memory base arithmetic Emu68 emits (the `add_immed`/
+ * `sub_immed` that bump/decrement the 68k An, and the `sub_immed(tmp_base_reg,...)` that
+ * snapshots the base register's pre-decrement value) is left AS-IS — it operates on a 68k
+ * address held in a register, no host translation needed.
+ *
+ * `base` is the AArch64 reg holding the 68k address; it is never x2/x3 (the RA hands out only
+ * w4..w11, and EMIT_MOVEM maps An = w13..w29 or an alloc reg). `rt1`/`reg` are the 68k D/A
+ * registers transferred (also never x2/x3). x3 = computed host pointer, x2 = REV scratch —
+ * both RA-reserved, disjoint from the live file, mirroring j5d_ea_mem.
+ *
+ * IMPORTANT ORDERING NOTE (pre/post index): an AArch64 `stp_preindex(base,a,b,-N)` updates
+ *   base BEFORE the access (`base-=N; [base]=a; [base+4]=b`); `ldp_postindex(base,a,b,N)`
+ *   updates base AFTER (`a=[base]; b=[base+4]; base+=N`). We reproduce that exactly: pre-index
+ *   adjusts `base` first, post-index last. The 68k An-update semantics this realises
+ *   (-(An) decrements before store, (An)+ increments after load) are what the decoder asked
+ *   for. (For movem, EMIT_MOVEM also emits a separate `add_immed(base,base,block_size)` to
+ *   bump An after a NON-pair-fast-path post-increment load — that is non-memory and untouched.)
+ * ===================================================================================*/
+
+/* Emit `host = base_adjust(x12) + (uint32_t)base68k` -> x3, with the +offset folded into the
+ * subsequent load/store (the A64 ldr/str offset field). For offsets the small immediate
+ * fits the scaled offset field; movem offsets are small (<= 15 regs * 4 = 60). */
+static uint32_t *movem_hostptr(uint32_t *ptr, uint8_t base68k)
+{
+    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
+    return ptr;
+}
+
+/* One sandbox WORD store: mem68k[base+byte_off] = val (REV to big-endian). */
+static uint32_t *movem_store_w(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
+{
+    g_j5d_ea_emits++;
+    ptr = movem_hostptr(ptr, base68k);
+    *ptr++ = rev(2 /*w2*/, val);
+    *ptr++ = str_offset(J5D_HOSTPTR, 2, (uint16_t)byte_off);
+    return ptr;
+}
+/* One sandbox HALF store: mem68k[base+byte_off] = (uint16)val (REV16 to big-endian). */
+static uint32_t *movem_store_h(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
+{
+    g_j5d_ea_emits++;
+    ptr = movem_hostptr(ptr, base68k);
+    *ptr++ = rev16(2 /*w2*/, val);
+    *ptr++ = strh_offset(J5D_HOSTPTR, 2, (uint16_t)byte_off);
+    return ptr;
+}
+/* One sandbox WORD load: val = mem68k[base+byte_off] (REV from big-endian). */
+static uint32_t *movem_load_w(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
+{
+    g_j5d_ea_emits++;
+    ptr = movem_hostptr(ptr, base68k);
+    *ptr++ = ldr_offset(J5D_HOSTPTR, val, (uint16_t)byte_off);
+    *ptr++ = rev(val, val);
+    return ptr;
+}
+/* One sandbox signed-HALF load: val = (int16)mem68k[base+byte_off], sign-extended to 32 bits
+ * (movem .w loads sign-extend word->long into the destination register — M68000 PRM). */
+static uint32_t *movem_load_sh(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
+{
+    g_j5d_ea_emits++;
+    ptr = movem_hostptr(ptr, base68k);
+    *ptr++ = ldrh_offset(J5D_HOSTPTR, val, (uint16_t)byte_off);
+    *ptr++ = rev16(val, val);
+    *ptr++ = sxth(val, val);
+    return ptr;
+}
+
+/* ---- the encoder-shaped entry points the darwinize --movem-sandbox rewrite calls.
+ * Each mirrors ONE A64.h encoder EMIT_MOVEM emitted; the pre/post-index ones also update
+ * `base` (the 68k An address reg) by `amt` (= block_size, always positive here). ---- */
+
+/* was stp(base, rt1, rt2, offset)            (32-bit W-pair store, no index) */
+uint32_t *j5d_movem_stp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset)
+{
+    ptr = movem_store_w(ptr, base, rt1, offset);
+    ptr = movem_store_w(ptr, base, rt2, offset + 4);
+    return ptr;
+}
+/* was stp_preindex(base, rt1, rt2, -amt)     (base-=amt FIRST, then the W-pair store) */
+uint32_t *j5d_movem_stp_pre(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int amt)
+{
+    *ptr++ = sub_immed(base, base, (uint16_t)amt);     /* pre-decrement the 68k An */
+    ptr = movem_store_w(ptr, base, rt1, 0);
+    ptr = movem_store_w(ptr, base, rt2, 4);
+    return ptr;
+}
+/* was str_offset(base, rt, offset)           (single 32-bit store, no index) */
+uint32_t *j5d_movem_str(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
+{
+    return movem_store_w(ptr, base, rt, offset);
+}
+/* was str_offset_preindex(base, rt, -amt)    (base-=amt FIRST, then the single store) */
+uint32_t *j5d_movem_str_pre(uint32_t *ptr, uint8_t base, uint8_t rt, int amt)
+{
+    *ptr++ = sub_immed(base, base, (uint16_t)amt);
+    return movem_store_w(ptr, base, rt, 0);
+}
+/* was strh_offset(base, rt, offset)          (single 16-bit store, no index) */
+uint32_t *j5d_movem_strh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
+{
+    return movem_store_h(ptr, base, rt, offset);
+}
+/* was strh_offset_preindex(base, rt, -amt)   (base-=amt FIRST, then the 16-bit store) */
+uint32_t *j5d_movem_strh_pre(uint32_t *ptr, uint8_t base, uint8_t rt, int amt)
+{
+    *ptr++ = sub_immed(base, base, (uint16_t)amt);
+    return movem_store_h(ptr, base, rt, 0);
+}
+/* was ldp(base, rt1, rt2, offset)            (32-bit W-pair load, no index) */
+uint32_t *j5d_movem_ldp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset)
+{
+    ptr = movem_load_w(ptr, base, rt1, offset);
+    ptr = movem_load_w(ptr, base, rt2, offset + 4);
+    return ptr;
+}
+/* was ldp_postindex(base, rt1, rt2, amt)     (W-pair load FIRST, then base+=amt)
+ * EMIT_MOVEM only emits ldp_postindex with amt=8 (its block_size==8 two-longword fast path,
+ * M68k_LINE4.c:2636-2637), and that path is taken only when neither loaded reg is the base An
+ * (the base is skipped in post-increment mode), so rt1/rt2 never alias `base`. We honour the
+ * literal amt the decoder passed; if that gate ever loosens, amt still tracks the decoder. */
+uint32_t *j5d_movem_ldp_post(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int amt)
+{
+    ptr = movem_load_w(ptr, base, rt1, 0);
+    ptr = movem_load_w(ptr, base, rt2, 4);
+    *ptr++ = add_immed(base, base, (uint16_t)amt);     /* post-increment the 68k An */
+    return ptr;
+}
+/* was ldr_offset(base, rt, offset)           (single 32-bit load, no index) */
+uint32_t *j5d_movem_ldr(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
+{
+    return movem_load_w(ptr, base, rt, offset);
+}
+/* was ldrsh_offset(base, rt, offset)         (single signed-16 load, sign-extend to long) */
+uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
+{
+    return movem_load_sh(ptr, base, rt, offset);
+}

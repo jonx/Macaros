@@ -277,6 +277,11 @@ int main(void)
                 "[J5g] bubble sort via (d8,An,Xn.L) indexed mem + a shift/rotate/immediate "
                 "checksum (LINE0/LINE4/LINEE decoders)", 1);
     printf("\n");
+    run_regprog("j5l.exe", "bin/j5l.exe", 11,
+                "[J5l] movem.l d2-d7/a2-a6,-(sp) save + (sp)+ restore around a clobbering "
+                "non-leaf sub (REAL EMIT_MOVEM decoder; sandbox base-adjust + REV) -> 11 regs "
+                "survive", 0);   /* no relocation (immediate/PC-rel only); movem mem proven in [J5l] */
+    printf("\n");
     run_libcall();
     printf("\n");
 
@@ -284,8 +289,8 @@ int main(void)
         printf("[apps68k] FAIL: one or more programs did not produce the expected result.\n");
         return 1;
     }
-    printf("[apps68k] PASS: all six REAL 68k programs (mul=42, fact=120, arraysum=150, "
-           "sumsq=55, bubsort=0x00F5B9F5, libcall=0) ran THROUGH THE JIT via Emu68's REAL "
+    printf("[apps68k] PASS: all seven REAL 68k programs (mul=42, fact=120, arraysum=150, "
+           "sumsq=55, bubsort=0x00F5B9F5, j5l=11, libcall=0) ran THROUGH THE JIT via Emu68's REAL "
            "per-opcode decoders + our re-hosted PC-driven dispatcher (with the [J5f] real "
            "return stack for sumsq's nested bsr/jsr/rts + computed jsr, and the [J5g] "
            "LINE0/LINE4/LINEE decoders + (d8,An,Xn)/(d16,An) sandbox EA for bubsort's "

@@ -163,6 +163,29 @@ Build-time darwinize (NO edit to the verbatim files)
   sandboxed. Applied to the BUILD-DIR copy ONLY; the QUARANTINE M68k_EA.c stays BYTE-
   VERBATIM (`diff` vs upstream empty, verified).
 
+  [J5l] FOURTH build-time transform (the EMIT_MOVEM sandbox rewrite) — applied to the
+  BUILD-DIR COPY of M68k_LINE4.c ONLY, gated by emu68_darwinize.pl's `--movem-sandbox`
+  flag (the [J5l]/apps builds pass it). EMIT_MOVEM does NOT use M68k_EA.c's
+  ldr_offset(reg_An,...) sites the --ea-sandbox transform rewrites: it resolves the EA base
+  ONCE (size 0, so `base` holds the 68k ADDRESS) and emits its OWN inner loop of raw, often
+  PAIRED, transfers straight off `base` —
+      *ptr++ = stp_preindex(base, rt1, reg, -block_size);  // -(An) predecrement save (.l)
+      *ptr++ = stp(base, rt1, reg, offset);                // (An)/(d16,An) control store
+      *ptr++ = strh_offset[_preindex](base, reg, ...);     // .w store
+      *ptr++ = ldp_postindex(base, rt1, reg, 8);           // (An)+ postincrement restore
+      *ptr++ = ldp(base, rt1, reg, offset);  ldr_offset(...); ldrsh_offset(...);  // loads
+  the 1:1-MMU + big-endian-CPU assumption. The script rewrites each such MEMORY site (scoped
+  to those whose base operand is the literal `base` — uniquely movem; lea/link/unlk/pea use
+  dest/src/sp) to a call to OUR j5d_movem_* helpers (j5d_ea_helpers.c, OURS): host =
+  base_adjust + (uint32_t)base (UXTW), a per-register REV byteswap, DECOMPOSING the 32-bit
+  W-register pairs (stp/ldp) into per-register accesses, and PRESERVING the pre/post-index An
+  update (stp_preindex => An-=N first; ldp_postindex => An+=N last). The non-memory base
+  arithmetic Emu68 emits (the add_immed/sub_immed bumping/snapshotting the 68k An) is left
+  AS-IS. The DECODE (the register-mask order — REVERSED for predecrement, normal otherwise —
+  the block sizing, the base-on-the-list tmp_base_reg snapshot, the post/pre An update) stays
+  100% the REAL EMIT_MOVEM. The QUARANTINE M68k_LINE4.c is NOT touched — `diff` vs upstream
+  stays empty (verified). No new file is vendored ([J5g] already vendored M68k_LINE4.c).
+
 NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
 -----------------------------------------------------------------------------
   src/aarch64/{start,vectors,mmu}.c, src/raspi/*, src/pistorm/*, src/boards/*,

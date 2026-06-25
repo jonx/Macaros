@@ -42,5 +42,10 @@ asm mandel  -no-opt              # [J5j] CAPSTONE: fixed-point Mandelbrot ASCII 
                                  # moveq, addi->addq, etc.) so the JIT + oracle decode the
                                  # precise muls.w/asr/(d16,a5)-EA/Bcc/cmpi set. No relocation
                                  # (PC-relative branches + abs sandbox scratch addr only).
+asm j5l     -no-opt              # [J5l] movem save/restore: a compiler-style non-leaf sub
+                                 # (movem.l d2-d7/a2-a6,-(sp) prologue + movem.l (sp)+,...
+                                 # epilogue) around a clobbering body, plus the control/(d16,An)
+                                 # /.w movem forms. -no-opt keeps the exact movem encodings.
+                                 # PC-relative bsr only, no relocation.
 echo ">> done. assembled:"
 ls -l "$HERE/bin/"

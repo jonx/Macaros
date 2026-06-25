@@ -64,17 +64,79 @@ sub ea_kind {
     return ($size & 3) | ($store << 2) | ($signed << 3) | (($index & 3) << 4);
 }
 
-# Usage: emu68_darwinize.pl <src.c> <out.c> [--ea-sandbox]
-#   --ea-sandbox  enable the [J5d] (An)-class sandbox-memory EA rewrite (M68k_EA.c).
-#                 Without it, only the alias-forwarder transform runs (the [J5c] build,
-#                 which is register-direct and links no j5d_ea_mem helper). The [J5d]/
-#                 apps builds pass it so the (An)/(An)+ memory modes route through the
-#                 sandbox-base + REV helper.
+# Usage: emu68_darwinize.pl <src.c> <out.c> [--ea-sandbox] [--movem-sandbox]
+#   --ea-sandbox     enable the [J5d] (An)-class sandbox-memory EA rewrite (M68k_EA.c).
+#                    Without it, only the alias-forwarder transform runs (the [J5c] build,
+#                    which is register-direct and links no j5d_ea_mem helper). The [J5d]/
+#                    apps builds pass it so the (An)/(An)+ memory modes route through the
+#                    sandbox-base + REV helper.
+#   --movem-sandbox  enable the [J5l] EMIT_MOVEM sandbox-memory rewrite (M68k_LINE4.c).
+#                    EMIT_MOVEM does NOT use M68k_EA.c's ldr_offset(reg_An,...) sites — it
+#                    resolves the EA base ONCE (size 0 -> `base` holds the 68k ADDRESS) and
+#                    emits its OWN inner loop of raw stp/str/strh/ldr/ldp/ldrsh straight off
+#                    `base` (1:1 MMU + big-endian CPU assumption). This rewrite routes each
+#                    such memory touch through OUR j5d_movem_* helpers (j5d_ea_helpers.c):
+#                    host = base_adjust + base (UXTW), per-register REV byteswap, with pair
+#                    decomposition + the pre/post-index An update preserved. The non-memory
+#                    base arithmetic (the add_immed/sub_immed that bump the 68k An, and the
+#                    sub_immed(tmp_base_reg,...) base snapshot) is left AS-IS. The QUARANTINE
+#                    M68k_LINE4.c stays BYTE-VERBATIM; only the build-dir copy is patched.
 use strict; use warnings;
 my ($src, $out, @opts) = @ARGV;
-die "usage: $0 <src.c> <out.c> [--ea-sandbox]\n" unless $src && $out;
-my $ea_sandbox = grep { $_ eq '--ea-sandbox' } @opts;
+die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox]\n" unless $src && $out;
+my $ea_sandbox    = grep { $_ eq '--ea-sandbox' } @opts;
+my $movem_sandbox = grep { $_ eq '--movem-sandbox' } @opts;
 local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close $fh;
+
+# ===================== [J5l] EMIT_MOVEM SANDBOX REWRITE =====================
+# Applied to M68k_LINE4.c only (--movem-sandbox). Each rewrite is a pure call-substitution
+# on a `*ptr++ = <encoder>(base, ...);` site whose base operand is the literal `base`
+# (EMIT_MOVEM's EA-base variable) — which uniquely scopes to movem (lea/link/unlk/pea in
+# this file use `dest`/`src`/`sp`, never `base`). Operand order is preserved; only WHICH
+# emitter is called changes. The pre/post-index amount is passed positive (the helper does
+# the sub/add on the 68k An). Run BEFORE the alias rewrite (these sites contain no aliases).
+if ($movem_sandbox) {
+    my $mv = 0;
+    # PAIR stores/loads (32-bit W-register pair). stp_preindex(base,a,b,-N) -> base-=N first.
+    $code =~ s{\*ptr\+\+\s*=\s*stp_preindex\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*-(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_stp_pre(ptr, base, $1, $2, $3); /* [J5l] was stp_preindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*stp\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_stp(ptr, base, $1, $2, $3); /* [J5l] was stp */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*ldp_postindex\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_ldp_post(ptr, base, $1, $2, $3); /* [J5l] was ldp_postindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*ldp\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_ldp(ptr, base, $1, $2, $3); /* [J5l] was ldp */"}gex;
+    # SINGLE word stores/loads. _preindex carries a negative literal -block_size.
+    $code =~ s{\*ptr\+\+\s*=\s*str_offset_preindex\(\s*base\s*,\s*(\w+)\s*,\s*-(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_str_pre(ptr, base, $1, $2); /* [J5l] was str_offset_preindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*str_offset\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_str(ptr, base, $1, $2); /* [J5l] was str_offset */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*ldr_offset\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_ldr(ptr, base, $1, $2); /* [J5l] was ldr_offset */"}gex;
+    # SINGLE half stores / signed-half loads.
+    $code =~ s{\*ptr\+\+\s*=\s*strh_offset_preindex\(\s*base\s*,\s*(\w+)\s*,\s*-(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_strh_pre(ptr, base, $1, $2); /* [J5l] was strh_offset_preindex */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*strh_offset\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_strh(ptr, base, $1, $2); /* [J5l] was strh_offset */"}gex;
+    $code =~ s{\*ptr\+\+\s*=\s*ldrsh_offset\(\s*base\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_ldrsh(ptr, base, $1, $2); /* [J5l] was ldrsh_offset */"}gex;
+    if ($mv) {
+        my $decl = "\n/* [J5l] darwinize: movem sandbox-memory helpers (OURS, j5d_ea_helpers.c) */\n"
+                 . "uint32_t *j5d_movem_stp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset);\n"
+                 . "uint32_t *j5d_movem_stp_pre(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int amt);\n"
+                 . "uint32_t *j5d_movem_str(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n"
+                 . "uint32_t *j5d_movem_str_pre(uint32_t *ptr, uint8_t base, uint8_t rt, int amt);\n"
+                 . "uint32_t *j5d_movem_strh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n"
+                 . "uint32_t *j5d_movem_strh_pre(uint32_t *ptr, uint8_t base, uint8_t rt, int amt);\n"
+                 . "uint32_t *j5d_movem_ldp(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int offset);\n"
+                 . "uint32_t *j5d_movem_ldp_post(uint32_t *ptr, uint8_t base, uint8_t rt1, uint8_t rt2, int amt);\n"
+                 . "uint32_t *j5d_movem_ldr(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n"
+                 . "uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset);\n";
+        if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
+            my $head = $1; substr($code, length($head), 0) = $decl;
+        } else { $code = $decl . $code; }
+    }
+}
 
 # [J5d] EA rewrite — applied to every `*ptr++ = <ldst>(reg_An, *arm_reg, <imm>);` site.
 # The substitution is purely textual on the verbatim source we just read; it preserves

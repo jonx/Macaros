@@ -1397,6 +1397,75 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   (exceptions stay dispatcher-decoded terminators). No `emu68/` file is touched; the Exhibit-B grep
   is unchanged/clean.
 
+- **`[J5l]` movem (move-multiple-registers) — IMPLEMENTED / GREEN.** Closes the highest-value
+  remaining ISA gap the prior spikes deferred (`[J5g]`/`[J5h]` listed `movem` as vendored-but-
+  undriven): `movem` is the opcode **every compiler-generated 68k function uses in its
+  prologue/epilogue** (`movem.l d2-d7/a2-a6,-(sp)` save + `movem.l (sp)+,d2-d7/a2-a6` restore), so
+  it is **required to run real compiled Amiga code**. `[J5l]` DRIVES Emu68's **REAL `EMIT_MOVEM`
+  decoder** (the verbatim, quarantined `M68k_LINE4.c` — already vendored at `[J5g]`), routing its
+  memory touches through the sandbox, byte-exact vs the independent interpreter (extended to model
+  `movem`). Files: `hosted/jit68k/{j5l_test.c, j5d_ea_helpers.c (movem helpers), j5d_interp.c
+  (oracle), emu68_darwinize.pl (--movem-sandbox), apps68k/j5l.s→bin/j5l.exe}`; target
+  `make hosted-jit68k-j5l` (marker `[J5l] PASS`, watchdog 30 s), added to `harness/test-hosted.sh`
+  and the `apps68k` runner. **PASS (observed):**
+  1. **`j5l.exe`** — a compiler-style **non-leaf subroutine** `work` does `movem.l d2-d7/a2-a6,-(sp)`
+     (PROLOGUE predecrement save) + `movem.l (sp)+,d2-d7/a2-a6` (EPILOGUE postincrement restore)
+     around a body that **CLOBBERS** every one of those registers, called from a caller that seeded
+     them with sentinels; the caller then **counts the survivors** → `d0 == 11` (all of d2-d7 + a2-a6
+     restored — the save/restore actually MATTERED). It also exercises the **control / (d16,An) / .w**
+     `movem` forms against a fixed sandbox frame. Run through the REAL decoders to `d0 == 11`,
+     **byte-exact equal to the independent interpreter** on the FULL register file AND the WHOLE
+     sandbox memory (incl. the predecrement save frame on the stack AND the control frame), with
+     **34 movem memory accesses** routed through the JIT.
+  2. **Negative control** — zero the EPILOGUE restore mask in the JIT copy only (an empty `movem`
+     mask transfers nothing): the clobbered callee regs leak, `d0 != 11` (JIT `0`) while the
+     un-patched oracle restores (`d0 == 11`) — the JIT **diverges**, so the byte-exact + survival
+     asserts genuinely bite.
+  3. **Regression** — the whole corpus (`mul`/`fact`/`arraysum`/`libcall`/`sumsq`/`bubsort`/`mp64`/
+     `mandel`) re-run through the SAME (movem-edited) engine, each byte-exact; `[J1]`–`[J5k]` +
+     `apps68k` re-confirmed green.
+
+  *The forms + mask orders + An-update covered (the honest scope statement).* All the forms a
+  compiler emits: **`movem.l <list>,-(An)`** (predecrement save — the prologue; the **REVERSED**
+  register-mask order: bit0=A7…bit15=D0, An predecremented before each store, ending at the lowest
+  slot), **`movem.l (An)+,<list>`** (postincrement restore — the epilogue; NORMAL mask order
+  bit0=D0…bit15=A7, An post-incremented by `size×count`), and the **control-mode** forms
+  (`(An)`/`(d16,An)`/abs, NORMAL mask, no An update) — all `.l` AND `.w` (the `.w` LOAD
+  sign-extends word→long into the full 32-bit register; the `.w` STORE writes the low 16 bits).
+  `movem` does **not** affect the condition codes. The DECODE is 100% Emu68's REAL `EMIT_MOVEM`
+  (the mask-order/predecrement/post-increment/`tmp_base_reg`-on-the-list logic) — not hand-rolled.
+
+  *The memory routing (the one real mechanism). `EMIT_MOVEM` does NOT route through `M68k_EA.c`'s
+  `ldr_offset(reg_An,…)` sites the `[J5d]` `--ea-sandbox` transform rewrites.* It resolves the EA
+  base ONCE (via `EMIT_LoadFromEffectiveAddress` with size 0, so `base` holds the 68k **address**,
+  not a host pointer) and then emits its OWN inner loop of raw, often **PAIRED**, sequential
+  transfers straight off `base` — `stp`/`stp_preindex` (the 32-bit W-register pair forms),
+  `str`/`str_offset_preindex`, `strh`, `ldr`, `ldp`/`ldp_postindex`, `ldrsh`. On bare-metal Emu68
+  these work because An is a 1:1 host pointer and the CPU runs big-endian (`SCTLR.EE`); on the
+  little-endian hosted sandbox each access needs `host = base_adjust(x12) + (uint32_t)base` (UXTW)
+  + a per-register `REV` byteswap (the `[J5a]`/`[J5g]` finding, here applied to a NEW set of encoder
+  sites). A SECOND darwinize pass (`emu68_darwinize.pl --movem-sandbox`, on `M68k_LINE4.c`) rewrites
+  exactly those movem memory sites in the BUILD-DIR COPY to OUR `j5d_movem_*` helpers
+  (`j5d_ea_helpers.c`), which **decompose the W-register pairs into per-register sandbox accesses**
+  (base-adjust + `REV` + the store/load) and **preserve the pre/post-index An update**
+  (`stp_preindex` → `An-=N` first; `ldp_postindex` → `An+=N` last). The non-memory base arithmetic
+  Emu68 emits (the `add_immed`/`sub_immed` that bump/snapshot the 68k An) is left AS-IS. The patch
+  is a pure call-substitution scoped to sites whose base operand is the literal `base` (uniquely
+  movem — `lea`/`link`/`unlk`/`pea` in `M68k_LINE4.c` use `dest`/`src`/`sp`); the **QUARANTINE
+  `M68k_LINE4.c` stays BYTE-VERBATIM** (`diff` vs upstream empty).
+
+  *No new Emu68 file is vendored.* `M68k_LINE4.c` was vendored verbatim at `[J5g]`; `[J5l]` only adds
+  a build-dir transform + OUR helpers + the oracle extension. The Exhibit-B grep is **UNCHANGED and
+  re-grep clean**, and no `emu68/` file is touched. **The frozen seam is UNCHANGED (confirmed):**
+  `[J5l]` is decoder/EA coverage below the seam — untouched are the `jit_region` API (`jit_region.h`),
+  the `struct M68KState`/`struct j5d_m68k_state` field layout, the `[J3]` LVO-call marshalling
+  contract, and the `[J5i]` exception/SR model.
+
+  *Honest deferrals.* `movem` to/from an **indexed** (mode 6 `(d8,An,Xn)`) or **PC-relative** EA, and
+  the `movem`-`(An)`-class with a base register ON the loaded list in the rare same-reg fast paths,
+  are decoded by the REAL `EMIT_MOVEM` but **not exercised** by the verified program (the rule "don't
+  assert what the test doesn't run"); `movep` (the LINE0 peripheral-move) remains vendored-but-undriven.
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:
