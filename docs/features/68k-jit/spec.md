@@ -2141,6 +2141,11 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
     `.p` trips loudly rather than silently mis-converting. **This is the single remaining FP item; every
     instruction and memory format compiled FP software uses is covered and byte-exact.**
 
+- **`run68k` — the user-facing CLI front-end (a usability wrapper, no new emulation).** `hosted/jit68k/run68k.c`
+  + `make run68k` → `build/run68k`: runs a self-contained 68k Amiga hunk executable through the full `[J5d]`
+  engine (CPU + FPU) from the terminal, the program's PutChar output to stdout (clean / pipe-able), exit code
+  = the 68k top-level D0, faults routed through the `[J5n]` crash bundle. See `hosted/jit68k/run68k.md`.
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:
