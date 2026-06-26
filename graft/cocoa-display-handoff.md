@@ -1,5 +1,20 @@
 # Cocoa/Metal display driver — "shell renders, window stays empty" (handoff)
 
+> **✅ RESOLVED 2026-06-26 — root cause was the direct-framebuffer contract.**
+> The driver is a direct-FB gfx HIDD: the real front framebuffer is created with
+> `aHidd_BitMap_FrameBuffer=TRUE` (the gfx base promotes it to Displayable only
+> later), and `Hidd_Gfx_Show` in this mode **copies the source screen into that
+> framebuffer and returns the framebuffer object** — which is what graphics then
+> keeps `UpdateRect`-ing. Two one-line fixes in `cocoagfx_hiddclass.c`:
+> (1) `CreateObject` routes *any bitmap with a valid ModeID* (not just Displayable)
+> to `CocoaBM`, so the framebuffer is our class and receives `UpdateRect`;
+> (2) `Show` tracks/presents the object `OOP_DoSuperMethod(Show)` **returns**
+> (`xsd.visible = shown`), not `msg->bitMap`. After the fix, UpdateRect fires and
+> the window shows the live console — verified interactive (typed `echo hello`
+> into the window → the shell received + executed it). So this was never a
+> screen-selection problem (§5–§6 below), it was presenting the wrong bitmap
+> object. The analysis below is kept for the record.
+
 **Status:** AROS boots to a fully usable shell, but the Mac window shows an empty
 gray screen. The crash bugs are all fixed (window opens, mouse + keyboard reach
 the OS with no crashes, file-I/O fixed, close→quit). This doc is the one
