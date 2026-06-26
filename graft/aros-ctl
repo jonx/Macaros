@@ -14,13 +14,16 @@
 #   aros-ctl stop           kill it
 #   aros-ctl type TEXT...   type text (lowercase/digits/space/punct; Up=shift)
 #   aros-ctl enter          press Return
-#   aros-ctl key VK P       raw key: macOS virtual keycode VK, pressed P (1/0)
+#   aros-ctl key VK P [MODS] raw key: macOS virtual keycode VK, pressed P (1/0)
+#   aros-ctl cmdc           press Command-C
+#   aros-ctl cmdv           press Command-V
 #   aros-ctl mouse X Y      move pointer to logical X,Y
 #   aros-ctl click [BTN]    click (0=left default,1=right,2=middle)
 #   aros-ctl button BTN P   raw mouse button BTN pressed P
 #   aros-ctl shot [PATH]    screenshot -> PATH (.png via sips, else .ppm)
 #   aros-ctl log [N]        last N log lines (default 40)
 #   aros-ctl crash          extract crash/alert lines from the log
+#   aros-ctl libs           list host dylibs mapped by AROSBootstrap (path + version)
 #   aros-ctl wait [SECS]    sleep, letting AROS run/render (default 1)
 set -u
 
@@ -28,9 +31,11 @@ BOOTD="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-495
 ENT="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-4959-b0ec-f7720da95bb3/scratchpad/scratchpad/cocoa-test-ent.plist"
 DYLIB_SRC="/Users/user/Source/aros-aarch64/build/cocoametal.dylib"
 
-FIFO=/tmp/aros-cm.ctl
-LOG=/tmp/aros-window.log
-PIDF=/tmp/aros-cm.pid
+# Overridable so parallel sessions (e.g. a host-volume test) don't fight over one
+# window: set AROS_CTL_FIFO/LOG/PIDF to isolate an instance.
+FIFO="${AROS_CTL_FIFO:-/tmp/aros-cm.ctl}"
+LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
 
 ctl() { [ -p "$FIFO" ] && printf '%s\n' "$*" > "$FIFO"; }
 
@@ -60,6 +65,8 @@ char2vk() {
 }
 
 LSHIFT=56   # macOS kVK_Shift
+LCMD=55     # macOS kVK_Command
+CMOD=8      # CM_MOD_CMD
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 
@@ -71,19 +78,26 @@ run)
     mkdir -p "$AROS/Devs/Monitors"
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
+    mkdir -p "$AROS/clips"   # CLIPS: target (host-side, so the AROS startup-seq needs no MakeDir)
     grep -v '^arguments ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
         && mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
     for M in Devs/shell.resource \
         Devs/Drivers/hiddclass.hidd Devs/Drivers/gfx.hidd \
         Devs/Drivers/inputclass.hidd Devs/Drivers/keyboard.hidd Devs/Drivers/mouse.hidd \
         Devs/console.device Devs/input.device Devs/keyboard.device Devs/gameport.device \
+        Devs/clipboard.device \
         Libs/keymap.library Libs/graphics.library Libs/layers.library \
-        Libs/intuition.library Libs/gadtools.library L/con-handler ; do
+        Libs/intuition.library Libs/gadtools.library Libs/iffparse.library L/con-handler ; do
         if [ -e "$AROS/$M" ] && ! grep -q "/$M\$" "$BOOTD/AROSBootstrap.conf"; then
             echo "module $AROS/$M" >> "$BOOTD/AROSBootstrap.conf"
         fi
     done
-    printf 'Version\n' > "$AROS/S/Startup-Sequence"
+    # Startup-sequence: version, then bring up the console<->system clipboard
+    # bridge. CLIPS: -> a host-visible dir (so a copied clip lands as a readable
+    # file), then ConClip (the con-handler/string-gadget edithook + rendezvous
+    # port) so RAmiga+C/V in the console route through clipboard.device.
+    printf 'Version\nAssign CLIPS: SYS:clips\nRun >SYS:conclip.log ConClip\n' \
+        > "$AROS/S/Startup-Sequence"
     [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/AROSBootstrap" 2>/dev/null \
                   || codesign -s - -f "$BOOTD/AROSBootstrap" 2>/dev/null
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
@@ -99,7 +113,9 @@ stop)
     rm -f "$PIDF" "$FIFO"
     echo "stopped"
     ;;
-key)    ctl "K ${1:-0} ${2:-1}";;
+key)    ctl "K ${1:-0} ${2:-1} ${3:-0}";;
+cmdc)   ctl "K $LCMD 1 $CMOD"; ctl "K 8 1 $CMOD"; ctl "K 8 0 $CMOD"; ctl "K $LCMD 0 0";;
+cmdv)   ctl "K $LCMD 1 $CMOD"; ctl "K 9 1 $CMOD"; ctl "K 9 0 $CMOD"; ctl "K $LCMD 0 0";;
 button) ctl "B ${1:-0} ${2:-1}";;
 mouse)  ctl "M ${1:-0} ${2:-0}";;
 click)  b="${1:-0}"; ctl "B $b 1"; ctl "B $b 0";;
@@ -128,8 +144,26 @@ shot)
     ;;
 log)    tail -n "${1:-40}" "$LOG" 2>/dev/null;;
 crash)  grep -nE "Trap signal|Alert|stack limits|Module |Function |supervisor mode|Privilege" "$LOG" 2>/dev/null | head -40;;
+libs)
+    # Host (macOS) dylibs mapped into the AROS process — path + version. Verifies
+    # which host shim actually loaded and from where (e.g. ~/lib/cocoametal.dylib).
+    # System libs in the dyld shared cache aren't separate files, so they show up
+    # under "(dyld shared cache)" rather than individually — that's expected.
+    # For AROS-side libraries (graphics/intuition/… name+version), use the AROS
+    # `LibList` C: command inside the shell instead (those aren't host dylibs).
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n AROSBootstrap 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running AROSBootstrap (start it with: aros-ctl run)" >&2; exit 1; }
+    echo "# host dylibs mapped by AROSBootstrap (pid $pid):"
+    vmmap "$pid" 2>/dev/null | grep -oE '/[^[:space:]]+\.dylib' | sort -u | while read -r dy; do
+        # current version from the dylib's own load command (file-backed libs only;
+        # shared-cache libs have no on-disk file, so just show the path).
+        ver="$(otool -l "$dy" 2>/dev/null | awk '/LC_ID_DYLIB/{f=1} f&&/current version/{print $3; exit}')"
+        printf '  %s%s\n' "$dy" "${ver:+  (v$ver)}"
+    done
+    ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {run|stop|type|enter|key|mouse|click|button|shot|log|crash|wait}" >&2
+    echo "usage: aros-ctl {run|stop|type|enter|key|cmdc|cmdv|mouse|click|button|shot|log|crash|libs|wait}" >&2
     exit 1;;
 esac
