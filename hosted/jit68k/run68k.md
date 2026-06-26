@@ -42,10 +42,69 @@ run68k [options] <program.exe> [program-args...]
 | `--diff`          | request the `[J5n]` differential lockstep checker (see *Limitations*)   |
 | `--crash-dir DIR` | where crash bundles go (default `$JIT68K_CRASH_DIR` or `./crash`)        |
 
-`[program-args...]` are **accepted but not yet passed into the 68k program**.
-Passing an Amiga CLI argument string into the program (through the crt0/stub) is a
-documented follow-on; the args are parsed off the command line but do not reach the
-program.
+### Command-line arguments (the AmigaDOS convention)
+
+`[program-args...]` **are passed into the 68k program**, via the AmigaDOS CLI
+convention. run68k joins the args with single spaces, appends a terminating newline
+`\n`, and places the resulting **argument string** in the sandbox. It then enters the
+program with:
+
+- **`A0`** = the sandbox address of the argument string, and
+- **`D0`** = the length of that string in bytes, **including the trailing `\n`**.
+
+This is exactly how a CLI-launched AmigaOS program is entered (the string is the command
+line *after* the command name — the program name is **not** in it). With **no args** the
+string is just `"\n"` and `D0 == 1`.
+
+A startup that reads `A0`/`D0` turns the string into a C `argv[]`. The repo ships one:
+**`apps68k/crt0_args.s`** — it splits the string on whitespace into a NUL-terminated
+`argv[]` and calls `main(argc, argv)`. The demo program **`apps68k/args.c`**
+(→ `apps68k/bin/args.exe`) prints `argc` and each `argv[i]`:
+
+```sh
+$ build/run68k hosted/jit68k/apps68k/bin/args.exe hello world 42
+argc=4
+argv[0]=a.out
+argv[1]=hello
+argv[2]=world
+argv[3]=42
+```
+
+**The splitter** (`crt0_args.s`, documented there): whitespace is space, tab and the
+terminating newline; a token is a maximal run of non-whitespace; runs of whitespace are
+collapsed (no empty args); leading/trailing whitespace is skipped. There is **no quote
+grouping** at the AmigaDOS level.
+
+**`argv[0]`**: the AmigaDOS arg string excludes the command name, so `crt0_args.s`
+synthesises `argv[0] = "a.out"` (a fixed, documented placeholder); the actual passed args
+are `argv[1..argc-1]`. (run68k could supply the real basename via a small extension; not
+done — the placeholder is stable and documented.)
+
+**Shell quoting vs AmigaDOS quoting (be honest about the semantics).** run68k does the
+AmigaDOS *join + split*: it joins the program-args the host shell already split, then the
+startup re-splits on whitespace. So a shell-quoted arg collapses the same as if it had
+been unquoted:
+
+```sh
+$ build/run68k hosted/jit68k/apps68k/bin/args.exe "one two" three
+argc=4
+argv[0]=a.out
+argv[1]=one          # "one two" was ONE shell arg, joined then re-split on the space
+argv[2]=two
+argv[3]=three
+```
+
+The host shell removed the quotes and passed `one two` as one program-arg; run68k joined
+it back into the one string `one two three\n`, which the whitespace splitter then split
+into three tokens. Quoting at the *shell* level therefore differs from quoting at the
+*AmigaDOS* level — AmigaDOS-string quote grouping is a deliberate non-goal of this
+splitter.
+
+**Backward compatibility.** Programs that ignore `A0`/`D0` — the rest of the committed
+corpus — are unaffected: the engine seeds `A6`/`A7`/`PC` but never touches `A0`/`D0`, and
+those programs never read them. The corpus stays byte-exact (`make hosted-jit68k-j5m`,
+`-j5t`, `-apps`); the argument-passing demo has its own marker, **`make
+hosted-jit68k-args`**.
 
 ## Examples
 
@@ -75,7 +134,8 @@ build/run68k -v hosted/jit68k/apps68k/bin/j5m.exe 2>stats.txt
   `PutChar` is the program's output sink → stdout.
 
 The committed corpus all runs:
-`apps68k/bin/{mandel,j5m,j5t,bubsort,sumsq,mul,fact,arraysum,j5l,j5o,j5p,j5q,j5r,j5s}.exe`.
+`apps68k/bin/{mandel,j5m,j5t,bubsort,sumsq,mul,fact,arraysum,j5l,j5o,j5p,j5q,j5r,j5s,args}.exe`
+(`args.exe` is the command-line-argument demo — see *Command-line arguments* above).
 
 ## What it can't run yet
 

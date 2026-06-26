@@ -2145,6 +2145,11 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
   + `make run68k` → `build/run68k`: runs a self-contained 68k Amiga hunk executable through the full `[J5d]`
   engine (CPU + FPU) from the terminal, the program's PutChar output to stdout (clean / pipe-able), exit code
   = the 68k top-level D0, faults routed through the `[J5n]` crash bundle. See `hosted/jit68k/run68k.md`.
+  **Command-line arguments** are delivered via the AmigaDOS CLI convention: run68k joins `[program-args...]`
+  with single spaces + a trailing `\n` into one argument string placed in the sandbox, and enters the program
+  with `A0` = the string and `D0` = its length (incl. the `\n`); `apps68k/crt0_args.s` splits it into `argv[]`
+  for `main(argc,argv)` (demo `apps68k/args.c` → `bin/args.exe`, marker `make hosted-jit68k-args`). Programs
+  that ignore `A0`/`D0` (the rest of the corpus) are unaffected — the engine never touches `A0`/`D0`.
 
 ## Risks
 

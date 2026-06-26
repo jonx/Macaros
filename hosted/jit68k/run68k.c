@@ -54,6 +54,20 @@
 #define HEAP_BASE       0x00231000u     /* AllocMem heap                            */
 #define HEAP_END        0x00238000u
 
+/* ---- The AmigaDOS argument region (OURS). ----------------------------------------
+ * The CLI argument string a CLI-launched AmigaOS program is entered with (A0 = the
+ * string, D0 = its length incl. the terminating '\n') needs a sandbox-resident,
+ * 32-bit-addressable home that A0 can hold and the 68k program can legally read. It
+ * lives in the FREE gap between the AllocMem heap end (0x238000) and the [J5i] vector
+ * table base (J5I_VBR == 0x240000): 32 KiB, untouched by the loader (which bump-
+ * allocates upward from the origin), the stub heap, or the vector table. The argv-
+ * parsing startup (apps68k/crt0_args.s) also builds its NUL-terminated argv[] array in
+ * this region (above the string), so the whole arg machinery is self-contained here
+ * and collides with nothing. Cap the joined string generously; the region is 32 KiB. */
+#define ARGS_BASE       0x00238000u     /* AmigaDOS arg string lives here            */
+#define ARGS_REGION_END 0x00240000u     /* == J5I_VBR; one past the args region      */
+#define MAX_ARGSTR      4096u           /* cap on the joined "a b c\n" arg string    */
+
 #define MAX_PROG_BYTES  (1u << 20)      /* 1 MiB cap on a hunk file (generous)      */
 
 /* ---- The library bridge: marshal 68k regs into the native stub via the [J3] thunk. ---- */
@@ -94,9 +108,12 @@ static void usage(FILE *f, const char *argv0)
 "  Programs that call real AmigaOS/AROS libraries (needs the AROS integration), and\n"
 "  hardware-banging games (needs a full-chipset emulator like UAE).\n"
 "\n"
-"program-args:  ACCEPTED but NOT YET passed into the 68k program.  Passing an Amiga\n"
-"  CLI argument string into the program (via the crt0/stub) is a follow-on; the args\n"
-"  are parsed off the command line here but do not reach the program.\n",
+"program-args:  passed into the 68k program via the AmigaDOS CLI convention.  run68k\n"
+"  joins [program-args...] with single spaces and a trailing newline into ONE argument\n"
+"  string, places it in the sandbox, and enters the program with A0 = the string and\n"
+"  D0 = its length (incl. the '\\n').  A startup that reads A0/D0 (apps68k/crt0_args.s)\n"
+"  splits it into argv[].  No args -> an empty string (just \"\\n\", D0=1).  Programs that\n"
+"  ignore A0/D0 (the rest of the corpus) are unaffected.\n",
         argv0);
 }
 
@@ -121,6 +138,52 @@ static uint8_t *slurp(const char *path, size_t *len_out)
     if (got != (size_t)sz) { fprintf(stderr, "run68k: short read on '%s'\n", path); free(buf); return NULL; }
     *len_out = got;
     return buf;
+}
+
+/* ---- Build the AmigaDOS CLI argument string from the program's argv and place it in
+ * the sandbox.  THE CONVENTION (the contract run68k honours): a CLI-launched AmigaOS
+ * program is entered with A0 = a pointer to the argument string (the command line AFTER
+ * the command name — the program name is NOT in it) and D0 = the length of that string
+ * in bytes INCLUDING the terminating newline '\n'.  No args -> the lone "\n" (D0 == 1).
+ *
+ * We JOIN the args with single spaces and append the '\n', write the bytes at ARGS_BASE
+ * in the sandbox, and return the 68k address + length.  (Each individual program-arg was
+ * already split by the host shell; the run68k AmigaDOS join+split semantics are documented
+ * in run68k.md — a shell-quoted "a b" arrives here as one program-arg yet rejoins into the
+ * one string the same as the shell-split "a" "b", which the AmigaDOS splitter then re-splits
+ * on whitespace.  This is the honest difference between shell quoting and AmigaDOS quoting.)
+ * Returns 0 on success; nonzero if the joined string would overflow the args region. */
+static int build_arg_string(j4_sandbox *sb, int prog_argc, char **prog_argv,
+                            uint32_t *a0_out, uint32_t *d0_out)
+{
+    char str[MAX_ARGSTR];
+    size_t n = 0;
+    for (int k = 0; k < prog_argc; k++) {
+        if (k > 0) {                                   /* single-space separator */
+            if (n + 1 >= sizeof str) goto overflow;
+            str[n++] = ' ';
+        }
+        size_t al = strlen(prog_argv[k]);
+        if (n + al >= sizeof str) goto overflow;
+        memcpy(str + n, prog_argv[k], al);
+        n += al;
+    }
+    if (n + 1 >= sizeof str) goto overflow;
+    str[n++] = '\n';                                   /* the terminating newline */
+
+    /* The string + its NUL guard must fit the reserved args region. */
+    if ((uint64_t)ARGS_BASE + n + 1 > (uint64_t)ARGS_REGION_END) goto overflow;
+
+    uint8_t *dst = j4_sandbox_host(sb, ARGS_BASE);
+    memcpy(dst, str, n);
+    dst[n] = '\0';                                     /* a courtesy NUL past the '\n' */
+
+    *a0_out = ARGS_BASE;
+    *d0_out = (uint32_t)n;                             /* length INCLUDING the '\n'   */
+    return 0;
+overflow:
+    fprintf(stderr, "run68k: argument string too long (> %u bytes)\n", MAX_ARGSTR);
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -148,8 +211,8 @@ int main(int argc, char **argv)
     }
     if (i >= argc) { fprintf(stderr, "run68k: no program given\n"); usage(stderr, argv[0]); return 2; }
     prog_path = argv[i];
-    int prog_argc = argc - i - 1;                          /* the 68k program's own args */
-    (void)prog_argc;                                       /* accepted; not yet passed in */
+    int    prog_argc = argc - i - 1;                       /* the 68k program's own args */
+    char **prog_argv = argv + i + 1;                       /* &argv[programname+1]       */
 
     /* ---- load the file ---- */
     size_t prog_len = 0;
@@ -216,6 +279,19 @@ int main(int argc, char **argv)
 
     /* ---- the normal path: run it through the JIT ---- */
     struct j5d_m68k_state st; memset(&st, 0, sizeof st);
+
+    /* ---- deliver the AmigaDOS CLI arguments: build the arg string in the sandbox and
+     * enter the program with A0 = the string, D0 = its length (incl. the '\n'). The
+     * engine seeds A6 (libbase), A7 (SP) and PC but does NOT touch A0/D0, so this entry
+     * state survives into the program. Programs that ignore A0/D0 (the rest of the
+     * corpus) are unaffected — they never read these registers. ---- */
+    uint32_t args_a0 = 0, args_d0 = 0;
+    if (build_arg_string(&sb, prog_argc, prog_argv, &args_a0, &args_d0)) {
+        free(mem); free(prog); return 2;
+    }
+    st.a[0] = args_a0;     /* A0 = sandbox address of the argument string  */
+    st.d[0] = args_d0;     /* D0 = its length in bytes, including the '\n'  */
+
     uint32_t d0 = 0;
     int rc = j5d_run(&j5sb, seg.entry, LIBBASE, &st, &d0, bridge, &c, err, sizeof err);
 
