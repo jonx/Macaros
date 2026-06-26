@@ -134,7 +134,17 @@ struct CMContext {
     id<MTLRenderPipelineState> effectPipeline;  /* present/[D]: effect-capable */
     id<MTLSamplerState>      sampler;       /* nearest (oracle + default present) */
     id<MTLSamplerState>      linearSampler; /* CM_FILTER_LINEAR (present only)    */
-    id<MTLTexture>           fbTex;       /* w x h, framebuffer (shared, CPU writes) */
+    /* N-buffered upload textures. The CPU writes fbRing[fbIdx] each frame and the
+     * async present samples that same slot; by the time a slot is reused (3 frames
+     * later, ~60ms at 50Hz) the present that sampled it has long completed, so the
+     * CPU never overwrites a texture the GPU is still reading -- the cause of the
+     * resize/text-selection fragments. Relies on FULL-FRAME uploads (each slot must
+     * hold a complete frame, since consecutive frames land in different slots); the
+     * AROS driver uploads the whole framebuffer per present. fbTex always aliases
+     * the current slot so the encode/readback paths need no change. */
+    id<MTLTexture>           fbRing[3];
+    unsigned                 fbIdx;
+    id<MTLTexture>           fbTex;       /* current ring slot (= fbRing[fbIdx]) */
     id<MTLTexture>           offTex;      /* tw x th, render target + shaderRead (shared) */
 
     /* Live present path (best-effort; nil when headless / no window server). */
@@ -320,12 +330,17 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
     cx->tw = w * cx->scale;
     cx->th = h * cx->scale;
 
-    /* Framebuffer texture: shared, CPU writes via replaceRegion. */
-    cx->fbTex = [dev newTextureWithDescriptor:bgra8_desc(w, h, MTLTextureUsageShaderRead)];
+    /* N-buffered framebuffer textures: shared, CPU writes via replaceRegion. */
+    for (unsigned i = 0; i < 3; i++) {
+        cx->fbRing[i] = [dev newTextureWithDescriptor:bgra8_desc(w, h, MTLTextureUsageShaderRead)];
+        if (!cx->fbRing[i]) { cm_close(cx); return NULL; }
+    }
+    cx->fbIdx = 0;
+    cx->fbTex = cx->fbRing[0];
     /* Offscreen target: render-to + shaderRead, shared so the CPU can read it. */
     cx->offTex = [dev newTextureWithDescriptor:
         bgra8_desc(cx->tw, cx->th, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead)];
-    if (!cx->fbTex || !cx->offTex) { cm_close(cx); return NULL; }
+    if (!cx->offTex) { cm_close(cx); return NULL; }
 
     /* §9: load persisted host-owned options now (no-op headless). */
     cm__apply_persisted_options(cx);
@@ -344,7 +359,9 @@ void cm_close(CMContext *cx) {
     /* ARC releases the Obj-C objects when the struct fields are cleared / freed;
      * but we must drop the window explicitly (it's held as void*). */
     if (cx->window) { cm_destroy_window(cx); }
-    cx->fbTex = nil; cx->offTex = nil; cx->pipeline = nil;
+    cx->fbTex = nil;
+    for (unsigned i = 0; i < 3; i++) cx->fbRing[i] = nil;
+    cx->offTex = nil; cx->pipeline = nil;
     cx->effectPipeline = nil; cx->sampler = nil; cx->linearSampler = nil;
     cx->queue = nil; cx->device = nil; cx->layer = nil;
     free(cx);
@@ -359,6 +376,11 @@ void cm_upload_rect(CMContext *cx, const void *src, int srcStride,
     }
     if (x < 0 || y < 0 || w <= 0 || h <= 0) return;
     if (x + w > cx->w || y + h > cx->h) return;
+    /* Rotate to the next ring slot BEFORE writing it, so the CPU never overwrites
+     * the texture the previous (still in-flight, async) cm_present is sampling on
+     * the GPU. The matching cm_present samples this same slot via cx->fbTex. */
+    cx->fbIdx = (cx->fbIdx + 1) % 3;
+    cx->fbTex = cx->fbRing[cx->fbIdx];
     /* src points at the top-left of the WHOLE framebuffer; offset to the rect. */
     const uint8_t *base = (const uint8_t *)src + (size_t)y * srcStride + (size_t)x * 4;
     MTLRegion region = MTLRegionMake2D((NSUInteger)x, (NSUInteger)y,
@@ -475,19 +497,15 @@ void cm_present(CMContext *cx) {
     if (![NSThread isMainThread]) { cm__sync_main(^{ cm_present(cx); }); return; }
     cx->presentCount++;
 
-    /* 1) Render the framebuffer into the offscreen target (the oracle). Always
-     *    the fixed pass-through/nearest pipeline — this is what cm_readback
-     *    verifies, so it is never touched by the selected effect. */
-    id<MTLCommandBuffer> cb = [cx->queue commandBuffer];
-    encode_pass(cx, cb, cx->pipeline, cx->offTex, CM_FX_NEAREST, cx->tw, cx->th);
-    [cb commit];
-    [cb waitUntilCompleted];               /* synchronous; no blocking run loop */
-
-    /* 2) Best-effort PRESENT: a render pass that draws the framebuffer texture
-     *    INTO the drawable as a color attachment (not a blit copy), so it is
-     *    valid with layer.framebufferOnly = YES — the drawable is a render
-     *    target, never a copy destination. This pass applies the selected
-     *    effect; the live window is presentation-only. Non-fatal. */
+    /* Best-effort PRESENT: a render pass that draws the framebuffer texture INTO
+     * the drawable as a color attachment (not a blit copy), so it is valid with
+     * layer.framebufferOnly = YES. This pass applies the selected effect; the
+     * live window is presentation-only. Non-fatal.
+     *
+     * The offscreen/readback oracle is intentionally not rendered here. Doing so
+     * used to force a synchronous waitUntilCompleted() on every live frame, which
+     * made resize and text-selection updates visibly stutter. cm_readback renders
+     * the oracle on demand instead. */
     if (cx->layer) {
         @autoreleasepool {
             /* Keep the live drawable glued to the content view BEFORE acquiring it
@@ -502,9 +520,8 @@ void cm_present(CMContext *cx) {
                 int dw = (int)d.texture.width, dh = (int)d.texture.height;
                 id<MTLCommandBuffer> cb2 = [cx->queue commandBuffer];
                 /* Live present honours the host-owned scale mode + filter
-                 * (encode_present_pass); the oracle pass above used encode_pass
-                 * with the fixed full-drawable/nearest path, so readback is
-                 * unchanged (§6). */
+                 * (encode_present_pass); readback uses its own fixed oracle pass
+                 * in cm_readback() so this remains presentation-only. */
                 encode_present_pass(cx, cb2, d.texture, cx->effect, dw, dh);
                 [cb2 presentDrawable:d];
                 [cb2 commit];
@@ -662,6 +679,11 @@ int cm_readback(CMContext *cx, void *dst, int dstStride, int w, int h) {
         return r;
     }
     if (w != cx->w || h != cx->h) return 2;   /* readback is logical w*h */
+
+    id<MTLCommandBuffer> cb = [cx->queue commandBuffer];
+    encode_pass(cx, cb, cx->pipeline, cx->offTex, CM_FX_NEAREST, cx->tw, cx->th);
+    [cb commit];
+    [cb waitUntilCompleted];
 
     /* The offscreen target is tw x th (= w*scale x h*scale). For the logical
      * readback we sample one source texel per logical pixel (nearest, the
