@@ -1564,6 +1564,12 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             uint32_t divisor; uint32_t adv;
             if (mode == 0)                  { divisor = st->d[reg]; adv = 4; }
             else if (mode == 7 && reg == 4) { divisor = be32(ip + 4); adv = 8; }
+            else if (mode == 5) {           /* [J5t] (d16,An): the vbcc capstone divides by a    */
+                int16_t d16 = be16s(ip + 4);                /* stack-resident divisor (36,a7)     */
+                uint32_t a = st->a[reg] + (uint32_t)(int32_t)d16; int oob = 0;
+                divisor = mem_rd32(sb, a, &oob); adv = 6;
+                if (oob) IFAIL("div.l (d16,An): source out of sandbox");
+            }
             else IFAIL("div.l: unsupported source EA in oracle");
             if (size64) IFAIL("div.l: 64-bit dividend form not in subset");
             if (divisor == 0) {
@@ -1874,6 +1880,23 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 uint32_t addr = 0; ext = pc + 4;
                 int fsz = (fmt==0)?4 : (fmt==1)?4 : (fmt==4)?2 : (fmt==5)?8 : (fmt==6)?1 : 0;
                 if (fsz == 0) IFAIL("FPU: .x/.p dest format deferred ([J5o] precision model)");
+                /* [J5t] FMOVE FPn -> Dn (mode 0, register-direct): the integer-format conversion
+                 * the compiler emits for (long)d / (int)d ETC. (fintrz.x fp ; fmove.l fp,d0). The
+                 * 68881 converts the FP value to the .l/.w/.b/.s integer/single and writes it into
+                 * Dn with SUB-REGISTER semantics: .l replaces all 32 bits, .w the low 16, .b the
+                 * low 8, .s the 32 single-precision bits (the JIT's EMIT_lineF does the same via
+                 * fcvtzs/fmov-to-GP).  .d format to a 32-bit Dn is invalid. The hand-written FP
+                 * corpus never converted FP->Dn (it stored to memory); the vbcc capstone does it
+                 * for every integer-ized result. */
+                if (mode == 0) {
+                    double v = src;
+                    if (fmt == 0)      st->d[reg] = (uint32_t)(int32_t)v;                                  /* .l */
+                    else if (fmt == 4) st->d[reg] = (st->d[reg] & 0xFFFF0000u) | ((uint32_t)(int16_t)(int32_t)v & 0xFFFFu);  /* .w */
+                    else if (fmt == 6) st->d[reg] = (st->d[reg] & 0xFFFFFF00u) | ((uint32_t)(int8_t)(int32_t)v & 0xFFu);     /* .b */
+                    else if (fmt == 1) { float fv = (float)v; uint32_t b; __builtin_memcpy(&b, &fv, 4); st->d[reg] = b; }   /* .s */
+                    else IFAIL("FPU: FMOVE FPn->Dn .d/.x/.p format invalid");
+                    pc = ext; continue;   /* FMOVE-to-reg does not update FPSR cc (it's a consumer) */
+                }
                 if (mode == 2) addr = st->a[reg];
                 else if (mode == 3) addr = st->a[reg];
                 else if (mode == 4) { st->a[reg] -= (uint32_t)fsz; addr = st->a[reg]; }

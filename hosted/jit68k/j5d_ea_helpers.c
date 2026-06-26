@@ -465,13 +465,37 @@ uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
  * file d8..d15 and the d2..d7 scratch pool never alias; the REAL decoder's vfp_reg for stores
  * is a d2..d7 alloc, passed to us). `base68k` is an An/PC/alloc GP reg, never x2/x3. ===========*/
 
+/* [J5t] Fold a (possibly LARGE) signed 68k displacement into the host pointer x3, leaving the
+ * subsequent ldur/stur to use offset 0. The (An)/PC FP EA helpers below previously passed the
+ * raw `offset` to ldur64_offset/stur64_offset (the UNSCALED ldur/stur form), whose immediate is
+ * only 9-bit SIGNED (-256..+255) — so a (d16,An) displacement |d16|>255 (which Emu68 reaches via
+ * the fldd_pimm/fstd_pimm SCALED path for d16 up to 32760) was MASKED into 9 bits and landed at
+ * the WRONG sandbox address (e.g. +416 wrapped to -96 — an 0x200 miss). The vbcc FP capstone is
+ * the first program to spill an FP temporary to a (d16,a7) slot with d16>255, exposing it. We
+ * add the displacement into x3 here (12-bit + 12-bit<<12 add/sub covers the whole ±32760 range)
+ * and store at [x3,#0], so any displacement is exact. (The hand-written FP corpus only ever used
+ * small offsets, so this never bit before.) */
+static uint32_t *fpu_fold_offset(uint32_t *ptr, int offset)
+{
+    if (offset == 0) return ptr;
+    if (offset > 0) {
+        if (offset & 0xfff)         *ptr++ = add64_immed(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)(offset & 0xfff));
+        if (offset >> 12)           *ptr++ = add64_immed_lsl12(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)((offset >> 12) & 0xfff));
+    } else {
+        int m = -offset;
+        if (m & 0xfff)              *ptr++ = sub64_immed(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)(m & 0xfff));
+        if (m >> 12)                *ptr++ = sub64_immed_lsl12(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)((m >> 12) & 0xfff));
+    }
+    return ptr;
+}
+
 /* Double (.d) load: d[fpreg] = byteswap64(mem68k[base+offset]). */
 static uint32_t *fpu_load_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
 {
     g_j5d_ea_emits++;
     *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    if (offset >= 0)      *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, (int16_t)offset);
-    else                  *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, (int16_t)offset);
+    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] large d16 -> into x3, not the 9-bit imm */
+    *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, 0);
     *ptr++ = rev64(2, 2);
     *ptr++ = mov_reg_to_simd(fpreg, TS_D, 0, 2);   /* fmov d[fpreg], x2 */
     return ptr;
@@ -483,7 +507,8 @@ static uint32_t *fpu_store_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int 
     *ptr++ = mov_simd_to_reg(2 /*x2*/, fpreg, TS_D, 0);   /* fmov x2, d[fpreg] */
     *ptr++ = rev64(2, 2);
     *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    *ptr++ = stur64_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] large d16 -> into x3, not the 9-bit imm */
+    *ptr++ = stur64_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
 /* Single (.s) load into the d-reg: load 4 bytes, byteswap, fmsr to the single half, then the
@@ -492,7 +517,8 @@ static uint32_t *fpu_load_s(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int o
 {
     g_j5d_ea_emits++;
     *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    *ptr++ = ldr_offset(J5D_HOSTPTR, 2 /*w2*/, (uint16_t)(offset >= 0 ? offset : 0));
+    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] any d16 (incl. >16380 / negative) -> x3 */
+    *ptr++ = ldr_offset(J5D_HOSTPTR, 2 /*w2*/, 0);
     *ptr++ = rev(2, 2);
     *ptr++ = fmsr(fpreg, 2);                       /* d[fpreg].s = w2 (single half) */
     return ptr;
@@ -505,7 +531,8 @@ static uint32_t *fpu_store_s(uint32_t *ptr, uint8_t vfp_reg, uint8_t base68k, in
     *ptr++ = fmrs(2 /*w2*/, vfp_reg);              /* w2 = vfp_reg.s */
     *ptr++ = rev(2, 2);
     *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    *ptr++ = str_offset(J5D_HOSTPTR, 2, (uint16_t)(offset >= 0 ? offset : 0));
+    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] any d16 (incl. >16380 / negative) -> x3 */
+    *ptr++ = str_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
 

@@ -363,6 +363,32 @@ static int is_fp_mem_terminator(uint16_t op, uint16_t opcode2)
     return 0;
 }
 
+/* [J5t] An FP arithmetic op (FADD/FSUB/FMUL/FDIV/FCMP/FMOVE/... <ea>,FPn) whose SOURCE is an
+ * INLINE IMMEDIATE (ea = mode 111:100 = 0x3c, opcode2 R/M bit = 1).  vbcc -fpu=68881 emits these
+ * heavily (fmove.d #$imm,fp ; fadd.d #$imm,fp ; fcmp.d #$imm,fp ; fmul.d #$imm,fp ; ...) but the
+ * hand-written FP corpus ([J5o]-[J5s]) never did — it loaded constants from a DATA section via a
+ * (d16,An)/(An) EA.  Emu68's verbatim EMIT_lineF lowers the .d/.s immediate to `fldd/flds(*reg,
+ * REG_PC, off)` — a PC-RELATIVE load that reads the immediate out of the live instruction stream
+ * via REG_PC.  On the bare metal REG_PC is a host pointer into mapped code; in our re-hosted JIT
+ * REG_PC (x18) is a CACHED 68k PC VALUE in sandbox space, so that PC-relative fldd dereferences a
+ * bogus host address -> SIGSEGV.  (The --fpu-sandbox darwinize pass deliberately leaves the
+ * REG_PC/const immediate paths ALONE — it only rewrites the EA-base sites.)  So we DECODE this one
+ * op at the dispatcher boundary and execute it in C (j5d_fp_imm_arith), exactly as the oracle does
+ * for an immediate source — the immediate bytes are read from the SANDBOX at the correct 68k PC.
+ * The .l/.w/.b integer immediates are NOT affected (Emu68 lowers those to movw/mov_immed, no PC
+ * load), so only the FP-format (.s/.d) immediate is the gap; we route ALL immediate-source FP
+ * arith to C uniformly (the C path handles every format identically to the oracle). */
+static int is_fp_imm_arith(uint16_t op, uint16_t opcode2)
+{
+    if ((op & 0xFFC0u) != 0xF200u) return 0;          /* FP EA-form line-F op                  */
+    if ((op & 0x3Fu) != 0x3Cu) return 0;              /* EA = mode 111:100 = #immediate        */
+    if (((opcode2 >> 15) & 1u) != 0u) return 0;       /* opcode2 bit15==0 : the EA-arith family */
+    if (((opcode2 >> 14) & 1u) != 1u) return 0;       /* R/M==1 : source is the EA (the imm)    */
+    /* exclude the FMOVE-to-mem direction (a #imm dest is illegal anyway) — defensive. */
+    if ((opcode2 & 0xE000u) == 0x6000u) return 0;
+    return 1;
+}
+
 /* ============================== [J5i] THE SR / EXCEPTION MODEL =====================
  * Dispatcher-level (C), the spec's "68k exceptions handled in C" (no host VBAR; Emu68's
  * bare-metal EMIT_Exception/VBR path is a no-op stub in our re-hosted runtime). The
@@ -780,6 +806,129 @@ static int j5s_fp_exc_apply(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t
     return 1;
 }
 
+/* ===================== [J5t] IMMEDIATE-SOURCE FP ARITHMETIC (dispatcher / C) ==============
+ * Execute ONE FP arithmetic op whose source is an inline immediate (fadd.d #imm,fp / fcmp.d
+ * #imm,fp / fmove.d #imm,fp / ...), decoded at the dispatcher boundary because Emu68's native
+ * lowering uses a PC-relative fldd that faults in our re-host (see is_fp_imm_arith).  The semantics
+ * MIRROR the oracle's immediate-source path (j5d_interp.c) EXACTLY so the JIT and oracle stay
+ * byte-exact: same arithmetic (j5s_one_op_exc's table, used here), same FPSR cc-update gate
+ * (fp_imm_update_needed == the oracle's fpu_fpsr_update_needed), same cc packing (fp_pack_cc ==
+ * the oracle's fpu_fcmp_fpsr), same EXC/AEXC + the same FP trap.  *after = the PC past this
+ * instruction (opcode + opcode2 + the immediate words). */
+
+/* Whether a later FP instruction CONSUMES the FPSR cc within 16 ops (so it must be written now).
+ * A FAITHFUL re-derivation of the oracle's fpu_fpsr_update_needed (j5d_interp.c) — same scan, same
+ * consumer set — so the JIT writes the cc byte at EXACTLY the same instructions the oracle does. */
+static int fp_imm_update_needed(j5d_sandbox *sb, uint32_t after_pc)
+{
+    uint32_t pc = after_pc; int cnt = 0;
+    for (;;) {
+        if (pc < sb->origin || (uint64_t)pc + 2 > (uint64_t)sb->origin + sb->size) return 1;
+        uint16_t op = be16(sb->host_mem + (pc - sb->origin));
+        if ((op & 0xfe00u) == 0xf200u) break;                     /* reached an FPU (line-F) op  */
+        if (cnt++ > 15) return 1;
+        if ((op & 0xf000u) == 0x6000u) return 1;                  /* Bcc/BRA/BSR                 */
+        if ((op & 0xff80u) == 0x4e80u) return 1;                  /* JSR/JMP                     */
+        if (op == 0x4e75u || op == 0x4e73u || op == 0x4e77u) return 1; /* RTS/RTE/RTR            */
+        if ((op & 0xfff0u) == 0x4e40u) return 1;                  /* TRAP #n                     */
+        if ((op & 0xf0f8u) == 0x50c8u) return 1;                  /* DBcc                        */
+        pc += 2;
+    }
+    uint16_t opcode  = be16(sb->host_mem + (pc - sb->origin));
+    uint16_t opcode2 = ((uint64_t)pc + 4 <= (uint64_t)sb->origin + sb->size)
+                       ? be16(sb->host_mem + (pc + 2 - sb->origin)) : 0;
+    if ((opcode & 0xff80u) == 0xf280u) return 1;                            /* FBcc          */
+    if ((opcode & 0xfff8u) == 0xf248u && (opcode2 & 0xffc0u) == 0) return 1;/* FDBcc         */
+    if ((opcode & 0xffc0u) == 0xf200u && (opcode2 & 0xc700u) == 0xc000u) return 1; /* FMOVEM */
+    if ((opcode & 0xffc0u) == 0xf200u && (opcode2 & 0xc3ffu) == 0x8000u) return 1; /* FMOVEMsp*/
+    if ((opcode & 0xffc0u) == 0xf240u && (opcode2 & 0xffc0u) == 0) return 1;/* FScc          */
+    if ((opcode & 0xfff8u) == 0xf278u && (opcode2 & 0xffc0u) == 0) return 1;/* FTRAPcc       */
+    if ((opcode & 0xffc0u) == 0xf200u && (opcode2 & 0xe000u) == 0x6000u) return 1; /* FMOVE->MEM */
+    if ((opcode & 0xffc0u) == 0xf340u) return 1;                            /* FRESTORE      */
+    return 0;
+}
+
+/* Pack the FPSR cc nibble (N/Z/I/NAN, bits 27..24) for `a <op> b` — the SAME mapping the oracle's
+ * fpu_fcmp_fpsr uses (EMIT_GetFPUFlags: I always 0 since the AArch64 C bit is bic'd out). */
+static uint32_t fp_pack_cc(uint32_t fpsr, double a, double b)
+{
+    fpsr &= ~(J5Q_FPSR_N | J5Q_FPSR_Z | 0x02000000u /*I*/ | J5Q_FPSR_NAN);
+    if (a != a || b != b)      fpsr |= J5Q_FPSR_NAN;   /* unordered (NaN)                       */
+    else if (a < b)            fpsr |= J5Q_FPSR_N;     /* less                                  */
+    else if (a == b)           fpsr |= J5Q_FPSR_Z;     /* equal                                 */
+    /* greater: all clear */
+    return fpsr;
+}
+
+static int j5d_fp_imm_arith(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t tpc,
+                            uint16_t op, uint16_t opcode2, uint32_t *after,
+                            char *errbuf, unsigned errlen)
+{
+#define FFAIL(msg) do { snprintf(errbuf, errlen, "%s", (msg)); return 1; } while (0)
+    unsigned srcspec = (opcode2 >> 10) & 7u;          /* the immediate's format (.l/.s/.w/.d/.b) */
+    unsigned fpn     = (opcode2 >> 7) & 7u;           /* dst FP register                          */
+    unsigned oper    = opcode2 & 0x7fu;               /* opmode (FADD/FSUB/.../FCMP/FMOVE)        */
+    uint32_t ext     = tpc + 4;                       /* first word AFTER opcode + opcode2        */
+
+    /* Read the inline immediate -> double `src`, advancing `ext` past the immediate words.  The
+     * widths match the oracle: .l=4 .s=4 .w=2 .d=8 .b=2 (byte immediate occupies a full word). */
+    double src = 0.0;
+    if (srcspec == 0) { /* .l */
+        if ((uint64_t)ext + 4 > (uint64_t)sb->origin + sb->size) FFAIL("FP imm .l out of sandbox");
+        src = (double)(int32_t)be32(sb->host_mem + (ext - sb->origin)); ext += 4;
+    } else if (srcspec == 1) { /* .s single */
+        if ((uint64_t)ext + 4 > (uint64_t)sb->origin + sb->size) FFAIL("FP imm .s out of sandbox");
+        uint32_t b = be32(sb->host_mem + (ext - sb->origin)); float f; memcpy(&f, &b, 4); src = (double)f; ext += 4;
+    } else if (srcspec == 4) { /* .w */
+        if ((uint64_t)ext + 2 > (uint64_t)sb->origin + sb->size) FFAIL("FP imm .w out of sandbox");
+        src = (double)(int32_t)(int16_t)be16(sb->host_mem + (ext - sb->origin)); ext += 2;
+    } else if (srcspec == 5) { /* .d double */
+        if ((uint64_t)ext + 8 > (uint64_t)sb->origin + sb->size) FFAIL("FP imm .d out of sandbox");
+        uint64_t b = 0; for (int i = 0; i < 8; i++) b = (b << 8) | sb->host_mem[(ext + i) - sb->origin];
+        memcpy(&src, &b, 8); ext += 8;
+    } else if (srcspec == 6) { /* .b (occupies one extension word) */
+        if ((uint64_t)ext + 2 > (uint64_t)sb->origin + sb->size) FFAIL("FP imm .b out of sandbox");
+        src = (double)(int32_t)(int8_t)(be16(sb->host_mem + (ext - sb->origin)) & 0xff); ext += 2;
+    } else {
+        FFAIL("FP imm .x/.p source format deferred (precision model)");   /* srcspec 2(.x)/3(.p) */
+    }
+    *after = ext;
+
+    /* Apply the op via the SAME table the per-op exception walk uses (j5s_one_op_exc), under the
+     * FPCR rounding direction + per-op fenv, and get the EXC bits.  j5s_one_op_exc advances the
+     * passed-in FP file for a dst-writing op and rounds to the FPCR precision — identical to the
+     * oracle's writes_dst path.  FCMP/FTST do not write FPn (handled inside j5s_one_op_exc). */
+    double dst = st->fp[fpn & 7];                     /* the cc compare reference for FCMP        */
+    int prev_round = fegetround();
+    fesetround(j5s_host_round(st->fpcr));
+    uint32_t exc = j5s_one_op_exc(st->fp, oper, fpn, src, st->fpcr);
+    fesetround(prev_round);
+
+    /* FPSR EXC byte (this op) + AEXC (sticky). */
+    st->fpsr = (st->fpsr & ~J5S_FPSR_EXC_MASK) | exc;
+    st->fpsr |= j5s_exc_to_aexc(exc);
+
+    /* FPSR condition codes — set IFF a subsequent FP consumer needs them (the oracle's gate).
+     * FCMP (oper 0x38) packs fcmp(dst,src); FTST (0x3a) tests src; everything else tests the
+     * result now in st->fp[fpn]. */
+    if (fp_imm_update_needed(sb, *after)) {
+        if (oper == 0x38u)      st->fpsr = fp_pack_cc(st->fpsr, dst, src);
+        else if (oper == 0x3au) st->fpsr = fp_pack_cc(st->fpsr, src, 0.0);
+        else                    st->fpsr = fp_pack_cc(st->fpsr, st->fp[fpn & 7], 0.0);
+    }
+
+    /* TAKE an FP exception trap if an EXC bit fired AND its FPCR enable bit is set ([J5s] model). */
+    uint32_t enabled = exc & (st->fpcr & J5S_FPCR_ENABLE_MASK);
+    unsigned vec;
+    if (j5s_exc_vector(enabled, &vec)) {
+        uint32_t handler;
+        if (raise_exception(sb, st, vec, *after, &handler, errbuf, errlen)) FFAIL("FP imm trap: no handler");
+        *after = handler;                              /* take the FP exception vector            */
+    }
+    return 0;
+#undef FFAIL
+}
+
 /* [J5s] BSUN (engine side, mirrors the oracle's j5s_bsun). A SIGNALLING FP predicate (selector
  * bit4 set) on an UNORDERED operand (FPSR NAN bit set) sets BSUN, accrues AIOP, and traps to
  * vector 48 if BSUN is enabled in FPCR. Returns 1 if a trap was TAKEN (*pc=handler, or
@@ -941,10 +1090,14 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
 
         if (is_terminator(op)) { *end_pc = cur_pc; break; }
         /* [J5r] FMOVEM / FP system-register moves are opcode2-distinguished; end the block so
-         * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist). */
+         * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist).
+         * [J5t] An immediate-source FP arithmetic op (fadd.d #imm,fp etc.) likewise ends the
+         * block — Emu68 would lower it to a PC-relative fldd that faults in our re-host; the
+         * dispatcher executes it in C (j5d_fp_imm_arith) reading the immediate from the sandbox. */
         if ((op & 0xFFC0u) == 0xF200u &&
             (uint64_t)cur_pc + 4 <= (uint64_t)sb->origin + sb->size &&
-            is_fp_mem_terminator(op, be16(ophost + 2))) { *end_pc = cur_pc; break; }
+            (is_fp_mem_terminator(op, be16(ophost + 2)) ||
+             is_fp_imm_arith(op, be16(ophost + 2)))) { *end_pc = cur_pc; break; }
 
         uint8_t group = op >> 12;
         uint16_t insn_consumed = 0;
@@ -1284,6 +1437,15 @@ static void link_if_resolved(j5d_sandbox *sb, j5d_cached_block *src, uint32_t ne
         if (src->link[k].linked || src->link[k].target_pc != next_pc) continue;
         j5d_cached_block *tgt = cache_find(next_pc);
         if (!tgt) return;                 /* not translated yet — link on a later pass        */
+        /* [J5t] NEVER chain INTO an FP block. FP blocks carry an FP callee-save prologue
+         * (fstd d8..d15) + epilogue (fldd d8..d15) wrapping the integer chain entry; a chained
+         * branch lands at tgt->chain_off (PAST that prologue) so the FP regs are never pushed,
+         * yet the epilogue still pops them — corrupting the host stack -> a wild return. FP blocks
+         * already never chain OUT (ntargets==0 for touches_fpu); this is the matching IN-edge
+         * guard. The capstone's vbcc FP loops are the first to have an INTEGER block (a loop
+         * counter test) fall into an FP block, which the hand-written FP corpus never did. The
+         * edge simply stays a C round-trip (correct, just not lazily linked). */
+        if (tgt->fpu_block) continue;
         try_link(src, k, tgt);
     }
 }
@@ -1791,7 +1953,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             char e2[120] = {0};
             uint32_t after = 0;
             int rc2;
-            if ((opcode2 & 0xC700u) == 0xC000u)
+            if (is_fp_imm_arith(top, opcode2))                                            /* [J5t] #imm src */
+                rc2 = j5d_fp_imm_arith(sb, st, tpc, top, opcode2, &after, e2, sizeof e2);
+            else if ((opcode2 & 0xC700u) == 0xC000u)
                 rc2 = j5d_fmovem_x(sb, st, tpc, top, opcode2, &after, e2, sizeof e2);     /* FMOVEM .x  */
             else /* (opcode2 & 0xE000) == 0x8000 (to ctrl) or 0xA000 (from ctrl) */
                 rc2 = j5d_fmove_sysreg(sb, st, tpc, top, opcode2, &after, e2, sizeof e2); /* sys-reg    */

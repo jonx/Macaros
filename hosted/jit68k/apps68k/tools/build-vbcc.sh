@@ -14,15 +14,29 @@
 #
 # Verified on this Mac (macOS 26.x, Apple clang/arm64). The ONE non-obvious step:
 # vbcc's `dtgen` (the target-datatype generator) is INTERACTIVE — it asks "Are you
-# building a cross-compiler?". Per vbcc's own doc/interface.texi: answer `n` when you
-# are running a NATIVE host compiler (clang here) to build a vbcc binary that runs on
-# the host — even though that vbcc TARGETS m68k. (Their "cross-compiler=y" means the
-# CC that BUILDS vbcc is itself a cross-compiler, which is not our case.) Answering `n`
-# makes dtgen use the host's native integer types; the m68k code generator accesses
-# integer constants only through its arithmetic functions, so host endianness does not
-# matter for INTEGER code (doc/interface.texi). FP constant folding WOULD need
-# big-endian host floats, so the j5m program is integer-only (-no-fp); the milestone
-# explicitly scopes FP out. We pipe `n` to dtgen so the build is non-interactive.
+# building a cross-compiler?".
+#
+# [J5t] WE NOW ANSWER cross=y (was cross=n through [J5m]).  Rationale: with cross=n,
+# dtgen wires the host's NATIVE datatypes into vbcc, which is correct for INTEGER constant
+# folding (the m68k codegen reaches integer constants only through arithmetic functions,
+# so host endianness is irrelevant — doc/interface.texi) but WRONG for FLOAT constants: a
+# little-endian host (arm64) then emits FP immediates BYTE-SWAPPED (e.g. 1000.0 ->
+# 0x0000000000408f40 instead of the correct big-endian 0x408f400000000000).  cross=y makes
+# dtgen use vbcc's portable IEEE-conversion datatypes (machine.dt declares S64BIEEEBE — the
+# host need only be IEEE, which arm64 is), so FP constants come out in BIG-ENDIAN target byte
+# order.  This is what the [J5t] HARDWARE-FP capstone (-fpu=68881) needs.  cross=y produces
+# BYTE-IDENTICAL integer code to cross=n (verified by diffing j5m.s), so it is a strict
+# improvement: same integer output, plus correct FP constants.  dtgen with cross=y prompts
+# per-type ("Does your system support a type implemented as X? [y]" + "Enter that type [T]");
+# every prompt's default is correct for clang/arm64, so we feed a stream of BLANK LINES (each
+# accepts the default) instead of `n` — fully non-interactive.  (Historical note: cross=n's
+# "are you building a cross-compiler?" refers to whether the CC that BUILDS vbcc is itself a
+# cross-compiler — not our case — but the FP-constant byte order is the part that actually
+# matters here, and it needs cross=y.)
+#
+# (Historical, pre-[J5t]: the j5m integer capstone was integer-only (-no-fp); the milestone
+# explicitly scoped FP out, and the build piped `n` to dtgen.  The [J5t] FP capstone needs
+# hardware FP with correct big-endian constants, hence cross=y now.)
 set -e
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"      # .../apps68k
@@ -50,16 +64,21 @@ tar xzf "$WORK/vbcc.tar.gz" -C "$WORK" 2>/dev/null || true
 VBCCSRC="$WORK/vbcc"
 [ -d "$VBCCSRC" ] || { echo "!! vbcc source not extracted"; exit 1; }
 
-echo ">> generating m68k target datatypes (dtgen, answering cross=n) + building vbccm68k"
+echo ">> generating m68k target datatypes (dtgen, answering cross=y) + building vbccm68k"
 mkdir -p "$VBCCSRC/objects/m68k"
 # Build the host tools (vc, dtgen) first, then the m68k datatypes, then the compiler.
 make -C "$VBCCSRC" bin/dtgen bin/vc >/dev/null 2>"$WORK/vbcc1.log" || {
     echo "!! vbcc host-tools (dtgen/vc) build failed:"; tail -25 "$WORK/vbcc1.log"; exit 1; }
-# dtgen is interactive ("Are you building a cross-compiler?"); pipe `n` (host-native
-# datatypes — see header). It writes objects/m68k/dt.{h,c}.
-printf 'n\n' | "$VBCCSRC/bin/dtgen" "$VBCCSRC/machines/m68k/machine.dt" \
-    "$VBCCSRC/objects/m68k/dt.h" "$VBCCSRC/objects/m68k/dt.c" >/dev/null
+# dtgen is interactive: "Are you building a cross-compiler?" then a per-type probe
+# ("Does your system support a type implemented as X? [y]" / "Enter that type [T]").
+# We answer cross=y (BIG-ENDIAN IEEE FP constants — see header) and accept every default
+# by feeding a stream of BLANK LINES (each accepts the bracketed default). It writes
+# objects/m68k/dt.{h,c}.
+yes '' | head -200 | "$VBCCSRC/bin/dtgen" "$VBCCSRC/machines/m68k/machine.dt" \
+    "$VBCCSRC/objects/m68k/dt.h" "$VBCCSRC/objects/m68k/dt.c" >/dev/null 2>&1
 [ -s "$VBCCSRC/objects/m68k/dt.h" ] || { echo "!! dtgen produced empty dt.h"; exit 1; }
+# Sanity: cross=y must wire zfloat/zdouble to the host float/double (IEEE conversion path).
+grep -q 'zfloat' "$VBCCSRC/objects/m68k/dt.h" || { echo "!! dtgen dt.h missing zfloat"; exit 1; }
 make -C "$VBCCSRC" TARGET=m68k bin/vbccm68k >/dev/null 2>"$WORK/vbcc2.log" || {
     echo "!! vbccm68k build failed:"; tail -25 "$WORK/vbcc2.log"; exit 1; }
 

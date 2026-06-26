@@ -2023,6 +2023,124 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
     end-to-end** — the FP analog of `[J5m]`'s integer capstone — exercising the whole FP stack together
     from real compiler output (the only remaining FP work besides the deliberately-deferred `.p`).
 
+- **`[J5t]` the FP CAPSTONE — a vbcc-compiled HARDWARE-FP C program through the JIT, byte-exact —
+  IMPLEMENTED / GREEN.** The FP analog of the `[J5m]` integer capstone; closes out the FPU goal
+  (`[J5o]`–`[J5t]`). A self-contained C program doing REAL `double` floating-point work, compiled ON
+  THIS MAC by the from-source vbcc→vasm→vlink toolchain with **hardware 68881 codegen**, runs THROUGH the
+  JIT (Emu68's REAL `EMIT_lineF` + our FP shim + the `[J3]` PutChar bridge) and is **byte-exact** vs the
+  independent interpreter. Files: OURS `hosted/jit68k/j5t_test.c`, `apps68k/{j5t.c, crt0_fp.s,
+  tools/compile-j5t.sh}` (+ committed `j5t.exe`), plus the engine/oracle/EA-helper fixes below. Target
+  `make hosted-jit68k-j5t` (marker `[J5t] PASS`, watchdog 40 s). **NO new vendored file, NO new darwinize
+  pass, NO new state field — the seam struct `j5d_jit68k.h` is byte-for-byte unchanged; the Emu68
+  quarantine stays byte-verbatim.**
+
+  - **MAKING vbcc EMIT HARDWARE FP (the codegen config — the first half of the milestone).** vbcc's m68k
+    backend has a SEPARATE `-fpu` flag (distinct from `-cpu`): `-cpu=68020 -fpu=68881` lowers `float`/
+    `double` arithmetic to **line-F FP instructions** (FMOVE/FADD/FSUB/FMUL/FDIV/FCMP/FBcc/FMOVEM/fintrz +
+    `fmove.l`↔Dn int conversions), NOT soft-float library calls. **Without `-fpu`, vbcc defaults to
+    `FPU=0` and emits soft-float (`__ieeeaddd`/`__ieeemuld`…) EVEN with `-cpu=68040`** — `-cpu` alone is
+    not enough; the `-fpu` flag is the switch (verified by inspecting `machines/m68k/machine.c`:
+    `FPU>68000` gates the `f`-prefixed emit). The 32-bit int↔double conversions stay all-hardware
+    (`fmove.l`/`fintrz.x`); only 64-bit `long long`↔FP would call helpers (the program uses 32-bit
+    `int`/`long`, so it is fully hardware FP). **VERIFIED:** the produced `.s` has 141 line-F mnemonics
+    and the committed hunk has 149 `0xF2..` coprocessor opcode bytes (no `__ieee*d` anywhere).
+  - **THE FP-CONSTANT BYTE-ORDER FIX (dtgen cross=y — the load-bearing toolchain change).** Through
+    `[J5m]` the toolchain was built with `dtgen cross=n` (host-native datatypes) — correct for INTEGER
+    constant folding but WRONG for FLOAT constants: on a little-endian host (arm64) vbcc then emitted FP
+    immediates BYTE-SWAPPED (e.g. `1000.0` → `0x0000000000408f40` instead of the correct big-endian
+    `0x408f400000000000`). **Rebuilding vbcc with `dtgen cross=y`** (the portable IEEE-conversion
+    datatypes; `machine.dt` declares `S64BIEEEBE`, so the host need only be IEEE — arm64 is) emits FP
+    constants in BIG-ENDIAN target byte order. cross=y produces **byte-identical INTEGER code** to
+    cross=n (verified by diffing `j5m.s`), so it is a strict improvement. `tools/build-vbcc.sh` now feeds
+    dtgen a stream of blank lines (each accepts the per-type default) for a non-interactive cross=y build.
+  - **THE PROGRAM (`apps68k/j5t.c`).** Real FP work, each lowered by the compiler to the full m68k FP
+    convention (fmovem.x FP prologues/epilogues, double stack args, fp0 returns): **(1)** Newton's-method
+    `sqrt` (fdiv/fadd/fmul + an `fcmp.d`/`fbge`/`fblt` convergence test) compared against the HARDWARE
+    `fsqrt`; **(2)** a Taylor series for `exp` (running product/sum + fcmp/fbcc magnitude stop) vs the
+    HARDWARE `fetox`; **(3)** vector statistics mean/variance/stddev over a `double[]` (the stddev via
+    HARDWARE `fsqrt`); **(4)** a `sin` table via the HARDWARE `fsin`. The three transcendentals the C
+    calls (`sqrt`/`sin`/`exp`) are tiny asm shims in `crt0_fp.s` that execute the actual 68881 hardware
+    transcendental opcodes (`FSQRT`/`FSIN`/`FETOX`) on the `fp0` argument — so the compiler's `jsr _sqrt`
+    lands on a real line-F op. **Output is INTEGER-IZED** (every result scaled ×1000/×1e6 and converted
+    double→int via the HARDWARE `fintrz.x`+`fmove.l fp0,d0`, printed through the existing integer PutChar
+    path), so the deliberately-deferred FP→decimal `.p` format is NOT needed. Output (717 bytes, printed
+    by the JITed FP code) shows Newton==hardware sqrt, Taylor==hardware exp, mean/var/stddev, and the sin
+    table — all `[agree]`; exit `d0=10857`.
+  - **GAPS THE COMPILER EXPOSED + FIXED (the primary value of the capstone — patterns the hand-written
+    `[J5o]`–`[J5s]` tests never produced).** Four distinct gaps, all fixed below the seam, Emu68
+    quarantine untouched:
+    1. **Immediate-source FP arithmetic (`fadd.d #imm,fp` etc.) faulted in the JIT.** vbcc emits FP
+       constants as INLINE immediates (`ea=111:100`); Emu68's `EMIT_lineF` lowers the `.s`/`.d` immediate
+       to `fldd/flds(*reg, REG_PC, off)` — a PC-relative load that reads the constant out of the live
+       instruction stream. On bare metal REG_PC is a host code pointer; in our re-host REG_PC (x18) is a
+       CACHED 68k PC value in sandbox space, so the PC-relative load dereferenced a wild host address →
+       SIGSEGV. (The `--fpu-sandbox` darwinize pass deliberately leaves REG_PC/const paths alone.)
+       **Fix:** recognise the immediate-source FP arith op at the dispatcher boundary (`is_fp_imm_arith`)
+       and execute it in C (`j5d_fp_imm_arith`, `j5d_engine.c`) — reading the immediate from the SANDBOX
+       at the correct 68k PC, applying the op via the SAME table the exception walk uses, and setting the
+       FPSR cc/EXC/AEXC + trap exactly as the oracle does. The pattern mirrors how FMOVEM/FBcc are
+       dispatcher-decoded.
+    2. **Integer block → FP block chaining corrupted the host stack.** The `[J5k]` lazy linker chains
+       block tails directly into successors; FP blocks carry an FP callee-save prologue (`fstd d8..d15`)
+       + epilogue (`fldd d8..d15`) wrapping the integer chain entry. FP blocks already never chain OUT,
+       but an INTEGER block (a loop-counter test) could chain INTO an FP block — landing PAST the FP
+       prologue so the FP regs were never pushed, yet the epilogue still popped them → host-stack
+       corruption → a wild return to PC 0. The hand FP corpus never had an integer block fall into an FP
+       block; the capstone's compiled FP loops are the first. **Fix:** `link_if_resolved` (`j5d_engine.c`)
+       refuses to link into a `fpu_block` target (the matching IN-edge guard; the edge stays a C
+       round-trip).
+    3. **FP store/load to a `(d16,An)` slot with |d16| > 255 wrote the WRONG address.** The sandbox FP-mem
+       helpers (`fpu_load_d`/`fpu_store_d`/`.s`, `j5d_ea_helpers.c`) passed the 68k displacement to
+       `ldur/stur` whose immediate is only 9-bit signed (−256..+255). Emu68 reaches `(d16,An)` for `|d16|`
+       up to 32760 via the SCALED `fldd_pimm`/`fstd_pimm` path; a 416-byte FP spill slot (`fmove.d
+       fp,(0x1a0,a7)`) was masked into 9 bits and stored 0x200 off (+416 → −96). The compiler spills FP
+       temporaries to large stack offsets; the hand corpus only used small ones. **Fix:** `fpu_fold_offset`
+       folds any displacement into the host pointer (12-bit + 12-bit«12 add/sub, full ±32760 range) and
+       stores at offset 0 — exact for any d16 (also fixes the previously-zeroed negative `.s` offset).
+    4. **Oracle gaps (the independent interpreter hit two patterns it didn't model).** `FMOVE FPn → Dn`
+       (register-direct integer-format conversion, the `(int)d` idiom `fintrz.x; fmove.l fp0,d0`) — added
+       the mode-0 destination with sub-register `.l`/`.w`/`.b`/`.s` semantics; and `div.l (d16,An),Dq`
+       (dividing by a stack-resident divisor) — added the `(d16,An)` source. Both in `j5d_interp.c`. The
+       JIT handled both natively all along; the oracle just hadn't seen them.
+  - **VERIFY (observed).** Byte-exact JIT vs the independent oracle on **int regs = YES, FP regs
+    (FP0..FP7 + FPSR/FPCR) = YES, the WHOLE sandbox memory = YES, the full 717-byte PutChar output stream
+    = YES, exit d0 = 10857 = YES**; the **negative control bites** (flipping one code byte inside `_main`'s
+    FP body makes JIT and oracle diverge); watchdog. **The whole corpus + `[J1]`–`[J5s]` re-confirmed
+    green** — `[J5d]` (engine), `[J5n]` (diagnostics), `[J5m]` (integer capstone), `[J5o]`/`[J5p]`/`[J5q]`/
+    `[J5r]`/`[J5s]` (the FP stack), and the `[J5s]` corpus pass (mul/fact/arraysum/bubsort/mp64/j5o/j5p/
+    j5q/j5r/mandel) all byte-exact, so the four fixes regressed nothing. Seam offsets unchanged; Emu68
+    quarantine byte-verbatim.
+
+- **FPU: COMPLETE — coverage summary across `[J5o]`–`[J5t]`.** The 68881/68882 coprocessor is fully
+  modeled for everything compiled software emits:
+  - **`[J5o]` CORE:** the FP register file FP0..FP7 + FPCR/FPSR; FMOVE (reg↔reg, mem↔reg, format
+    conversions `.l/.w/.b` int and `.s/.d` float); FADD/FSUB/FMUL/FDIV/FSQRT/FABS/FNEG; FCMP/FTST.
+  - **`[J5p]` TRANSCENDENTALS + UTILITY:** FSIN/FCOS/FTAN/FASIN/FACOS/FATAN, the hyperbolics + areas,
+    FETOX/FETOXM1/FTWOTOX/FTENTOX, FLOGN/FLOGNP1/FLOG10/FLOG2, FSINCOS, FINT/FINTRZ/FGETEXP/FGETMAN/
+    FMOD/FREM/FSCALE (routed to the host libm, the same reference both sides use).
+  - **`[J5q]` FP CONDITIONAL CONTROL-FLOW:** FBcc/FScc/FDBcc/FTRAPcc over all 32 predicates (ordered vs
+    unordered), reading the FPSR cc; the signalling-predicate BSUN behaviour.
+  - **`[J5r]` FMOVEM + SYSTEM REGS + the `.x` format:** FMOVEM.x register-list save/restore (FP
+    prologue/epilogue) and the 80-bit extended `.x` MEMORY format; FMOVE/FMOVEM to/from FPCR/FPSR/FPIAR.
+  - **`[J5s]` EXCEPTION MODEL:** the FPSR EXC/AEXC bytes, the FPCR enable + rounding/precision bytes, the
+    FP traps (vectors 48–54), and BSUN — derived per-op via `<fenv.h>`, bit-exact both sides.
+  - **`[J5t]` CAPSTONE:** all of the above together, from REAL vbcc HARDWARE-FP compiler output, byte-exact
+    through the JIT — plus the four compiler-exposed gaps fixed (immediate FP source, int→FP-block
+    chaining, large-`(d16,An)` FP offsets, the oracle's FMOVE→Dn + div.l (d16,An)).
+  - **PRECISION MODEL (documented, mirrors Emu68):** the FP register file is modeled in IEEE-754
+    **binary64** — the JIT and oracle run the SAME native `double` arithmetic, so results are deterministic
+    and bit-exact BETWEEN them (the asserted gate). 80-bit extended-precision exactness is NOT
+    bit-reproducible on AArch64 (which has no 80-bit FP) and is out of scope; transcendentals use the host
+    libm (last-ULP is implementation-defined on real 68881s, so libm is the shared reference — the test
+    verifies the TRANSLATION, not a re-derivation of `sin()`).
+  - **THE ONE DEFERRED ITEM — packed-decimal `.p` (FMOVE.p).** The 68881's 12-byte BCD floating-DECIMAL-
+    STRING memory format (FP↔decimal-string I/O with a k-factor). It is **not emitted by any normal
+    compiled software** (vbcc/gcc never produce it — the `[J5t]` capstone confirmed this: zero `.p` in real
+    compiler output), so it is deferred as a disproportionate-complexity / unused format. `PackedToDouble`/
+    `DoubleToPacked` stay the abort-on-call stubs in `j5o_fpu_shims.c`, so a future increment that drives
+    `.p` trips loudly rather than silently mis-converting. **This is the single remaining FP item; every
+    instruction and memory format compiled FP software uses is covered and byte-exact.**
+
 ## Risks
 
 Honest debt — restated from the design doc, sharpened by the `[J0]` findings:
