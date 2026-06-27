@@ -115,6 +115,13 @@ run)
     fi
     echo "boot dir: $BOOTD" >&2
     AROS="$(cd "$BOOTD/../.." && pwd)"
+    artifact_line() {
+        local label="$1" path="$2" stamp hash
+        [ -e "$path" ] || return 0
+        stamp="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$path" 2>/dev/null || echo '?')"
+        hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print substr($1,1,12)}')"
+        echo "$label ${hash:-????????????} $stamp" >&2
+    }
     mkdir -p "$HOME/lib"; [ -f "$DYLIB_SRC" ] && cp -f "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib"
     # Clipboard bridge host shim: the AROS sync task loads it by bare name via
     # hostlib.resource, so it must sit in ~/lib like cocoametal.dylib. Without it
@@ -124,15 +131,26 @@ run)
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
     mkdir -p "$AROS/clips"   # CLIPS: target (host-side, so the AROS startup-seq needs no MakeDir)
+    HOST_FOLDER="${AROS_CTL_HOST_FOLDER:-$HOME/AROS/Shared}"
+    mkdir -p "$HOST_FOLDER"
+    [ -e "$HOST_FOLDER/ReadMe" ] || \
+        printf 'Files here show up in AROS as MacRO: (read-only) and MacRW: (read/write).\n' \
+            > "$HOST_FOLDER/ReadMe"
+    AROS_HOST_VOLUME="${AROS_HOST_VOLUME:-MacRO:$HOST_FOLDER
+MacRW:$HOST_FOLDER;WRITE}"
     grep -v '^arguments ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
         && mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
-    for M in Devs/shell.resource \
+    for M in Devs/shell.resource Devs/task.resource \
         Devs/Drivers/hiddclass.hidd Devs/Drivers/gfx.hidd \
         Devs/Drivers/inputclass.hidd Devs/Drivers/keyboard.hidd Devs/Drivers/mouse.hidd \
         Devs/console.device Devs/input.device Devs/keyboard.device Devs/gameport.device \
-        Devs/clipboard.device \
+        Devs/clipboard.device Devs/timer.device \
         Libs/keymap.library Libs/graphics.library Libs/layers.library \
-        Libs/intuition.library Libs/gadtools.library Libs/iffparse.library L/con-handler ; do
+        Libs/intuition.library Libs/gadtools.library Libs/iffparse.library \
+        Libs/asl.library Libs/commodities.library Libs/cybergraphics.library \
+        Libs/coolimages.library Libs/datatypes.library Libs/locale.library \
+        Libs/muimaster.library Libs/rexxsyslib.library Libs/stdc.library \
+        L/con-handler ; do
         if [ -e "$AROS/$M" ] && ! grep -q "/$M\$" "$BOOTD/AROSBootstrap.conf"; then
             echo "module $AROS/$M" >> "$BOOTD/AROSBootstrap.conf"
         fi
@@ -141,7 +159,7 @@ run)
     # bridge. CLIPS: -> a host-visible dir (so a copied clip lands as a readable
     # file), then ConClip (the con-handler/string-gadget edithook + rendezvous
     # port) so RAmiga+C/V in the console route through clipboard.device.
-    printf 'Version\nAssign CLIPS: SYS:clips\nRun >SYS:conclip.log ConClip\n' \
+    printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' \
         > "$AROS/S/Startup-Sequence"
     # Present as "Daedalos" in the menu bar / Dock — macOS names a non-bundled app
     # by its executable filename, so run a signed copy named Daedalos. The discovered
@@ -149,16 +167,51 @@ run)
     cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
     [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Daedalos" 2>/dev/null \
                   || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
+    artifact_line "AROSBootstrap" "$BOOTD/AROSBootstrap"
+    artifact_line "emul-handler" "$BOOTD/L/emul-handler"
+    artifact_line "locale.library" "$AROS/Libs/locale.library"
+    artifact_line "timer.device" "$BOOTD/Devs/timer.device"
+    [ -e "$BOOTD/Devs/timer.device" ] || artifact_line "timer.device" "$AROS/Devs/timer.device"
+    artifact_line "task.resource" "$AROS/Devs/task.resource"
+    artifact_line "cybergraphics.library" "$AROS/Libs/cybergraphics.library"
+    artifact_line "coolimages.library" "$AROS/Libs/coolimages.library"
+    artifact_line "muimaster.library" "$AROS/Libs/muimaster.library"
+    artifact_line "stdc.library" "$AROS/Libs/stdc.library"
+    artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
-    ( cd "$BOOTD" && AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
+    ( cd "$BOOTD" && exec env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
         DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
+        AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         ./Daedalos -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
     echo $! > "$PIDF"
     echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
     ;;
 stop)
-    [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null
-    pkill -KILL Daedalos 2>/dev/null; pkill -KILL AROSBootstrap 2>/dev/null
+    stopped=0
+    if [ -f "$PIDF" ]; then
+        pid="$(cat "$PIDF" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            for _ in 1 2 3 4 5; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.2
+            done
+            kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+            stopped=1
+        fi
+    fi
+    if [ "$stopped" = 0 ]; then
+        BOOTD="$(find_bootd)"
+        if [ -n "$BOOTD" ]; then
+            ps -axo pid=,command= | while read -r pid command; do
+                case "$command" in
+                    *"/Daedalos -c $BOOTD/AROSBootstrap.conf"|*"./Daedalos -c $BOOTD/AROSBootstrap.conf"|*"/AROSBootstrap -c $BOOTD/AROSBootstrap.conf"|*"./AROSBootstrap -c $BOOTD/AROSBootstrap.conf")
+                        kill "$pid" 2>/dev/null
+                        ;;
+                esac
+            done
+        fi
+    fi
     rm -f "$PIDF" "$FIFO"
     echo "stopped"
     ;;

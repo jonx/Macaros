@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  aros-host.entitlements.plist — entitlements signed onto AROSBootstrap for a
+  hosted-AROS run (shared by aros-ctl, run-window.sh and run-shell.sh). Travels
+  with the scripts so the harness is self-contained.
+
+  Under the HARDENED RUNTIME these let the loader:
+    allow-dyld-environment-variables   read DYLD_FALLBACK_LIBRARY_PATH so a
+                                       bare-name HostLib_Open("cocoametal.dylib")
+                                       resolves from ~/lib (see memory
+                                       hostlib-dylib-path-darwin).
+    allow-jit / allow-unsigned-executable-memory / disable-executable-page-
+    protection                         the MAP_JIT / native-LoadSeg exec-memory path.
+    disable-library-validation         dlopen our ad-hoc-signed host dylibs.
+
+  Without the hardened runtime (plain ad-hoc signature) none of this is needed;
+  the scripts only sign with these when the plist is present. (run-shell.sh, the
+  terminal-only launcher, doesn't set DYLD_* and so doesn't strictly need the
+  dyld-env key — it's a harmless superset there.)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-executable-page-protection</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
