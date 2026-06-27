@@ -104,6 +104,17 @@ static void cm__sync_layer_to_view(NSView *view) {
         layer.drawableSize = want;
 }
 
+/* A fully-transparent cursor. addCursorRect over the Metal content view hides the
+ * macOS pointer there so ONLY the AROS-drawn cursor shows; the host cursor returns
+ * over the title bar / footer / Settings panel automatically (AppKit's cursor-rect
+ * machinery handles enter/leave, key/non-key, and overlapping windows). */
+static NSCursor *cm__blank_cursor(void) {
+    static NSCursor *c = nil;
+    if (!c) c = [[NSCursor alloc] initWithImage:[[NSImage alloc] initWithSize:NSMakeSize(1, 1)]
+                                        hotSpot:NSZeroPoint];
+    return c;
+}
+
 /* Content view that hosts the CAMetalLayer as its backing layer and keeps the
  * drawable glued to its size across resize / scale-change / fullscreen. Background
  * is black (opaque, black backgroundColor on the layer) so nothing white ever shows
@@ -125,12 +136,26 @@ static void cm__sync_layer_to_view(NSView *view) {
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     cm__sync_layer_to_view(self);          /* live resize */
+    [self.window invalidateCursorRectsForView:self];   /* keep the hidden-cursor rect = bounds */
 }
 - (void)viewDidChangeBackingProperties {
     [super viewDidChangeBackingProperties];
     cm__sync_layer_to_view(self);          /* moved to a different-scale screen */
 }
+- (void)resetCursorRects {
+    [self addCursorRect:self.bounds cursor:cm__blank_cursor()];   /* AROS cursor only */
+}
 @end
+
+/* The Metal CMContentView is a SUBVIEW of the window's content view (a footer sits
+ * below it so the window's ROUNDED bottom corners don't clip the AROS image). Find
+ * it whether it is the contentView (no footer) or a subview (with footer). */
+static CMContentView *cm__metal_view(NSWindow *win) {
+    if ([win.contentView isKindOfClass:[CMContentView class]]) return (CMContentView *)win.contentView;
+    for (NSView *v in win.contentView.subviews)
+        if ([v isKindOfClass:[CMContentView class]]) return (CMContentView *)v;
+    return nil;
+}
 
 /* Minimal window delegate: surfaces close-button / live-resize transitions (which
  * arrive as delegate callbacks / notifications, NOT plain dequeuable NSEvents) into
@@ -164,12 +189,10 @@ static void cm__sync_layer_to_view(NSView *view) {
     if (self.cx) cm__set_resize_pending(self.cx);
 }
 - (void)windowDidEnterFullScreen:(NSNotification *)note {
-    NSWindow *win = note.object;
-    cm__sync_layer_to_view(win.contentView);   /* drawable -> screen-sized now */
+    cm__sync_layer_to_view(cm__metal_view(note.object));   /* drawable -> screen-sized now */
 }
 - (void)windowDidExitFullScreen:(NSNotification *)note {
-    NSWindow *win = note.object;
-    cm__sync_layer_to_view(win.contentView);   /* drawable -> restored window size */
+    cm__sync_layer_to_view(cm__metal_view(note.object));   /* drawable -> restored window size */
 }
 @end
 
@@ -193,7 +216,8 @@ void cm_try_window(CMContext *cx, const char *title) {
         cm__disable_press_and_hold();
 
         int w = cm__logical_w(cx), h = cm__logical_h(cx);
-        NSRect frame = NSMakeRect(120, 120, w, h);
+        const CGFloat FOOTER_H = 22;            /* footer keeps the rounded corners off the image */
+        NSRect frame = NSMakeRect(120, 120, w, h + FOOTER_H);
         NSWindow *win = [[NSWindow alloc]
             initWithContentRect:frame
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -219,9 +243,27 @@ void cm_try_window(CMContext *cx, const char *title) {
         /* Custom content view that hosts the CAMetalLayer as its BACKING layer and
          * keeps the drawable glued to the view size across resize / scale change /
          * fullscreen (see CMContentView above — the fix for the small-rect bug). */
-        CMContentView *view = [[CMContentView alloc] initWithFrame:frame];
+        /* A footer strip at the bottom keeps the window's ROUNDED bottom corners off
+         * the AROS image: the Metal view sits ABOVE the footer (bottom-left origin). */
+        NSView *root = [[NSView alloc] initWithFrame:frame];
+        win.contentView = root;
+
+        NSView *footer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, w, FOOTER_H)];
+        footer.wantsLayer = YES;
+        footer.layer.backgroundColor = [NSColor colorWithWhite:0.11 alpha:1.0].CGColor;
+        footer.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+        NSTextField *brand = [NSTextField labelWithString:@"Daedalus — AROS on Apple Silicon"];
+        brand.font = [NSFont systemFontOfSize:10];
+        brand.textColor = [NSColor secondaryLabelColor];
+        brand.frame = NSMakeRect(10, (FOOTER_H - 14) / 2.0, w - 20, 14);
+        brand.autoresizingMask = NSViewWidthSizable;
+        [footer addSubview:brand];
+        [root addSubview:footer];
+
+        CMContentView *view = [[CMContentView alloc] initWithFrame:NSMakeRect(0, FOOTER_H, w, h)];
         view.wantsLayer = YES;                 /* triggers -makeBackingLayer (CAMetalLayer) */
-        win.contentView = view;
+        view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [root addSubview:view];
 
         CAMetalLayer *layer = (CAMetalLayer *)view.layer;
         layer.device = (id<MTLDevice>)cm__device(cx);
@@ -361,7 +403,7 @@ void cm__resync_layer(CMContext *cx) {
     if (!w) return;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)w;
-        cm__sync_layer_to_view(win.contentView);
+        cm__sync_layer_to_view(cm__metal_view(win));
     }
 }
 
@@ -375,7 +417,7 @@ int cm__live_drawable_size(CMContext *cx, int *dw, int *dh, int *viewW, int *vie
     if (!w) return 0;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)w;
-        NSView *v = win.contentView;
+        NSView *v = cm__metal_view(win);
         CAMetalLayer *layer = (CAMetalLayer *)v.layer;
         if (![layer isKindOfClass:[CAMetalLayer class]]) return 0;
         if (dw) *dw = (int)(layer.drawableSize.width + 0.5);
@@ -396,7 +438,7 @@ void cm__live_set_framebuffer_only(CMContext *cx, int on) {
     if (!w) return;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)w;
-        CAMetalLayer *layer = (CAMetalLayer *)win.contentView.layer;
+        CAMetalLayer *layer = (CAMetalLayer *)cm__metal_view(win).layer;
         if ([layer isKindOfClass:[CAMetalLayer class]])
             layer.framebufferOnly = on ? YES : NO;
     }
@@ -429,29 +471,32 @@ static unsigned cm__map_mods(NSEventModifierFlags f) {
     return m;
 }
 
-/* Logical content height in points: the window's content view bounds height when
- * a window exists, else the logical H (== content points per §2). Used for the
- * bottom-left -> top-left Y flip. */
-static int cm__content_h_points(CMContext *cx) {
+/* The Metal content view's origin Y in window points (== the footer height). Exposed
+ * (non-static) so the input test can post a window location that lands on a target
+ * AROS point through the footer offset. 0 when there is no window. */
+int cm__content_origin_y(CMContext *cx) {
     void *w = cm__get_window(cx);
     if (w) {
-        NSWindow *win = (__bridge NSWindow *)w;
-        NSView *v = win.contentView;
-        if (v) {
-            int hp = (int)(v.bounds.size.height + 0.5);
-            if (hp > 0) return hp;
-        }
+        CMContentView *mv = cm__metal_view((__bridge NSWindow *)w);
+        if (mv) return (int)(mv.frame.origin.y + 0.5);
     }
-    return cm__logical_h(cx);
+    return 0;
 }
 
-/* Fill a CMEvent's mouse position from an NSEvent (logical, top-left, clamped). */
+/* Fill a CMEvent's mouse position from an NSEvent (logical, top-left, clamped).
+ * Convert into the Metal view's OWN coordinates first — folding in the footer offset
+ * and any resize — then flip within the view's height. */
 static void cm__fill_mouse_xy(CMContext *cx, NSEvent *ev, CMEvent *out) {
     int w = cm__logical_w(cx), h = cm__logical_h(cx);
-    int chp = cm__content_h_points(cx);
-    NSPoint p = ev.locationInWindow;        /* points, bottom-left origin */
+    NSPoint p = ev.locationInWindow;        /* window points, bottom-left origin */
+    CGFloat vh = (CGFloat)h;
+    void *win = cm__get_window(cx);
+    if (win) {
+        CMContentView *mv = cm__metal_view((__bridge NSWindow *)win);
+        if (mv) { p = [mv convertPoint:ev.locationInWindow fromView:nil]; vh = mv.bounds.size.height; }
+    }
     int x = (int)p.x;
-    int y = chp - (int)p.y;                  /* flip to top-left */
+    int y = (int)(vh - p.y);                 /* flip to top-left within the Metal view */
     if (x < 0) x = 0; else if (x >= w) x = w - 1;
     if (y < 0) y = 0; else if (y >= h) y = h - 1;
     out->x = x; out->y = y;
@@ -587,6 +632,14 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
                  * then keep draining. */
                 forward = 1;
                 break;
+            }
+
+            /* Host app shell: a mouse event over a DIFFERENT window (the Settings panel
+             * on top) must NOT move the AROS pointer — only the AROS window's mouse
+             * events translate. Still forward so that window handles it. */
+            if (emit && (e->type == CM_EV_MOUSEMOVE || e->type == CM_EV_MOUSEBTN)) {
+                void *aw = cm__get_window(cx);
+                if (aw && ev.window != (__bridge NSWindow *)aw) emit = 0;
             }
 
             if (forward) [app sendEvent:ev];

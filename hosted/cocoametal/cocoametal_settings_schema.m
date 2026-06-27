@@ -221,6 +221,20 @@ static NSString *footer_tooltip(void) {
             gSchemaPath ?: @"(none)", gConfPath ?: @"(none)"];
 }
 
+/* An SF Symbol per tab (not the same cog for all). Unknown tabs fall back to a cog. */
+static NSString *symbol_for_tab(NSString *tab) {
+    NSDictionary *M = @{
+        @"General":  @"gearshape",
+        @"Input":    @"keyboard",
+        @"Captures": @"camera",
+        @"Display":  @"display",
+        @"System":   @"memorychip",
+        @"Sharing":  @"folder",
+        @"Sound":    @"speaker.wave.2",
+    };
+    return M[tab] ?: @"gearshape";
+}
+
 @interface CMSettingsWC : NSObject <NSToolbarDelegate>
 @property (nonatomic, assign) CMContext *cx;
 @property (nonatomic, strong) NSWindow *window;
@@ -347,7 +361,7 @@ static NSString *footer_tooltip(void) {
  willBeInsertedIntoToolbar:(BOOL)flag {
     NSToolbarItem *it = [[NSToolbarItem alloc] initWithItemIdentifier:ident];
     it.label = ident; it.target = self; it.action = @selector(switchTab:);
-    it.image = [NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil];
+    it.image = [NSImage imageWithSystemSymbolName:symbol_for_tab(ident) accessibilityDescription:ident];
     return it;
 }
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)tb { return self.tabs; }

@@ -110,8 +110,10 @@ static int run_d4(NSWindow *win, CMContext *cx) {
     /* Target a clearly off-centre logical point so the Y-flip is unambiguous. */
     int lx = 100, ly = 40;
     /* Desired window-local point (bottom-left) that maps to logical (lx,ly):
-     *   point.x = lx,  point.y = H - ly. */
-    double wantX = lx, wantY = (double)(H - ly);
+     *   point.x = lx,  point.y = (H - ly) + footer offset. The Metal content view
+     *   sits ABOVE the window's footer, so add cm__content_origin_y(cx). */
+    extern int cm__content_origin_y(CMContext *cx);
+    double wantX = lx, wantY = (double)(H - ly) + cm__content_origin_y(cx);
 
     /* Calibrate the post->dequeue affine on each axis with two probes, then invert
      * so the DEQUEUED location equals (wantX, wantY) and thus the shim yields exactly
