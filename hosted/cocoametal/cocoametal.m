@@ -122,6 +122,14 @@ struct CMContext {
      * cm_get_option can drive the panel UI and tests. */
     long                     reqModeW, reqModeH, reqKeymap, reqAudioVolume;
 
+    /* Host app shell (v3) AROS-facing recorded values, relayed via CM_EV_SETTING.
+     * retina is host-acted (a recorded presentation pref); the VOLUME_* strings
+     * are the side-channel cm_get_option_str returns. */
+    long                     reqClipboard, reqAudioDevice, reqPower;
+    int                      retina;
+    char                     reqVolumeAdd[512];
+    char                     reqVolumeRemove[256];
+
     /* Pending CM_EV_SETTING queue. cm_set_option of an AROS-facing key enqueues
      * {key,x,y}; cm_pump_events drains it (pull-only — never a callback into AROS,
      * §3). One (main) thread touches this, like the close/resize flags. */
@@ -200,6 +208,13 @@ int  cm__window_is_fullscreen(CMContext *cx);
  * pass under the hand-pumped run loop (which is what left the framebuffer a small
  * rect after a fullscreen enter). Non-blocking; pure geometry. */
 void cm__resync_layer(CMContext *cx);
+
+/* Host app shell (menu bar / About / app icon — host-shell v3). Strong override in
+ * cocoametal_shell.m (installs the NSMenu + delegate + icon and builds the real
+ * CMShellSink that calls back into these cm_* entry points); weak no-op stub below
+ * for headless and the non-shell test builds (d2t/input) that don't link
+ * cocoametal_shell.m. cm_open calls it once, on the main thread, after the window. */
+void cm__install_shell(CMContext *cx);
 
 /* Build a texture descriptor for a BGRA8 shared texture. */
 static MTLTextureDescriptor *bgra8_desc(int w, int h, MTLTextureUsage usage) {
@@ -349,6 +364,10 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
      * via $AROS_CM_CONTROL. Non-fatal, no-op when unset. */
     extern void cm__control_init(CMContext *cx, const char *path);
     cm__control_init(cx, getenv("AROS_CM_CONTROL"));
+
+    /* Host app shell: install the menu bar + About + app icon (no-op headless and
+     * in the non-shell test builds that don't link cocoametal_shell.m). */
+    cm__install_shell(cx);
 
     return cx;
 }
@@ -648,6 +667,23 @@ int cm_set_option(CMContext *cx, int key, long value) {
         cm__enqueue_setting(cx, CM_OPT_AUDIO_VOLUME, (int)value, 0);
         return 0;
 
+    /* ---- host-shell v3 ---- */
+    case CM_OPT_RETINA:                        /* host-acted presentation pref */
+        cx->retina = value ? 1 : 0;
+        return 0;
+    case CM_OPT_CLIPBOARD_SHARE:               /* AROS-facing */
+        cx->reqClipboard = value ? 1 : 0;
+        cm__enqueue_setting(cx, CM_OPT_CLIPBOARD_SHARE, (int)cx->reqClipboard, 0);
+        return 0;
+    case CM_OPT_AUDIO_DEVICE:                  /* AROS-facing */
+        cx->reqAudioDevice = value;
+        cm__enqueue_setting(cx, CM_OPT_AUDIO_DEVICE, (int)value, 0);
+        return 0;
+    case CM_OPT_POWER:                         /* AROS-facing lifecycle request */
+        cx->reqPower = value;
+        cm__enqueue_setting(cx, CM_OPT_POWER, (int)value, 0);
+        return 0;
+
     default:
         return 3;                              /* unknown key */
     }
@@ -665,9 +701,49 @@ int cm_get_option(CMContext *cx, int key, long *value) {
     case CM_OPT_REQUEST_MODE_H:   v = cx->reqModeH;              break;
     case CM_OPT_KEYMAP:           v = cx->reqKeymap;             break;
     case CM_OPT_AUDIO_VOLUME:     v = cx->reqAudioVolume;        break;
+    case CM_OPT_RETINA:           v = (long)cx->retina;          break;
+    case CM_OPT_CLIPBOARD_SHARE:  v = cx->reqClipboard;          break;
+    case CM_OPT_AUDIO_DEVICE:     v = cx->reqAudioDevice;        break;
+    case CM_OPT_POWER:            v = cx->reqPower;              break;
     default:                      return 3;     /* unknown key */
     }
     if (value) *value = v;
+    return 0;
+}
+
+/* ---- host-shell v3: string-valued options (the side-channel CM_EV_SETTING
+ * cannot carry). cm_set_option_str records the string + enqueues the key-only
+ * CM_EV_SETTING; the AROS side reads the string back with cm_get_option_str. One
+ * (main) thread touches this, like cm_set_option. ------------------------------*/
+int cm_set_option_str(CMContext *cx, int key, const char *value) {
+    if (!cx) return 1;
+    const char *s = value ? value : "";
+    switch (key) {
+    case CM_OPT_VOLUME_ADD:
+        strncpy(cx->reqVolumeAdd, s, sizeof cx->reqVolumeAdd - 1);
+        cx->reqVolumeAdd[sizeof cx->reqVolumeAdd - 1] = '\0';
+        cm__enqueue_setting(cx, CM_OPT_VOLUME_ADD, 0, 0);
+        return 0;
+    case CM_OPT_VOLUME_REMOVE:
+        strncpy(cx->reqVolumeRemove, s, sizeof cx->reqVolumeRemove - 1);
+        cx->reqVolumeRemove[sizeof cx->reqVolumeRemove - 1] = '\0';
+        cm__enqueue_setting(cx, CM_OPT_VOLUME_REMOVE, 0, 0);
+        return 0;
+    default:
+        return 3;
+    }
+}
+
+int cm_get_option_str(CMContext *cx, int key, char *buf, int buflen) {
+    if (!cx || !buf || buflen <= 0) return 1;
+    const char *s;
+    switch (key) {
+    case CM_OPT_VOLUME_ADD:    s = cx->reqVolumeAdd;    break;
+    case CM_OPT_VOLUME_REMOVE: s = cx->reqVolumeRemove; break;
+    default:                   return 3;
+    }
+    strncpy(buf, s, (size_t)buflen - 1);
+    buf[buflen - 1] = '\0';
     return 0;
 }
 
@@ -783,6 +859,26 @@ __attribute__((weak)) void cm_try_window(CMContext *cx, const char *title) {
 }
 __attribute__((weak)) void cm_destroy_window(CMContext *cx) {
     (void)cx;
+}
+
+/* Host app shell weak stub: no menu/About/icon in headless and the non-shell
+ * test builds (d2t/input). The dylib links cocoametal_shell.m, which provides the
+ * strong override that actually installs the menu bar + icon. */
+__attribute__((weak)) void cm__install_shell(CMContext *cx) {
+    (void)cx;
+}
+
+/* Movie capture (cm_record_*) is STUBBED until the AVFoundation recorder spike.
+ * The ABI slots + the menu item exist so the wiring is complete; the impl returns
+ * nonzero ("not yet"). These are non-weak (the contract symbols); the AVFoundation
+ * implementation will replace them in cocoametal_shell.m at the recorder spike. */
+int cm_record_start(CMContext *cx, const char *path, int fps, int codec) {
+    (void)cx; (void)path; (void)fps; (void)codec;
+    return -1;   /* TODO: AVAssetWriter over cm_readback frames */
+}
+int cm_record_stop(CMContext *cx) {
+    (void)cx;
+    return -1;
 }
 
 /* cm_open_settings: the real native AppKit panel lives in cocoametal_settings.m

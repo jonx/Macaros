@@ -119,7 +119,8 @@ typedef enum {
     CM_OPT_SCALE_MODE  = 0x01,   /* value = a CMScaleMode         */
     CM_OPT_FULLSCREEN  = 0x02,   /* value = 0/1                   */
     CM_OPT_FILTER      = 0x03,   /* value = a CMFilter            */
-    /* 0x04..0x0F reserved for future HOST-acted keys */
+    CM_OPT_RETINA      = 0x04,   /* value = 0/1 (host-shell v3; recorded pref) */
+    /* 0x05..0x0F reserved for future HOST-acted keys */
 
     /* --- AROS-facing, STUBBED on the host (surfaced via CM_EV_SETTING) ---
      * NOT host-acted. The host records nothing functional for these; it only
@@ -128,9 +129,27 @@ typedef enum {
     CM_OPT_REQUEST_MODE_H = 0x11,/* requested display mode height (px); paired
                                   * with _MODE_W in CM_EV_SETTING.y      */
     CM_OPT_KEYMAP         = 0x12,/* requested AROS keymap id            */
-    CM_OPT_AUDIO_VOLUME   = 0x13 /* requested audio volume (0..100)     */
-    /* 0x14.. reserved for future AROS-facing keys */
+    CM_OPT_AUDIO_VOLUME   = 0x13,/* requested audio volume (0..100)     */
+    /* host-shell v3 (append-only): the menu/settings surface these AROS-facing
+     * requests; the AROS side pulls them via cm_pump_events (CM_EV_SETTING). The
+     * VOLUME_* keys carry a STRING (the mount spec) read with cm_get_option_str. */
+    CM_OPT_CLIPBOARD_SHARE = 0x14,/* share host clipboard 0/1            */
+    CM_OPT_AUDIO_DEVICE    = 0x15,/* requested audio output device index */
+    CM_OPT_VOLUME_ADD      = 0x16,/* mount a host folder (string spec)   */
+    CM_OPT_VOLUME_REMOVE   = 0x17,/* unmount by name (string)            */
+    CM_OPT_POWER           = 0x18 /* lifecycle request (a CM_POWER_*)    */
+    /* 0x19.. reserved for future AROS-facing keys */
 } CMOption;
+
+/* Value for CM_OPT_POWER — a graded lifecycle request (host-shell v3). The host
+ * records + relays it; the AROS side decides what to do (clean shutdown vs reset
+ * vs forced stop). Replaces the close-button's unilateral exit() at merge. */
+typedef enum {
+    CM_POWER_REQUEST_DOWN = 0,   /* soft: ask AROS to shut down  */
+    CM_POWER_RESET        = 1,   /* reset / reboot               */
+    CM_POWER_FORCE_DOWN   = 2,   /* hard: stop the machine       */
+    CM_POWER_FORCE_QUIT   = 3    /* last resort: end the process */
+} CMPower;
 
 /* Open the display: build device/queue, framebuffer + offscreen textures, and
  * (best-effort) a live window. Returns NULL on failure. */
@@ -189,8 +208,17 @@ int        cm_render_effect_readback(CMContext *, CMEffect effect,
  *
  * v1 -> v2: appended the settings/options ABI (cm_set_option / cm_get_option /
  * cm_open_settings, entries 10/11/12), the CMOption/CMScaleMode/CMFilter enums,
- * and the CM_EV_SETTING event. All append-only — no existing symbol moved. */
-#define CM_ABI_VERSION 2
+ * and the CM_EV_SETTING event. All append-only — no existing symbol moved.
+ *
+ * v2 -> v3 (host app shell): appended cm_set_option_str / cm_get_option_str
+ * (entries 13/14, the string side-channel for CM_OPT_VOLUME_*), cm_capture_png
+ * (15, screenshot via cm_readback + ImageIO), and cm_record_start / cm_record_stop
+ * (16/17, movie capture — stubbed until the AVFoundation spike), plus the new
+ * CM_OPT_ keys (RETINA, CLIPBOARD_SHARE, AUDIO_DEVICE, VOLUME_ADD/REMOVE, POWER)
+ * and the CMPower enum.
+ * The menu bar / About / icon / settings are HOST-SIDE (no new AROS-facing
+ * symbol) — they reach AROS only through the existing cm_pump_events channel. */
+#define CM_ABI_VERSION 3
 int        cm_abi_version(void);
 
 /* ---- Settings & options ABI (INTERFACE.md §9) — appended at v2 ------------
@@ -215,6 +243,26 @@ int        cm_get_option(CMContext *, int key, long *value);
  * Degrades to a no-op when there is no window server. Non-blocking. Returns 0
  * if the panel is up (or already up), nonzero if it could not be opened. */
 int        cm_open_settings(CMContext *);
+
+/* ---- Host app shell ABI (v3, append-only — entries 13..17) ----------------
+ * The menu bar / About / icon are installed host-side when the window comes up
+ * (no AROS-facing call). These symbols are the few that AROS *may* also drive. */
+
+/* String-valued option (the side-channel CM_EV_SETTING cannot carry). For
+ * CM_OPT_VOLUME_ADD/REMOVE the host records the string and enqueues the matching
+ * CM_EV_SETTING (key only); the AROS side pulls the string with cm_get_option_str.
+ * Returns 0 on success, nonzero for an unknown key. */
+int        cm_set_option_str(CMContext *, int key, const char *value);
+int        cm_get_option_str(CMContext *, int key, char *buf, int buflen);
+
+/* Save the current frame as a PNG (cm_readback the offscreen oracle -> ImageIO).
+ * No Screen-Recording/TCC — the pixels are ours. Returns 0 on success. */
+int        cm_capture_png(CMContext *, const char *path);
+
+/* Movie capture (AVFoundation). STUBBED until the recorder spike — returns
+ * nonzero ("not yet"). The menu item + ABI slot exist so the wiring is complete. */
+int        cm_record_start(CMContext *, const char *path, int fps, int codec);
+int        cm_record_stop(CMContext *);
 
 #ifdef __cplusplus
 }

@@ -21,3 +21,8 @@ _cm_abi_version
 _cm_set_option
 _cm_get_option
 _cm_open_settings
+_cm_set_option_str
+_cm_get_option_str
+_cm_capture_png
+_cm_record_start
+_cm_record_stop
