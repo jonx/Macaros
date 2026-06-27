@@ -28,6 +28,7 @@ CLEANROOM.md           — the GPL clean-room process that governs every spec.md
 |---------|----------|--------|
 | [68k JIT](68k-jit/design.md) · [spec](68k-jit/spec.md) | A host 68k→AArch64 translator so the hosted AROS runs real classic Amiga binaries at native speed | design + spec done · `[J0]` → adapt Emu68 |
 | [Cocoa/Metal display](cocoa-metal-display/design.md) · [spec](cocoa-metal-display/spec.md) | A live macOS window (Apple-native Metal) replacing H7's render-to-PNG | design + spec done · **`[D1]` shim GREEN** |
+| [Host app shell](host-app-shell/design.md) · [spec](host-app-shell/spec.md) | Make the window a first-class Mac app — menu bar, About, custom icon, two-tier Settings; the UI home for screenshot/video + drive/clipboard/sharing | design + spec done |
 | [Clipboard bridge](clipboard-bridge/design.md) · [spec](clipboard-bridge/spec.md) | Two-way copy/paste between macOS NSPasteboard and AROS `clipboard.device` | design + spec done |
 | [Host volume](host-volume/design.md) · [spec](host-volume/spec.md) | A real macOS folder mounted as an AROS volume, drag-from-Finder | design + spec done · foundation landed |
 | [CoreAudio audio](coreaudio-audio/design.md) · [spec](coreaudio-audio/spec.md) | Real sound via a CoreAudio-backed AHI sub-driver | design + spec done |
@@ -38,8 +39,10 @@ CLEANROOM.md           — the GPL clean-room process that governs every spec.md
 - **The standout** — [68k JIT](68k-jit/design.md). The uniquely-Apple-Silicon payoff and
   the natural destination of the W^X / `MAP_JIT` work. Prior art exists out-of-tree:
   **Emu68** (MPL-2.0, adoptable) for the translator, **emumiga** for the AROS integration.
-- **"Make it a real Mac app"** — [display](cocoa-metal-display/design.md),
-  [clipboard](clipboard-bridge/design.md), [host volume](host-volume/design.md).
+- **"Make it a real Mac app"** — the [host app shell](host-app-shell/design.md) is the
+  umbrella (menu bar, About, icon, two-tier Settings, screenshot/video) that surfaces
+  [display](cocoa-metal-display/design.md), [clipboard](clipboard-bridge/design.md), and
+  [host volume](host-volume/design.md) as one native UI.
 - **Infrastructure** — [audio](coreaudio-audio/design.md),
   [sockets](bsdsocket-net/design.md).
 
