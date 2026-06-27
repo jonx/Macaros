@@ -15,11 +15,12 @@
  * untranslated NSEvents to [NSApp sendEvent:], which drives menu tracking) — no
  * [NSApp run] is introduced.
  *
- * Sources: Apple AppKit/CoreGraphics/ImageIO docs [PUB] + Apple HIG [PUB] (the
- * menu layout follows the published HIG conventions). Independent work: no
- * third-party implementation source — emulator, agent, driver, or otherwise — was
- * read, searched, or consulted in producing it, and any resemblance to existing
- * implementations is coincidental.
+ * Sources: Apple AppKit/CoreGraphics/ImageIO docs [PUB] + Apple HIG [PUB]. The
+ * menu/Power-submenu shape was inspired by UTM's publicly-visible design
+ * (Apache-2.0 — observed from its public docs/app, never its source) [PUB-UTM].
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and any
+ * resemblance to existing implementations is coincidental.
  */
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>

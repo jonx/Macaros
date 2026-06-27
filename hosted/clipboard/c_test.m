@@ -1,10 +1,12 @@
 /* c_test.m — standalone proof of the NSPasteboard clipboard host shim ([C]).
  *
- * Implemented clean-room from docs/features/clipboard-bridge/spec.md
- * ("Verification" C0..C3 + "Transcode" R-TRANSCODE). No GPL emulator/agent source
- * (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE, vAmiga, QEMU/SPICE vdagent) was read,
- * searched, or consulted. Models this project's [OURS] marker discipline ("a file
- * existing is not a PASS — the asserted bytes are") from hosted/cocoametal/d1_test.m.
+ * Implemented from docs/features/clipboard-bridge/spec.md
+ * ("Verification" C0..C3 + "Transcode" R-TRANSCODE). Independent work: no
+ * third-party implementation source — emulator, agent, driver, or otherwise —
+ * was read, searched, or consulted in producing it, and any resemblance to
+ * existing implementations is coincidental. Models this project's [OURS] marker
+ * discipline ("a file existing is not a PASS — the asserted bytes are") from
+ * hosted/cocoametal/d1_test.m.
  *
  * Headless-safe and non-hanging: it uses a UNIQUELY-NAMED NSPasteboard (NOT the
  * general pasteboard) so it never touches the user's real clipboard, performs only

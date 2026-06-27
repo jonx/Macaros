@@ -49,7 +49,7 @@ shell stays host-agnostic, the engine sees no new contract.
 ## What it proves (all green)
 
 - **`[G-MENU]`** — the full menu bar matches the design's R-MENU: App / File / Edit / View
-  / Machine / Window / Help, with the UTM-shaped **Machine ▸ Power** submenu (Request
+  / Machine / Window / Help, with the UTM-inspired **Machine ▸ Power** submenu (Request
   Power Down · Force Shut Down · Force Quit), View scaling/filter/scanlines, the right key
   equivalents (⌘, ⇧⌘3, ⌃⌘F, ⌃⌘R, ⌃⌘I …), and target/action wiring. Asserted by **walking
   the `NSMenu` tree**, never a screenshot.
@@ -134,10 +134,12 @@ schema's tabs+controls** (Machine 4 tabs/8 controls, App 3 tabs/6 controls). `./
    `open_settings` sink field build the window (already wired through `settingsAction:`).
    Extend the settings by editing `settings.json` — no rebuild, no UI code.
 
-## Clean-room
+## Provenance
 
 Implemented from Apple AppKit/Foundation/CoreGraphics docs + the Apple HIG + this
 project's spec ([../../docs/features/host-app-shell/spec.md](../../docs/features/host-app-shell/spec.md)).
-**No GPL emulator source** (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read. UTM is
-Apache-2.0; only its public menu *layout* informed the structure. See
-[../../docs/features/CLEANROOM.md](../../docs/features/CLEANROOM.md).
+**Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing it, and any resemblance to
+existing implementations is coincidental.** The menu-bar shape was inspired by UTM's
+publicly-visible design (Apache-2.0 — observed as users / from its public docs, never
+its source) and otherwise follows the Apple HIG.

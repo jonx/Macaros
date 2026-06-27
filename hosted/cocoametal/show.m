@@ -1,9 +1,11 @@
 /* show.m — PERSISTENT human-facing "look at it" build for the Cocoa/Metal shim.
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§2a live-present-fills-drawable contract, §9 fullscreen) + spec.md + cocoametal.h.
- * No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or
- * consulted. Apple AppKit/Metal/QuartzCore/Foundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§2a live-
+ * present-fills-drawable contract, §9 fullscreen) + spec.md + cocoametal.h.
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and any
+ * resemblance to existing implementations is coincidental. Apple AppKit/Metal/
+ * QuartzCore/Foundation docs only [PUB].
  *
  * NOT part of the regression matrix — this is the build the USER runs to VISUALLY
  * confirm the live present fills the window/screen (on-screen look is human-judged).

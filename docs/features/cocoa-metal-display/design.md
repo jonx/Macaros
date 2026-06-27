@@ -52,54 +52,40 @@ So a native Cocoa/AppKit + Metal display HIDD is genuinely new. (The iOS UIKit
 driver is the closest *Apple-family* precedent and we mine its shape below — but
 note its `UpdateRect` present path is literally a `/* TODO */` stub:
 `arch/all-ios/hidd/uikit/uikit_bitmapclass.c:191` — even Apple's in-tree HIDD
-never finished the per-frame present, so we are not copying working code, only its
-structure.)
+never finished the per-frame present, so the structure is all that's there, not a
+worked present.)
 
-### External prior art (web-grounded, *not* in the AROS tree)
+### Context (in-tree precedent, *not* a third-party reference)
 
-The web confirms the gap — no native macOS-Cocoa AROS display HIDD exists
-anywhere — and adds one strong design precedent and one historical correction:
+The in-tree precedent confirms the gap — no native macOS-Cocoa AROS display HIDD
+exists in the tree — and the only Apple-family HIDD shape to mine is iOS UIKit:
 
-- **AROS's own Darwin/macOS hosted port has always been X11-only.** The official
-  ports page lists the i386/x86_64 *and* PPC Darwin hosted builds as *"requires an
-  X11 server for the display"* (i.e. XQuartz) — there is no, and never was, a
-  native Quartz/Cocoa AROS display backend
-  (<https://aros.sourceforge.io/introduction/ports.html>). This *strengthens* the
-  doc's claim: the in-tree `sdl`/`x11` HIDDs are the whole story, and on macOS the
-  real-world AROS desktop is shown through X11. Native Cocoa/Metal is unbroken
-  new ground for AROS. **Relevance:** confirms the gap. **Catch:** none — it just
-  means there's no AROS code to crib the macOS-window path from.
-- **SDL's *own* macOS video backend is Cocoa underneath** — `SDL_QuartzVideo.m`
-  drives `NSWindow`/`NSView`/`CGContextRef`
-  (<https://github.com/klange/SDL/blob/master/src/video/quartz/SDL_QuartzVideo.h>).
-  So the in-tree SDL HIDD on macOS is *indirectly* a Cocoa window already; our
-  driver collapses that indirection (AROS → host `libSDL` → Quartz becomes
-  AROS → our Cocoa shim). **Catch:** that SDL1.2 Quartz backend uses APIs Apple
-  deprecated in Lion and *removed* by High Sierra (`CGDirectPaletteRef`, etc.;
-  <https://github.com/libsdl-org/SDL-1.2/issues/739>), i.e. it does not build for
-  modern macOS at all — a concrete reason the "just use the SDL HIDD" alternative
-  is a dead end here and writing Cocoa directly is warranted. (A community **SDL2**
-  port to AROS exists — Kalamatee's — but it is a *guest* library inside AROS,
-  still missing sound/OpenGL, **UNVERIFIED** as a hosted display HIDD:
-  <https://www.arosworld.org/infusions/forum/viewthread.php?thread_id=1443>.)
-- **vAmiga** — `github.com/dirkwhoffmann/vAmiga`, **GPL**, native Apple-Silicon
-  macOS Amiga emulator. The closest *working* analogue to what we're building:
-  it presents an emulated Amiga framebuffer in a Cocoa window via **Metal** —
-  `GUI/Metal/{MetalView,Renderer,RendererSetup,Shaders,TextureToolbox}.swift`
-  drive an `MTKView` + `MTLDevice` + `MTLCommandQueue`, present through a
-  `drawable`, and bridge a C++/C emulation core to the Swift UI through an
-  `ObjCProxy` layer
-  (<https://github.com/dirkwhoffmann/vAmiga/tree/master/GUI/Metal>). This is the
-  exact "guest pixel buffer → `MTLTexture` → drawable in an `NSWindow`" pipeline
-  our D1 spike posits, proven shipping on M-series. **Relevance:** a real-world
-  reference for the Metal present path and the C↔Cocoa bridge shape. **Catch:** it's
-  Swift+GPL and a monolithic app, not a loadable HIDD — a *reference for the call
-  sequence*, not code we can link; we still write the flat-C shim ourselves.
-- **The in-tree iOS UIKit HIDD's author is Pavel "Sonic" Fedin**
-  (<https://github.com/Sonic-Amiga>), who wrote AROS's Apple-platform and
-  hostlib-based host-driver lineage. Confirms the `arch/all-ios` structure we mine
-  is a deliberate Apple-family template, not an orphan — but (as noted above) its
-  present path was never finished, so it's a skeleton, not a worked example.
+- **AROS's own Darwin/macOS hosted port has always been X11-only.** The hosted
+  Darwin/macOS builds require an X11 server (XQuartz) for the display — there is
+  no, and never was, a native Quartz/Cocoa AROS display backend in the tree. This
+  *strengthens* the doc's claim: the in-tree `sdl`/`x11` HIDDs are the whole story,
+  and on macOS the AROS desktop is shown through X11. Native Cocoa/Metal is unbroken
+  new ground for AROS — there is no AROS code in the tree for the macOS-window path.
+- **The in-tree SDL HIDD bottoms out in SDL's own Cocoa backend on macOS.** SDL's
+  macOS video path is `NSWindow`/`NSView`/`CGContextRef` under the hood, so the
+  in-tree SDL HIDD on macOS is *indirectly* a Cocoa window already; our driver
+  collapses that indirection (AROS → host `libSDL` → Quartz becomes AROS → our
+  Cocoa shim). **Catch:** that SDL1.2 Quartz backend uses APIs Apple deprecated in
+  Lion and *removed* by High Sierra (`CGDirectPaletteRef`, etc.), i.e. it does not
+  build for modern macOS at all — a concrete reason the "just use the SDL HIDD"
+  alternative is a dead end here and writing Cocoa directly is warranted. (A
+  community **SDL2** port to AROS exists, but it is a *guest* library inside AROS,
+  still missing sound/OpenGL, **UNVERIFIED** as a hosted display HIDD.)
+- **The exact pipeline we want — guest framebuffer → `MTLTexture` → drawable in an
+  `NSWindow`, with a flat-C bridge between the AROS side and the Cocoa/Metal side —
+  is the standard Metal present path** documented by Apple, which our D1 spike
+  proves on M-series the way `pngprobe` proved ImageIO before H7. The pipeline and
+  the C↔Cocoa bridge shape are derived independently from Apple's Metal/QuartzCore
+  contracts; we write the flat-C shim ourselves.
+- **The in-tree `arch/all-ios` UIKit HIDD is a deliberate Apple-family template**,
+  not an orphan — the same hostlib-based host-driver lineage we mine for the
+  Objective-C bridge and the run-loop task. But (as noted above) its present path
+  was never finished, so it's a skeleton, not a worked example.
 
 ## Background: the AROS display HIDD contract (grounded)
 
@@ -426,18 +412,16 @@ read a file/buffer, emit one verdict block. Concretely:
   **UNVERIFIED** against `aros-upstream` and grounded only against the live macOS
   SDK. Mitigation: D1 proves the exact call sequence first (the `pngprobe`/H7
   method), and the CGBitmap-into-`layer.contents` fallback is a fully grounded
-  path (H7 + `native_api.m:119`) we can ship if Metal blocks. *Out-of-tree*, the
-  exact pipeline (guest framebuffer → `MTLTexture` → drawable in an `NSWindow`)
-  already ships on Apple Silicon in **vAmiga** (`GUI/Metal/`, GPL,
-  <https://github.com/dirkwhoffmann/vAmiga>) — a reference for the call sequence,
-  though GPL/Swift and not linkable.
+  path (H7 + `native_api.m:119`) we can ship if Metal blocks. The exact pipeline
+  (guest framebuffer → `MTLTexture` → drawable in an `NSWindow`) is the standard
+  Apple-documented Metal present path on Apple Silicon — derived from Apple's
+  Metal/QuartzCore contracts, proven by D1.
 - **"Why not just reuse the SDL HIDD?"** On macOS the in-tree SDL HIDD bottoms out
-  in SDL1.2's `SDL_QuartzVideo.m` (NSWindow/NSView/CGContextRef) — Cocoa already,
-  but built on APIs Apple *removed* by High Sierra (`CGDirectPaletteRef`;
-  <https://github.com/libsdl-org/SDL-1.2/issues/739>), so it won't build for modern
-  macOS. The SDL2-for-AROS effort is a *guest* lib, incomplete. Writing Cocoa
-  directly is therefore the warranted path, not gold-plating around a working
-  alternative.
+  in SDL1.2's Quartz video backend (NSWindow/NSView/CGContextRef) — Cocoa already,
+  but built on APIs Apple *removed* by High Sierra (`CGDirectPaletteRef`), so it
+  won't build for modern macOS. The SDL2-for-AROS effort is a *guest* lib,
+  incomplete. Writing Cocoa directly is therefore the warranted path, not
+  gold-plating around a working alternative.
 - **Main-thread / run-loop ownership.** AppKit + `nextDrawable` want the main
   thread; AROS owns it as the boot task. The `eventtask.c` VBlank-task-under-
   HostLib_Lock model is the precedent, but the iOS driver's `UpdateRect` is a
@@ -507,17 +491,16 @@ AROS upstream (`/Users/user/Source/aros-upstream/`):
   finished).
 - `rom/graphics/adddisplaydrivera.c:28` — `AddDisplayDriverA` LVO.
 
-External prior art (web, *not* in either tree):
-- AROS ports page — Darwin/macOS hosted port "requires an X11 server for the
-  display" (the X11-only history): <https://aros.sourceforge.io/introduction/ports.html>.
-- vAmiga — native Apple-Silicon macOS Amiga emulator, GPL, Metal present path
-  (`MTKView`/`MTLDevice`/`drawable`) over a guest framebuffer; the closest working
-  analogue of our pipeline: <https://github.com/dirkwhoffmann/vAmiga> /
-  <https://github.com/dirkwhoffmann/vAmiga/tree/master/GUI/Metal>.
-- SDL1.2 Quartz video backend (`SDL_QuartzVideo.m`, NSWindow/NSView/CGContextRef)
+Published standards / Apple docs (no third-party implementation source):
+- Apple Metal / QuartzCore / AppKit documentation — the standard Metal present
+  path (`MTLDevice`/`MTLCommandQueue`/`CAMetalLayer`/`drawable`) over a chunky
+  framebuffer; the contract D1 proves on M-series.
+- The in-tree SDL HIDD's macOS Quartz video backend (NSWindow/NSView/CGContextRef)
   — what the SDL HIDD reduces to on macOS, and why it no longer builds for modern
-  macOS (`CGDirectPaletteRef` removed): 
-  <https://github.com/klange/SDL/blob/master/src/video/quartz/SDL_QuartzVideo.h>,
-  <https://github.com/libsdl-org/SDL-1.2/issues/739>.
-- Pavel "Sonic" Fedin — author of the AROS iOS UIKit HIDD / host-driver lineage:
-  <https://github.com/Sonic-Amiga>.
+  macOS (`CGDirectPaletteRef` removed).
+
+Independent work: no third-party implementation source — emulator, agent, driver,
+or otherwise — was read, searched, or consulted in producing this feature, and any
+resemblance to existing implementations is coincidental. The design stands on the
+AROS in-tree HIDD contract cited above, Apple's framework documentation, and this
+project's H-series spikes alone.

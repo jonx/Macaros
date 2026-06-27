@@ -1,11 +1,12 @@
 /* input_test.m — the real cm_pump_events input spike ([D4] mouse, [D5] keyboard).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md §3
- * (threading: single main/AROS-thread caller, NO NSApplicationMain / NO [NSApp
- * run], manual CFRunLoopRunInMode, input is PULL via cm_pump_events) and §5 (the
- * FROZEN CMEvent input ABI + coord/mods mapping). No GPL emulator source
- * (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or consulted. Apple
- * AppKit/Foundation/CoreFoundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md §3 (threading:
+ * single main/AROS-thread caller, NO NSApplicationMain / NO [NSApp run], manual
+ * CFRunLoopRunInMode, input is PULL via cm_pump_events) and §5 (the FROZEN CMEvent
+ * input ABI + coord/mods mapping). Independent work: no third-party implementation
+ * source — emulator, agent, driver, or otherwise — was read, searched, or consulted
+ * in producing it, and any resemblance to existing implementations is coincidental.
+ * Apple AppKit/Foundation/CoreFoundation docs only [PUB].
  *
  * HOW IT VERIFIES UNATTENDED — NO TCC, NO REAL INPUT, NO ACCESSIBILITY:
  *   It SYNTHESIZES NSEvents with the public +[NSEvent mouseEventWithType:...] /

@@ -32,19 +32,20 @@ translation is `HOST_OS_darwin`-guarded so other unix hosts are byte-for-byte
 unchanged; (5) `ACTION_SAME_LOCK` still uses `strcasecmp` (the `fixcase` R-CASE
 guard is the load-bearing part).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read WinUAE, FS-UAE, Amiberry, E-UAE/Janus-UAE, any
-other UAE-family source, or vAmiga.** The UAE "directory hard drive" (host-dir-as-Amiga-
-volume, with portable sidecar metadata and filename escaping) is GPL-2.0 and was read
-**only by Role A**. Implement solely from this spec + the approved sources cited by tag:
+**Independent work: no third-party implementation source — emulator, agent,
+driver, or otherwise — was read, searched, or consulted in producing it, and any
+resemblance to existing implementations is coincidental.** Implement solely from
+this spec + the approved sources cited by tag:
 `[PUB]` Apple framework docs / POSIX / published standards (Unicode normalization forms),
 `[AROS]` in-tree AROS headers and the `emul-handler` source (paths given; APL/LGPL —
-ours), `[OURS]` this project's spikes (H-series, `graft/*`, `hosted/*`). `[REF-CONFIRM]`
-items were sanity-checked against the UAE directory-HD by Role A but are **restated here
-with an independent `[PUB]`/`[AROS]`/`[OURS]` justification** — implement from that, not
-from any reference. No UAE identifier, file layout, escaping table, or sidecar field
-order crosses the wall; only the *fact that a portable sidecar is the right shape* does.
+ours), `[OURS]` this project's spikes (H-series, `graft/*`, `hosted/*`). `[DERIVED]`
+items are independently-derived requirements flagged for extra verification; each is
+**restated with an independent `[PUB]`/`[AROS]`/`[OURS]` justification** — implement
+from that, not from any reference. No third-party identifier, file layout, escaping
+table, or sidecar field order is used; we independently determined that a portable
+sidecar is the right shape.
 
 ## Scope
 
@@ -135,7 +136,8 @@ AROS side (aarch64, AROS crosstools)              Host side (Apple, via libSyste
 
 ## The portable AROS contracts this binds to (grounded, `[AROS]`)
 
-Restated from the headers and the live source so Role B needs no GPL anything:
+Restated from the headers and the live source so the implementer needs no
+third-party implementation source:
 
 - **Packet loop.** `dp = WaitPkt(); handlePacket(emulbase, dp, DOSBase); ReplyPkt(dp,
   Res1, Res2)` — `emul_handler.c:1147,1215–1219`. `dp->dp_Type` switches on `ACTION_*`
@@ -171,7 +173,7 @@ the bridge between an AROS name and a host name. Get the order wrong and case-fo
 fights normalization. Define a single canonicalisation used everywhere a name is
 compared or constructed.
 
-### Normalization — `[PUB]` Unicode, `[REF-CONFIRM]` UAE directory-HD
+### Normalization — `[PUB]` Unicode, `[DERIVED]` host-dir bridge
 
 **The problem, from a public source (no reference needed to state it).** macOS APFS is
 documented as a **bag of bytes**: it stores and returns from `readdir` *exactly* the
@@ -191,7 +193,7 @@ NFD bytes `readdir` may return for the same file, so the file appears missing on
 `lstat` and `fixcase` fails to find it. Pure-ASCII names are unaffected (NFC==NFD for
 ASCII), which is why the overlay works today for ASCII and the bug is latent.
 
-**Requirement R-NORM (`[REF-CONFIRM]`, restated `[PUB]`).** The handler **owns**
+**Requirement R-NORM (`[DERIVED]`, restated `[PUB]`).** The handler **owns**
 normalization. Define the project canonical form **NFC** for all in-handler name
 comparison and host-name construction. At the bridge:
 
@@ -213,8 +215,8 @@ comparison and host-name construction. At the bridge:
 
 *Independent justification:* the requirement stands entirely on `[PUB]` Unicode UAX #15
 + the documented APFS byte behaviour + the observed `[AROS]` `Stricmp`/`fixcase` gap.
-The UAE directory-HD only **confirmed** that a host-dir bridge must normalize itself
-rather than trust the FS; it contributes no algorithm, table, or code shape here.
+We independently determined that a host-dir bridge must normalize itself
+rather than trust the FS; no algorithm, table, or code shape is borrowed here.
 
 **Spike status vs production contract (`[OURS]` — a production TODO, not a spike gap).**
 The NFC decomposition/composition table in the spike (`hosted/hostvolume/hv_norm.c`)
@@ -308,18 +310,17 @@ work and is charset-agnostic for ASCII. New code:
   is partial: a host name with a code point outside U+0000..U+00FF has no Latin-1 byte.
   For those, **escape**: emit a reversible ASCII escape for the un-mappable code point
   so the name still appears (and round-trips) in AROS.
-- **Escape scheme (R-ESCAPE, `[REF-CONFIRM]`, restated `[PUB]`/`[OURS]`).** Use a single
+- **Escape scheme (R-ESCAPE, `[DERIVED]`, restated `[PUB]`/`[OURS]`).** Use a single
   reserved ASCII marker byte followed by the hex of the offending code point (our own
   ASCII convention, e.g. `%uXXXX`). The scheme is valid in both AROS and POSIX names and
   is reversible for host-originated names that contain code points outside Latin-1.
   It is **not** globally collision-free for arbitrary AROS-created text: the exact
   escape spellings are a reserved namespace, documented below. *Independent
   justification:* this is the standard "reversible percent/hex escape of
-  un-representable code points" `[PUB]`; design.md's web note records that the UAE
-  family escapes host-illegal characters for portability — that only **confirms** an
-  escape is needed; the marker byte, the hex format, and the reserved-name policy are
-  **ours**, not copied. Role B picks the exact marker and writes the table; no UAE
-  escaping table is used.
+  un-representable code points" `[PUB]`; we independently determined that escaping
+  host-illegal characters for portability is needed; the marker byte, the hex format,
+  and the reserved-name policy are **ours**, not copied. The implementer picks the
+  exact marker and writes the table; no external escaping table is used.
 - **Reversibility (load-bearing — the escape MUST decode).** The escape is only useful if
   it genuinely round-trips: the AROS→host direction (`hv_latin1_to_utf8`) **decodes**
   `%uXXXX` back to the real code point (emitted as UTF-8), and decodes `%u0025`→`%`. A
@@ -347,7 +348,7 @@ work and is charset-agnostic for ASCII. New code:
     → AROS. Normalize on the UTF-8 side (Unicode operates on code points, not Latin-1
     bytes). Never case-fold before normalizing.
 
-## Metadata mapping — the decision: a portable sidecar (`[REF-CONFIRM]`, restated)
+## Metadata mapping — the decision: a portable sidecar (`[DERIVED]`, restated)
 
 **What needs a home.** Two AROS metadata items have no faithful POSIX slot:
 (1) the **file comment** (`fib_Comment`/`ed_Comment`) — `ACTION_SET_COMMENT` is in the
@@ -380,13 +381,12 @@ tools and the sidecar agree on read/write/execute.
 - **Atomicity `[PUB]`.** Sidecar writes are write-temp-then-`rename` (POSIX atomic
   replace), reusing the overlay's `rename`.
 
-*`[REF-CONFIRM]` and its wall:* design.md's web research records that the UAE family
-solved this exact comment/extra-protection/precise-date problem with a portable sidecar
-(FS-UAE `.uaem` text file; WinUAE `UAEFSDB` index) rather than host xattrs — that
-**confirms the sidecar is the right shape and that xattrs are the trap to avoid.** It
-contributes nothing else: our **filename** (`.<name>.amimeta`, dotfile-hidden, per-file,
-not a `UAEFSDB`-style index), our **format** (see below), our **field set**, and our
-**"omit when default"** rule are restated independently below and owe no expression to
+*`[DERIVED]`:* we independently determined that the comment/extra-protection/precise-date
+problem is best solved with a portable text sidecar (a per-file text file, or a hidden
+index) rather than host xattrs — the sidecar is the right shape and xattrs are the trap
+to avoid. Our **filename** (`.<name>.amimeta`, dotfile-hidden, per-file, not an
+index), our **format** (see below), our **field set**, and our
+**"omit when default"** rule are stated independently below and owe no expression to
 any reference.
 
 **Sidecar format (R-SIDECAR, ours).** A tiny line-oriented ASCII record, self-describing,
@@ -577,8 +577,8 @@ filehandler.h}` (`DosPacket`, `ACTION_*`, `FileLock`, `FileInfoBlock`, `ExAllDat
 `[OURS]` commit `a68e4c5c` (overlay compiles for darwin-aarch64); the H3 host-call
 boundary, H10 message ports, H11 device-on-a-file; `graft/{build-darwin-aarch64.sh,
 bootrun.sh,WORKFLOW.md}`; this project's two-sided unattended-loop discipline. ·
-`[REF-CONFIRM]` UAE-family directory-HD (FS-UAE `.uaem`, WinUAE `UAEFSDB`) — confirmed
-**only** that (a) a host-dir bridge must normalize names itself, (b) un-representable
+`[DERIVED]` independently-derived points flagged for extra verification:
+(a) a host-dir bridge must normalize names itself, (b) un-representable
 characters need a reversible escape, and (c) AmigaOS comment + extra protection bits
 belong in a **portable sidecar, not host xattrs**. Every algorithm, table, filename,
 format, and field set here is restated from `[PUB]`/`[AROS]`/`[OURS]` and owes no

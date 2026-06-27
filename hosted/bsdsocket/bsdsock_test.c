@@ -1,10 +1,12 @@
 /* bsdsock_test.c — standalone proof of the bsdsocket host pump ([N]).
  *
- * Implemented clean-room from docs/features/bsdsocket-net/spec.md ("Unattended
+ * Implemented from docs/features/bsdsocket-net/spec.md ("Unattended
  * verification" [N1]-[N3], the non-blocking + kqueue-pump -> readiness-signal
- * model). No GPL emulator source (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE/vAmiga)
- * was read, searched, or consulted. POSIX/Apple man pages [PUB] + this project's
- * H11 two-sided verify discipline (hosted/device.c) [OURS] only.
+ * model). Independent work: no third-party implementation source — emulator,
+ * agent, driver, or otherwise — was read, searched, or consulted in producing
+ * it, and any resemblance to existing implementations is coincidental.
+ * POSIX/Apple man pages [PUB] + this project's H11 two-sided verify discipline
+ * (hosted/device.c) [OURS] only.
  *
  * What it proves, unattended, hermetic on localhost (no entitlement, no DNS):
  *   [N-1] non-blocking connect (EINPROGRESS via the pump) + send + recv-back

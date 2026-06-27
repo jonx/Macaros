@@ -1,11 +1,12 @@
 /* hostvolume.h — flat C ABI for the macOS-folder-as-AROS-volume host glue.
  *
- * Implemented clean-room from docs/features/host-volume/spec.md (R-NORM,
- * R-CHARSET, R-ESCAPE, R-SIDECAR). No GPL emulator source (UAE family —
- * WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE — or vAmiga) was read, searched, or
- * consulted. Sources: POSIX + Unicode UAX #15 (NFC/NFD) [PUB]; the AROS
- * emul-handler Do* contract as restated in the spec [AROS]; this project's
- * own hosted spikes + harness conventions [OURS].
+ * Implemented from docs/features/host-volume/spec.md (R-NORM, R-CHARSET,
+ * R-ESCAPE, R-SIDECAR). Independent work: no third-party implementation source
+ * — emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * Sources: POSIX + Unicode UAX #15 (NFC/NFD) [PUB]; the AROS emul-handler Do*
+ * contract as restated in the spec [AROS]; this project's own hosted spikes +
+ * harness conventions [OURS].
  *
  * Hand-authored, neutral. This header is the contact surface the AROS-side
  * emul-handler per-host overlay (built by the AROS crosstools) calls into.

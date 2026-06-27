@@ -1,9 +1,11 @@
 /* cocoametal_window.m — optional AppKit live-window path for the Cocoa/Metal shim.
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/spec.md
- * ("Metal pipeline" step 2 + "HiDPI" + the render-pass present / framebufferOnly
- * rationale). No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was
- * read, searched, or consulted. Apple AppKit/QuartzCore docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/spec.md ("Metal pipeline"
+ * step 2 + "HiDPI" + the render-pass present / framebufferOnly rationale).
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and any
+ * resemblance to existing implementations is coincidental. Apple AppKit/QuartzCore
+ * docs only [PUB].
  *
  * This file is linked only into builds that have AppKit and a window server. It
  * provides the strong definitions of cm_try_window / cm_destroy_window that

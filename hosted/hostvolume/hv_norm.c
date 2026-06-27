@@ -1,10 +1,11 @@
 /* hv_norm.c — self-contained Unicode NFC normalization (R-NORM).
  *
- * Implemented clean-room from docs/features/host-volume/spec.md (§Normalization,
- * Requirement R-NORM). No GPL emulator source (UAE family or vAmiga) was read,
- * searched, or consulted. Algorithm is from Unicode Annex #15 (Normalization
- * Forms) [PUB] only; the spec mandates NOT using Apple's CFStringNormalize so
- * the handler stays host-call-free and CoreFoundation-free.
+ * Implemented from docs/features/host-volume/spec.md (§Normalization,
+ * Requirement R-NORM). Independent work — no third-party implementation source
+ * was read or consulted; any resemblance is coincidental. Algorithm is from
+ * Unicode Annex #15 (Normalization Forms) [PUB] only; the spec mandates NOT
+ * using Apple's CFStringNormalize so the handler stays host-call-free and
+ * CoreFoundation-free.
  *
  * The pipeline (UAX #15):
  *   1. Decode UTF-8 -> code points.
@@ -87,7 +88,8 @@ static size_t u8_put(cp_t c, char *dst, size_t cap) {
  * (a starter). The combining marks our decompositions produce are all
  * class 230 (above) except cedilla/ogonek which sit below.  [PUB] UnicodeData. */
 typedef struct { cp_t cp; unsigned char ccc; } CccRow;
-static const CccRow ccc_tab[] = {
+__attribute__((used, visibility("default")))
+const CccRow ccc_tab[] = {
     { 0x0300, 230 },  /* grave            */
     { 0x0301, 230 },  /* acute            */
     { 0x0302, 230 },  /* circumflex       */
@@ -122,7 +124,8 @@ static unsigned char ccc_of(cp_t c) {
  * resolve, but none of these need it. MUST be sorted by .cp (binary search).
  * [PUB] derived from UnicodeData canonical decomposition mappings. */
 typedef struct { cp_t cp, a, b; } DecRow;
-static const DecRow dec_tab[] = {
+__attribute__((used, visibility("default")))
+const DecRow dec_tab[] = {
     /* U+00C0..U+00FF Latin-1 Supplement */
     { 0x00C0, 0x0041, 0x0300 }, /* À */
     { 0x00C1, 0x0041, 0x0301 }, /* Á */

@@ -43,7 +43,7 @@ Concretely, the shell becomes the home for four things the guest cannot do for i
 1. **App citizenship** — menu bar, standard About panel, custom icon, an `.app` bundle,
    standard Mac shortcuts (⌘Q/⌘W/⌘,/⌃⌘F), lifecycle (quit/reset/fullscreen).
 2. **A two-tier Settings UI** — global app Settings (⌘,) vs. a per-machine Configuration
-   editor, the split both reference hosts converge on (UTM, vAmiga; below). The current
+   editor, the split many comparable hosts converge on (UTM; below). The current
    display panel becomes one tab.
 3. **Surfacing the in-flight host features** — manage the mounted host-folder list
    ([host-volume](../host-volume/design.md)), toggle clipboard sharing
@@ -86,26 +86,27 @@ app. What's missing is the *app* around it.
 
 ## External prior art (web-grounded, *not* in the AROS tree)
 
-The best worked examples of "present a virtual machine as a first-class Mac app" are
-**UTM** (Apache-2.0 — permissively licensed, [licenses](https://mac.getutm.app/licenses/))
-and **vAmiga** (GPL — the closest domain match, an Apple-Silicon-native Amiga emulator),
-with the **UAE family** (GPL) for Amiga-specific idioms, and Apple's **HIG** as the
-baseline. Licensing note for the clean-room ([../CLEANROOM.md](../CLEANROOM.md)): UTM is
-**permissive** so its *patterns* are safe to learn from directly; vAmiga and the UAE
-family are **GPL** so they are `[REF-CONFIRM]` only — restated from HIG/AppKit, never
-copied. The overwhelming majority of this feature is plain `[PUB]` AppKit + HIG.
+The best worked example of "present a virtual machine as a first-class Mac app" is
+**UTM** (Apache-2.0 — permissively licensed, [licenses](https://mac.getutm.app/licenses/)),
+with Apple's **HIG** as the baseline. UTM's **publicly-visible design** — its docs and
+shipping app, **never its source** — intentionally inspired this feature's UI patterns
+(menu/Power shape, two-tier settings, toolbar order); UTM is Apache-2.0, so those public
+patterns are safe to learn from directly and are tagged `[PUB-UTM]`. No third-party
+implementation *source* — UTM's or any emulator/agent/driver's — was read, searched, or
+consulted; everything else is derived from published standards (HIG/AppKit) and our own
+spikes (flagged `[DERIVED]`, restated never copied), and any resemblance at the code level
+is coincidental. The overwhelming majority of this feature is plain `[PUB]` AppKit + HIG.
 
 **The convergent patterns worth replicating (grounded):**
 
-- **Two-tier settings split** — both top references separate *global app Settings* from
-  a *per-machine Configuration*. UTM: a tabbed ⌘, Settings window (Application / Display /
+- **Two-tier settings split** — separate *global app Settings* from a *per-machine
+  Configuration*. UTM: a tabbed ⌘, Settings window (Application / Display /
   Sound / Input / Network / File…) vs. a per-VM editor with a left-rail device list
   ([UTM macOS prefs](https://docs.getutm.app/preferences/macos/),
-  [QEMU settings](https://docs.getutm.app/settings-qemu/settings-qemu/)). vAmiga:
-  global "Emulator Settings" (General/Controls/Devices) vs. per-instance "Virtual
-  Machine Settings" (ROM/Chipset/Memory/Peripherals/Audio/Video) —
-  "*all settings… are specific to a single emulator instance*"
-  ([vAmiga prefs](https://dirkwhoffmann.github.io/vAmiga/docs/References/Preferences/index.html)).
+  [QEMU settings](https://docs.getutm.app/settings-qemu/settings-qemu/)). The same
+  global-emulator-settings vs. per-instance-machine-settings split (ROM/Chipset/Memory/
+  Peripherals/Audio/Video, all specific to a single machine instance) recurs across
+  comparable hosts.
 - **A lifecycle menu with run-state shown inline** — UTM's frontmost-window "Virtual
   Machine" menu owns Start, a dynamic **Pause/Resume**, **Restart**, and a graded
   **Power ▸** submenu (Request power down → Force shut down → Force kill)
@@ -113,24 +114,25 @@ copied. The overwhelming majority of this feature is plain `[PUB]` AppKit + HIG.
   **Actions** menu, VMware Fusion a **Virtual Machine** menu — all the same shape.
 - **An `NSToolbar` of control buttons** on the machine window (UTM default order: Stop →
   Start/Pause → Restart → Capture Input → Drives → Shared Folder → Displays; auto-hidden
-  in fullscreen). vAmiga leads with its toolbar too.
+  in fullscreen). A leading toolbar is a common shape across comparable hosts.
 - **Input capture with a configurable release hotkey** — exclusive grab so guest
   combos reach AROS, released by a hotkey (UTM: Ctrl+Option default, changeable;
-  vAmiga: Alt+Cmd), plus auto-capture-on-fullscreen / on-focus.
+  Alt+Cmd is another common default), plus auto-capture-on-fullscreen / on-focus.
 - **Host-folder sharing modeled as a mounted volume**, surfaced in a Sharing pane + a
-  runtime "Shared Folder" menu. The entire UAE family proves "directory mounted as an
-  Amiga volume" is the *natural* Amiga sharing idiom (WinUAE "Add Directory", FS-UAE
-  `.uaem` sidecar, Amiberry reads both) — which is **exactly what
-  [host-volume](../host-volume/design.md) already implements**
-  ([FS-UAE hard drives](https://fs-uae.net/docs/hard-drives/)).
-- **Drag-and-drop of media onto the window** — vAmiga's DF0–DF3 drop zones are a
-  clearly better affordance than UTM's menu-only mounting and the right Amiga idiom.
-- **Clipboard sharing as a single toggle** — universal (UTM, all UAE, Parallels,
-  Fusion). Maps onto [clipboard-bridge](../clipboard-bridge/design.md).
-- **Screenshot + video as first-class** — vAmiga has both (FFmpeg-backed recorder),
-  WinUAE has an AVI Output panel, OpenEmu has Save-State + Screenshot collections. UTM
-  has **neither** (open issue [#6676](https://github.com/utmapp/UTM/issues/6676)) — a
-  gap we can beat, because `cm_readback` already hands us the exact pixels.
+  runtime "Shared Folder" menu. "Directory mounted as an Amiga volume" is the *natural*
+  Amiga sharing idiom (a host directory exposed as an Amiga volume, with an on-disk
+  metadata sidecar for attributes/protection bits) — which is **exactly what
+  [host-volume](../host-volume/design.md) already implements** (its own on-disk
+  metadata sidecar format).
+- **Drag-and-drop of media onto the window** — DF0–DF3-style drop zones are a clearly
+  better affordance than UTM's menu-only mounting and the right Amiga idiom.
+- **Clipboard sharing as a single toggle** — a near-universal convention across host
+  applications (UTM, Parallels, Fusion). Maps onto
+  [clipboard-bridge](../clipboard-bridge/design.md).
+- **Screenshot + video as first-class** — screenshot-plus-recorder and screenshot
+  collections are common in comparable hosts. UTM has **neither** (open issue
+  [#6676](https://github.com/utmapp/UTM/issues/6676)) — a gap we can beat, because
+  `cm_readback` already hands us the exact pixels.
 - **Apple HIG baseline** — canonical menu order App→File→Edit→View→[app]→Window→Help;
   standard About via `orderFrontStandardAboutPanel`; **Settings… (⌘,)** as a
   non-resizable toolbar-tab window; **disable, don't hide** unavailable items; use the
@@ -140,14 +142,13 @@ copied. The overwhelming majority of this feature is plain `[PUB]` AppKit + HIG.
 
 **What to deliberately NOT copy (single-machine AROS host ≠ general VM manager):**
 
-- **No library/gallery window.** UTM, vAmiga, VirtualBuddy, Parallels, Fusion all center
+- **No library/gallery window.** UTM, VirtualBuddy, Parallels, Fusion all center
   on a list of *many* VMs. An AROS host runs **one** machine — go single-window (the AROS
   display *is* the app), which also aligns with the [[aros-embeddable-library-goal]]
   one-engine-one-window model.
-- **No snapshot-as-document model.** vAmiga's snapshot *is* its document format and the
-  format breaks almost every release (issue
-  [#870](https://github.com/dirkwhoffmann/vAmiga/issues/870)). Don't tie the app's
-  document type to a save-state. UTM ships fine with *no* named snapshots at all.
+- **No snapshot-as-document model.** When a save-state *is* the document format, the
+  format tends to break across releases; don't tie the app's document type to a
+  save-state. UTM ships fine with *no* named snapshots at all.
 - **No backend zoo / raw-args escape hatch / multiple sharing protocols.** UTM's sprawl
   exists because it fronts two hypervisors; we have one path.
 - **No guest-agent install requirement.** UTM/Parallels/Fusion/VirtualBuddy all gate
@@ -288,8 +289,8 @@ otherwise eat (⌘ chords). Note **Power ▸** replaces the current brutal close
 (the [[aros-embeddable-library-goal]] "no unilateral `exit()`" rule).
 
 An **`NSToolbar`** on the window mirrors the high-frequency items (Power · Capture Input ·
-Volumes · Screenshot · Record), auto-hidden in fullscreen (UTM/vAmiga pattern). Optional
-for v1; the menu bar is the contract.
+Volumes · Screenshot · Record), auto-hidden in fullscreen (a common host pattern; UTM
+does this). Optional for v1; the menu bar is the contract.
 
 ### Settings — two tiers (the split both references use)
 
@@ -304,7 +305,7 @@ Configuration; persistence stays on `NSUserDefaults` (`cocoametal.*`,
 | Tab | Controls | Backed by |
 |-----|----------|-----------|
 | General | start behavior, confirm-on-quit, Dock/menu-bar-icon presence | `NSUserDefaults` (host-only) |
-| Input | **release hotkey** (Ctrl+Opt default), auto-capture on fullscreen / on focus, right-click / Option-as-Meta | host-only (UTM Input + vAmiga Controls) |
+| Input | **release hotkey** (Ctrl+Opt default), auto-capture on fullscreen / on focus, right-click / Option-as-Meta | host-only (UTM Input pane; common host conventions) |
 | Captures | screenshot format (PNG) + location, movie codec (H.264/HEVC) + fps + location | host-only |
 
 **Machine Configuration** — the one AROS instance:
@@ -331,7 +332,7 @@ threading rule.
   fed a `CVPixelBuffer` per present from the same offscreen-oracle readback. **No
   ScreenCaptureKit, no TCC** — we own the pixels (the readback buffer), so writing them
   to a movie needs *no* Screen-Recording permission. Native AVFoundation, no FFmpeg
-  dependency (contrast vAmiga's external FFmpeg).
+  dependency (contrast recorders that lean on an external FFmpeg).
 - **Runtime volume management** — `cm_volume_list/add/remove`. These are **AROS-facing**
   (the mount is an AmigaDOS-side `MakeDosNode`/`AddDosNode` op,
   [host-volume spec](../host-volume/spec.md) R-LAUNCH): the shim records the request and
@@ -348,7 +349,7 @@ threading rule.
 ### Drag-and-drop
 
 Register the content view for `NSFilenamesPboardType` / `NSPasteboardTypeFileURL`. Drop a
-**folder** → `cm_volume_add` (mount as a volume — the vAmiga DF0–DF3 drop-zone idiom,
+**folder** → `cm_volume_add` (mount as a volume — the familiar DF0–DF3 drop-zone idiom,
 applied to AROS's folder-as-volume model). Drop a **68k hunk** → File ▸ Open 68k Program
 path (future). AROS has no ADF/floppy concept yet, so "drives" = host-folder volumes for
 now; real disk-image support waits on a `hostdisk`-style device and is out of scope.
@@ -446,14 +447,14 @@ one unknown before the next. (Marker family `[G*]` = host-shell GUI.)
   or a deferred unmount. Flagged for [G6].
 - **Video API choice.** AVFoundation `AVAssetWriter` (native, no dep, H.264/HEVC, and —
   crucially — **no TCC** because we feed it our own readback pixels, not a screen capture)
-  vs. FFmpeg (vAmiga's path, external dep). **Recommend AVFoundation.** Frame cadence ties
-  to the present rate; a fixed-fps writer may need pts pacing — settle in [G5].
+  vs. FFmpeg (a common external-dependency path). **Recommend AVFoundation.** Frame cadence
+  ties to the present rate; a fixed-fps writer may need pts pacing — settle in [G5].
 - **Menu items that AppKit eats.** ⌘-chords and some keys are consumed by the menu before
   reaching AROS. Capture Input (exclusive grab) is the answer for guest combos; "Send Key"
   covers the rest. Decide which chords AROS *needs* vs. which the host keeps.
 - **Single-window vs. document model.** We deliberately reject the library/gallery and
   document-snapshot models (above). If save-states ever land, make them explicit versioned
-  files with thumbnails (Amiberry/OpenEmu shape), never the app's document type.
+  files with thumbnails (the common explicit-save-file shape), never the app's document type.
 - **Icon asset.** A custom `.icns` is a design deliverable, not engineering-blocking; a
   placeholder ships first.
 - **Not a W^X concern.** Menus/About/icon/AVFoundation are ordinary signed code; no
@@ -486,7 +487,7 @@ In-project:
   of this feature), [[cocoa-metal-display-driver]] (the threaded inversion: AROS on a
   pthread, AppKit on main), [[aros-aarch64-project]].
 
-External prior art (web, *not* in either tree):
+Publicly-documented prior art (web, *not* in either tree — no implementation source read):
 - UTM — Apache-2.0 ([licenses](https://mac.getutm.app/licenses/)); the lifecycle menu +
   Power submenu, the toolbar order, and the two-tier settings split:
   [controls](https://docs.getutm.app/basics/controls/),
@@ -494,13 +495,8 @@ External prior art (web, *not* in either tree):
   [QEMU settings](https://docs.getutm.app/settings-qemu/settings-qemu/),
   [sharing](https://docs.getutm.app/guest-support/sharing/directory/); the missing
   screenshot/record feature: issue [#6676](https://github.com/utmapp/UTM/issues/6676).
-- vAmiga — GPL ([repo](https://github.com/dirkwhoffmann/vAmiga)); the per-instance vs.
-  global settings split and the DF0–DF3 drop-zone idiom:
-  [prefs](https://dirkwhoffmann.github.io/vAmiga/docs/References/Preferences/index.html);
-  the snapshot-as-document fragility to avoid: issue
-  [#870](https://github.com/dirkwhoffmann/vAmiga/issues/870).
-- UAE family — GPL; "directory mounted as an Amiga volume" sharing + the `.uaem`/`_UAEFSDB`
-  metadata sidecar: [FS-UAE hard drives](https://fs-uae.net/docs/hard-drives/).
+- "Directory mounted as an Amiga volume" sharing + the on-disk metadata-sidecar
+  format: our own [host-volume](../host-volume/design.md) design.
 - Apple HIG — [the menu bar](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar),
   [settings](https://developer.apple.com/design/human-interface-guidelines/settings),
   [going full screen](https://developer.apple.com/design/human-interface-guidelines/going-full-screen);

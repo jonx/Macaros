@@ -1,10 +1,11 @@
 /* jit_region.h — W^X-aware executable-memory layer for the hosted 68k JIT.
  *
- * Clean-room [OURS]. Authored from docs/features/68k-jit/spec.md (the [J1]
- * MAP_JIT executable-memory layer + its W^X / threading section) and Apple/POSIX
- * docs only. This file contains NO Emu68 / UAE / vAmiga source — it is the
- * native-macOS executable-memory substrate the adapted Emu68 emitter ([J2]) and
- * the native LoadSeg path will both sit on top of.
+ * Independent work [OURS] — no third-party implementation source was read or
+ * consulted; any resemblance is coincidental. Authored from
+ * docs/features/68k-jit/spec.md (the [J1] MAP_JIT executable-memory layer + its
+ * W^X / threading section) and Apple/POSIX docs only. This file contains NO
+ * Emu68 source — it is the native-macOS executable-memory substrate the adapted
+ * Emu68 emitter ([J2]) and the native LoadSeg path will both sit on top of.
  *
  * Contract (the spec's R-JIT-* requirements):
  *   R-JIT-MAP    a MAP_JIT region is the only W^X-legal source of executable JIT

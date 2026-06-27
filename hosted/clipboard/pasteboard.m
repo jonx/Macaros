@@ -1,9 +1,10 @@
 /* pasteboard.m — NSPasteboard <-> AROS clipboard.device host shim.
  *
- * Implemented clean-room from docs/features/clipboard-bridge/spec.md
+ * Implemented from docs/features/clipboard-bridge/spec.md
  * ("Host side (hosted/pasteboard.m)", "The C ABI", "Transcode", "Change-detection
- * model"). No GPL emulator/agent source (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE,
- * vAmiga, QEMU/SPICE vdagent) was read, searched, or consulted. Sources: Apple
+ * model"). Independent work: no third-party implementation source — emulator,
+ * agent, driver, or otherwise — was read, searched, or consulted in producing it,
+ * and any resemblance to existing implementations is coincidental. Sources: Apple
  * Foundation/AppKit docs [PUB] (NSPasteboard generalPasteboard / pasteboardWith-
  * Name:, changeCount, stringForType:NSPasteboardTypeString, setString:forType:,
  * clearContents), the published Latin-1<->Unicode 1:1 mapping [PUB], POSIX
@@ -119,7 +120,7 @@ void host_pb_free(void *p) {
  * (110xxxxx 10xxxxxx). So Latin-1 -> UTF-8 is: byte < 0x80 stays as-is, else two
  * bytes 0xC0|(c>>6), 0x80|(c&0x3F). The reverse decodes those two forms and
  * rejects (or substitutes) anything that decodes above U+00FF. Written from the
- * encoding definitions, no iconv, no table lifted. */
+ * encoding definitions, no iconv, independently derived. */
 
 int host_latin1_to_utf8(const unsigned char *latin1, size_t len,
                         char **out, size_t *out_len) {

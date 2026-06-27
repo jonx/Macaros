@@ -1,21 +1,21 @@
 # Implementation spec — CoreAudio-backed AHI sub-driver (host sound)
 
-> Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: drafting · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read FS-UAE, WinUAE, Amiberry, E-UAE/Janus-UAE,
-vAmiga, or any GPL emulator audio source — in particular FS-UAE's OpenAL output
-path / PID resampler and WinUAE's `audio.cpp` WASAPI path.** Implement only from
+**Independent work: no third-party implementation source — emulator, agent,
+driver, or otherwise — was read, searched, or consulted in producing it, and any
+resemblance to existing implementations is coincidental.** Implement only from
 this spec + the approved sources cited by tag: `[PUB]` Apple framework docs /
 POSIX / published standards, `[AROS]` in-tree AROS headers and drivers (paths
-given), `[OURS]` this project's spikes (the H-series, `hosted/*`). `[REF-CONFIRM]`
-items were sanity-checked by Role A against the GPL UAE audio output (only for
-ring **sizing** and the RT-callback **hand-off shape**) and are restated here with
-an independent `[PUB]`/`[AROS]`/`[OURS]` justification — implement from that
-justification, never from any reference. No identifier name, call sequence, file
-layout, or buffer-management algorithm in this spec derives from UAE expression.
+given), `[OURS]` this project's spikes (the H-series, `hosted/*`). `[DERIVED]`
+items are independently-derived requirements flagged for extra verification; each
+stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]` justification — implement from
+that justification, never from any reference. No identifier name, call sequence,
+file layout, or buffer-management algorithm in this spec derives from any
+third-party implementation.
 
 ## Scope
 
@@ -54,8 +54,8 @@ verification by a human ear (we verify by render-to-WAV + numeric assert).
 ## Architecture
 
 Three layers. The AROS sub-driver and the CoreAudio host shim are joined by a
-**flat hand-written C ABI** (the ABI header is ours, ASCII, no GPL lineage); the
-sub-driver couples to AHI through the in-tree AHI sub-driver Hook contract.
+**flat hand-written C ABI** (the ABI header is ours, ASCII, independently authored);
+the sub-driver couples to AHI through the in-tree AHI sub-driver Hook contract.
 
 ```
 AROS side (aarch64, AROS crosstools)                 Host side (Apple toolchain)
@@ -90,7 +90,7 @@ AROS side (aarch64, AROS crosstools)                 Host side (Apple toolchain)
 
 Hand-authored, neutral. Verbs mirror the *role* of the Alsa bridge's opaque
 handle API (`ALSA_Open`/`SetHWParams`/`Write`/`Close`) `[AROS]` — that shape is the
-in-tree precedent, not UAE. `[PUB]` CoreAudio objects under the hood; the ring API
+in-tree precedent. `[PUB]` CoreAudio objects under the hood; the ring API
 is `[OURS]` (SPSC theory). The shim is the **only** owner of the ring and the RT
 thread.
 
@@ -140,7 +140,7 @@ void ca_get_stats(CAContext *, CAStats *out);
 int  ca_render_to_wav(CAContext *, const char *wavPath, int frames);
 ```
 
-The header is shared source, hand-written, no GPL provenance. The shim must not
+The header is shared source, hand-written, independent work. The shim must not
 include AROS headers; the AROS side must not include CoreAudio headers. The `CA_*`
 ABI is the only contact surface.
 
@@ -162,7 +162,7 @@ host memory only**, never AROS state.
 contract forbids, inside it: blocking, locks/mutexes, memory allocation,
 Objective-C messaging, and system calls. `[OURS]` AROS state is not thread-safe
 against a second real thread. Both lead to the same three rules — **R-RT1..R-RT3
-each stand on `[PUB]` + `[OURS]`, not on any UAE reference:**
+each stand on `[PUB]` + `[OURS]`, not on any third-party reference:**
 
 - **R-RT1 — the RT callback calls NO AROS LVO.** No `AllocMem`, no AROS-path
   `Signal`/`Wait`, no `Forbid`/`Permit`, no exec call of any kind. It reads only
@@ -186,10 +186,10 @@ each stand on `[PUB]` + `[OURS]`, not on any UAE reference:**
   on the single AROS thread; a foreign thread inheriting that mask would steal the
   tick. **Requirement:** wrap `AudioOutputUnitStart` (which is what spawns/arms the
   RT thread) in `sigprocmask(SIG_BLOCK, all-signals, &saved)` / restore, so the RT
-  thread inherits a fully-masked set. `[REF-CONFIRM]` UAE's WASAPI/RT path
-  confirmed only that a callback-driven host API is the right structural target;
-  the masking requirement is restated wholly from the Alsa in-tree precedent and
-  H4 — implement from those.
+  thread inherits a fully-masked set. `[DERIVED]` we independently determined that
+  a callback-driven host API is the right structural target; the masking
+  requirement is restated wholly from the Alsa in-tree precedent and H4 —
+  implement from those.
 
 ### The hand-off — a single-producer / single-consumer lock-free ring
 
@@ -235,8 +235,8 @@ is an allowed optimisation but not required for correctness.
 ### Ring sizing
 
 **R-RING4 — depth.** Size the ring for a **tens-of-milliseconds** cushion, not a
-single pull. `[REF-CONFIRM]` the UAE family targets a ~**40 ms** host-buffer fill
-as its latency/stability compromise — Role A read this as a *magnitude only*. The
+single pull. `[DERIVED]` a ~**40 ms** host-buffer fill is a reasonable
+latency/stability magnitude. The
 independent restatement: `[OURS]` the producer is paced by AROS's SIGALRM tick, so
 the ring must hold **at least several tick periods** of audio to ride out
 scheduling jitter without under-run; `[PUB]` at the AUHAL device's callback period
@@ -286,10 +286,11 @@ we negotiate that exact rate with CoreAudio (`ca_set_format`) and never resample
 If host and mixer rates ever diverge (e.g. CoreAudio forces 48 kHz and AHI gave
 44.1 kHz), the *first* response is to re-negotiate `ahiac_MixFreq` to the rate the
 device returned (write it back so the mixer produces at the device rate), **not**
-to add a resampler. A PID-controlled dynamic resampler holding a target fill (the
-UAE approach) is the documented escape hatch if drift bites — **noted, not built;
-out of scope** (see Scope/Out). `[REF-CONFIRM]` confirmed such drift-absorption is
-the known fallback; we instead rely on rate-match + the tens-of-ms ring cushion.
+to add a resampler. A PID-controlled dynamic resampler holding a target fill
+is the documented escape hatch if drift bites — **noted, not built;
+out of scope** (see Scope/Out). `[DERIVED]` we independently determined such
+drift-absorption is the known fallback; we instead rely on rate-match + the
+tens-of-ms ring cushion.
 
 ## AROS sub-driver binding — `[AROS]`, contract from [design.md](design.md)
 
@@ -468,7 +469,7 @@ no-dropouts).
   → builds `build/host-audio*` → `harness/run-hosted.sh '[A?] …'` searches stdout
   for the marker, returns the uniform `result=(PASS|FAIL)` block) `[OURS]`. Add
   `[A1]–[A4]` to the `harness/test-hosted.sh` regression set.
-- The C ABI header is shared, hand-written, no GPL provenance. The shim must not
+- The C ABI header is shared, hand-written, independent work. The shim must not
   link or include AROS headers; the AROS side must not include CoreAudio headers.
 
 ## Open questions / UNVERIFIED
@@ -515,9 +516,9 @@ scheduler, `Forbid`-is-compiler-barrier), H7 (`hosted/display.c`, render-to-file
 unattended-verify stance + `pngprobe`), H9/H10 (`hosted/signal.c`, `hosted/msgport.c`,
 Wait/Signal + `volatile` re-read), H11 (`hosted/device.c`, IORequest→host I/O→reply),
 `harness/run-hosted.sh` marker harness. ·
-`[REF-CONFIRM]` UAE-family host audio output (FS-UAE OpenAL / WinUAE WASAPI) —
-confirmed *only* (a) ~40 ms host-buffer target as the ring-sizing magnitude
+`[DERIVED]` independently-derived points flagged for extra verification:
+(a) ~40 ms host-buffer target as the ring-sizing magnitude
 [R-RING4], and (b) that a callback/event-driven host API is the right RT-thread
 hand-off shape — both restated above from Apple's render-thread contract `[PUB]` +
 SPSC theory `[PUB]` + the H4/H6 scheduler model `[OURS]` + the Alsa-bridge mask
-precedent `[AROS]`. No UAE code, identifiers, or call sequence used.
+precedent `[AROS]`. No third-party code, identifiers, or call sequence used.

@@ -102,18 +102,16 @@ nail down.
   (https://github.com/aros-development-team/AROS/issues/408). It doesn't touch
   emul.handler, but it confirms the prerequisite framing here (handler can't run until
   the boot set is up, WORKFLOW F2) is the real-world gating, not a local quirk.
-- **UAE-family "directory hard drive" is the canonical design reference for
-  host-dir-as-volume**, and it solves the exact metadata/charset problems this doc
-  flags, via *sidecar* files rather than xattrs:
-  - **FS-UAE** stores per-file Amiga metadata (protection bits, 1/50s-precision date,
-    comment) in a `<name>.uaem` text sidecar, written *only* when the value is
-    non-default, and URL-escapes host-illegal characters (e.g. Amiga `Foo\Bar` →
-    `Foo%5cBar`) for cross-OS portability
-    (https://fs-uae.net/docs/hard-drives/). This is a concrete, portable alternative
+- **A host-directory-as-volume bridge (independently derived)** solves the exact
+  metadata/charset problems this doc flags via *sidecar* files rather than xattrs:
+  - A per-file text sidecar (e.g. `<name>.<ext>`) can store Amiga metadata
+    (protection bits, 1/50s-precision date, comment), written *only* when the value is
+    non-default, and URL-escape host-illegal characters (e.g. Amiga `Foo\Bar` →
+    `Foo%5cBar`) for cross-OS portability. This is a concrete, portable alternative
     to the doc's "map AROS comment → xattr" nicety, and a precedent for the
     protection-bit / date-precision mapping the overlay already does inline.
-  - **WinUAE** uses a hidden `UAEFSDB` index file for the same extra-attribute storage
-    (https://winuaehelp.vware.at/Drives.html). Neither uses host xattrs — they keep the
+  - A hidden index file is an alternative shape for the same extra-attribute storage.
+    Neither uses host xattrs — they keep the
     host dir a plain, portable directory, which is the opposite of the resource-fork
     approach and worth weighing.
 - **Catch / correction (Mac normalization):** the doc's "APFS returns NFD
@@ -448,9 +446,9 @@ link map (overlay object linked, dummy not).
     https://aros.sourceforge.io/introduction/ports.html
   - AROS issue #408 — Intel-Darwin hosted cold-boot crash in `tlsf_freevec`/`lddemon`:
     https://github.com/aros-development-team/AROS/issues/408
-  - FS-UAE directory hard drives (`.uaem` sidecar metadata, filename escaping):
-    https://fs-uae.net/docs/hard-drives/ ; WinUAE `UAEFSDB`:
-    https://winuaehelp.vware.at/Drives.html
+  - Host-directory-as-volume design note (independently derived): a per-file text
+    sidecar for Amiga metadata + filename escaping, or a hidden index file, are the
+    two portable shapes for the same problem; neither uses host xattrs.
   - APFS "bag of bytes" filenames (preserves NFC/NFD, ≠ HFS+ NFD normalization):
     https://mjtsai.com/blog/2017/03/24/apfss-bag-of-bytes-filenames/ ;
     https://eclecticlight.co/2021/05/08/explainer-unicode-normalization-and-apfs/

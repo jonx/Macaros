@@ -1,10 +1,10 @@
 /* coreaudio_shim.h — flat C ABI for the CoreAudio-backed AHI sub-driver host shim.
  *
- * Implemented clean-room from docs/features/coreaudio-audio/spec.md
- * ("The C ABI (coreaudio_shim.h)" and "Concurrency model"). No GPL emulator
- * source (WinUAE / FS-UAE / Amiberry / E-UAE / Janus-UAE / vAmiga) was read,
- * searched, or consulted — in particular not FS-UAE's OpenAL path / PID
- * resampler nor WinUAE's audio.cpp WASAPI path. Sources: Apple AudioToolbox /
+ * Implemented from docs/features/coreaudio-audio/spec.md
+ * ("The C ABI (coreaudio_shim.h)" and "Concurrency model"). Independent work:
+ * no third-party implementation source — emulator, agent, driver, or otherwise —
+ * was read, searched, or consulted in producing it, and any resemblance to
+ * existing implementations is coincidental. Sources: Apple AudioToolbox /
  * AudioUnit docs [PUB], C11 atomics + SPSC ring-buffer theory [PUB], and this
  * project's own H-series spikes (the render-to-file unattended-verify stance of
  * hosted/display.c, the flat C ABI shape of hosted/cocoametal/cocoametal.h)

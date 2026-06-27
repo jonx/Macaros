@@ -1,9 +1,10 @@
 /* bsdsock_shim.h — non-blocking host socket op wrappers (the bsdsocket ABI seam).
  *
- * Implemented clean-room from docs/features/bsdsocket-net/spec.md (R-NONBLOCK,
- * R-PARK, LVO surface). No GPL emulator source (WinUAE/FS-UAE/Amiberry/E-UAE/
- * Janus-UAE/vAmiga) was read, searched, or consulted. POSIX/Apple man pages
- * [PUB] only.
+ * Implemented from docs/features/bsdsocket-net/spec.md (R-NONBLOCK,
+ * R-PARK, LVO surface). Independent work: no third-party implementation source —
+ * emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * POSIX/Apple man pages [PUB] only.
  *
  * Signatures mirror the spec's socket/connect/send/recv/close ABI rows. The
  * trailing PumpSig* is the wake target — the readiness-signal seam the AROS

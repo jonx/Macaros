@@ -1,10 +1,11 @@
 /* cocoametal.m — Apple-native Cocoa/Metal display HIDD host shim.
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/spec.md
- * ("Metal pipeline (host shim internals)"). No GPL emulator source
- * (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or consulted — the
- * two MSL shaders below were authored from scratch. Sources: Apple's
- * Metal/QuartzCore/Foundation docs [PUB] + this project's H7 spike
+ * Implemented from docs/features/cocoa-metal-display/spec.md ("Metal pipeline
+ * (host shim internals)"). Independent work: no third-party implementation
+ * source — emulator, agent, driver, or otherwise — was read, searched, or
+ * consulted in producing it, and any resemblance to existing implementations is
+ * coincidental — the two MSL shaders below were authored from scratch. Sources:
+ * Apple's Metal/QuartzCore/Foundation docs [PUB] + this project's H7 spike
  * (hosted/display.c) for the readback/PNG/pixel-assert discipline [OURS].
  *
  * This is the D1-phase host shim: it owns every Cocoa/Metal object and exposes

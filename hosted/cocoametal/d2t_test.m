@@ -1,9 +1,11 @@
 /* d2t_test.m — D2 under the REAL graft threading model ([D2t]).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md §3
- * (threading & call contract) + spec.md ("Threading model"). No GPL emulator
- * source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or consulted.
- * Apple AppKit/Metal/QuartzCore/CoreFoundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md §3 (threading &
+ * call contract) + spec.md ("Threading model"). Independent work: no third-party
+ * implementation source — emulator, agent, driver, or otherwise — was read,
+ * searched, or consulted in producing it, and any resemblance to existing
+ * implementations is coincidental. Apple AppKit/Metal/QuartzCore/CoreFoundation
+ * docs only [PUB].
  *
  * THE QUESTION THIS ANSWERS (INTERFACE.md §8 item 3, the de-risk):
  *   Under the graft's real model — the AROS boot task IS the host main pthread

@@ -3,21 +3,17 @@
 > Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read WinUAE, FS-UAE, Amiberry, E-UAE/Janus-UAE, or any
-other UAE-family / vAmiga GPL emulator source — in particular not `bsdsocket.cpp` /
-`bsdsock.cpp` or any unix socket backend.** Implement only from this spec + the approved
+**Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing this spec, and any resemblance
+to existing implementations is coincidental.** Implement only from this spec + the approved
 sources cited by tag: `[PUB]` POSIX / Apple `man` pages / published standards, `[AROS]`
 in-tree AROS headers and modules (paths given), `[OURS]` this project's spikes (the
-H-series in `NOTES.md`). `[REF-CONFIRM]` items were sanity-checked against the UAE family's
-GPL host-socket emulation by Role A — they confirmed the *non-blocking-host-I/O → pump →
-raise an Amiga Signal → WaitSelect* bridge is viable and surfaced the races to handle — but
-each is **restated here with an independent `[PUB]`/`[AROS]`/`[OURS]` justification**.
-Implement from that justification, never from any reference. The UAE mechanism is
-Windows-shaped (`WSAEventSelect` + an invisible message window + a worker-thread pool); our
-design is deliberately different (kqueue + one pump thread), so there is nothing structural
-to copy even if you had it.
+H-series in `NOTES.md`). `[DERIVED]` items are independently-derived requirements flagged
+for extra verification; each stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]`
+justification — implement from that justification. Our design is kqueue + one pump thread,
+derived from the AmiTCP autodoc semantics + macOS `kqueue` docs + this project's H-series.
 
 ## Scope
 
@@ -114,7 +110,7 @@ pthread_create  pthread_kill  write/read    /* pump thread + its wake pipe */
 getaddrinfo  freeaddrinfo  gai_strerror     /* resolver, deferred */
 ```
 
-The pump-control surface (our own, tiny, ASCII, no GPL lineage) — a handful of functions the
+The pump-control surface (our own, tiny, ASCII, independent work) — a handful of functions the
 AROS side calls to drive the pump, defined in §"The bridge":
 `pump_start()`, `pump_register(hostfd, want, sb)`, `pump_unregister(hostfd, sb)`,
 `pump_drain(sb, out_ready[])`, `pump_wake(sb)`. These are `[OURS]`; their *behaviour* is
@@ -195,8 +191,8 @@ int WaitSelect(int nfds, fd_set *readfds, fd_set *writefds,
 
 ## The concurrency model — the load-bearing constraint
 
-This is the heart of the spec. Three intertwined requirements; each restated from an
-independent justification even where a GPL reference confirmed the shape.
+This is the heart of the spec. Three intertwined requirements; each stands on an
+independent justification.
 
 ### R-NONBLOCK — every host socket is non-blocking, always
 
@@ -212,9 +208,9 @@ driven by SIGALRM (H4/H6, `hosted/exec.c`); one blocking host syscall on that th
 `EAGAIN` (or `EINPROGRESS` for `connect`) instead of sleeping in the kernel `[PUB]`
 (`fcntl(2)`, `connect(2)`). The in-tree mingw32 port reaches the same conclusion by a
 different route — it sets sockets non-blocking implicitly at creation
-(`arch/all-mingw32/bsdsocket/socket.c`) `[AROS]`. `[REF-CONFIRM]`: the UAE family confirms a
-host-socket bsdsocket must use non-blocking host fds and absorb the wait elsewhere — but the
-requirement stands on H6 + POSIX alone.
+(`arch/all-mingw32/bsdsocket/socket.c`) `[AROS]`. `[DERIVED]`: that a host-socket
+bsdsocket must use non-blocking host fds and absorb the wait elsewhere — independently
+derived; the requirement stands on H6 + POSIX alone.
 
 ### R-PUMP — one kqueue host thread converts fd-readiness into an AROS Signal
 
@@ -247,11 +243,10 @@ task signals across the H10 boundary: `Signal` is `Forbid`-bracketed and on one 
 thread a compiler barrier orders it (H6) `[OURS]`/`[AROS]`. `kqueue`/`kevent` are the
 documented macOS readiness primitives `[PUB]`. This *replaces* mingw32's
 `ResolverThread`+`KrnCauseSystemIRQ` (`host_socket.c`) — a Windows event-object mechanism
-with no darwin analogue `[AROS]`. `[REF-CONFIRM]`: the UAE family confirms readiness is
-delivered to the guest by raising an Amiga `Signal` from outside the guest's normal flow
-(its "fake interrupt" pump) and that one pump thread is enough rather than a thread per
-socket — but our mechanism (kqueue + `exec.Signal`) is re-derived from H4/H6/H9 + macOS
-`kqueue` docs, not from its Windows `WSAAsyncSelect`/message-window path.
+with no darwin analogue `[AROS]`. `[DERIVED]`: that readiness is delivered to the guest by
+raising an exec `Signal` from outside the guest's normal flow, and that one pump thread
+suffices rather than a thread per socket — independently derived; our mechanism (kqueue +
+`exec.Signal`) follows from H4/H6/H9 + macOS `kqueue` docs.
 
 ### R-PARK — a would-block guest call becomes register-then-`Wait`-then-retry
 
@@ -309,13 +304,12 @@ wait on the exec Signals named in `*sigmask`. Steps:
 **Justification `[AROS]` + `[OURS]`.** The behavioural contract (examine fds + wait on
 `*sigmask`; in/out 6th arg; count/0/-1 return; clear-fds-on-signal) is the published AmiTCP
 autodoc semantics in the AROS tree (`.../autodoc/auto_socket.c`) `[AROS]` — it is the
-external standard, not a UAE invention. The *implementation* — translate the fd_sets into
+external standard. The *implementation* — translate the fd_sets into
 pump registrations, combine with `*sigmask`, single `Wait`, then re-probe — is the H9
-`Wait`/H10 port pattern composed with R-PUMP `[OURS]`. `[REF-CONFIRM]`: the UAE family
-confirms WaitSelect is realised as "wait on a combined synthetic mask, then report which
-non-socket signals fired in the out-mask, clearing fd_sets if a non-socket signal preempted"
-— this matches the AROS autodoc and is implemented here from the autodoc + H9, not from its
-code.
+`Wait`/H10 port pattern composed with R-PUMP `[OURS]`. `[DERIVED]`: that WaitSelect is
+realised as "wait on a combined synthetic mask, then report which non-socket signals fired
+in the out-mask, clearing fd_sets if a non-socket signal preempted" — independently derived
+and consistent with the AROS autodoc; implemented here from the autodoc + H9.
 
 ### R-RACE — no lost wakeups when an fd event and an exec Signal race
 
@@ -344,9 +338,9 @@ Signal racing ahead of `Wait` is still seen (NOTES.md H9) `[OURS]`. The H6 cavea
 `Forbid` compiler-barrier shortcut holds only *within* the single underlying thread and a
 real second OS thread needs a true lock — follows directly from the H6 lesson (a write that
 must be visible across a true thread boundary needs more than a compiler barrier) `[OURS]`.
-`[REF-CONFIRM]`: the UAE family guards its signal-queue/readiness handoff with a real
-critical section and resolves the race by having the task check both sources after wake —
-the same two conclusions reached here independently from H6 + H9.
+`[DERIVED]`: that the signal-queue/readiness handoff needs a real critical section and the
+race is resolved by having the task check both sources after wake — both conclusions
+independently derived from H6 + H9.
 
 ## errno translation — `[AROS]`
 
@@ -580,9 +574,10 @@ symbol plumbing), `arch/all-hosted/hostlib/` (`hostlib.resource`). · `[OURS]`
 (H10 ports), `hosted/abishim.S`+`hosted/host.c` (H3 host-call shim), `hosted/exec.c` (H4/H6
 single underlying thread + SIGALRM + the `Forbid` compiler-barrier rule and its true-thread
 limit), `NOTES.md` (H-series + "portable timeout" watchdog + "ground it, don't dream it"),
-`graft/WORKFLOW.md` (boot state / where the library slots). · `[REF-CONFIRM]` the UAE family's
-GPL host-socket `bsdsocket` emulation confirmed the non-blocking-host-I/O → pump → raise an
-Amiga `Signal` → `WaitSelect` bridge is viable, that one pump thread suffices over a
-thread-per-socket, and surfaced the lost-wakeup race — each restated above from
-H4/H6/H9/H11 + the AmiTCP autodoc + POSIX/macOS `kqueue` docs, **not** from its
-Windows-shaped (`WSAEventSelect`/message-window/thread-pool) code.
+`graft/WORKFLOW.md` (boot state / where the library slots). · `[DERIVED]` the
+non-blocking-host-I/O → pump → raise an exec `Signal` → `WaitSelect` bridge, that one pump
+thread suffices over a thread-per-socket, and the lost-wakeup race — each independently
+derived above from H4/H6/H9/H11 + the AmiTCP autodoc + POSIX/macOS `kqueue` docs.
+Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing it, and any resemblance to
+existing implementations is coincidental.

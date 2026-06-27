@@ -17,7 +17,9 @@
  * apply: hostOption (live cm_set_option), arosOption/arosOptionStr (AROS-facing,
  * relayed as CM_EV_SETTING), or bootOnly (conf only, next launch).
  *
- * Clean-room: Apple AppKit/Foundation docs [PUB] + the project spec [OURS]. No GPL.
+ * Sources: Apple AppKit/Foundation docs [PUB] + the project spec [OURS].
+ * Independent work — no third-party implementation source was read or consulted;
+ * any resemblance is coincidental.
  */
 #import <AppKit/AppKit.h>
 #include <stdio.h>

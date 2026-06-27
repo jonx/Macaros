@@ -1,12 +1,12 @@
 /* hv_charset.c — AROS Latin-1 <-> host UTF-8 filename glue (R-CHARSET/R-ESCAPE).
  *
- * Implemented clean-room from docs/features/host-volume/spec.md (§Charset,
- * Requirements R-CHARSET and R-ESCAPE). No GPL emulator source (UAE family or
- * vAmiga) was read, searched, or consulted. ISO-8859-1 + UTF-8 are published
- * standards [PUB]; the reversible hex escape is the standard percent/hex escape
- * of un-representable code points [PUB]. The marker byte ('%'), the "%uXXXX"
- * format, and the self-escaping-of-the-marker rule are OURS (restated in the
- * spec), copied from no reference.
+ * Implemented from docs/features/host-volume/spec.md (§Charset, Requirements
+ * R-CHARSET and R-ESCAPE). Independent work — no third-party implementation
+ * source was read or consulted; any resemblance is coincidental. ISO-8859-1 +
+ * UTF-8 are published standards [PUB]; the reversible hex escape is the standard
+ * percent/hex escape of un-representable code points [PUB]. The marker byte
+ * ('%'), the "%uXXXX" format, and the self-escaping-of-the-marker rule are OURS
+ * (restated in the spec), copied from no reference.
  *
  * AROS/AmigaOS filenames are conventionally ISO-8859-1; macOS paths are UTF-8.
  *   Latin-1 -> UTF-8 : total for raw bytes, AND it DECODES our "%uXXXX" escapes

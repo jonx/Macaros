@@ -143,7 +143,7 @@ The committed corpus all runs:
   graphics, …): needs the AROS integration — the host-side LVO bridge into a running
   AROS, not the stub OS. That is the next milestone, not a `run68k` change.
 - **Hardware-banging games / demos** (direct chipset, copper, blitter, custom
-  registers, self-modifying decompressors): needs a full-chipset emulator (UAE).
+  registers, self-modifying decompressors): needs a full-chipset Amiga emulator.
   `run68k` is a CPU+FPU JIT with a stub OS, not a machine emulator.
 
 ## Crash bundles

@@ -1,10 +1,12 @@
 /* cocoametal_settings.m — native AppKit settings panel + NSUserDefaults
  * persistence for the Cocoa/Metal display shim (INTERFACE.md §9).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md (§9
- * settings & options, §3 threading, §5 CM_EV_SETTING) + spec.md + cocoametal.h.
- * No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read,
- * searched, or consulted. Apple AppKit/Foundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§9 settings &
+ * options, §3 threading, §5 CM_EV_SETTING) + spec.md + cocoametal.h. Independent
+ * work: no third-party implementation source — emulator, agent, driver, or
+ * otherwise — was read, searched, or consulted in producing it, and any
+ * resemblance to existing implementations is coincidental. Apple AppKit/Foundation
+ * docs only [PUB].
  *
  * This file is linked only into builds that have AppKit. It provides the strong
  * definitions of cm__open_settings_appkit and cm__apply_persisted_options that

@@ -4,8 +4,9 @@
  * task uses: dlopen the dylib, resolve every pasteboard.h symbol (errcount must be
  * 0), then drive a text round-trip + a Latin-1->UTF-8 transcode through the resolved
  * pointers. Uses a uniquely-named NSPasteboard so it never touches the real one.
- * Plain C, links none of the .m — the REAL load boundary. Clean-room: pasteboard.h
- * + Apple docs only; no GPL source read.
+ * Plain C, links none of the .m — the REAL load boundary. Independent work — no
+ * third-party implementation source was read or consulted; any resemblance is
+ * coincidental. Built from pasteboard.h + Apple docs only.
  */
 #include <dlfcn.h>
 #include <stdio.h>

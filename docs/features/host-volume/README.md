@@ -1,7 +1,7 @@
 # Host volume — share a Mac folder with AROS
 
 > Status: **working & verified on darwin-aarch64 (2026-06-26)**.
-> This is the practical "what & how". For the design and the clean-room
+> This is the practical "what & how". For the design and the
 > implementation spec, see [design.md](design.md) and [spec.md](spec.md).
 
 ## What it does

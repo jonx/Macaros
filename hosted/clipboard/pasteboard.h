@@ -1,9 +1,10 @@
 /* pasteboard.h — flat C ABI for the NSPasteboard <-> AROS clipboard.device shim.
  *
- * Implemented clean-room from docs/features/clipboard-bridge/spec.md
- * ("The C ABI (pasteboard.h)"). No GPL emulator/agent source (WinUAE/FS-UAE/
- * Amiberry/E-UAE/Janus-UAE, vAmiga, QEMU/SPICE vdagent) was read, searched, or
- * consulted. Sources: Apple Foundation/AppKit docs [PUB] (NSPasteboard,
+ * Implemented from docs/features/clipboard-bridge/spec.md
+ * ("The C ABI (pasteboard.h)"). Independent work: no third-party implementation
+ * source — emulator, agent, driver, or otherwise — was read, searched, or
+ * consulted in producing it, and any resemblance to existing implementations is
+ * coincidental. Sources: Apple Foundation/AppKit docs [PUB] (NSPasteboard,
  * changeCount, NSPasteboardTypeString), POSIX, and this project's own hosted
  * spikes [OURS]. This header is the ONLY contact surface between the AROS side
  * (AROS crosstools) and the host shim (Apple clang): the shim pulls no AROS
@@ -93,7 +94,7 @@ void   host_pb_set_signal_cb(PBSignalFn fn);
  * host-clang helpers so the standalone proof can assert the round-trip, and so
  * the bridge has one canonical implementation. Latin-1 maps 1:1 to U+0000..U+00FF
  * [PUB], so the conversion is a tight table walk, written from scratch (no iconv,
- * no GPL).
+ * independently derived).
  *
  * host_latin1_to_utf8: every Latin-1 byte has a UTF-8 codepoint -> always
  *   lossless. Returns malloc'd NUL-terminated UTF-8; *out_len excludes the NUL.

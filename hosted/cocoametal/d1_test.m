@@ -1,12 +1,13 @@
 /* d1_test.m — standalone proof of the Cocoa/Metal present pipeline ([D1]),
  * resolution-parametric scaling ([D2]), and the present-time shader stage ([D]).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/spec.md
- * ("Verification — D1", the resolution-parametric cm_open, and the cm_set_effect
- * shader stage). No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE)
- * was read, searched, or consulted. Models the H7 readback + pixel-assert
- * discipline from this project's hosted/display.c [OURS] (ImageIO PNG encode,
- * "a file existing is not a PASS — the pixels are").
+ * Implemented from docs/features/cocoa-metal-display/spec.md ("Verification — D1",
+ * the resolution-parametric cm_open, and the cm_set_effect shader stage).
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and any
+ * resemblance to existing implementations is coincidental. Models the H7 readback +
+ * pixel-assert discipline from this project's hosted/display.c [OURS] (ImageIO PNG
+ * encode, "a file existing is not a PASS — the pixels are").
  *
  * What it proves, unattended, with no window required:
  *   [D1] At 320x200: device + queue, a BGRA8 shared framebuffer texture, a

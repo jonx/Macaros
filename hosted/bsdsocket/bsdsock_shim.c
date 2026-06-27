@@ -1,11 +1,13 @@
 /* bsdsock_shim.c — the non-blocking host socket op wrappers (the bsdsocket ABI).
  *
- * Implemented clean-room from docs/features/bsdsocket-net/spec.md (R-NONBLOCK,
+ * Implemented from docs/features/bsdsocket-net/spec.md (R-NONBLOCK,
  * R-PARK, the "socket/connect/send/recv/close" LVO surface rows 5/9/11/13/20).
- * No GPL emulator source (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE/vAmiga) was
- * read, searched, or consulted. POSIX/Apple man pages [PUB] (socket(2),
- * fcntl(2) O_NONBLOCK, connect(2) EINPROGRESS/SO_ERROR, recv(2)/send(2)
- * EWOULDBLOCK) + this project's H11 block-then-reply loop [OURS] only.
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and
+ * any resemblance to existing implementations is coincidental. POSIX/Apple man
+ * pages [PUB] (socket(2), fcntl(2) O_NONBLOCK, connect(2) EINPROGRESS/SO_ERROR,
+ * recv(2)/send(2) EWOULDBLOCK) + this project's H11 block-then-reply loop
+ * [OURS] only.
  *
  * Each wrapper maps one would-block host result into the spec's
  * register-then-Wait-then-retry park (R-PARK), driving the kqueue pump

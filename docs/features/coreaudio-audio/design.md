@@ -68,10 +68,10 @@ matter:
   mixed PCM to the host's audio API. CoreAudio is simply the macOS sibling none of the
   hosted ports ever needed (the historical AROS-darwin ports — i386/x86_64/PPC, all
   listed "Working" — require X11 and ship **no audio at all**:
-  aros.sourceforge.io/introduction/ports.html). The catch: `WASAPI` is the closest
-  *structural* analogue (callback/event-driven host API, like CoreAudio's RT callback —
-  unlike Alsa's blocking-write model), so it, not just Alsa, is worth reading; but it is
-  Win32 code, no help for the Apple-Silicon ABI/signal-mask plumbing.
+  aros.sourceforge.io/introduction/ports.html). The catch: the in-tree `WASAPI`
+  driver is the closest *structural* analogue (callback/event-driven host API, like
+  CoreAudio's RT callback — unlike Alsa's blocking-write model); but it is Win32
+  code, no help for the Apple-Silicon ABI/signal-mask plumbing.
 - **"SDL-audio AHI driver" is a category error — the dependency runs the other way.** On
   Amiga-family systems SDL is a *client of* AHI: SDL2's audio backend opens `ahi.device`
   to get sound out (os4depot.net SDL2; the AmigaPorts SDL2 tree). There is no AHI
@@ -422,12 +422,11 @@ rate, right channels, no dropouts".
   `MixFreq/PlayerFreq` frames; if the slave can't refill before the RT callback drains
   the ring, we glitch. The AudioQueue fallback trades latency for a buffer pool we own.
   Under-run count is an explicit assertion. **Open:** ring depth vs SIGALRM period —
-  needs measurement in [A4]. *Web data point:* the UAE family does not pace the
-  producer to a hard sample clock — **FS-UAE** runs a PID controller that tweaks
-  playback frequency to hold a target buffer fill (~40 ms default), absorbing
-  producer/consumer drift via dynamic resampling rather than tight scheduling
-  (fs-uae.net/audio, fs-uae.net/docs/options/audio-buffer-target-size). It also routes
-  through **OpenAL**, not CoreAudio directly. For us this argues: size the ring for a
+  needs measurement in [A4]. *Design data point (independently derived):* a producer
+  need not be paced to a hard sample clock — a PID controller that tweaks
+  playback frequency to hold a target buffer fill (~40 ms default) can absorb
+  producer/consumer drift via dynamic resampling rather than tight scheduling. For
+  us this argues: size the ring for a
   tens-of-ms cushion (not single-pass), accept tick-granularity latency, and let the
   ring's fill level — not a precise clock — be the back-pressure signal; a PID/resampler
   is overkill at this stage but is the known escape hatch if drift bites.
@@ -490,8 +489,8 @@ External prior art (web, not in the AROS tree):
 - `github.com/aros-development-team/AROS` → `workbench/devs/AHI/Drivers/` — authoritative
   upstream-HEAD driver list; confirms no `CoreAudio`/`Darwin`/`SDL` driver and that
   `WASAPI` (Windows-hosted) + `PulseAudio`/`Alsa`/`OSS` (Unix-hosted) are the existing
-  host-backed family CoreAudio would join. `WASAPI` is the closest structural analogue
-  (callback-driven host API) — worth reading despite being Win32.
+  host-backed family CoreAudio would join. The in-tree `WASAPI` driver is the closest
+  structural analogue (callback-driven host API), though it is Win32.
 - `aros.sourceforge.io/introduction/ports.html` — the historical AROS-darwin hosted
   ports (i386/x86_64/PPC, "Working"); require X11, ship no audio — confirms macOS AROS
   never had sound.
@@ -501,7 +500,6 @@ External prior art (web, not in the AROS tree):
   `os4depot.net` SDL2, `github.com/amigaports` — SDL2's Amiga audio backend opens
   `ahi.device`. An "SDL alternative" means SDL2's own CoreAudio backend as the host
   bridge, not an AHI driver written in SDL.
-- UAE-family audio output (design reference for latency/back-pressure):
-  `fs-uae.net/audio`, `fs-uae.net/docs/options/audio-buffer-target-size` — OpenAL output
-  with a PID-controlled dynamic resampler holding a ~40 ms buffer target (not a hard
-  sample clock); `github.com/tonioni/WinUAE/blob/master/audio.cpp` (WinUAE audio core).
+- Latency/back-pressure design note (independently derived): a host-buffer fill
+  target of ~40 ms held by a PID-controlled dynamic resampler is a known approach to
+  absorbing producer/consumer drift without a hard sample clock.

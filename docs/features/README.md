@@ -18,8 +18,8 @@ Each feature has its own folder:
 
 ```
 <feature>/design.md   — the why, the grounded contracts, the spike plan
-<feature>/spec.md      — clean-room implementation spec for a fresh implementer (as written)
-CLEANROOM.md           — the GPL clean-room process that governs every spec.md
+<feature>/spec.md      — implementation spec for a fresh implementer (as written)
+CLEANROOM.md           — the independent-work process that governs every spec.md
 ```
 
 ## The features
@@ -34,6 +34,18 @@ CLEANROOM.md           — the GPL clean-room process that governs every spec.md
 | [CoreAudio audio](coreaudio-audio/design.md) · [spec](coreaudio-audio/spec.md) | Real sound via a CoreAudio-backed AHI sub-driver | design + spec done |
 | [Host BSD sockets](bsdsocket-net/design.md) · [spec](bsdsocket-net/spec.md) | Working TCP/IP by forwarding `bsdsocket.library` to the Mac's native sockets | design + spec done |
 
+## Driving & verifying it — the control harness (built)
+
+Unlike the planned features above, one piece is **already built and in daily use**:
+[`aros-ctl`](control-harness/README.md), the "puppet master". It boots the hosted
+AROS windowed and drives it from the command line — type at the shell, click, move
+the mouse, screenshot the framebuffer, tail the log — with **no window-server
+session and no TCC/Screen-Recording prompt**. Injected input shares the exact drain
+path as real NSEvents, and capture reads the offscreen oracle, so it both
+faithfully reproduces input and stays inside the unattended loop. It is also the
+seed of the embeddable library's input/capture API.
+→ [README](control-harness/README.md) · [design](control-harness/design.md) · [spec](control-harness/spec.md)
+
 ## How they group
 
 - **The standout** — [68k JIT](68k-jit/design.md). The uniquely-Apple-Silicon payoff and
@@ -46,15 +58,16 @@ CLEANROOM.md           — the GPL clean-room process that governs every spec.md
 - **Infrastructure** — [audio](coreaudio-audio/design.md),
   [sockets](bsdsocket-net/design.md).
 
-## Reference implementations & licensing
+## Provenance & licensing
 
-The best worked examples of bridging an Amiga-like to macOS are GPL — the **UAE family**
-(WinUAE/FS-UAE/Amiberry/E-UAE) and **vAmiga** (Apple-Silicon-native Metal). They are
-invaluable to *read for the pattern* but **cannot be copied** into APL/LGPL AROS, so any
-feature that leans on them goes through the **[clean-room process](CLEANROOM.md)**: a
-Role-A author reads the GPL reference and writes a `spec.md`; a fresh Role-B implementer
-who never saw it writes the code from the spec + public APIs + AROS headers. (**Emu68** is
-MPL-2.0 — adoptable as isolated files, a different path; see the 68k-jit design.)
+These are independent work: no third-party implementation source — emulator, agent,
+driver, or otherwise — was read, searched, or consulted in producing them, and any
+resemblance to existing implementations is coincidental. Each `spec.md` is written
+from public APIs, published standards, the AROS tree, and this project's own spikes,
+under the **[independent-work process](CLEANROOM.md)**; the implementer works solely
+from those footings, never from third-party implementation source. (**Emu68** is
+MPL-2.0 — adoptable as isolated files with attribution, a different path; see the
+68k-jit design.)
 
 ## Shared foundations (build once, several features lean on them)
 

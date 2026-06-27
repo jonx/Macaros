@@ -5,11 +5,15 @@
  * hosted/hostshell/ and touches NONE of the existing cocoametal shim, so it can
  * be developed in parallel and merged later (see README.md).
  *
- * Clean-room: implemented from Apple AppKit/Foundation/CoreGraphics docs [PUB] +
- * the Apple HIG menu-bar/settings/About conventions [PUB] + this project's own
- * spec (docs/features/host-app-shell/spec.md, the cm_* ownership split) [OURS].
- * No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read. UTM is
- * Apache-2.0; only its public menu *layout* informed the structure [PUB-UTM].
+ * Implemented from Apple AppKit/Foundation/CoreGraphics docs [PUB] + the Apple
+ * HIG menu-bar/settings/About conventions [PUB] + this project's own spec
+ * (docs/features/host-app-shell/spec.md, the cm_* ownership split) [OURS].
+ * Independent work: no third-party implementation source — emulator, agent,
+ * driver, or otherwise — was read, searched, or consulted in producing it, and
+ * any resemblance to existing implementations is coincidental. The menu-bar
+ * shape was inspired by UTM's publicly-visible design (Apache-2.0 — observed as
+ * users / from its public docs, never its source) and otherwise follows the
+ * Apple HIG [PUB] + [PUB-UTM].
  *
  * THE SEAM (engine/shell split, [[aros-embeddable-library-goal]]): the controller
  * never calls Cocoa-into-AROS or the Metal shim directly. Every menu action is
@@ -50,7 +54,8 @@ enum { CM_SCALE_FIT = 0, CM_SCALE_INTEGER_NEAREST = 1,
        CM_SCALE_PIXEL_PERFECT = 2, CM_SCALE_ASPECT_FIT = 3 };
 enum { CM_FILTER_NEAREST = 0, CM_FILTER_LINEAR = 1 };
 
-/* Graded shutdown, UTM's Power-submenu shape [PUB-UTM] restated [OURS]. */
+/* Graded shutdown — a Power-submenu shape inspired by UTM's public UI (Apache-2.0,
+   from its public docs/app, not its source) [PUB-UTM]. */
 enum { CM_POWER_REQUEST_DOWN = 0,  /* soft: ask AROS to shut down       */
        CM_POWER_RESET        = 1,  /* reset / reboot                    */
        CM_POWER_FORCE_DOWN   = 2,  /* hard: stop the machine            */

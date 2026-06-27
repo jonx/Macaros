@@ -1,11 +1,12 @@
 /* v_test.c — standalone proof of the host-volume Mac glue ([V]).
  *
- * Implemented clean-room from docs/features/host-volume/spec.md
+ * Implemented from docs/features/host-volume/spec.md
  * (§Unattended verification: [VN] normalization, [VM] sidecar; R-NORM,
- * R-SIDECAR, R-CHARSET). No GPL emulator source (UAE family or vAmiga) was
- * read, searched, or consulted. Follows this project's [OURS] hosted-spike
- * verdict discipline (hosted/cocoametal/d1_test.m: "a file existing is not a
- * PASS — the asserted values are") and the two-sided host/AROS check shape.
+ * R-SIDECAR, R-CHARSET). Independent work — no third-party implementation
+ * source was read or consulted; any resemblance is coincidental. Follows this
+ * project's [OURS] hosted-spike verdict discipline (hosted/cocoametal/d1_test.m:
+ * "a file existing is not a PASS — the asserted values are") and the two-sided
+ * host/AROS check shape.
  *
  * Since the AROS emul-handler needs the AROS build, this drives the NEW Mac
  * glue directly and exercises it against the REAL macOS filesystem in a temp

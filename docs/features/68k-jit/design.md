@@ -66,11 +66,11 @@ upstream tree, and there is no JIT at all in this checkout.
 
 - **The one in-tree way to launch a 68k app is *delegation*, not execution.**
   `workbench/libs/workbench/uae_integration.c` detects a 68k binary by its
-  `0x000003f3` magic (`is_68k()`) and, *if the external Janus-UAE emulator is
-  running*, forwards a launch message to its `"J-UAE Execute"` port
-  (`forward_to_uae()` → `FindPort`); with no J-UAE present, the binary simply will
+  `0x000003f3` magic (`is_68k()`) and, *if an external Amiga emulator is
+  running*, forwards a launch message to its execute port
+  (`FindPort`); with no emulator present, the binary simply will
   not launch. That is whole-machine Amiga emulation handed to a **separate program**
-  (an E-UAE fork that emulates the chipset and runs its own ROM) — not AROS executing
+  (a GPL emulator that emulates the chipset and runs its own ROM) — not AROS executing
   68k in its own address space. So on *no* host architecture does AROS itself run 68k
   code. This feature is the opposite model: an in-OS JIT that runs the 68k program as
   an AROS task, in AROS's own address space, with its library calls bridged into the
@@ -89,8 +89,8 @@ neither lives in `aros-upstream`:
   out of its bare-metal runtime and feed it our `MAP_JIT` executable memory + AROS
   library-call/trap hooks.
 - **emumiga** (`github.com/moggen/emumiga`, LGPL-2.1) — an **in-OS** 68k engine for
-  AROS (runs 68k as an AROS execution engine — the opposite of J-UAE's separate
-  machine). That is the integration shape we want, but it is effectively abandoned (2
+  AROS (runs 68k as an AROS execution engine — the opposite of a separate-machine
+  emulator). That is the integration shape we want, but it is effectively abandoned (2
   commits, XFree86-era), 32-bit-oriented, and unclear JIT-vs-interpreter. Useful as a
   *design reference* for the in-OS LoadSeg/library-dispatch plumbing, not as code.
 
@@ -411,4 +411,4 @@ External prior art (web, not in the AROS tree):
 - `github.com/moggen/emumiga` — abandoned in-OS 68k engine for AROS, LGPL-2.1; a
   design reference for the AROS-integration shape, not usable code.
 - AROS in-tree delegation (for contrast): `workbench/libs/workbench/uae_integration.c`
-  — hands 68k binaries to the external Janus-UAE emulator; not in-OS execution.
+  — hands 68k binaries to an external Amiga emulator; not in-OS execution.

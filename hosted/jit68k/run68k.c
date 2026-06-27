@@ -2,8 +2,9 @@
  * executable through the JIT (CPU + FPU) from the macOS terminal, piping the
  * program's output to stdout.  (OURS, AROS-licensed.)
  *
- * Clean-room / OURS.  This is a USABILITY WRAPPER over the existing engine — it adds
- * NO emulation.  It composes the already-proven pieces:
+ * Independent work / OURS — no third-party implementation source was read or
+ * consulted; any resemblance is coincidental.  This is a USABILITY WRAPPER over the
+ * existing engine — it adds NO emulation.  It composes the already-proven pieces:
  *   - the [J4] hunk loader + relocator (j4_loader.c / j4_hunk.h)
  *   - the stub OS (stublib.[ch]): AllocMem / FreeMem / PutChar over the [J3] LVO bridge
  *   - the full [J5d] JIT engine (j5d_engine.c): per-block translation driving Emu68's
@@ -106,7 +107,7 @@ static void usage(FILE *f, const char *argv0)
 "  vbcc-compiled C.  The stub OS provides AllocMem/FreeMem/PutChar via the [J3] bridge.\n"
 "what it can't run YET:\n"
 "  Programs that call real AmigaOS/AROS libraries (needs the AROS integration), and\n"
-"  hardware-banging games (needs a full-chipset emulator like UAE).\n"
+"  hardware-banging games (needs a full-chipset Amiga emulator).\n"
 "\n"
 "program-args:  passed into the 68k program via the AmigaDOS CLI convention.  run68k\n"
 "  joins [program-args...] with single spaces and a trailing newline into ONE argument\n"

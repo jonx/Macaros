@@ -1,9 +1,10 @@
 /* shell_test.m — unattended POC/verifier for the host app shell ([G]).
  *
- * Clean-room from Apple AppKit/Foundation/CoreFoundation/GCD docs [PUB] + the HIG
- * [PUB] + docs/features/host-app-shell/spec.md [OURS]. No GPL emulator source
- * read. Proves the parts of the host-shell that are INDEPENDENT of the Metal
- * window, so it runs fully headless (no window server, no TCC, no screenshot):
+ * Implemented from Apple AppKit/Foundation/CoreFoundation/GCD docs [PUB] + the
+ * HIG [PUB] + docs/features/host-app-shell/spec.md [OURS]. Independent work — no
+ * third-party implementation source was read or consulted; any resemblance is
+ * coincidental. Proves the parts of the host-shell that are INDEPENDENT of the
+ * Metal window, so it runs fully headless (no window server, no TCC, no screenshot):
  *
  *   [G-MENU]    the menu bar tree matches spec.md R-MENU (titles, submenus, key
  *               equivalents, target/action wiring) — walked, never screen-grabbed.

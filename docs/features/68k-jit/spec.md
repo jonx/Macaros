@@ -24,16 +24,17 @@ not a wall:
   before adopting. **DONE for the `[J2]` files** (`hosted/jit68k/emu68/A64.h`,
   `RegisterAllocator.h`): grep is empty — Exhibit-A only, compatible. Re-run before
   adopting the `[J3]` decoder/RA files (recorded in `hosted/jit68k/emu68/NOTICE`).
-- **Still forbidden (GPL):** the UAE family (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE) and
-  vAmiga — do NOT read them for the translator. **emumiga** (LGPL-2.1) is **design
-  reference only** for the in-OS LoadSeg/dispatch shape — abandoned, not adopted as code.
+- **Still forbidden (GPL):** GPL Amiga emulators — do NOT read them for the translator.
+  **emumiga** (LGPL-2.1) is **design reference only** for the in-OS LoadSeg/dispatch
+  shape — abandoned, not adopted as code.
 
 Provenance tags as elsewhere: `[PUB]` public API / standard (Apple docs, MPL text, the
 m68k ISA, the AmigaOS hunk format), `[AROS]` in-tree AROS header/module (path given,
 APL/LGPL — ours), `[OURS]` this project's spikes (the H-series, `graft/*`, `hosted/*`),
 `[EMU68]` an adopted MPL file (cite the Emu68 path; ships in the quarantine dir).
-`[REF-CONFIRM]` items were checked against a reference but are restated from an
-independent justification — Role B implements from that.
+`[DERIVED]` items are independently-derived requirements flagged for extra verification;
+each stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]` justification — Role B
+implements from that.
 
 ## Scope
 
@@ -76,7 +77,8 @@ separate sub-feature); self-modifying / dirty-code-page coherency beyond detecti
 68k MMU/030-040 PMMU emulation; the `HUNK_OVERLAY` overlay loader; multi-core /
 true-parallel translated execution (the H6 scheduler is single-threaded — see W^X /
 threading); a full chipset (no chip RAM / custom registers — a 68k *program*, not a
-whole Amiga; whole-machine emulation is what J-UAE does and is not this).
+whole Amiga; whole-machine emulation is what a full-chipset Amiga emulator does and is
+not this).
 
 ## Architecture
 
@@ -1489,7 +1491,7 @@ no-crash is necessary but never sufficient, so a silent mistranslation cannot pa
      program is integer-only). The script pipes `n` to make it non-interactive. Licenses: vbcc is
      the same family as vasm (free for non-commercial AND an explicit commercial exception for
      M68k/AmigaOS targets — exactly our use); vlink is freeware. Both are the TOOLCHAIN, not
-     emulators — no GPL/MPL emulator source involved.
+     the translator — no third-party emulator source is involved in building the test program.
   2. **The program — a self-contained C compute kernel** (`apps68k/j5m.c`, no Amiga SDK, no real
      libc): an iterative AND a recursive Fibonacci, a factorial table, an in-place bubble sort, a
      hand-written unsigned/signed integer-to-decimal printer, and a 32-bit checksum returned from
@@ -2279,4 +2281,4 @@ is unchanged/clean for both). **Future `[J5c]` adoption (not yet vendored, if an
 `src/M68k_LINE*.c`, `src/M68k_{MOVE,MULDIV,CC,SR,Exception}.c`, `src/M68k_Translator.c`,
 `src/ExecutionLoop.c` — block model (`M68KTranslationUnit`, `ICache`/`LRU`, `MainLoop`
 RET-to-dispatcher funnel, PC in x18, `INT32` interrupt hook, `EMIT_Exception`/VBR). ·
-`[REF-CONFIRM]` none — the translator is adopted MPL, read directly, not clean-roomed.
+`[DERIVED]` none — the translator is adopted MPL, read directly, not clean-roomed.

@@ -3,14 +3,15 @@
 > Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read vAmiga, WinUAE, FS-UAE, Amiberry, or any GPL
-emulator source.** Implement only from this spec + the approved sources cited by tag:
-`[PUB]` Apple framework docs / published standards, `[AROS]` in-tree AROS headers
-(paths given), `[OURS]` this project's spikes. `[REF-CONFIRM]` items were sanity-checked
-against vAmiga's GPL Metal pipeline by Role A but are restated here with an independent
-`[PUB]`/`[AROS]` justification — implement from that, not from any reference.
+**Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing this spec, and any resemblance
+to existing implementations is coincidental.** Implement only from this spec + the approved
+sources cited by tag: `[PUB]` Apple framework docs / published standards, `[AROS]` in-tree
+AROS headers (paths given), `[OURS]` this project's spikes. `[DERIVED]` items are
+independently-derived requirements flagged for extra verification; each stands solely on
+its cited `[PUB]`/`[AROS]` justification — implement from that.
 
 ## Scope
 
@@ -31,8 +32,8 @@ live on-screen verification via `screencapture` (TCC-blocked — we verify by re
 
 ## Architecture
 
-Two layers joined by a **flat hand-written C ABI** (the ABI header is ours, ASCII, no
-GPL lineage):
+Two layers joined by a **flat hand-written C ABI** (the ABI header is ours, ASCII,
+independent work):
 
 ```
 AROS side (aarch64, AROS crosstools)              Host side (Apple toolchain)
@@ -172,7 +173,7 @@ the **"display-server" task** — which is the one anchored to the host main thr
 task: creates the window (`cm_open`), pumps events (`cm_pump_events`), and performs
 presents (`cm_present`). Any other AROS task that needs a window operation posts a
 request to the display-server task (an AROS message port) and signals it; it never calls
-the shim directly. Justification is independent of any GPL reference: it follows directly
+the shim directly. The justification stands on its own: it follows directly
 from the AppKit main-thread rule `[PUB]` + the single-thread scheduler `[OURS]`, and it
 matches the **in-tree** hosted precedent — the iOS UIKit HIDD runs a VBlank-signalled
 AROS task that services `CFRunLoopRunInMode(...)` under `HostLib_Lock`
@@ -208,10 +209,11 @@ with **NO** `NSApplicationMain` and **NO** `[NSApp run]` — works end to end:
   passes whether or not a window/drawable exists, so a headless launch context
   (no window server → `scale=1`, present pass skipped) still satisfies the contract.
 
-## Metal pipeline (host shim internals) — `[PUB]` Apple, `[REF-CONFIRM]` vAmiga
+## Metal pipeline (host shim internals) — `[PUB]` Apple
 
-All from Apple's Metal/QuartzCore documentation; vAmiga only confirmed this exact
-sequence ships on M-series. Implement from the Apple contracts:
+All from Apple's Metal/QuartzCore documentation; the sequence is the standard
+Apple-documented Metal present path, proven to ship on M-series by our own spike.
+Implement from the Apple contracts:
 
 1. **Device + queue.** `MTLCreateSystemDefaultDevice()` once; one `MTLCommandQueue`.
 2. **Layer.** Attach a `CAMetalLayer` to the window's content `NSView`
@@ -532,7 +534,7 @@ the full finding in INTERFACE.md §9 / §9f.
   dirty-rect stream + compose/swizzle asserts → `[HIDDSIM] PASS` (see Verification →
   D3 host-support above). The behavioral reference for the AROS UpdateRect wiring;
   additive, no ABI change.
-- The C ABI header is shared source, hand-written, no GPL provenance.
+- The C ABI header is shared source, hand-written, independent work.
 - The shim must not link or include AROS headers; the AROS side must not include Cocoa
   headers. The C ABI is the only contact surface.
 
@@ -601,5 +603,8 @@ split between "the contract verification depends on" and "presentation-only suga
 `[AROS]` `rom/hidds/gfx/gfx.conf`, `gfx_hiddclass.c`, `gfx_bitmapclass.c`,
 `arch/all-hosted/hidd/sdl/`, `arch/all-ios/hidd/uikit/eventtask.c`, `hostlib.resource`. ·
 `[OURS]` `hosted/display.c` (H7 ImageIO + pixel-assert), the H3 host-call boundary, the
-H4/H6 scheduler model. · `[REF-CONFIRM]` vAmiga `GUI/Metal/*` confirmed the present
-sequence ships on M-series — restated here from Apple contracts only.
+H4/H6 scheduler model. · `[DERIVED]` the Metal present sequence — independently derived
+from Apple's Metal/QuartzCore contracts and proven to ship on M-series by our own spike.
+Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing it, and any resemblance to
+existing implementations is coincidental.

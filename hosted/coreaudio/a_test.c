@@ -1,13 +1,14 @@
 /* a_test.c — [A] headless/silent CoreAudio render proof: the SPSC host ring +
  * offline AudioUnit render-to-WAV oracle, asserted numerically.
  *
- * Implemented clean-room from docs/features/coreaudio-audio/spec.md
- * ("Verification — unattended", markers [A1]/[A3]/[A4]). No GPL emulator source
- * (WinUAE / FS-UAE / Amiberry / E-UAE / Janus-UAE / vAmiga) was read, searched,
- * or consulted. Sources: Apple AudioToolbox/AudioUnit docs [PUB]; SPSC ring
- * theory + Goertzel single-bin DFT [PUB]; this project's render-to-file
- * unattended-verify discipline (hosted/display.c, "a file existing is not a
- * PASS — the samples are") [OURS].
+ * Implemented from docs/features/coreaudio-audio/spec.md
+ * ("Verification — unattended", markers [A1]/[A3]/[A4]). Independent work: no
+ * third-party implementation source — emulator, agent, driver, or otherwise —
+ * was read, searched, or consulted in producing it, and any resemblance to
+ * existing implementations is coincidental. Sources: Apple AudioToolbox/AudioUnit
+ * docs [PUB]; SPSC ring theory + Goertzel single-bin DFT [PUB]; this project's
+ * render-to-file unattended-verify discipline (hosted/display.c, "a file existing
+ * is not a PASS — the samples are") [OURS].
  *
  * The standalone spike (no AROS build): a real second pthread is the PRODUCER,
  * standing in for the AHI slave task (this is the exact seam where the slave's

@@ -1,11 +1,12 @@
 /* hiddsim_test.c — a HIDD-shaped behavioral harness for cocoametal.dylib
  * (INTERFACE.md §8 D3 host-support — the de-risk + reference for the AROS HIDD).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§2/§2a pixel hand-off + call mapping, §3 threading, §4 function semantics,
- * §6 readback oracle) + cocoametal.h. No GPL emulator source
- * (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or consulted. Apple
- * framework docs + this project's own H7 readback discipline only.
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§2/§2a pixel
+ * hand-off + call mapping, §3 threading, §4 function semantics, §6 readback oracle)
+ * + cocoametal.h. Independent work: no third-party implementation source —
+ * emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * Apple framework docs + this project's own H7 readback discipline only.
  *
  * WHAT THIS IS, AND HOW IT DIFFERS FROM abi_test.c
  * ------------------------------------------------

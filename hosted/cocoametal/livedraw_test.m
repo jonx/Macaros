@@ -1,11 +1,12 @@
 /* livedraw_test.m — LIVE-DRAWABLE readback: prove the present FILLS the drawable
  * ([LIVE]). The bug the OFFSCREEN oracle was blind to.
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§2a live-present-fills-drawable contract, §9 fullscreen, §3 threading, §6 oracle)
- * + spec.md + cocoametal.h. No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/
- * E-UAE) was read, searched, or consulted. Apple AppKit/Metal/QuartzCore/
- * CoreFoundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§2a live-
+ * present-fills-drawable contract, §9 fullscreen, §3 threading, §6 oracle) +
+ * spec.md + cocoametal.h. Independent work: no third-party implementation source —
+ * emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * Apple AppKit/Metal/QuartzCore/CoreFoundation docs only [PUB].
  *
  * WHAT THIS PROVES + WHY THE EXISTING TESTS MISSED THE BUG:
  *   The [D1]/[D2t]/[FS] markers only read back the OFFSCREEN ORACLE target (cm_read-

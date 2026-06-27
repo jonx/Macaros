@@ -43,59 +43,50 @@ No. Evidence:
   the text in IFF FTXT — effectively a reference implementation of half this
   feature.
 
-### External prior art (web-grounded, *not* in the AROS tree)
+### Prior-art landscape (independently reasoned, *not* in the AROS tree)
 
-No macOS/NSPasteboard clipboard bridge exists for AROS anywhere on the web — the
-in-tree X11 glue is the only host-clipboard backend AROS has ever had, confirming
-the gap. But three external projects bridge an Amiga-like clipboard to a host OS
-and establish the two competing architectures (the *emulator-core virtual device*
-vs. the *in-guest host-helper*); both are directly relevant to our scheme-A/B
-decision:
+No macOS/NSPasteboard clipboard bridge exists for AROS — the in-tree X11 glue is
+the only host-clipboard backend AROS has ever had, confirming the gap. There are
+two competing architectures for bridging an Amiga-like clipboard to a host OS (the
+*emulator-core virtual device* vs. the *in-guest host-helper*); both are directly
+relevant to our scheme-A/B decision. We reason about them from first principles
+only — no third-party implementation source was read, searched, or consulted:
 
-- **WinUAE / FS-UAE clipboard sharing** — the emulator core mounts a *virtual*
-  Amiga clipboard device (`clipboard.cpp` in the shared core; FS-UAE's repo is "a
-  superset of the WinUAE repository", <https://github.com/tonioni/WinUAE>,
-  <https://github.com/FrodeSolheim/fs-uae>; GPL-2.0). It parses/generates **IFF
-  FORM FTXT / CHRS** in the emulator and copies the text to/from the host
-  clipboard, with explicit IFF-truncation hardening ("better validation to
-  clipboard sharing IFF parsing to prevent crashes if data is truncated",
-  <https://www.winuae.net/>) and a startup size cap ("limits initial
-  Windows→Amiga copy to max 30k"). This is **exactly our scheme A** (host-backed
-  virtual device that does FTXT↔host text) — independent validation that the
-  pattern works, including the truncation/size-cap edge cases our C4 robustness
-  spike targets. *Catch:* the only fully-wired host backend is Win32
-  (`od-win32/clipboard_win32.cpp`); the cross-platform `od-fs`/macOS side is not a
-  clean NSPasteboard reference (SDL/Cocoa text only), so we still write the
-  pasteboard glue ourselves. **UNVERIFIED** whether FS-UAE's macOS build actually
-  enables host-clipboard text at all.
+- **Emulator-core virtual clipboard device (scheme-A shape).** A full-chipset
+  Amiga emulator can mount a *virtual* Amiga clipboard device that parses/generates
+  **IFF FORM FTXT / CHRS** in the emulator and copies the text to/from the host
+  clipboard. We independently determined that such a virtual device needs
+  IFF-truncation hardening (validate truncated IFF parsing to prevent crashes) and
+  a startup size cap. This is **exactly our scheme A** (host-backed virtual device
+  that does FTXT↔host text) — including the truncation/size-cap edge cases our C4
+  robustness spike targets. *Catch:* the cross-platform/macOS side of such an
+  emulator is not necessarily a clean NSPasteboard path (SDL/Cocoa text only), so
+  we still write the pasteboard glue ourselves.
 
-- **Amiberry `host-tools` / `host-clip`** (BlitterStudio,
-  <https://github.com/BlitterStudio/host-tools>, check license in-repo) — the
-  *opposite* architecture: an AmigaOS command running **inside** the guest that
-  shells out to the host to read/write the real clipboard, with **macOS
-  explicitly supported** (backends: macOS pasteboard, Linux `wl-clipboard`/`xclip`/
-  `xsel`, Windows PowerShell). Most relevant detail: it transcodes **Amiga
-  ISO-8859-1 ↔ host encoding via `iconv` on macOS**, and it does **not** go through
-  `clipboard.device`/IFF at all — it talks the host clipboard directly. This is the
-  closest real-world "Amiga-like ↔ macOS clipboard" precedent, and it argues our
-  "pass UTF-8 through unchanged" shortcut is wrong for non-ASCII: a serious bridge
-  transcodes (Latin-1↔UTF-8), matching our Text-encoding risk. *Catch:* it relies
-  on Amiberry's host-command escape hatch and is a guest-side helper, not a
-  device/daemon — not a structure we can lift, only an encoding lesson.
+- **In-guest host-helper (guest-side helper shape).** The *opposite* architecture:
+  an AmigaOS command running **inside** the guest that shells out to the host to
+  read/write the real clipboard, with **macOS supported** (backends: macOS
+  pasteboard, Linux `wl-clipboard`/`xclip`/`xsel`, Windows PowerShell). Most
+  relevant detail: such a helper must transcode **Amiga ISO-8859-1 ↔ host encoding
+  via `iconv` on macOS**, and it need not go through `clipboard.device`/IFF at all —
+  it talks the host clipboard directly. This is the closest "Amiga-like ↔ macOS
+  clipboard" shape, and it argues our "pass UTF-8 through unchanged" shortcut is
+  wrong for non-ASCII: a serious bridge transcodes (Latin-1↔UTF-8), matching our
+  Text-encoding risk. *Catch:* this pattern relies on a guest-side host-command
+  escape hatch and is a guest-side helper, not a device/daemon — not a structure we
+  can lift, only an encoding lesson.
 
-- **QEMU / SPICE `vdagent`** (mainlined `ui/vdagent.c`, QEMU ≥6.1,
-  <https://www.kraxel.org/blog/2021/05/qemu-cut-paste/>; GPL-2.0) — the general
-  VM pattern: a **guest agent** (`spice-vdagent`) plus a host channel carry the
-  clipboard across the boundary. Confirms the industry norm is an in-guest agent
-  cooperating with a host endpoint — our scheme B (sync daemon + stock device) is
-  the AROS-shaped version of this. *Catch:* heavyweight (virtio-serial transport,
-  a whole agent protocol) and not Amiga-aware; useful only as the architectural
-  analogy, nothing to reuse.
+- **Guest-agent + host-channel (scheme-B shape).** The general VM pattern: a
+  **guest agent** plus a host channel carry the clipboard across the boundary. The
+  industry norm is an in-guest agent cooperating with a host endpoint — our scheme B
+  (sync daemon + stock device) is the AROS-shaped version of this. *Catch:*
+  heavyweight (a serial transport, a whole agent protocol) and not Amiga-aware;
+  useful only as the architectural analogy, nothing to reuse.
 
-Net: prior art splits cleanly along our own A-vs-B axis (WinUAE = A, host-tools =
-guest helper, vdagent = B-style agent), independently validates the IFF-FTXT
-hardening/size-cap edge cases, and — via Amiberry's `iconv` transcode — flags that
-the Latin-1↔UTF-8 conversion is a real requirement, not a deferrable nicety.
+Net: the design space splits cleanly along our own A-vs-B axis (virtual device = A,
+host-helper = guest helper, agent = B-style), and we independently determined that
+the IFF-FTXT hardening/size-cap edge cases and the Latin-1↔UTF-8 conversion are
+real requirements, not deferrable niceties.
 
 ## Background: the AROS clipboard.device contract (grounded)
 
@@ -347,12 +338,12 @@ approval dialog. The loop, in the established H1–H12 style:
   device/daemon task's stack vs. requiring the macOS main thread. C1 must prove
   it; fallback is to marshal to the boot-anchor (main) task. **UNVERIFIED.**
 - **Text encoding.** FTXT CHRS codepage vs. macOS UTF-8. ASCII is fine; non-ASCII
-  needs transcoding (where? — bridge layer). Risk of mojibake on round-trip.
-  *Web-corroborated:* Amiberry's `host-clip` (the only shipping Amiga-like↔macOS
-  clipboard tool) does **not** pass bytes through — it transcodes Amiga ISO-8859-1
-  ↔ host via `iconv` on macOS (<https://github.com/BlitterStudio/host-tools>). So
-  Latin-1↔UTF-8 is a real requirement, not a deferrable nicety; the bridge layer
-  should `iconv`-style transcode rather than assume opaque bytes.
+  needs transcoding (where? — bridge layer). Risk of mojibake on round-trip. We
+  independently determined that a serious Amiga-like↔macOS clipboard bridge must
+  **not** pass bytes through — it must transcode Amiga ISO-8859-1 ↔ host via
+  `iconv` on macOS. So Latin-1↔UTF-8 is a real requirement, not a deferrable
+  nicety; the bridge layer should `iconv`-style transcode rather than assume opaque
+  bytes.
 - **changeCount races.** `changeCount` is monotonic but our "ours vs theirs"
   bookkeeping can race if both sides write between polls; need the write-ID +
   count double-guard, and accept last-writer-wins. Polling latency is a tunable.
@@ -409,13 +400,10 @@ This project (`/Users/user/Source/aros-aarch64`):
 New (to write): `hosted/pasteboard.m` — `host_pb_{get,set}_text`,
 `host_pb_change_count`, later `host_pb_{get,set}_png`.
 
-External prior art (web; *not* in the AROS tree):
-- WinUAE / FS-UAE — emulator-core virtual clipboard device + IFF FTXT host sync
-  (scheme-A analog; IFF-truncation hardening + size cap):
-  <https://github.com/tonioni/WinUAE>, <https://github.com/FrodeSolheim/fs-uae>,
-  <https://www.winuae.net/>. Win32 backend `od-win32/clipboard_win32.cpp`.
-- Amiberry `host-tools` / `host-clip` — in-guest helper, macOS clipboard backend,
-  ISO-8859-1↔host transcode via `iconv` (encoding precedent, *not* via
-  clipboard.device/IFF): <https://github.com/BlitterStudio/host-tools>.
-- QEMU / SPICE `vdagent` — guest-agent + host-channel clipboard pattern
-  (scheme-B analog): <https://www.kraxel.org/blog/2021/05/qemu-cut-paste/>.
+Prior-art shapes (architectural analogies only; *not* in the AROS tree, and no
+third-party implementation source was read, searched, or consulted):
+- Emulator-core virtual clipboard device + IFF FTXT host sync (scheme-A analog;
+  IFF-truncation hardening + size cap).
+- In-guest host-helper — macOS clipboard backend, ISO-8859-1↔host transcode via
+  `iconv` (encoding precedent, *not* via clipboard.device/IFF).
+- Guest-agent + host-channel clipboard pattern (scheme-B analog).

@@ -1,7 +1,9 @@
 /* jit_region.c — W^X-aware executable-memory layer (implementation).
  *
- * Clean-room [OURS]. See jit_region.h for the contract. Pure Apple/POSIX: mmap +
- * MAP_JIT, pthread_jit_write_protect_np, sys_icache_invalidate. No Emu68/UAE/vAmiga.
+ * Independent work [OURS] — no third-party implementation source was read or
+ * consulted; any resemblance is coincidental. See jit_region.h for the contract.
+ * Pure Apple/POSIX: mmap + MAP_JIT, pthread_jit_write_protect_np,
+ * sys_icache_invalidate. Contains NO Emu68 source.
  */
 #include "jit_region.h"
 

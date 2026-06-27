@@ -1,6 +1,6 @@
 /* cmshell.m — host app-shell controller: menu bar + About + app icon.
  *
- * See cmshell.h for the clean-room provenance and the engine/shell seam. This
+ * See cmshell.h for the provenance and the engine/shell seam. This
  * file is pure AppKit [PUB]; it pulls NO AROS headers and does NOT touch the
  * cocoametal Metal shim. Every menu action routes to the CMShellSink.
  *

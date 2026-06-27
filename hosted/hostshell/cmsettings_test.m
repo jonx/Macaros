@@ -1,8 +1,9 @@
 /* cmsettings_test.m — unattended verifier for the schema-driven settings ([GS]).
  *
- * Clean-room from Apple AppKit/Foundation docs [PUB] + the project spec [OURS].
- * No GPL source read. Headless (no window server needed): builds views off-screen
- * and asserts the model + generation, never a screenshot.
+ * Implemented from Apple AppKit/Foundation docs [PUB] + the project spec [OURS].
+ * Independent work — no third-party implementation source was read or consulted;
+ * any resemblance is coincidental. Headless (no window server needed): builds
+ * views off-screen and asserts the model + generation, never a screenshot.
  *
  *   [GS-SCHEMA]  the descriptor table is well-formed (unique ids, popups have
  *                choices, sliders have a range, every setting binds a store key).

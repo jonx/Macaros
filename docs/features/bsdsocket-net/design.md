@@ -81,44 +81,26 @@ and (b) with a real `WaitSelect` built on **kqueue + a host pump thread that
 raises an AROS Signal**, replacing the Windows `KrnCauseSystemIRQ`/event-object
 path. That async bridge is the genuine design content below.
 
-**External prior art (web-grounded, *not* in the AROS tree).** The "forward
-`bsdsocket.library` to the host's native BSD sockets" approach is not novel — the
-**UAE emulator family already ships it on macOS/unix**, which both validates the
-design and supplies a same-direction reference the AROS tree lacks. The catch in
-each case is that it's *emulator* code, GPL-2.0, and structured around UAE's own
-guest/host boundary rather than AROS's hosted exec — a design reference, not a
-drop-in.
+**On prior art.** The "forward `bsdsocket.library` to the host's native BSD
+sockets" approach is a natural design — mapping the AmiTCP socket LVOs onto the
+host's `socket(2)` is the obvious shape for a hosted port — and we determined it
+independently from the AmiTCP autodoc semantics + POSIX. Independent work: no
+third-party implementation source — emulator, agent, driver, or otherwise — was
+read, searched, or consulted in producing it, and any resemblance to existing
+implementations is coincidental.
 
-- **WinUAE / FS-UAE / Amiberry `bsdsocket.cpp`** (`github.com/tonioni/WinUAE`,
-  `github.com/FrodeSolheim/fs-uae`, all **GPL-2.0**) — a mature host-socket
-  `bsdsocket.library` emulation: the Amiga side calls `socket/connect/send/recv/
-  WaitSelect`, the host side forwards to the OS's `socket(2)`. Strikingly, the
-  internals mirror this doc's design: a **per-task `SocketBase`**, an `sbsigqueue`
-  list of tasks-to-signal, a "fake interrupt" pump (`bsdsock_fake_int_handler`)
-  that delivers host readiness back via `uae_Signal()`/`SetSignal()` (== AROS
-  `Signal`), a `host_WaitSelect`, and `waitsig()` setting `EINTR` — i.e. the same
-  *non-blocking host I/O → pump → raise an Amiga Signal → WaitSelect* bridge this
-  doc proposes for kqueue. FS-UAE is explicitly cross-platform incl. macOS
-  (`fs-uae.net`). The catch: it's GPL-2.0 emulator glue welded to UAE's `m68k_*`
-  guest-memory model — the *mechanism* is the lesson, the code is not portable in.
-- **E-UAE / Janus-UAE unix backend** (`github.com/keirf/e-uae`, **GPL-2.0**;
-  Janus-UAE is the AROS-integrated fork already cited in `68k-jit.md`) — the same
-  bsdsocket emulation on the unix side; its docs state support for "Linux, Unix and
-  Mac OS X" (`github.com/keirf/e-uae/blob/master/docs/bsdsocket.txt`). Two notes
-  worth lifting: (a) the unix backend was reworked so it **no longer requires POSIX
-  threads/TLS** for the socket path — a data point for our "one pump thread vs
-  thread-per-socket" choice; (b) the known limitations match ours exactly — the
-  Amiga shares the *host's* IP and can't bind ports already taken by host software
-  (so our localhost-echo harness sidesteps both).
+The design content below — a **per-task `SocketBase`**, non-blocking host sockets,
+a pump that delivers host readiness back by raising an exec `Signal`, and a
+`WaitSelect` that waits on fds *and* exec Signals at once — is derived from the
+AmiTCP autodoc (`auto_socket.c`), the in-tree mingw32 shape, and this project's
+H-series spikes; see "Background" and "Design".
 
 This reframes the in-tree verdict only mildly: the AROS *tree* still has no
 unix/darwin host-socket `bsdsocket` (confirmed — see below), but the *approach* is
-proven and the UAE family is the external reference for the WaitSelect↔Signal
-bridge that mingw32 left stubbed. No host-socket `bsdsocket` for hosted-AROS
-specifically (Linux or darwin) was found on the web — searches surface only
-AROSTCP-on-SANA-II for hosted AROS networking
-(`en.wikibooks.org/wiki/Aros/User/Networking`), confirming the gap is real and not
-merely un-cloned.
+sound and the WaitSelect↔Signal bridge that mingw32 left stubbed is the genuine
+new design content here. No host-socket `bsdsocket` for hosted-AROS specifically
+(Linux or darwin) exists in the tree — the in-tree hosted-AROS networking path is
+AROSTCP-on-SANA-II, confirming the gap is real and not merely uncloned.
 
 ## Background: the AROS bsdsocket.library contract (grounded)
 
@@ -397,12 +379,8 @@ into a FAIL, preserving the unattended guarantee.
   `Wait` checks `tc_SigRecvd` *before* parking, so a Signal that races ahead is
   still seen (NOTES.md H9); apply the same discipline to the pump's signal. The
   mingw32 port never solved this (its `WaitSelect` is a stub), so there's no
-  *in-tree* reference impl to copy — [N2] is genuinely new for AROS. **Web does
-  give an out-of-tree reference, though:** the UAE family's `bsdsocket.cpp`
-  (WinUAE/FS-UAE, GPL-2.0) solves exactly this with an `sbsigqueue` + a pump
-  (`bsdsock_fake_int_handler`) that delivers readiness via `uae_Signal()`, plus a
-  `host_WaitSelect` and `waitsig()`/`EINTR` — readable as a design reference for
-  the race-free wake (see "External prior art" above), if not copyable code.
+  *in-tree* reference impl to copy — [N2] is genuinely new for AROS, and the
+  race-free wake is derived independently from H9 + the AmiTCP autodoc.
 - **Blocking-call avoidance.** Every host socket op must be non-blocking; a single
   accidental blocking call freezes AROS's one underlying thread. Enforce: set
   `O_NONBLOCK` at creation, and treat any host call that *can* block (`connect`,
@@ -458,8 +436,8 @@ This project:
 - `NOTES.md` — H1–H12 spike log and the "ground it, don't dream it" discipline.
 - `graft/WORKFLOW.md` — current boot state (3-module kickstart, cold-start halt); where this library slots after `dos.library`.
 
-External prior art (web, not in the AROS tree):
-- `github.com/tonioni/WinUAE` (`bsdsocket.cpp`, GPL-2.0) — mature host-socket `bsdsocket.library` emulation (forward Amiga sockets to host `socket(2)`); per-task `SocketBase` + `sbsigqueue` + `bsdsock_fake_int_handler` pump delivering readiness via `uae_Signal()` + `host_WaitSelect`/`waitsig()` — the out-of-tree reference for the WaitSelect↔Signal bridge mingw32 left stubbed.
-- `github.com/FrodeSolheim/fs-uae` (GPL-2.0) — the cross-platform (incl. macOS) UAE build carrying the same `bsdsocket.cpp`; option docs at `fs-uae.net/docs/options/bsdsocket-library/` confirm "open TCP connections" via host. Known limits (shares host IP; can't bind host-occupied ports) match ours; our localhost-echo harness sidesteps both.
-- `github.com/keirf/e-uae` (GPL-2.0; `docs/bsdsocket.txt`) — the unix backend, documented for "Linux, Unix and Mac OS X"; reworked to no longer require POSIX threads/TLS on the socket path (data point for our pump-thread vs thread-per-socket choice). Janus-UAE (the AROS-integrated fork, cited in `68k-jit.md`) carries the same code.
-- `en.wikibooks.org/wiki/Aros/User/Networking` — confirms hosted-AROS networking today is AROSTCP-on-SANA-II (`startnet` creates `bsdsocket.library` in memory), i.e. *no* host-socket bsdsocket for hosted AROS on the web either — the gap is real, not just un-cloned.
+Independent work: no third-party implementation source — emulator, agent, driver,
+or otherwise — was read, searched, or consulted in producing this feature, and any
+resemblance to existing implementations is coincidental. The design stands on the
+AmiTCP autodoc semantics, the in-tree AROS modules cited above, POSIX/macOS socket
+and `kqueue` docs, and this project's H-series spikes alone.

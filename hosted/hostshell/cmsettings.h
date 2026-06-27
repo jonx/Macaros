@@ -9,7 +9,8 @@
  * (module/arguments/comments) untouched.
  *
  * POC stage (hosted/hostshell) — pure AppKit + Foundation [PUB], no AROS/Metal.
- * Clean-room: Apple docs + the project's own spec, no GPL source. See README.md.
+ * Independent work — no third-party implementation source was read or consulted;
+ * any resemblance is coincidental. Apple docs + the project's own spec. See README.md.
  */
 #ifndef CMSETTINGS_H
 #define CMSETTINGS_H

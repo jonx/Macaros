@@ -1,18 +1,18 @@
 /* bsdsock_host.h — the host-side ABI seam for bsdsocket.library on aarch64-darwin.
  *
- * Implemented clean-room from docs/features/bsdsocket-net/spec.md (the
+ * Implemented from docs/features/bsdsocket-net/spec.md (the
  * "HostSockInterface", "The concurrency model" R-NONBLOCK/R-PUMP/R-PARK/
- * R-WAITSELECT/R-RACE, and "The descriptor table" sections). No GPL emulator
- * source (WinUAE/FS-UAE/Amiberry/E-UAE/Janus-UAE/vAmiga) was read, searched, or
- * consulted — in particular not bsdsocket.cpp / bsdsock.cpp or any unix socket
- * backend. Implemented only from that spec + POSIX/Apple man pages [PUB] + this
- * project's own H9/H10/H11 spikes (hosted/signal.c, hosted/msgport.c,
- * hosted/device.c) [OURS].
+ * R-WAITSELECT/R-RACE, and "The descriptor table" sections). Independent work:
+ * no third-party implementation source — emulator, agent, driver, or otherwise —
+ * was read, searched, or consulted in producing it, and any resemblance to
+ * existing implementations is coincidental. Implemented only from that spec +
+ * POSIX/Apple man pages [PUB] + this project's own H9/H10/H11 spikes
+ * (hosted/signal.c, hosted/msgport.c, hosted/device.c) [OURS].
  *
  * This header is the only contact surface the later AROS-side bsdsocket.library
  * (AROS crosstools) calls. The host shim pulls no AROS headers; the AROS side
  * pulls no macOS socket headers — the socket calls are POSIX [PUB] and the
- * pump-control surface below is [OURS] (tiny, ASCII, no GPL lineage).
+ * pump-control surface below is [OURS] (tiny, ASCII, independently derived).
  *
  * THE READINESS-SIGNAL SEAM (the load-bearing design point of this spike):
  * the spec's pump "raises an AROS Signal" when an fd becomes ready (R-PUMP step

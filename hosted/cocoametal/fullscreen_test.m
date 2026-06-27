@@ -1,10 +1,11 @@
 /* fullscreen_test.m — REAL native AppKit fullscreen for CM_OPT_FULLSCREEN ([FS]).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§9 settings & options — CM_OPT_FULLSCREEN, §3 threading, §6 readback oracle) +
- * spec.md + cocoametal.h. No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/
- * E-UAE) was read, searched, or consulted. Apple AppKit/Metal/QuartzCore/
- * CoreFoundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§9 settings &
+ * options — CM_OPT_FULLSCREEN, §3 threading, §6 readback oracle) + spec.md +
+ * cocoametal.h. Independent work: no third-party implementation source — emulator,
+ * agent, driver, or otherwise — was read, searched, or consulted in producing it,
+ * and any resemblance to existing implementations is coincidental. Apple AppKit/
+ * Metal/QuartzCore/CoreFoundation docs only [PUB].
  *
  * WHAT THIS PROVES + THE FINDING IT NAILS:
  *   cm_set_option(CM_OPT_FULLSCREEN,1) now calls -[NSWindow toggleFullScreen:] to

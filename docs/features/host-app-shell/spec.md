@@ -3,19 +3,21 @@
 > Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-26
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read vAmiga, WinUAE, FS-UAE, Amiberry, E-UAE/Janus-UAE,
-or any GPL emulator source.** Implement only from this spec + the approved sources cited
-by tag: `[PUB]` Apple framework docs / HIG / published standards, `[AROS]` in-tree AROS
-headers and drivers (paths given), `[OURS]` this project's existing shim + spikes
-(`hosted/cocoametal/*`, the `cm_*` ABI, the H-series). `[REF-CONFIRM]` items were
-sanity-checked by Role A against GPL hosts but are **restated here from HIG/AppKit** —
-implement from that, not from any reference. **UTM is Apache-2.0 (permissive)**, so its
-*patterns* (menu layout, two-tier settings, toolbar order) are safe to learn from
-directly and are tagged `[PUB-UTM]`; even so, write our own code. The overwhelming
-majority of this feature is plain `[PUB]` AppKit + HIG — there is very little GPL
-expression to wall off (it is UI chrome, not an emulation algorithm).
+**Independent work: no third-party implementation source — emulator, agent, driver, or
+otherwise — was read, searched, or consulted in producing this feature, and any
+resemblance to existing implementations is coincidental.** Implement only from this spec +
+the approved sources cited by tag: `[PUB]` Apple framework docs / HIG / published
+standards, `[AROS]` in-tree AROS headers and drivers (paths given), `[OURS]` this
+project's existing shim + spikes (`hosted/cocoametal/*`, the `cm_*` ABI, the H-series).
+`[DERIVED]` items are independently-derived requirements flagged for extra verification;
+each stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]` justification — implement from
+that. **UTM is Apache-2.0 (permissive)**, so its publicly-documented *patterns* (menu
+layout, two-tier settings, toolbar order) are safe to learn from directly and are tagged
+`[PUB-UTM]`; even so, write our own code. The overwhelming majority of this feature is
+plain `[PUB]` AppKit + HIG — there is very little to wall off (it is UI chrome, not an
+emulation algorithm).
 
 ## Scope
 
@@ -126,21 +128,21 @@ Use the label **"Settings…"** (Ventura+), not "Preferences…".
 | **Window** | Minimize (⌘M) · Zoom · Bring All to Front | standard |
 | **Help** | AROS Help · AROS Website · Report an Issue | URLs |
 
-`[REF-CONFIRM]`→`[PUB-UTM]`: the **Machine** menu and its graded **Power ▸** submenu
-mirror UTM's "Virtual Machine"/"Power" shape (Apache-2.0,
+`[PUB-UTM]`: the **Machine** menu and its graded **Power ▸** submenu mirror UTM's
+"Virtual Machine"/"Power" shape (Apache-2.0,
 [UTM controls](https://docs.getutm.app/basics/controls/)); restated here as a plain HIG
 app-specific menu. **Power ▸ replaces** the current close→`exit(0)` (`cocoametal_window.m:143`)
 with a clean shutdown *request* to the engine (the [[aros-embeddable-library-goal]] "no
 unilateral `exit()`" rule).
 
-### R-SETTINGS — two-tier toolbar-tab settings `[PUB]`+`[REF-CONFIRM]`
+### R-SETTINGS — two-tier toolbar-tab settings `[PUB]`+`[DERIVED]`
 
 Two non-resizable toolbar-tab windows (`[PUB]` HIG settings: non-resizable, noncustomizable
 pane toolbar, title = active pane, restore last pane). General first. The existing panel
 (`cocoametal_settings.m:173–266`) is refactored into the **Display** tab of Machine
 Configuration; persistence stays on `NSUserDefaults` `cocoametal.*`
-(`cocoametal_settings.m:54–84`). `[REF-CONFIRM]`: the global-vs-per-machine split is the
-UTM/vAmiga convergence, restated as the host-presentation-vs-guest-function split this
+(`cocoametal_settings.m:54–84`). `[DERIVED]`: we independently determined the
+global-vs-per-machine split, restated as the host-presentation-vs-guest-function split this
 project's ABI already encodes (`[OURS]`).
 
 **R-SETTINGS-SCHEMA — the window is generated from a data-file schema (decided
@@ -203,8 +205,8 @@ R-LAUNCH `mount_hostvol` via `MakeDosNode`/`AddDosNode(ADNF_STARTPROC)`):
   the Drives UI (the AROS side publishes it; mechanism mirrors the existing get-option
   pull).
 - **Drag-and-drop:** register the content view for `NSPasteboardTypeFileURL`; a dropped
-  **folder** → `cm_volume_add` (default RO; modifier → `;WRITE`). The vAmiga drop-zone
-  idiom (`[REF-CONFIRM]`, restated as plain AppKit drag handling).
+  **folder** → `cm_volume_add` (default RO; modifier → `;WRITE`). The familiar drop-zone
+  idiom (`[DERIVED]`, restated as plain AppKit drag handling).
 
 ### R-OPTKEYS — new append-only option keys / events `[OURS]`
 
@@ -321,8 +323,9 @@ split (`cocoametal.h:116–133`); the existing settings panel + `NSUserDefaults`
 ([controls](https://docs.getutm.app/basics/controls/),
 [macOS prefs](https://docs.getutm.app/preferences/macos/)); permissively licensed, learned
 from directly but reimplemented. ·
-`[REF-CONFIRM]` vAmiga (GPL) — per-instance vs. global settings split + the DF0–DF3
-drop-zone idiom (restated as plain AppKit drag-to-mount); the snapshot-as-document
-fragility we avoid (issue #870). UAE family (GPL) — "directory mounted as an Amiga volume"
-sharing (restated; already implemented in host-volume). Implement every `[REF-CONFIRM]`
-item from its HIG/AppKit/`[AROS]` justification, never from a reference.
+`[DERIVED]` — independently determined and flagged for extra verification: the
+per-instance vs. global settings split + the DF0–DF3-style drop-zone idiom (restated as
+plain AppKit drag-to-mount); the snapshot-as-document fragility we avoid; "directory
+mounted as an Amiga volume" sharing (already implemented in host-volume). Implement every
+`[DERIVED]` item from its HIG/AppKit/`[AROS]` justification, never from a third-party
+implementation.

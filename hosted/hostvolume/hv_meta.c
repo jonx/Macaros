@@ -1,8 +1,9 @@
 /* hv_meta.c — ".<name>.amimeta" per-file metadata sidecar (R-SIDECAR).
  *
- * Implemented clean-room from docs/features/host-volume/spec.md (§Metadata
- * mapping + R-SIDECAR). No GPL emulator source (UAE family or vAmiga) was read,
- * searched, or consulted. The sidecar uses only libc file I/O that the AROS
+ * Implemented from docs/features/host-volume/spec.md (§Metadata mapping +
+ * R-SIDECAR). Independent work — no third-party implementation source was read
+ * or consulted; any resemblance is coincidental. The sidecar uses only libc
+ * file I/O that the AROS
  * overlay's struct LibCInterface already exposes (open/read/write/close/unlink/
  * rename) [AROS] — no xattr, no new dlsym symbol, no Cocoa. Atomicity is
  * write-temp-then-rename, the POSIX atomic replace [PUB]; the temp is created
@@ -10,8 +11,8 @@
  * never collide [PUB]. (Note: mkstemp would be added to the overlay's libc
  * symbol set at graft; the spike proves the mechanism host-side.)
  *
- * The filename (".<base>.amimeta", per-file dotfile — NOT a UAEFSDB-style
- * index), the line-oriented format, the field set, and the "omit when default"
+ * The filename (".<base>.amimeta", per-file dotfile — NOT a single shared index
+ * file), the line-oriented format, the field set, and the "omit when default"
  * rule are OURS (restated in the spec), copied from no reference.
  *
  * Format (line-oriented ASCII, self-describing, forward-compatible):

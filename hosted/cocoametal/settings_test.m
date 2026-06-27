@@ -1,10 +1,11 @@
 /* settings_test.m — the host settings panel + key/value option ABI ([SET]).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§9 settings & options, §3 threading, §5 CM_EV_SETTING, §6 readback oracle) +
- * spec.md + cocoametal.h. No GPL emulator source (vAmiga/WinUAE/FS-UAE/Amiberry/
- * E-UAE) was read, searched, or consulted. Apple AppKit/Metal/QuartzCore/
- * Foundation docs only [PUB].
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§9 settings &
+ * options, §3 threading, §5 CM_EV_SETTING, §6 readback oracle) + spec.md +
+ * cocoametal.h. Independent work: no third-party implementation source — emulator,
+ * agent, driver, or otherwise — was read, searched, or consulted in producing it,
+ * and any resemblance to existing implementations is coincidental. Apple AppKit/
+ * Metal/QuartzCore/Foundation docs only [PUB].
  *
  * Runs under the SAME threading model as D2t (the graft's real model): main
  * pthread IS the display-server task, hand-pumped

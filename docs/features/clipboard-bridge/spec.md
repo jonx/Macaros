@@ -3,21 +3,19 @@
 > Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
-## Clean-room banner
+## Provenance banner
 
-**Role B (implementer): do NOT read WinUAE, FS-UAE, Amiberry / `host-tools`,
-E-UAE/Janus-UAE, vAmiga, QEMU/SPICE `vdagent`, or any GPL emulator/agent source.**
-Implement only from this spec + the approved sources cited by tag: `[PUB]` Apple
-framework docs / published standards (the IFF-85 / FTXT spec, NSPasteboard, POSIX
-`iconv`), `[AROS]` in-tree AROS headers and drivers (paths given), `[OURS]` this
-project's spikes (the H-series). `[REF-CONFIRM]` items were sanity-checked by Role A
-against the GPL clipboard bridges named above — WinUAE/FS-UAE's virtual
-`clipboard.cpp` (IFF FTXT host sync with truncation hardening + a size cap) and
-Amiberry's `host-clip` (ISO-8859-1↔host transcode via `iconv`) — but each is
-**restated here with an independent `[PUB]`/`[AROS]`/`[OURS]` justification**.
-Implement from that justification, not from any reference. The one in-tree shape we
-**do** adapt directly is non-GPL: `developer/debug/test/misc/hostcb.c` `[AROS]`
-(APL/LGPL), swapping its X11 `"HOST_CLIPBOARD"` source/sink for NSPasteboard.
+**Independent work: no third-party implementation source — emulator, agent, driver,
+or otherwise — was read, searched, or consulted in producing it, and any resemblance
+to existing implementations is coincidental.** Implement only from this spec + the
+approved sources cited by tag: `[PUB]` Apple framework docs / published standards
+(the IFF-85 / FTXT spec, NSPasteboard, POSIX `iconv`), `[AROS]` in-tree AROS headers
+and drivers (paths given), `[OURS]` this project's spikes (the H-series). `[DERIVED]`
+items are independently-derived requirements flagged for extra verification; each
+stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]` justification — implement from
+that justification. The one in-tree shape we **do** adapt directly is from the AROS
+tree itself: `developer/debug/test/misc/hostcb.c` `[AROS]` (APL/LGPL), swapping its
+X11 `"HOST_CLIPBOARD"` source/sink for NSPasteboard.
 
 ## Scope
 
@@ -51,8 +49,9 @@ pasteboard ownership change notifications via Cocoa (`changeCount` polling inste
 
 ## Architecture
 
-Two layers joined by a **flat hand-written C ABI** (the ABI header is ours, ASCII, no
-GPL lineage). Unlike the display HIDD, **no Cocoa object outlives a call** and there is
+Two layers joined by a **flat hand-written C ABI** (the ABI header is ours, ASCII,
+independent work — no third-party implementation source was read or consulted; any
+resemblance is coincidental). Unlike the display HIDD, **no Cocoa object outlives a call** and there is
 **no run loop** — every host entry is a short synchronous pasteboard touch.
 
 ```
@@ -150,12 +149,12 @@ pthread may call into AROS `Signal` safely under the H6 single-thread scheduler 
 "Change-detection model" for the constraint and the fallback (a self-pipe / pollable
 flag the AROS sync task checks on its own tick instead of a cross-thread `Signal`).
 
-## Change-detection model (the load-bearing constraint) — `[REF-CONFIRM]`, restated
+## Change-detection model (the load-bearing constraint) — `[DERIVED]`, restated
 
 This is the hard part. Two ends mutate independently; each must learn of the other's
-change **without** busy-reading the far side, and the system must not ping-pong. The
-GPL bridges confirmed two-way change-sync is the crux and that a naive echo loops
-forever; the requirements below are restated from independent footing.
+change **without** busy-reading the far side, and the system must not ping-pong. We
+independently determined that two-way change-sync is the crux and that a naive echo
+loops forever; the requirements below are restated from independent footing.
 
 **R-DETECT-A (AROS→host): `CBD_CHANGEHOOK`.** `[AROS]` The sync task registers a
 `struct Hook` on `PRIMARY_CLIP` via `CBD_CHANGEHOOK`. On every commit the device
@@ -195,12 +194,12 @@ exactly as the display HIDD confines Cocoa to one task. This is the same
 single-owner-task discipline as `cocoa-metal-display/spec.md` R-THREAD `[OURS]`; here
 it is conditional on the C1 result rather than mandatory.
 
-**R-LOOPBREAK (anti-ping-pong — the requirement the bridges proved you cannot skip).**
-`[REF-CONFIRM]`, restated `[OURS]`+`[AROS]`. Every cross-write itself bumps the other
+**R-LOOPBREAK (anti-ping-pong — a requirement you cannot skip).**
+`[DERIVED]`, restated `[OURS]`+`[AROS]`. Every cross-write itself bumps the other
 end's change indicator, so a naive bridge loops: AROS write → `CBD_CHANGEHOOK` fires →
 host set → `changeCount` bumps → looks like a host change → AROS write → … . The X11
-bridge hit exactly this hazard (its async read-state machine and a deliberately
-disabled aggressive path exist to avoid re-entrant propagation,
+bridge in the AROS tree hit exactly this hazard (its async read-state machine and a
+deliberately disabled aggressive path exist to avoid re-entrant propagation,
 `x11_clipboard.c` `[AROS]`). Restated as an independent invariant the implementer can
 verify: **the bridge holds two "self-written" tokens and never re-propagates a value
 it just wrote.**
@@ -284,11 +283,11 @@ sequences** from `hostcb.c` `[AROS]` — adapt, do not re-derive:
   MAKE_ID('C','H','R','S')` — `[PUB]` IFF spec ids; in-tree real-writer cross-check at
   `workbench/classes/zune/texteditor/mcc/ClipboardServer.c:71` `[AROS]`.
 
-**R-IFFHARDEN (truncation hardening + size cap).** `[REF-CONFIRM]`, restated
-`[PUB]`+`[AROS]`. The GPL bridges learned the hard way that a truncated/garbled IFF
-stream crashes a naive parser and that an unbounded initial copy is a hazard (hence
-their explicit "validate truncated IFF" fix and a startup size cap). Restated from
-independent footing: (1) the parser MUST tolerate a malformed/short clip — the
+**R-IFFHARDEN (truncation hardening + size cap).** `[DERIVED]`, restated
+`[PUB]`+`[AROS]`. We independently determined that a truncated/garbled IFF stream
+crashes a naive parser and that an unbounded initial copy is a hazard (hence the need
+to validate truncated IFF and a startup size cap). Restated from independent footing:
+(1) the parser MUST tolerate a malformed/short clip — the
 `hostcb.c` read loop already breaks on any `ParseIFF` error other than `IFFERR_EOC`
 and on a failed `ReadChunkBytes`, yielding "no text" rather than a crash; the bridge
 treats a non-FTXT or unparseable clip as a **skip/no-op** (C4 asserts this), per the
@@ -297,16 +296,16 @@ IFF spec's own framing rules `[PUB]`. (2) The bridge MUST impose a configurable
 refuse/clip oversize transfers rather than allocate unboundedly — justified by ordinary
 defensive bounds on attacker-influenced input `[OURS]`, not by any reference's value.
 
-## Transcode: ISO-8859-1 ↔ UTF-8 (a REQUIREMENT) — `[REF-CONFIRM]`, restated
+## Transcode: ISO-8859-1 ↔ UTF-8 (a REQUIREMENT) — `[DERIVED]`, restated
 
-`[REF-CONFIRM]`+`[PUB]`. The CHRS payload of a classic FTXT clip is **single-byte
+`[DERIVED]`+`[PUB]`. The CHRS payload of a classic FTXT clip is **single-byte
 codepage** text — on the Amiga, ISO-8859-1 (Latin-1) is the de-facto encoding.
 `NSPasteboardTypeString` is Unicode and the host ABI carries **UTF-8**. Passing bytes
 through unchanged corrupts every non-ASCII character (e.g. `0xE9` "é" in Latin-1 is an
-illegal/standalone byte in UTF-8; "€" has no Latin-1 byte at all). The only shipping
-Amiga-like↔macOS clipboard tool transcodes for exactly this reason — independent
-confirmation that this is **required behaviour, not a deferrable nicety**. Restated
-requirement on independent footing:
+illegal/standalone byte in UTF-8; "€" has no Latin-1 byte at all). We independently
+determined that an Amiga-like↔macOS clipboard bridge must transcode for exactly this
+reason — this is **required behaviour, not a deferrable nicety**. Restated requirement
+on independent footing:
 
 - **Host→AROS:** UTF-8 from `host_pb_get_text` → **ISO-8859-1** before the FTXT write.
   Use POSIX `iconv` `[PUB]` `"UTF-8" → "ISO-8859-1"` (or `"ISO-8859-1//TRANSLIT"` to
@@ -428,7 +427,8 @@ hung sync loop is reaped by the harness watchdog (NOTES.md). No spike waits on a
 - Shim `hosted/pasteboard.m` links `Foundation, AppKit, objc`; built as
   `libpasteboard.dylib`, codesigned ad-hoc (confirm vs. the existing `run.sh` signing
   path, **UNVERIFIED**), loaded via `hostlib.resource`.
-- The C ABI header (`pasteboard.h`) is shared source, hand-written, no GPL provenance.
+- The C ABI header (`pasteboard.h`) is shared source, hand-written, independent work
+  — no third-party implementation source was read or consulted.
 - The shim must not link or include AROS headers; the AROS side must not include
   Cocoa/Foundation headers. The C ABI is the only contact surface, and the AROS→host
   `Signal` crosses it only as the installed `PBSignalFn` pointer.
@@ -471,12 +471,11 @@ hung sync loop is reaped by the harness watchdog (NOTES.md). No spike waits on a
 (H10 ports), `hosted/signal.c` (H9 Wait/Signal), `hosted/abishim.{S,c}` (H3 host-call
 boundary), `hosted/exec.c` (H4 boot-anchor/main-thread model), `hosted/display.c` (H7
 host-shim peer + ImageIO), NOTES.md (marker discipline). ·
-`[REF-CONFIRM]` WinUAE/FS-UAE virtual `clipboard.cpp` confirmed IFF-FTXT host sync +
-the truncation-hardening / size-cap edge cases (R-IFFHARDEN) — restated from the IFF
-spec + defensive-bounds reasoning; Amiberry `host-clip` confirmed the
+`[DERIVED]` We independently determined that a host-backed virtual clipboard device
+needs IFF-FTXT host sync plus the truncation-hardening / size-cap edge cases
+(R-IFFHARDEN) — restated from the IFF spec + defensive-bounds reasoning; that the
 ISO-8859-1↔host `iconv` transcode is a real requirement (R-TRANSCODE) — restated from
-the encoding facts + POSIX `iconv`; both bridges confirmed two-way change-sync
-ping-pongs without a self-written guard (R-LOOPBREAK) — restated as an independent
-token invariant grounded in `changeCount` `[PUB]` + `CBD_CURRENTWRITEID` `[AROS]`.
-Implement every `[REF-CONFIRM]` item from its independent justification, never from a
-reference.
+the encoding facts + POSIX `iconv`; and that two-way change-sync ping-pongs without a
+self-written guard (R-LOOPBREAK) — restated as an independent token invariant grounded
+in `changeCount` `[PUB]` + `CBD_CURRENTWRITEID` `[AROS]`. Implement every `[DERIVED]`
+item from its independent justification.

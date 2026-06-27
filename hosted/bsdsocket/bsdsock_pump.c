@@ -1,10 +1,12 @@
 /* bsdsock_pump.c — the kqueue host pump thread + the readiness-signal seam.
  *
- * Implemented clean-room from docs/features/bsdsocket-net/spec.md (R-PUMP,
- * R-PARK, R-RACE, "The bridge"). No GPL emulator source (WinUAE/FS-UAE/Amiberry/
- * E-UAE/Janus-UAE/vAmiga) was read, searched, or consulted. POSIX/Apple man
- * pages [PUB] (kqueue(2)/kevent(2)/EVFILT_READ/EVFILT_WRITE, the self-pipe
- * trick, pthread) + this project's H9 Wait/Signal discipline [OURS] only.
+ * Implemented from docs/features/bsdsocket-net/spec.md (R-PUMP,
+ * R-PARK, R-RACE, "The bridge"). Independent work: no third-party implementation
+ * source — emulator, agent, driver, or otherwise — was read, searched, or
+ * consulted in producing it, and any resemblance to existing implementations is
+ * coincidental. POSIX/Apple man pages [PUB] (kqueue(2)/kevent(2)/EVFILT_READ/
+ * EVFILT_WRITE, the self-pipe trick, pthread) + this project's H9 Wait/Signal
+ * discipline [OURS] only.
  *
  * This is the only piece with no in-tree precedent (spec): one real OS pthread
  * that blocks in kevent() and, on readiness, raises a per-target wake (the

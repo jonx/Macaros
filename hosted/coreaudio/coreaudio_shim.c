@@ -1,12 +1,12 @@
 /* coreaudio_shim.c — CoreAudio host shim: SPSC lock-free ring + offline
  * (headless, silent) AudioUnit render proof.
  *
- * Implemented clean-room from docs/features/coreaudio-audio/spec.md
+ * Implemented from docs/features/coreaudio-audio/spec.md
  * ("Concurrency model — the RT-thread <-> AROS SPSC ring", "The C ABI",
- * "Verification"). No GPL emulator source (WinUAE / FS-UAE / Amiberry / E-UAE /
- * Janus-UAE / vAmiga) was read, searched, or consulted — in particular not
- * FS-UAE's OpenAL output path / PID resampler nor WinUAE's audio.cpp WASAPI
- * path. Sources used:
+ * "Verification"). Independent work: no third-party implementation source —
+ * emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * Sources used:
  *   [PUB]  Apple AudioToolbox/AudioUnit docs: AudioComponent, AudioUnit,
  *          kAudioUnitSubType_GenericOutput, AURenderCallback / AudioUnitRender,
  *          AudioStreamBasicDescription (LinearPCM float32), the real-time

@@ -2,7 +2,7 @@
 
 > Status: **v1 — proposed, freezing in progress** · Drafted 2026-06-25
 > Both sides build against *this* file. The host shim (`hosted/cocoametal/`, Apple
-> clang, John's clean-room implementation) and the AROS driver
+> clang, John's independent implementation) and the AROS driver
 > (`arch/all-darwin/hidd/cocoa/`, AROS crosstools, mine) meet at exactly one seam:
 > **`cocoametal.dylib` + the flat-C `cm_*` ABI in `cocoametal.h`.** Nothing else
 > crosses. Any change here is a change to *both* sides and a version bump (§7).

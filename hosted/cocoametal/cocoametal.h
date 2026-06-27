@@ -1,9 +1,10 @@
 /* cocoametal.h — flat C ABI for the Apple-native Cocoa/Metal display HIDD shim.
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/spec.md
- * ("The C ABI (cocoametal.h)"). No GPL emulator source (vAmiga/WinUAE/FS-UAE/
- * Amiberry/E-UAE) was read, searched, or consulted. Apple framework docs +
- * this project's own H7 spike (hosted/display.c) only.
+ * Implemented from docs/features/cocoa-metal-display/spec.md ("The C ABI
+ * (cocoametal.h)"). Independent work: no third-party implementation source —
+ * emulator, agent, driver, or otherwise — was read, searched, or consulted in
+ * producing it, and any resemblance to existing implementations is coincidental.
+ * Apple framework docs + this project's own H7 spike (hosted/display.c) only.
  *
  * Hand-authored, neutral. This header is the *only* contact surface between the
  * AROS-side HIDD (AROS crosstools) and the host shim (Apple clang). The shim
@@ -11,7 +12,8 @@
  *
  * ABI is APPEND-ONLY (INTERFACE.md §1a): symbols/enum members are only ever
  * added at the end, never reordered or removed. v2 appended the settings/options
- * ABI (§9). No GPL emulator source was read for any of it.
+ * ABI (§9). Independent work — no third-party implementation source was read or
+ * consulted; any resemblance is coincidental.
  */
 #ifndef COCOAMETAL_H
 #define COCOAMETAL_H

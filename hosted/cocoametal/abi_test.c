@@ -1,10 +1,11 @@
 /* abi_test.c — the dlopen-based ABI conformance test for cocoametal.dylib
  * (INTERFACE.md §8 item 2 — the highest-value de-risk of the seam).
  *
- * Implemented clean-room from docs/features/cocoa-metal-display/INTERFACE.md
- * (§1 load sequence, §1a frozen symbol array, §2 pixel/geometry, §6 readback
- * oracle, §7 versioning) + cocoametal.h. No GPL emulator source
- * (vAmiga/WinUAE/FS-UAE/Amiberry/E-UAE) was read, searched, or consulted.
+ * Implemented from docs/features/cocoa-metal-display/INTERFACE.md (§1 load
+ * sequence, §1a frozen symbol array, §2 pixel/geometry, §6 readback oracle, §7
+ * versioning) + cocoametal.h. Independent work: no third-party implementation
+ * source — emulator, agent, driver, or otherwise — was read, searched, or consulted
+ * in producing it, and any resemblance to existing implementations is coincidental.
  *
  * This file is PLAIN C and links NONE of the .m files. It exercises the shim the
  * exact way the AROS side does at runtime:

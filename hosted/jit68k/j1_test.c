@@ -1,8 +1,9 @@
 /* j1_test.c — [J1]: prove a JIT code cache works under Apple-Silicon W^X.
  *
- * Clean-room [OURS]. Standalone spike for docs/features/68k-jit/spec.md [J1].
- * Pure Apple/POSIX — touches NO Emu68/UAE/vAmiga/translator source. Builds on the
- * reusable executable-memory API in jit_region.{h,c} that [J2] (the adapted Emu68
+ * Independent work [OURS] — no third-party implementation source was read or
+ * consulted; any resemblance is coincidental. Standalone spike for
+ * docs/features/68k-jit/spec.md [J1]. Pure Apple/POSIX. Builds on the reusable
+ * executable-memory API in jit_region.{h,c} that [J2] (the adapted Emu68
  * emitter) and the native LoadSeg path will share.
  *
  * What it proves, unattended, value-asserting (no-crash is necessary, never
