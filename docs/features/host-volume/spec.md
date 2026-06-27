@@ -1,7 +1,36 @@
 # Implementation spec — Host volume (a macOS folder as an AROS volume)
 
-> Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: **IMPLEMENTED & verified on darwin-aarch64 (2026-06-26)** · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
+
+## Implementation status (2026-06-26)
+
+All requirements are grafted into the live AROS `emul-handler` (`aros-upstream`,
+branch `aarch64-darwin-graft`) and verified two-sided on hosted AROS:
+
+| Req | What | Status | Verified by |
+|-----|------|--------|-------------|
+| R-WRITE | read-only default + `;WRITE` keyword + write guard | **done** | host writes blocked on RO, land on RW (two boots) |
+| (launcher) | `AROS_HOST_VOLUME` env-var mount (our keyword path) | **done** | `run-window.sh` maps a folder as `MacRO:`/`MacRW:` |
+| R-NORM | NFC normalization at the bridge | **done** | NFD-on-disk `café` reached by NFC name |
+| R-CHARSET | Latin-1 ↔ UTF-8 | **done** | `grün`/`naïve` round-trip both ways |
+| R-ESCAPE | reversible `%uXXXX` for non-Latin-1 | **done** | `œ`/`%u0153` round-trips (lookup + create) |
+| R-SIDECAR | `.amimeta` comment + AmigaOS-only prot bits | **done** | `Filenote`/`Protect` → sidecar; `List` shows `sp`; hidden from `Dir` |
+| R-CASE | case-sensitivity guard (`pathconf`) | **done** (no-op on the case-insensitive Mac; sensitive-volume path UNVERIFIED here) | NFD lookup unregressed after the guard |
+
+New overlay modules: `emul_norm.c` (NFC), `emul_charset.c` (Latin-1/UTF-8 +
+escape), `emul_meta.c` (sidecar). Name bridge hooks in `makefilename` (core),
+`DoExamineNext`/`DoExamineEntry`/`fixcase` (overlay); sidecar hooks in those
+examines plus `DoChMod`/`DoRename`/`DoDelete`/`DoSetComment` and the `emul_dir`
+enumeration skip. **Deviations (intentional):** (1) the sidecar's atomic write
+uses `open(O_CREAT|O_TRUNC)` on a per-task temp name, not `mkstemp` (not in the
+overlay's libc symbol set; one handler process per volume serialises writes);
+(2) the comment is stored as escaped AROS (Latin-1) bytes, round-trip-exact, not
+re-encoded to UTF-8; (3) the NFC tables cover the Latin range only — the spike's
+documented scope boundary; full UCD tables remain a production TODO; (4) name
+translation is `HOST_OS_darwin`-guarded so other unix hosts are byte-for-byte
+unchanged; (5) `ACTION_SAME_LOCK` still uses `strcasecmp` (the `fixcase` R-CASE
+guard is the load-bearing part).
 
 ## Clean-room banner
 
@@ -47,7 +76,7 @@ trip* on Apple Silicon.
   `GetCurrentDir()` and names the volume `System:` (`emul_handler.c:559,617,655–663`)
   `[AROS]`. First observable win needs *no* Mountlist.
 
-### New code to write (this spec) — the four hard parts + bring-up
+### New code to write (this spec) — the hard parts + bring-up
 
 1. **Unicode normalization at the bridge** — normalize BOTH the AROS-side name and every
    `readdir` result to one agreed form before any comparison. APFS is a *bag of bytes*;
@@ -59,7 +88,11 @@ trip* on Apple Silicon.
    file** (decision + justification below). (§Metadata sidecar.)
 4. **Mac path/charset glue** — Latin-1 filename bytes ↔ host UTF-8, layered on the
    existing pure-ASCII `filenames.c` surgery. (§Charset.)
-5. **Bring-up wiring** — make mmake select the `all-unix` overlay for the darwin-aarch64
+5. **Explicit write-enable mount mode** — host folders mount read-only by default.
+   `dir`/`type`/copy-out work without extra flags; AROS-originated mutation is allowed
+   only when the mount string explicitly opts in with `WRITE`, `W`, or `RW`.
+   (§Access mode.)
+6. **Bring-up wiring** — make mmake select the `all-unix` overlay for the darwin-aarch64
    target; bring up `unixio.hidd`; add the `Mac:` Mountlist entry. (§Build/mount.)
 
 ### Out (non-goals, this spec)
@@ -215,6 +248,54 @@ spike's narrow table is an intentional, documented scope boundary, not a correct
   unchanged. **UNVERIFIED:** whether `_PC_CASE_SENSITIVE` is reliable across APFS
   variants; fallback is a mount option `CASE=SENSITIVE|INSENSITIVE` in the Mountlist.
 
+### Access mode — read-only by default, write is OUR keyword (`[AROS]` + `[OURS]`) — IMPLEMENTED
+
+The normal host volume is **read-only**: AROS can list, read, examine, and copy files out
+of the host folder, and host-side changes are reflected on the next directory scan. This
+is the default because a mounted macOS folder is outside AROS's sandbox and should not be
+mutable unless the user deliberately opts in. **Read-only is OUR policy**, layered on top
+of AROS's normal mount path; a host volume that does not carry our explicit write keyword
+stays read-only no matter how it was mounted.
+
+- **Requirement R-WRITE (done).** Add an explicit write-enable keyword, spelled `WRITE`,
+  `W`, or `RW`, parsed from the trailing option grammar of `fssm_Device`. Only a
+  write-enabled host volume may create, modify, rename, delete, or set date/protection/
+  comment metadata (and write sidecar metadata). `READONLY` / `RO` are accepted, redundant
+  aliases. The boot/root volume (empty device string → `System:`) is writable; every
+  *explicit host-folder* mount defaults to read-only.
+- **The keyword is ours, not AROS's — do NOT pass it through the Mount command.** The
+  option lives in `fssm_Device` as `<VolumeName>:<hostpath>[;WRITE|;W|;RW][;READONLY|;RO]`,
+  and `new_volume` strips the suffix before `GetHomeDir`/normalization/lookup. But AROS's
+  `Mount` command runs a mountlist `Device` value through `preparefile()`, which turns a
+  bare `;` into whitespace (keyword silently lost → safely read-only) and **fails outright
+  on a quoted `";…;WRITE"`** ("Mount Failed"). So the keyword is delivered **only by our
+  own mount path** (see Delivery), never handed to `Mount`. A declarative mountlist host
+  folder is therefore always read-only — which is the correct, safe default.
+- **Delivery — the launcher hook (R-LAUNCH, done).** `emul-handler` mounts a host folder
+  named in the `AROS_HOST_VOLUME` host environment variable, building `fssm_Device`
+  itself: `AROS_HOST_VOLUME="Mac:~/Amiga"` (read-only) or `AROS_HOST_VOLUME="Mac:~/Amiga;WRITE"`
+  (read/write). This is a programmatic `MakeDosNode`/`AddDosNode(ADNF_STARTPROC)` done in a
+  `mount_hostvol()` init function registered **after** `host_startup` (so the host libc
+  used to read the env var is up — `ADD2INITLIB` runs ascending, so `host_startup` pri 0
+  before a pri-10 hook; doing it in `startup()` pri −10 dereferences a NULL `SysIFace` and
+  traps). The launcher is the seed of the `run-window.sh --host-volume` developer UX.
+- **Where to enforce.** Unless R-WRITE is enabled, enforce write protection in the packet
+  handler before any host syscall or sidecar write. Block `ACTION_FINDOUTPUT`,
+  write-capable `ACTION_FINDUPDATE`,
+  `ACTION_WRITE`, `ACTION_CREATE_DIR`, `ACTION_DELETE_OBJECT`, `ACTION_RENAME_OBJECT`,
+  `ACTION_SET_PROTECT`, `ACTION_SET_DATE`, `ACTION_SET_FILE_SIZE`, `ACTION_MAKE_LINK`,
+  `ACTION_SET_COMMENT`, and sidecar updates/removes. Existing read handles, `ACTION_READ`,
+  `ACTION_SEEK`, `ACTION_EXAMINE_*`, `ACTION_INFO`, `ACTION_DISK_INFO`,
+  `ACTION_LOCATE_OBJECT`, locks, and copy-out from the host volume continue to work.
+- **DOS semantics.** Rejected mutating packets return `DOSFALSE` with
+  `ERROR_DISK_WRITE_PROTECTED`. `ACTION_WRITE` on an already-open file returns `-1` with
+  `ERROR_DISK_WRITE_PROTECTED`, matching the packet's byte-count convention. `InfoData`
+  / `ACTION_DISK_INFO` reports `id_DiskState = ID_WRITE_PROTECTED` by default and
+  `ID_VALIDATED` only for an explicit write-enabled mount.
+- **Host permissions still matter.** R-WRITE only removes the AROS-side guard; it is not
+  a substitute for POSIX permissions. In write-enabled mode, host `EACCES`/`EROFS` errors
+  still surface through the existing errno→DOS-error path.
+
 ### Charset — `[PUB]` + `[AROS]`
 
 AmigaOS/AROS filenames are a byte string conventionally interpreted as **ISO-8859-1
@@ -229,15 +310,16 @@ work and is charset-agnostic for ASCII. New code:
   so the name still appears (and round-trips) in AROS.
 - **Escape scheme (R-ESCAPE, `[REF-CONFIRM]`, restated `[PUB]`/`[OURS]`).** Use a single
   reserved ASCII marker byte followed by the hex of the offending code point (our own
-  ASCII convention, e.g. `%uXXXX`), chosen so it is (a) reversible, (b) valid in both an
-  AROS and a POSIX name, (c) collision-free by also escaping the marker byte itself, and
-  (d) symmetric — an AROS name already containing the marker is escaped on the way out
-  so a host round-trip reproduces it. *Independent justification:* this is the standard
-  "reversible percent/hex escape of un-representable code points" `[PUB]`; design.md's
-  web note records that the UAE family escapes host-illegal characters for portability —
-  that only **confirms** an escape is needed; the marker byte, the hex format, and the
-  self-escaping rule are **ours**, not copied. Role B picks the exact marker and writes
-  the table; no UAE escaping table is used.
+  ASCII convention, e.g. `%uXXXX`). The scheme is valid in both AROS and POSIX names and
+  is reversible for host-originated names that contain code points outside Latin-1.
+  It is **not** globally collision-free for arbitrary AROS-created text: the exact
+  escape spellings are a reserved namespace, documented below. *Independent
+  justification:* this is the standard "reversible percent/hex escape of
+  un-representable code points" `[PUB]`; design.md's web note records that the UAE
+  family escapes host-illegal characters for portability — that only **confirms** an
+  escape is needed; the marker byte, the hex format, and the reserved-name policy are
+  **ours**, not copied. Role B picks the exact marker and writes the table; no UAE
+  escaping table is used.
 - **Reversibility (load-bearing — the escape MUST decode).** The escape is only useful if
   it genuinely round-trips: the AROS→host direction (`hv_latin1_to_utf8`) **decodes**
   `%uXXXX` back to the real code point (emitted as UTF-8), and decodes `%u0025`→`%`. A
@@ -249,14 +331,16 @@ work and is charset-agnostic for ASCII. New code:
   astral one. A variable-length hex run is **wrong** — a hex digit in the following text
   (the `d` in `%u0025done`) would bleed into the escape and corrupt the decode. Fixed width
   makes the escape boundary independent of what follows.
-- **Ambiguity policy (`[OURS]`).** Encode (host→AROS) **always** escapes a literal `%` as
-  `%u0025`, so any `%u`+4hex (or `%U`+6hex) in an AROS name is **unambiguously** one of our
-  escapes and is decoded; a bare `%` **not** in that exact shape is a literal `%` and passes
-  through unchanged. **Residual ambiguity (documented, accepted for the spike):** a user who
-  literally types the exact sequence `%uXXXX`/`%UXXXXXX` in an AROS name will have it decoded
-  to the corresponding code point on the way to the host — i.e. the marker convention
-  reserves those two exact textual shapes. This is the single, narrow, documented exception;
-  ordinary names (including stray `%`) are unaffected.
+- **Ambiguity / reserved-name policy (`[OURS]`).** Encode (host→AROS) **always** escapes a
+  literal `%` as `%u0025`, so host-originated names round-trip without ambiguity. In the
+  AROS→host direction, `%u`+4hex and `%U`+6hex are treated as reserved escape spellings
+  and decoded; a bare `%` **not** in that exact shape is a literal `%` and passes through
+  unchanged. Consequence: an AROS user who intentionally creates the literal text
+  `%uXXXX`/`%UXXXXXX` has requested the reserved escape spelling and it will become the
+  corresponding Unicode code point on the host. This is an explicit namespace reservation,
+  not a collision-free mapping for every possible AROS byte string. If later we need fully
+  collision-free AROS-created names, add a sidecar name map instead of overloading the
+  visible filename alone.
 - **Ordering (load-bearing).** The pipeline is strictly:
   - AROS→host: `Latin1→UTF-8` → `NFC-normalize` → splice/`shrink` → host call.
   - host→AROS: `readdir` bytes → `NFC-normalize` → compare / `UTF-8→Latin1 (+escape)`
@@ -317,6 +401,11 @@ comment <UTF-8 bytes of the AROS comment, percent-escaped past printable ASCII>
 - **Excluded from enumeration:** `DoExamineNext`/`DoExamineAll`/`ReadDir` must skip names
   matching `.*.amimeta` (extend the existing `is_special_dir` skip in `emul_dir.c:18`
   with an `.amimeta`-suffix skip) so sidecars never appear as AROS files.
+- **Reserved host namespace:** because `.*.amimeta` is hidden from AROS enumeration, that
+  filename shape is reserved for metadata inside a mounted host volume. A pre-existing
+  host file with that shape is intentionally treated as sidecar data, not as a user file.
+  If that reservation becomes too broad, move metadata to a single hidden directory or an
+  index file instead of silently exposing colliding files.
 - **Comment hook:** replace `fib_Comment[0]='\0'` (`emul_host.c:1119`) and the
   `ED_COMMENT` empty-string (`emul_host.c:1016–1018`) with "read sidecar; if present and
   has `comment`, copy it; else empty".
@@ -348,18 +437,25 @@ The new code above lives in the overlay; these are the wiring tasks that make it
 - **Off_t guard (R-OFFT).** `HOST_LONG_ALIGNED` (the split-lseek hack, `emul_unix.h:48–
   54`, `:97–98`) is `__arm__`/iOS-only and must stay **off** for darwin-aarch64 (macOS
   arm64 `off_t` is plain 64-bit). Verify the macro is not defined for this target.
-- **Mount.** Default boot volume self-mounts as `System:` (no Mountlist) — first win.
-  For a named Mac folder, add a Mountlist entry modelled on the in-tree `HOME:`
-  (`workbench/devs/Mountlist:98–106`):
+- **Mount — two paths.** Default boot volume self-mounts as `System:` (no Mountlist).
+  (1) **Declarative, read-only.** A Mountlist entry modelled on the in-tree `HOME:`
+  (`workbench/devs/Mountlist`) mounts a host folder **read-only** — the write keyword is
+  deliberately not exposed to `Mount`:
   ```
   MAC:
       FileSystem = emul-handler
       Device     = Mac:~/Amiga
       DOSType    = 0x454D5500
   ```
-  `Device` is `<VolumeName>:<hostpath>`; `~` → `$HOME` via `GetHomeDir`. Equivalent
-  programmatic path: `MakeDosNode`/`AddDosNode(ADNF_STARTPROC)` with the host path in
-  `FileSysStartupMsg.fssm_Device`, as `emul_init.c` already does for the `EMU` node.
+  `Device` is `<VolumeName>:<hostpath>`; `~` → `$HOME` via `GetHomeDir`.
+  (2) **Our launcher, read-only or read/write.** Set the `AROS_HOST_VOLUME` host env var
+  before booting; `emul_init.c`'s `mount_hostvol()` builds the node via `MakeDosNode`/
+  `AddDosNode(ADNF_STARTPROC)` with the value as `fssm_Device`, so our `;WRITE` keyword
+  reaches `new_volume` intact (never passing through `Mount`):
+  ```
+  AROS_HOST_VOLUME="Work:~/Amiga"        # read-only
+  AROS_HOST_VOLUME="Work:~/Amiga;WRITE"  # read/write
+  ```
 - **Prerequisite (gating).** The handler is a `.resource` started as a DOS process; it
   needs `dos.library` + `expansion.library` + the boot module set. The current kickstart
   halts at cold-start (WORKFLOW F1); `dos.library` + the F2 boot set are the prerequisite
@@ -371,11 +467,12 @@ The loop is the project's existing one: `graft/build-darwin-aarch64.sh` builds; 
 AROS runs headless via `~/aros-darwin/run.sh` / `graft/bootrun.sh`; the agent reads
 serial markers from stdout (same channel as M/H milestones). **Two-sided assertion is
 the rule** (proven in H11): the harness **creates the fixture on the macOS side**
-(`/tmp/aros-hostvol-XXXX/…`) and asserts AROS sees it, **and** writes from AROS and
-re-reads the host file independently. No screenshot, no Finder-automation, no screen-
-recording — the handler's file I/O runs as the AROS *process itself* under the launching
-terminal's permissions, so **no TCC prompt**. Each spike prints `[Vn] PASS …`/`[Vn] FAIL
-…`; a hung mount is reaped by the existing bash watchdog. Markers are unique per spike.
+(`/tmp/aros-hostvol-XXXX/…`) and asserts AROS sees it; write-enabled spikes additionally
+write from AROS and re-read the host file independently. No screenshot, no Finder-
+automation, no screen-recording — the handler's file I/O runs as the AROS *process
+itself* under the launching terminal's permissions, so **no TCC prompt**. Each spike
+prints `[Vn] PASS …`/`[Vn] FAIL …`; a hung mount is reaped by the existing bash watchdog.
+Markers are unique per spike.
 
 - **[V0] Builds for the target.** `emul.handler` (Unix overlay) compiles **and links**
   for darwin-aarch64. PASS = link artifact present **and** the link map shows
@@ -391,23 +488,34 @@ terminal's permissions, so **no TCC prompt**. Each spike prints `[Vn] PASS …`/
 - **[V3] Host glue writes; host sees it.** Spike `DoOpen(MODE_NEWFILE)`+`DoWrite` a
   pattern to a new host path; harness re-reads that path on the macOS side. PASS = the
   Mac file exists with the right bytes (mirrors H11's two-sided check).
-- **[V4] Mount as a named volume in booted AROS** (needs `dos.library`). `MAC: Device =
-  Mac:<tmpdir>`; boot, `dir MAC:`. PASS = AROS lists the marker files the harness placed.
-  Marker `[V4] MAC: <n> entries`.
-- **[V5] Round-trip through DOS.** `copy MAC:in.dat MAC:out.dat` (or `Open`/`Write` from
-  a boot script); harness re-reads `<tmpdir>/out.dat` on the Mac side. PASS = bytes
-  match. Exercises `ACTION_FINDINPUT/FINDOUTPUT/READ/WRITE/END` end-to-end.
+- **[V4] Read-only mountlist mount — DONE (2026-06-26).** `MAC: Device = Mac:<tmpdir>`;
+  boot windowed, run from `S/Startup-Sequence`: `Dir MAC:` lists the marker files,
+  `Type MAC:in.dat` returns the host bytes; `MakeDir`/`Copy`-into/`Delete` on `MAC:` all
+  fail with **"disk is write-protected"** (`ERROR_DISK_WRITE_PROTECTED`). Harness re-scans
+  `<tmpdir>` and asserts nothing changed (no created dir/file, deleted file still present).
+  Verified two-sided via `graft/aros-ctl` (screenshot + host re-read).
+- **[V5] Writable launcher mount — DONE (2026-06-26).** Boot with
+  `AROS_HOST_VOLUME="MacW:<tmpdir>;WRITE"`; the launcher auto-mounts `MacW:` read/write.
+  `Copy MacW:in.dat MacW:out.dat` and `MakeDir MacW:newdir` succeed; harness re-reads
+  `<tmpdir>/out.dat` (bytes match) and `<tmpdir>/newdir` on the Mac side. Proves the
+  `;WRITE` keyword is honoured when delivered by our path, **not** the Mount command.
+- **[V5-ro] (covered by [V4]).** The read-only default *is* the mountlist behaviour, so a
+  plain `MAC:` entry is the read-only sweep; `;READONLY`/`;RO` are accepted aliases on the
+  launcher path. (A literal `;READONLY` in a mountlist `Device` is mangled by `Mount` like
+  any option — harmless here since the result is read-only anyway.)
 - **[V6] Examine/metadata fidelity.** `dir MAC:` then assert size/date/protection for a
   file the harness made with known `chmod`/`mtime`. PASS = AROS reports matching size,
   date, and `rwx`→`FIBF` mapping (low-active R/W/E correct).
-- **[VN] Normalization round-trip (the new hard part).** Harness creates **two** fixture
-  files whose names are the *same* accented string written once in **NFC** and once in
-  **NFD** bytes (e.g. `café` composed vs decomposed). (a) `dir MAC:` lists both, each
-  rendered to a stable AROS name; (b) from AROS, open a file by the NFC-typed accented
-  name and assert it resolves to the file the harness wrote in **NFD** (proves the
-  handler's own normalization, not the FS's). PASS = both listed **and** the cross-form
-  open hits the right file. Marker `[VN]`. **This is the spike that fails today** without
-  R-NORM and passes with it.
+- **[VN] Normalization round-trip (the new hard part).** Use two deterministic subtests
+  so the result does not depend on whether the developer's APFS volume permits distinct
+  NFC/NFD siblings. **[VN1]** Harness creates one fixture using **NFD** bytes for an
+  accented name (e.g. `café` decomposed); AROS opens it by the **NFC** spelling and the
+  harness asserts the NFD fixture was read. This proves the handler's cross-form lookup.
+  **[VN2]** On a host directory/volume known to permit distinct Unicode-normalization
+  siblings, harness creates both NFC and NFD byte spellings and asserts `dir MAC:` renders
+  each to a stable, non-conflicting AROS-visible name. If the host FS rejects the pair,
+  mark `[VN2] skipped fs=normalization-insensitive`, not failed. Marker `[VN]`. **VN1 is
+  the mandatory spike that fails today** without R-NORM and passes with it.
 - **[VM] Metadata sidecar round-trip.** From AROS set a comment + a Pure/Script
   protection bit on a file (`ACTION_SET_COMMENT`/`SET_PROTECT`); harness reads
   `.<name>.amimeta` on the Mac side and asserts its `comment`/`prot` contents; then
@@ -439,6 +547,8 @@ terminal's permissions, so **no TCC prompt**. Each spike prints `[Vn] PASS …`/
   [V0], **UNVERIFIED** until a link.
 - `_PC_CASE_SENSITIVE` reliability across APFS variants; fallback is a `CASE=` Mountlist
   option (R-CASE).
+- Host paths containing a literal `;`: reserved as the keyword separator in `fssm_Device`
+  (the keyword is delivered via the `AROS_HOST_VOLUME` launcher, not the Mount command).
 - Normalization table coverage/size: the Latin-1-mappable subset suffices for the
   Latin-1 round-trip, but a host name with arbitrary BMP code points needs a wider
   decomposition table — start narrow, widen if [VN] is extended past Latin-1.

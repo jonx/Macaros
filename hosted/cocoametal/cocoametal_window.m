@@ -19,6 +19,22 @@
 
 #include "cocoametal.h"
 
+static void cm__disable_press_and_hold(void) {
+    NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+    [defs registerDefaults:@{ @"ApplePressAndHoldEnabled" : @NO }];
+    NSMutableDictionary *args = [[defs volatileDomainForName:NSArgumentDomain] mutableCopy];
+    if (!args) args = [NSMutableDictionary dictionary];
+    args[@"ApplePressAndHoldEnabled"] = @NO;
+    [defs setVolatileDomain:args forName:NSArgumentDomain];
+}
+
+__attribute__((constructor))
+static void cm__early_disable_press_and_hold(void) {
+    @autoreleasepool {
+        cm__disable_press_and_hold();
+    }
+}
+
 /* We only touch the two fields we need; mirror the layout prefix of CMContext.
  * To stay honest we instead reach them through accessor knowledge: CMContext is
  * defined in cocoametal.m. Rather than duplicate the struct, expose tiny setters
@@ -168,6 +184,13 @@ void cm_try_window(CMContext *cx, const char *title) {
         if ([NSScreen mainScreen] == nil) return;
 
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+        /* Held keys: opt out of macOS "press and hold" (the accent-popover /
+         * NSTextInputContext path) before any text-input state can latch the
+         * default. The volatile argument domain intentionally overrides a
+         * user/global default for this host process only; AROS owns key repeat
+         * below. */
+        cm__disable_press_and_hold();
 
         int w = cm__logical_w(cx), h = cm__logical_h(cx);
         NSRect frame = NSMakeRect(120, 120, w, h);
@@ -505,6 +528,14 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
 
             case NSEventTypeKeyDown:
             case NSEventTypeKeyUp:
+                if (ev.type == NSEventTypeKeyDown && ev.isARepeat) {
+                    /* AROS input.device has its own repeat timer and tags repeat
+                     * events with IEQUALIFIER_REPEAT. Feeding host autorepeat as
+                     * ordinary down events repeatedly aborts/restarts that timer
+                     * and can wedge the input path under the hosted lock model.
+                     * Keep the physical state transition only: first down + up. */
+                    break;
+                }
                 e->type = CM_EV_KEY;
                 e->code = (int)ev.keyCode;       /* macOS virtual keycode */
                 e->pressed = (ev.type == NSEventTypeKeyDown) ? 1 : 0;

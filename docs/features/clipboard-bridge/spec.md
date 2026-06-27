@@ -406,9 +406,13 @@ discipline, NOTES.md).
   **without an explicit kick**, and that the log shows **exactly one** propagation per
   change (no echo). Print `[C3] a2h=ok h2a=ok prop=1`. **PASS** = both directions
   auto-sync, ping-pong-free.
-- **[C3-nonascii] R-TRANSCODE.** Round-trip `"café €<C3>"` host→AROS→host and the
-  reverse; print `[C3x] utf8_rt=ok latin1_rt=ok`. **PASS** = both round-trips
-  byte-exact after transcode (Latin-1 lossy chars handled per `//TRANSLIT`).
+- **[C3-nonascii] R-TRANSCODE.** Split lossless Latin-1 from non-Latin-1 policy:
+  round-trip `"café ü ß ©<C3>"` host→AROS→host and AROS→host→AROS; print
+  `[C3x] latin1_rt=ok`. **PASS** = byte-exact after Latin-1↔UTF-8 transcode. Then
+  test `"price €<C3e>"` as the explicit unrepresentable-code-point case; print the
+  chosen result as `[C3e] policy=<translit|replace|skip> out=<...>`. **PASS** =
+  deterministic policy, no crash, and no claim of byte-exact Latin-1 round-trip for
+  characters ISO-8859-1 cannot represent.
 - **[C4] robustness / R-IFFHARDEN.** Empty clip; a large clip (> 4096, multi-CHRS /
   multi-`CMD_WRITE`); a non-FTXT / truncated clip (assert graceful **skip**, no crash);
   an oversize clip (> `PB_MAX_CLIP`, assert refused/capped). Print

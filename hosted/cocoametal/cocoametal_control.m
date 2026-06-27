@@ -91,9 +91,10 @@ static void cm__control_exec(CMContext *cx, char *line) {
     memset(&e, 0, sizeof e);
     switch (line[0]) {
     case 'K': {
-        int vk, pressed;
-        if (sscanf(line + 1, "%d %d", &vk, &pressed) == 2) {
+        int vk, pressed, mods = 0;
+        if (sscanf(line + 1, "%d %d %d", &vk, &pressed, &mods) >= 2) {
             e.type = CM_EV_KEY; e.code = vk; e.pressed = pressed;
+            e.mods = (unsigned)mods;
             cm__inj_push(&e);
         }
         break;

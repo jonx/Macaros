@@ -7,9 +7,15 @@
 # "AROS" opens showing the blue Workbench screen and the boot console. Click the
 # window to give it keyboard focus, then type at the "1> " shell prompt.
 #
+#   Dir MacRO:     list the shared Mac folder (read-only volume)
+#   Dir MacRW:     same folder, read/write — Copy/MakeDir here land on the Mac
 #   Echo hello     prints "hello" (built-in, no file I/O)
 #   Version        prints the kickstart version
 #   <Ctrl-C>       in THIS terminal stops everything
+#
+# Two volumes are mapped to a Mac folder (default ~/AROS/Shared, or pass one as
+# the first argument): MacRO: read-only and MacRW: read/write. A write to MacRO:
+# is refused ("disk is write-protected"); a write to MacRW: appears in the folder.
 #
 # Most C: commands aren't built yet ("object not found"). Commands that do heavy
 # host file I/O can still hit the threaded-mode mid-syscall bug — basic typing,
@@ -39,6 +45,7 @@ if [ ! -f "$HOME/lib/cocoametal.dylib" ]; then
     echo "    cd ~/Source/aros-aarch64 && make cocoametal-dylib" >&2
     exit 1
 fi
+echo ">> cocoametal.dylib $(shasum -a 256 "$HOME/lib/cocoametal.dylib" | awk '{print substr($1,1,12)}') from $HOME/lib"
 
 # Cocoa as the sole display: deploy the driver to Devs/Monitors and drop the
 # headless fallback (its teardown clashes with a real display registering).
@@ -67,6 +74,23 @@ done
 # prompt inside the window.
 printf 'Version\n' > "$AROS/S/Startup-Sequence"
 
+# Share a Mac folder with AROS as TWO volumes, both mapped to the same folder:
+#   MacRO:  read-only   (writes are refused with "disk is write-protected")
+#   MacRW:  read/write  (changes appear in the Mac folder, and vice-versa)
+# Override the folder with the first argument: run-window.sh ~/somewhere
+# These are mounted by emul-handler itself from the AROS_HOST_VOLUME env var
+# (one "<Vol>:<path>[;WRITE]" per line). ;WRITE is OUR keyword — it is delivered
+# this way precisely so it never passes through (and is mangled by) AROS's Mount.
+HOST_FOLDER="${1:-$HOME/AROS/Shared}"
+mkdir -p "$HOST_FOLDER"
+[ -e "$HOST_FOLDER/ReadMe" ] || \
+    printf 'Files here show up in AROS as MacRO: (read-only) and MacRW: (read/write).\n' \
+        > "$HOST_FOLDER/ReadMe"
+AROS_HOST_VOLUME="MacRO:$HOST_FOLDER
+MacRW:$HOST_FOLDER;WRITE"
+export AROS_HOST_VOLUME
+echo ">> Sharing $HOST_FOLDER as MacRO: (read-only) and MacRW: (read/write)."
+
 # Sign with entitlements that allow DYLD_* env + loading the unsigned host shim.
 [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/AROSBootstrap" 2>/dev/null \
               || codesign -s - -f "$BOOTD/AROSBootstrap" 2>/dev/null
@@ -74,4 +98,5 @@ printf 'Version\n' > "$AROS/S/Startup-Sequence"
 echo ">> An 'AROS' window will open — click it for keyboard focus, then type."
 cd "$BOOTD"
 exec env AROS_DARWIN_THREADED=1 DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
+    AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
     ./AROSBootstrap -c "$BOOTD/AROSBootstrap.conf"

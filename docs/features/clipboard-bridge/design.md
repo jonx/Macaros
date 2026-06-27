@@ -283,13 +283,16 @@ A single hosted AROS "clipboard-sync" task owns the policy:
    just wrote. (The X11 bridge notes the same ping-pong hazard;
    `x11_clipboard.c` even disables an aggressive POST path to avoid it.)
 
-**FTXT ↔ UTF-8:** CHRS bytes are "just text". macOS is UTF-8;
-`NSPasteboardTypeString` is Unicode. Classic FTXT is codepage-bound, but AROS's
-own apps increasingly use UTF-8, and `hostcb.c` already treats CHRS as an opaque
-byte string (`strlen` + raw copy). For the spikes we pass UTF-8 through unchanged
-and assert byte-equality on ASCII; codepage transcoding for non-ASCII is a
-deferred refinement (see Risks). **UNVERIFIED:** whether any AROS text consumer
-chokes on UTF-8 in CHRS.
+**FTXT ↔ UTF-8:** CHRS bytes are "just text" to `clipboard.device`, but the bridge
+may not treat them as opaque once the bytes cross into macOS. macOS pasteboard
+strings are Unicode/UTF-8; AROS-side FTXT text for this bridge is interpreted as
+ISO-8859-1 unless a later, explicit charset marker says otherwise. Therefore the
+bridge layer does the same conversion the executable spec requires:
+AROS/FTXT CHRS Latin-1 bytes → UTF-8 for `NSPasteboardTypeString`, and UTF-8 →
+Latin-1 on the way back. Host characters outside Latin-1 must follow the spec's
+lossy/escape policy instead of being silently copied as mojibake. ASCII remains the
+trivial exact case, but non-ASCII is part of the required bridge, not a deferred
+nicety.
 
 ## Plan — spikes in the loop
 
@@ -299,9 +302,10 @@ Each is one PASS/FAIL the harness greps for, no manual step.
   runtime on aarch64-darwin; from a host-side test, set then get a string,
   print `[C0] PB rt=<string>`. PASS = round-trips host→host. Confirms NSPasteboard
   is reachable and picks scheme A vs B for the rest.
-- **[C1] host→AROS text.** Host `host_pb_set_text("AROS<C1>")`; an AROS task does
-  the `hostcb`-style FTXT read of `PRIMARY_CLIP`; print `[C1] read=<...>`. PASS =
-  AROS clip equals the host string.
+- **[C1] host→AROS text.** Host `host_pb_set_text("AROS<C1>")`; the sync task reads
+  the host pasteboard, transcodes the text, writes a `FORM FTXT` clip to
+  `PRIMARY_CLIP`, and an independent AROS reader prints `[C1] read=<...>`. PASS =
+  AROS clip equals the host string after the documented charset policy.
 - **[C2] AROS→host text.** AROS writes a FORM FTXT clip ("HELLO<C2>") via
   `OpenClipboard`/iffparse; host reads `host_pb_get_text` (≡ `pbpaste`); print
   `[C2] host=<...>`. PASS = pasteboard equals the AROS clip.

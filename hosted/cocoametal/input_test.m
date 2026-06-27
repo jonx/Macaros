@@ -289,6 +289,89 @@ static int run_d5(NSWindow *win, CMContext *cx) {
     return ok;
 }
 
+/* ---- [D5R] held-key repeat filter -----------------------------------------
+ * Post first keyDown, two AppKit autorepeat keyDowns, then keyUp. The shim must
+ * surface only the physical state transition and leave repeat generation to
+ * AROS input.device. */
+static int run_d5_repeat(NSWindow *win, CMContext *cx) {
+    int ok = 1;
+    NSInteger wn = win.windowNumber;
+    const unsigned short keyCode = 3; /* kVK_ANSI_F */
+
+    NSEvent *kd = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                   location:NSZeroPoint
+                              modifierFlags:0
+                                  timestamp:0
+                               windowNumber:wn
+                                    context:nil
+                                 characters:@"f"
+                charactersIgnoringModifiers:@"f"
+                                  isARepeat:NO
+                                    keyCode:keyCode];
+    NSEvent *kr1 = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                    location:NSZeroPoint
+                               modifierFlags:0
+                                   timestamp:0
+                                windowNumber:wn
+                                     context:nil
+                                  characters:@"f"
+                 charactersIgnoringModifiers:@"f"
+                                   isARepeat:YES
+                                     keyCode:keyCode];
+    NSEvent *kr2 = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                    location:NSZeroPoint
+                               modifierFlags:0
+                                   timestamp:0
+                                windowNumber:wn
+                                     context:nil
+                                  characters:@"f"
+                 charactersIgnoringModifiers:@"f"
+                                   isARepeat:YES
+                                     keyCode:keyCode];
+    NSEvent *ku = [NSEvent keyEventWithType:NSEventTypeKeyUp
+                                   location:NSZeroPoint
+                              modifierFlags:0
+                                  timestamp:0
+                               windowNumber:wn
+                                    context:nil
+                                 characters:@"f"
+                charactersIgnoringModifiers:@"f"
+                                  isARepeat:NO
+                                    keyCode:keyCode];
+
+    [NSApp postEvent:kd atStart:NO];
+    [NSApp postEvent:kr1 atStart:NO];
+    [NSApp postEvent:kr2 atStart:NO];
+    [NSApp postEvent:ku atStart:NO];
+
+    CMEvent ev[32];
+    memset(ev, 0, sizeof(ev));
+    int n = cm_pump_events(cx, ev, 32);
+    printf("[D5R] posted keyDown + repeat + repeat + keyUp keyCode=%u; "
+           "cm_pump_events drained %d event(s)\n", keyCode, n);
+    for (int i = 0; i < n; i++)
+        printf("[D5R]   ev[%d] type=%-9s code=%d pressed=%d mods=0x%X\n",
+               i, evtype_name(ev[i].type), ev[i].code, ev[i].pressed, ev[i].mods);
+
+    int matching = 0, downs = 0, ups = 0;
+    for (int i = 0; i < n; i++) {
+        if (ev[i].type == CM_EV_KEY && ev[i].code == (int)keyCode) {
+            matching++;
+            if (ev[i].pressed) downs++;
+            else ups++;
+        }
+    }
+
+    if (matching != 2 || downs != 1 || ups != 1) {
+        printf("[D5R]   FAIL want exactly one down and one up for keyCode=%u "
+               "(got matching=%d downs=%d ups=%d)\n", keyCode, matching, downs, ups);
+        ok = 0;
+    } else {
+        printf("[D5R]   repeat keyDowns filtered; AROS owns repeat generation  ok\n");
+    }
+    return ok;
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("[INPUT] cm_pump_events real-drain spike (synthetic NSEvent injection via "
@@ -357,13 +440,16 @@ int main(void) {
     int d4 = run_d4(win, cx);
     hand_pump(4);
     int d5 = run_d5(win, cx);
+    hand_pump(4);
+    int d5r = run_d5_repeat(win, cx);
 
     printf("[D4] %s\n", d4 ? "PASS" : "FAIL");
     printf("[D5] %s\n", d5 ? "PASS" : "FAIL");
+    printf("[D5R] %s\n", d5r ? "PASS" : "FAIL");
     /* Combined gate marker — printed ONLY when BOTH value-asserting checks passed,
      * so the harness can gate on a single marker that requires D4 AND D5. */
-    if (d4 && d5) printf("[D4D5] PASS\n");
+    if (d4 && d5 && d5r) printf("[D4D5] PASS\n");
 
     cm_close(cx);
-    return (d4 && d5) ? 0 : 1;
+    return (d4 && d5 && d5r) ? 0 : 1;
 }

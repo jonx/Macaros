@@ -1,15 +1,19 @@
 # Host volume — a macOS folder as an AROS volume
 
-> Status: in progress (foundation landed) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: **IMPLEMENTED & verified on darwin-aarch64 (2026-06-26)** · Drafted 2026-06-24
+> The whole spec is grafted into the live `emul-handler` and verified two-sided:
+> mount + read-only-default + `;WRITE` keyword + `AROS_HOST_VOLUME` launcher,
+> NFC normalization, Latin-1↔UTF-8 + escape, the `.amimeta` metadata sidecar, and
+> the case-sensitivity guard. See [spec.md](spec.md) "Implementation status".
 
 ## What & why
 
 Mount a real macOS directory (e.g. `~/Amiga`) as an AROS DOS volume so it shows up
 in Wanderer and AROS commands (`dir`, `copy`, `ed`, `type`) operate on real Mac
-files. Drag a file in from Finder → it's there in AROS; write from AROS → Finder
-sees it. This is the *filesystem* face of the project thesis — "macOS owns the
-drivers; AROS reaches them via standard exec I/O" — realised as a DOS filesystem
-handler whose backing store is the live macOS filesystem.
+files. Drag a file in from Finder → it's there in AROS; opt into a writable mount and
+writes from AROS → Finder sees them. This is the *filesystem* face of the project thesis
+— "macOS owns the drivers; AROS reaches them via standard exec I/O" — realised as a DOS
+filesystem handler whose backing store is the live macOS filesystem.
 
 The whole thing is **not greenfield**: AROS already ships a host-filesystem handler,
 `emul-handler` (the "emulation handler"), used by every hosted flavour (Linux,
@@ -245,13 +249,25 @@ the dlsym'd `LibCInterface` and is Darwin-aware. Concretely
   `emul.handler` actually links for the target (gap item #1).
 - Bring up `unixio.hidd` for darwin-aarch64 (gap item #2) — needed for the libc
   handle + errno pointer.
-- Add a `~/Amiga`-style mount: a Mountlist entry modelled on `HOME:`:
-  ```
-  MAC:  FileSystem = emul-handler   Device = Mac:~/Amiga   DOSType = 0x454D5500
-  ```
-  or, programmatically, the same `MakeDosNode`/`AddDosNode(ADNF_STARTPROC)` path
-  `emul_init.c` already uses for the `EMU` boot node, with the host path injected via
-  `FileSysStartupMsg.fssm_Device`.
+- Add a `~/Amiga`-style mount two ways (both implemented):
+  - **Declarative (always read-only):** a Mountlist entry modelled on `HOME:`. Read-only
+    is our policy and a mountlist host folder cannot opt out of it — the write keyword is
+    ours and is deliberately never handed to the `Mount` command:
+    ```
+    MAC:  FileSystem = emul-handler   Device = Mac:~/Amiga   DOSType = 0x454D5500
+    ```
+  - **Our launcher (read-only or read/write):** set the `AROS_HOST_VOLUME` host env var;
+    `emul_init.c`'s `mount_hostvol()` does the `MakeDosNode`/`AddDosNode(ADNF_STARTPROC)`
+    with the value as `fssm_Device`, so our `;WRITE` keyword reaches `new_volume` intact:
+    ```
+    AROS_HOST_VOLUME="Mac:~/Amiga"        # read-only
+    AROS_HOST_VOLUME="Mac:~/Amiga;WRITE"  # read/write
+    ```
+  `new_volume` parses the trailing `;WRITE|;W|;RW|;READONLY|;RO` keyword off `fssm_Device`
+  and strips it before resolving `~`/the host path. We do NOT route the keyword through
+  `Mount`: its mountlist parser (`preparefile()`) turns a bare `;` into whitespace (keyword
+  lost → safely read-only) and errors on a quoted `";…;WRITE"`. The launcher is the seed of
+  the `run-window.sh --host-volume` developer UX.
 - The default boot volume already self-mounts: `new_volume(NULL)` falls back to
   `GetCurrentDir()` and names the volume `System:` (`emul_handler.c:559, 617, 627`).
   So the *first* observable win is "AROS has a `System:` volume backed by the launch
@@ -265,28 +281,36 @@ the dlsym'd `LibCInterface` and is Darwin-aware. Concretely
   to a clean POSIX path. Device prefix (`Mac:`) is stripped (`strrchr(filename,':')`,
   `emul_handler.c:105`). This is pure string code, host-agnostic — reused as-is.
 - **Case + Unicode (the real Mac risk)**: AmigaOS filenames are case-*insensitive*,
-  case-*preserving*, Latin-1-ish; APFS is case-*insensitive* (default) but
-  Unicode/UTF-8 and **NFD-normalizing** (decomposed). The Unix overlay already
-  compiles with `#define NO_CASE_SENSITIVITY` (`emul_host_unix.c:35`), which enables
-  `fixcase()` (`emul_host.c:224`): on a failed `lstat`, it re-scans the parent dir
-  with `Stricmp` to find a case-folded match. That covers ASCII case; it does **not**
-  handle NFC↔NFD (a name with accents typed in AROS as NFC won't `Stricmp`-match the
-  NFD bytes APFS returns). Normalization is an open item (Risks).
+  case-*preserving*, Latin-1-ish; macOS paths are UTF-8, and APFS should be treated as
+  preserving whatever Unicode normalization form was written rather than as an
+  NFD-normalizing filesystem. The Unix overlay already compiles with
+  `#define NO_CASE_SENSITIVITY` (`emul_host_unix.c:35`), which enables `fixcase()`
+  (`emul_host.c:224`): on a failed `lstat`, it re-scans the parent dir with `Stricmp`
+  to find a case-folded match. That covers ASCII case; it does **not** handle NFC↔NFD
+  (a name with accents typed in AROS as NFC may not `Stricmp`-match decomposed bytes
+  returned by `readdir`). The executable spec requires a bridge-level NFC pass and does
+  not rely on the filesystem to normalize.
 - **Protection bits**: `prot_u2a`/`prot_a2u` (`emul_host.c:95–161`) map POSIX `rwx`
   (user/group/other) ↔ AROS `FIBF_*`. Note the AmigaOS inversion: R/W/E are
   *low-active* in `fib_Protection` (set = denied), handled correctly already.
 - **Dates**: `st_mtime` ↔ AROS `DateStamp` via `Date2Amiga`/`Amiga2Date` and
   host `localtime`/`mktime` (`emul_host.c:165, 195`).
-- **Comments / metadata**: AROS file comments have no clean POSIX home. The handler
-  leaves `ed_Comment` empty by default. A Mac nicety could map AROS comment →
-  extended attribute (`com.apple.metadata:kMDItemFinderComment` or a private xattr)
-  — **new code, not in the overlay** (`ACTION_SET_COMMENT` is in the handler's
-  "FIXME: not supported yet" list, `emul_handler.c:1133`). Alternative precedent:
-  UAE-family emulators avoid xattrs entirely and keep the host dir portable by storing
-  the comment (plus protection bits and a higher-precision date) in a `<name>.uaem`
-  text sidecar — FS-UAE — or a `UAEFSDB` index file — WinUAE
-  (https://fs-uae.net/docs/hard-drives/). A sidecar keeps the folder copyable to any OS
-  but litters it with extra files; an xattr is invisible but Mac-only. Weigh per goal.
+- **Comments / metadata**: AROS file comments and AmigaOS-only protection bits have no
+  faithful POSIX slot. The spec chooses a portable sidecar, not xattrs: one
+  `.<basename>.amimeta` file beside the data file, omitted when metadata is default and
+  hidden from AROS enumeration. This keeps the mounted directory copyable across hosts
+  and avoids Finder/private-xattr semantics. The cost is an explicit reserved host
+  namespace: files matching `.*.amimeta` are metadata inside the mounted volume, not
+  ordinary AROS-visible files.
+- **Access mode** (implemented): default is read-only; the `;WRITE`/`;W`/`;RW` keyword on
+  `fssm_Device` allows AROS-originated mutations. The keyword is **ours** — delivered via
+  the `AROS_HOST_VOLUME` launcher, never through `Mount` (see above) — so a mountlist host
+  folder is always read-only. Without write, the packet handler enforces protection before
+  any host syscall or sidecar update: reads, directory scans, examine, locks, and copy-out
+  work; mutating packets (`FINDOUTPUT`, write-capable `FINDUPDATE`, `WRITE`, create/delete/
+  rename, set date/protect/size/comment, link creation) fail with
+  `ERROR_DISK_WRITE_PROTECTED`, and `ACTION_INFO`/`DISK_INFO` report `ID_WRITE_PROTECTED`.
+  `READONLY`/`RO` remain accepted aliases, redundant because read-only is the default.
 
 ## Plan — spikes in the loop
 
@@ -312,14 +336,18 @@ agent greps; the agent creates/asserts files on **both** sides so there is no ma
   a pattern to a new host path; *the agent then reads that path back on the macOS
   side* and asserts the bytes. PASS = the Mac file exists with the right content.
   (Mirrors H11's two-sided verification exactly.)
-- **[V4] Mount as a named volume in booted AROS.** Once `dos.library` is up: a
-  Mountlist `MAC: Device = Mac:<tmpdir>` entry; boot AROS, run `assign`/`info` or a
-  tiny `dir MAC:` command. PASS = AROS lists the marker files the agent placed in
-  `<tmpdir>`; serial marker `[V4] MAC: <n> entries`.
-- **[V5] Round-trip through DOS.** In booted AROS, `copy MAC:in.dat MAC:out.dat` (or
-  `Open`/`Write` from a boot script); agent reads `<tmpdir>/out.dat` on the Mac side.
-  PASS = host file content matches. This exercises `ACTION_FINDINPUT/FINDOUTPUT/
-  READ/WRITE/END` end-to-end over the real DOS packet path.
+- **[V4] Read-only mountlist mount — DONE (2026-06-26).** Mountlist `MAC: Device =
+  Mac:<tmpdir>`; boot windowed, drive from `S/Startup-Sequence`. PASS (verified): `Dir
+  MAC:` lists the markers, `Type MAC:in.dat` returns the bytes; `MakeDir`/`Copy`-into/
+  `Delete` on `MAC:` fail "disk is write-protected"; the agent re-reads `<tmpdir>` and
+  nothing changed. (Drive from the Startup-Sequence file, not stdin — no input race.)
+- **[V5] Writable launcher mount — DONE (2026-06-26).** Boot with
+  `AROS_HOST_VOLUME="MacW:<tmpdir>;WRITE"`; `Copy MacW:in.dat MacW:out.dat` + `MakeDir
+  MacW:newdir`. PASS (verified): the agent re-reads `<tmpdir>/out.dat` (bytes match) and
+  `<tmpdir>/newdir` on the Mac side — the `;WRITE` keyword honoured via our path.
+- **[V5-ro] (covered by [V4]).** Read-only *is* the mountlist behaviour, so the plain
+  `MAC:` entry is the read-only sweep; the agent confirms the host directory and sidecars
+  did not change.
 - **[V6] Examine/metadata fidelity.** `dir MAC:` then assert sizes/dates/protection
   for a file the agent created with known `chmod`/`mtime`. PASS = AROS reports the
   matching size, date, and `rwx`→`FIBF` mapping.
@@ -337,13 +365,13 @@ uses is ordinary file I/O by the AROS *process itself*, which inherits the launc
 terminal's permissions; it is **not** a Finder-automation or screen-recording
 permission, so no TCC prompt).
 
-Two-sided assertion is the rule (proven in H11): for every read/write spike the agent
-**creates the fixture on the macOS side** (`/tmp/aros-hostvol-XXXX/…`) and asserts AROS
-sees it, **and** writes from AROS and asserts the bytes landed on the Mac side by
-re-reading the host file independently. Each spike prints `[Vn] PASS …` / `[Vn] FAIL
-…`; a hung mount is reaped by the existing bash watchdog. Markers are unique per spike
-so a regression localises (the M/H marker discipline). For [V0] the assertion is a
-grep over the mmake link map (overlay object linked, dummy not).
+Two-sided assertion is the rule (proven in H11): the agent **creates the fixture on the
+macOS side** (`/tmp/aros-hostvol-XXXX/…`) and asserts AROS sees it; write-enabled spikes
+also write from AROS and assert the bytes landed on the Mac side by re-reading the host
+file independently. Each spike prints `[Vn] PASS …` / `[Vn] FAIL …`; a hung mount is
+reaped by the existing bash watchdog. Markers are unique per spike so a regression
+localises (the M/H marker discipline). For [V0] the assertion is a grep over the mmake
+link map (overlay object linked, dummy not).
 
 ## Risks & open questions
 
@@ -374,6 +402,11 @@ grep over the mmake link map (overlay object linked, dummy not).
 - **Locking semantics** — `emul-handler` tracks share counts but does not enforce
   exclusive locks against the host (two AROS exclusive locks on one host file aren't
   blocked at the POSIX layer). Faithful to upstream; note it.
+- **Access-option parsing** — `WRITE`/`W`/`RW` and `READONLY`/`RO` reserve semicolon as
+  the keyword separator in `fssm_Device`; a host path may not contain a literal `;` (a
+  later quoting rule could lift this). Because the keyword is delivered via our launcher
+  (`AROS_HOST_VOLUME`) and not the `Mount` command, it never meets `Mount`'s mountlist
+  parser — which would mangle a bare `;` to whitespace and error on a quoted one.
 - **Symlinks** — `DoSymLink`/`DoReadLink`/`ACTION_MAKE_LINK`/`READ_LINK` exist in the
   overlay; AROS-relative vs POSIX-absolute link resolution (`read_softlink`,
   `emul_handler.c:431`) is subtle and untested on Darwin. Open.
