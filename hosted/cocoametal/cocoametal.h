@@ -210,15 +210,18 @@ int        cm_render_effect_readback(CMContext *, CMEffect effect,
  * cm_open_settings, entries 10/11/12), the CMOption/CMScaleMode/CMFilter enums,
  * and the CM_EV_SETTING event. All append-only — no existing symbol moved.
  *
- * v2 -> v3 (host app shell): appended cm_set_option_str / cm_get_option_str
- * (entries 13/14, the string side-channel for CM_OPT_VOLUME_*), cm_capture_png
- * (15, screenshot via cm_readback + ImageIO), and cm_record_start / cm_record_stop
- * (16/17, movie capture — stubbed until the AVFoundation spike), plus the new
- * CM_OPT_ keys (RETINA, CLIPBOARD_SHARE, AUDIO_DEVICE, VOLUME_ADD/REMOVE, POWER)
- * and the CMPower enum.
- * The menu bar / About / icon / settings are HOST-SIDE (no new AROS-facing
- * symbol) — they reach AROS only through the existing cm_pump_events channel. */
-#define CM_ABI_VERSION 3
+ * host app shell — STAYS AT 2 ON PURPOSE. The shell appended new symbols
+ * (cm_set_option_str / cm_get_option_str, cm_capture_png, cm_record_start/stop) and
+ * new CM_OPT_ keys (RETINA / CLIPBOARD_SHARE / AUDIO_DEVICE / VOLUME_ADD/REMOVE /
+ * POWER) + the CMPower enum. But the AROS-FACING contract the HIDD resolves (the 13
+ * entries 0..12) is UNCHANGED, and the menu / About / icon / settings are HOST-SIDE
+ * (they reach AROS only through the existing cm_pump_events channel). The AROS loader
+ * checks cm_abi_version() == CM_ABI_VERSION (strict) and the deployed AROS cocoa HIDD
+ * expects 2 — so this version, which tracks the AROS-facing contract, MUST stay 2;
+ * the appended symbols are an orthogonal host-side extension a v2 driver ignores.
+ * Bump to 3 (and rebuild the AROS HIDD to match) only when the AROS side is taught to
+ * CONSUME a new symbol — e.g. cm_get_option_str for the clipboard/volume bridge. */
+#define CM_ABI_VERSION 2
 int        cm_abi_version(void);
 
 /* ---- Settings & options ABI (INTERFACE.md §9) — appended at v2 ------------
