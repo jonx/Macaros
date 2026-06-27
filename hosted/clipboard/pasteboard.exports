@@ -1,0 +1,18 @@
+# Exported dynamic symbols for build/libpasteboard.dylib — the NSPasteboard host
+# shim the AROS clipboard-sync task loads via hostlib.resource (HostLib_Open +
+# HostLib_GetPointer), the peer of cocoametal.dylib. Listed explicitly (not a glob)
+# so the export table is exactly the pasteboard.h contract surface. The test-only
+# host_pb_poller_tick_for_test is deliberately NOT exported (the [C] proof links
+# pasteboard.m directly).
+_host_pb_get_text
+_host_pb_set_text
+_host_pb_change_count
+_host_pb_free
+_host_pb_poller_start
+_host_pb_poller_stop
+_host_pb_set_signal_cb
+_host_latin1_to_utf8
+_host_utf8_to_latin1
+_host_pb_use_named
+_host_pb_get_png
+_host_pb_set_png
