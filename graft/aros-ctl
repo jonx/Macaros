@@ -27,9 +27,43 @@
 #   aros-ctl wait [SECS]    sleep, letting AROS run/render (default 1)
 set -u
 
-BOOTD="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-4959-b0ec-f7720da95bb3/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin"
-ENT="/private/tmp/claude-501/-Users-user-Source-aros-aarch64/a7d73cfa-b608-4959-b0ec-f7720da95bb3/scratchpad/scratchpad/cocoa-test-ent.plist"
-DYLIB_SRC="/Users/user/Source/aros-aarch64/build/cocoametal.dylib"
+# --- Relocatable paths -----------------------------------------------------
+# Resolve this script's own dir (following symlinks) -> repo root, so the
+# in-repo artifacts are found wherever the checkout lives. Each is overridable.
+SELF="${BASH_SOURCE[0]}"
+while [ -h "$SELF" ]; do
+    d="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$d/$SELF";; esac
+done
+HERE="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"   # .../graft
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"                # repo root
+
+# cocoametal host shim (built into the repo's build/) and the entitlements that
+# travel beside this script. Override AROS_CTL_DYLIB / AROS_CTL_ENT if relocated.
+DYLIB_SRC="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
+ENT="${AROS_CTL_ENT:-$HERE/aros-host.entitlements.plist}"
+
+# The AROS boot dir (AROSBootstrap + .conf) is a BUILD OUTPUT that lives outside
+# the repo, so we discover it lazily (only `run` needs it): $AROS_CTL_BOOTD wins,
+# else the canonical build dir ($BUILD, default /tmp/arosbuild — see
+# build-darwin-aarch64.sh), else an in-repo staging dir, else the newest matching
+# scratchpad build. Newest AROSBootstrap by mtime breaks ties.
+find_bootd() {
+    if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
+    local d t best="" bt=0
+    local restore; restore="$(shopt -p nullglob)"; shopt -s nullglob   # unmatched globs vanish
+    for d in \
+        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "$ROOT/build/AROS/boot/darwin" \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
+        /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do
+        [ -x "$d/AROSBootstrap" ] || continue
+        t="$(stat -f %m "$d/AROSBootstrap" 2>/dev/null || echo 0)"
+        [ "$t" -ge "$bt" ] && { bt="$t"; best="$d"; }
+    done
+    $restore
+    printf '%s\n' "$best"
+}
 
 # Overridable so parallel sessions (e.g. a host-volume test) don't fight over one
 # window: set AROS_CTL_FIFO/LOG/PIDF to isolate an instance.
@@ -72,9 +106,20 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
 run)
-    if [ ! -x "$BOOTD/AROSBootstrap" ]; then echo "no AROSBootstrap at $BOOTD" >&2; exit 1; fi
+    BOOTD="$(find_bootd)"
+    if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
+        echo "aros-ctl: no AROSBootstrap found." >&2
+        echo "  point AROS_CTL_BOOTD at <build>/bin/darwin-aarch64/AROS/boot/darwin," >&2
+        echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to /tmp/arosbuild)." >&2
+        exit 1
+    fi
+    echo "boot dir: $BOOTD" >&2
     AROS="$(cd "$BOOTD/../.." && pwd)"
     mkdir -p "$HOME/lib"; [ -f "$DYLIB_SRC" ] && cp -f "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib"
+    # Clipboard bridge host shim: the AROS sync task loads it by bare name via
+    # hostlib.resource, so it must sit in ~/lib like cocoametal.dylib. Without it
+    # the bridge starts but silently no-ops (no NSPasteboard access).
+    [ -f "$ROOT/build/libpasteboard.dylib" ] && cp -f "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib"
     mkdir -p "$AROS/Devs/Monitors"
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
@@ -98,18 +143,22 @@ run)
     # port) so RAmiga+C/V in the console route through clipboard.device.
     printf 'Version\nAssign CLIPS: SYS:clips\nRun >SYS:conclip.log ConClip\n' \
         > "$AROS/S/Startup-Sequence"
-    [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/AROSBootstrap" 2>/dev/null \
-                  || codesign -s - -f "$BOOTD/AROSBootstrap" 2>/dev/null
+    # Present as "Daedalos" in the menu bar / Dock — macOS names a non-bundled app
+    # by its executable filename, so run a signed copy named Daedalos. The discovered
+    # AROSBootstrap stays the build artifact we copy from (and the .conf keeps its name).
+    cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
+    [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Daedalos" 2>/dev/null \
+                  || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
     ( cd "$BOOTD" && AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
         DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
-        ./AROSBootstrap -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
+        ./Daedalos -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
     echo $! > "$PIDF"
     echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
     ;;
 stop)
     [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null
-    pkill -KILL AROSBootstrap 2>/dev/null
+    pkill -KILL Daedalos 2>/dev/null; pkill -KILL AROSBootstrap 2>/dev/null
     rm -f "$PIDF" "$FIFO"
     echo "stopped"
     ;;
@@ -152,9 +201,9 @@ libs)
     # For AROS-side libraries (graphics/intuition/… name+version), use the AROS
     # `LibList` C: command inside the shell instead (those aren't host dylibs).
     pid="$(cat "$PIDF" 2>/dev/null)"
-    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n AROSBootstrap 2>/dev/null)"
-    [ -n "$pid" ] || { echo "no running AROSBootstrap (start it with: aros-ctl run)" >&2; exit 1; }
-    echo "# host dylibs mapped by AROSBootstrap (pid $pid):"
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Daedalos 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running Daedalos (start it with: aros-ctl run)" >&2; exit 1; }
+    echo "# host dylibs mapped by Daedalos (pid $pid):"
     vmmap "$pid" 2>/dev/null | grep -oE '/[^[:space:]]+\.dylib' | sort -u | while read -r dy; do
         # current version from the dylib's own load command (file-backed libs only;
         # shared-cache libs have no on-disk file, so just show the path).
