@@ -116,6 +116,18 @@ risk was the *stack walk* (already solved by the inlined frame-pointer chain).
 `DecodeLocation` never touches the stack — it walks the separate, intact module
 registry.
 
+### 3. NULL-pointer-call annotation
+
+A call/jump through a NULL (or near-NULL) function pointer faults with `PC` at
+(near) address 0 — there is no code there, so a bare `pc=0000000000000000` is
+opaque. When `PC(regs) < 0x1000` the handler says so outright and points at the
+caller (`LR` holds the return address of the bad call, i.e. the code that made
+it), symbolized:
+
+```
+[KRN] *** Call through a NULL pointer: PC=0x0 has no code; caller LR=0x100960820  locale.library Locale_2_... + 0x...
+```
+
 ## Verifying
 
 - The dump's first line carries a **`[h2]`** tag
