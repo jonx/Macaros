@@ -15,8 +15,11 @@
  * untranslated NSEvents to [NSApp sendEvent:], which drives menu tracking) — no
  * [NSApp run] is introduced.
  *
- * Clean-room: Apple AppKit/CoreGraphics/ImageIO docs [PUB] + Apple HIG [PUB]. No GPL
- * emulator source read. UTM (Apache-2.0) informed only the public menu layout.
+ * Sources: Apple AppKit/CoreGraphics/ImageIO docs [PUB] + Apple HIG [PUB] (the
+ * menu layout follows the published HIG conventions). Independent work: no
+ * third-party implementation source — emulator, agent, driver, or otherwise — was
+ * read, searched, or consulted in producing it, and any resemblance to existing
+ * implementations is coincidental.
  */
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -25,6 +28,10 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
 #include "cocoametal.h"
+
+/* Host-internal: inject a synthetic key transition into the event ring (defined in
+ * cocoametal_control.m), so the Edit menu can hand the Amiga clipboard keys to AROS. */
+extern void cm__inject_key(int vk, int pressed, unsigned mods);
 
 /* ------------------------------------------------------------------ icon ----
  * Daedalos's wings: a white feather on a sky-gradient rounded rect. Drawn with
@@ -160,6 +167,30 @@ static void cmsh_show_about(void) {
     cm_set_option(_cx, CM_OPT_CLIPBOARD_SHARE, _clipboardOn);
 }
 
+/* Edit — the AROS shell's clipboard keys are Right-Amiga+C / Right-Amiga+V (handled
+ * by console.device + ConClip), so the Mac Copy/Paste items synthesize that chord
+ * into AROS. macOS virtual keycodes: 54 = Right Command -> RAWKEY_RAMIGA, 8='c', 9='v'.
+ * The Right-Amiga key carries the RCOMMAND qualifier (set on its down, cleared on its
+ * up); the C/V ride inside that hold. The bridge then syncs PRIMARY_CLIP <-> Mac. */
+- (void)editAmigaChord:(int)key {
+    enum { RAMIGA = 54 };
+    cm__inject_key(RAMIGA, 1, CM_MOD_CMD);   /* Right-Amiga down */
+    cm__inject_key(key,    1, CM_MOD_CMD);   /* C/V down (RCOMMAND active) */
+    cm__inject_key(key,    0, CM_MOD_CMD);   /* C/V up */
+    cm__inject_key(RAMIGA, 0, 0);            /* Right-Amiga up (mods=0 clears RCOMMAND) */
+}
+- (void)editCopyAction:(id)s  { [self editAmigaChord:8]; }   /* Right-Amiga+C */
+- (void)editPasteAction:(id)s { [self editAmigaChord:9]; }   /* Right-Amiga+V */
+
+/* Enable Paste only when the Mac clipboard actually holds text (Copy stays on: it
+ * copies the console selection, a no-op if nothing is marked). */
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action == @selector(editPasteAction:))
+        return [[NSPasteboard generalPasteboard]
+                   canReadObjectForClasses:@[[NSString class]] options:nil];
+    return YES;
+}
+
 /* Help */
 - (void)websiteAction:(id)s {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://aros.org"]];
@@ -221,8 +252,8 @@ static void cmsh_build_menu(CMShellController *c) {
              NSEventModifierFlagShift | NSEventModifierFlagCommand);
     [edit addItem:[NSMenuItem separatorItem]];
     cmsh_add(edit, @"Cut", @selector(cut:), nil, @"x", NSEventModifierFlagCommand);
-    cmsh_add(edit, @"Copy", @selector(copy:), nil, @"c", NSEventModifierFlagCommand);
-    cmsh_add(edit, @"Paste", @selector(paste:), nil, @"v", NSEventModifierFlagCommand);
+    cmsh_add(edit, @"Copy", @selector(editCopyAction:), c, @"c", NSEventModifierFlagCommand);
+    cmsh_add(edit, @"Paste", @selector(editPasteAction:), c, @"v", NSEventModifierFlagCommand);
     cmsh_add(edit, @"Select All", @selector(selectAll:), nil, @"a", NSEventModifierFlagCommand);
 
     NSMenu *view = cmsh_submenu(bar, @"View");

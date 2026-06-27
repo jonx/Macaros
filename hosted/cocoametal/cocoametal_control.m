@@ -42,6 +42,20 @@ static void cm__inj_push(const CMEvent *e) {
     g_injTail = next;
 }
 
+/* Inject one synthetic key transition into the same ring the control FIFO uses,
+ * so the host app shell (menu items) can hand keystrokes to AROS. Main thread:
+ * the menu actions and the pump both run on the main queue. `vk` is a macOS
+ * virtual keycode, `mods` a CM_MOD_* bitmask. */
+void cm__inject_key(int vk, int pressed, unsigned mods) {
+    CMEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = CM_EV_KEY;
+    e.code = vk;
+    e.pressed = pressed;
+    e.mods = mods;
+    cm__inj_push(&e);
+}
+
 /* Drain queued injected events into out[]; returns count written. Main thread.
  * Declared (extern) and called at the top of cm__pump_events_appkit. */
 int cm__control_drain(CMEvent *out, int maxEvents) {
