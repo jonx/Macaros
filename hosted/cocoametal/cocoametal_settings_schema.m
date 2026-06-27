@@ -131,6 +131,7 @@ static int load_schema(const char *pathC) {
 
 /* ======================================================= the stores ========= */
 static NSString *gConfPath = nil;
+static NSString *gSchemaPath = nil;   /* where settings.json was loaded from (shown in the window) */
 static void set_conf_path(NSString *p) { gConfPath = p; }
 static NSUserDefaults *du(void) { return [NSUserDefaults standardUserDefaults]; }
 
@@ -205,6 +206,21 @@ static void set_str(const CMSetting *s, const char *v, CMContext *cx) {
 }
 
 /* ================================================ the generated window ====== */
+/* A footer shown on every tab so the user can see WHERE the schema + config were
+ * loaded from (they can come from several places: AROS_SETTINGS_SCHEMA, next to the
+ * dylib, or ~/Library/Application Support/AROS). Abbreviated with ~, full in tooltip. */
+static NSString *abbrev_path(NSString *p) {
+    return p ? [p stringByAbbreviatingWithTildeInPath] : @"(built-in)";
+}
+static NSString *footer_text(void) {
+    return [NSString stringWithFormat:@"Schema: %@      ·      Config: %@",
+            abbrev_path(gSchemaPath), abbrev_path(gConfPath)];
+}
+static NSString *footer_tooltip(void) {
+    return [NSString stringWithFormat:@"settings.json loaded from:\n  %@\n\naros-host.conf:\n  %@",
+            gSchemaPath ?: @"(none)", gConfPath ?: @"(none)"];
+}
+
 @interface CMSettingsWC : NSObject <NSToolbarDelegate>
 @property (nonatomic, assign) CMContext *cx;
 @property (nonatomic, strong) NSWindow *window;
@@ -300,11 +316,22 @@ static void set_str(const CMSetting *s, const char *v, CMContext *cx) {
     [[grid columnAtIndex:0] setXPlacement:NSGridCellPlacementTrailing];
     NSView *pad = [[NSView alloc] initWithFrame:NSZeroRect];
     [pad addSubview:grid];
+    /* footer: where the schema + config were loaded from */
+    NSTextField *foot = [NSTextField labelWithString:footer_text()];
+    foot.font = [NSFont systemFontOfSize:9];
+    foot.textColor = [NSColor secondaryLabelColor];
+    foot.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    foot.toolTip = footer_tooltip();
+    foot.translatesAutoresizingMaskIntoConstraints = NO;
+    [pad addSubview:foot];
     [NSLayoutConstraint activateConstraints:@[
         [grid.topAnchor constraintEqualToAnchor:pad.topAnchor constant:20],
         [grid.leadingAnchor constraintEqualToAnchor:pad.leadingAnchor constant:20],
         [grid.trailingAnchor constraintEqualToAnchor:pad.trailingAnchor constant:-20],
-        [grid.bottomAnchor constraintEqualToAnchor:pad.bottomAnchor constant:-20],
+        [foot.topAnchor constraintEqualToAnchor:grid.bottomAnchor constant:16],
+        [foot.leadingAnchor constraintEqualToAnchor:pad.leadingAnchor constant:20],
+        [foot.trailingAnchor constraintLessThanOrEqualToAnchor:pad.trailingAnchor constant:-20],
+        [foot.bottomAnchor constraintEqualToAnchor:pad.bottomAnchor constant:-12],
     ]];
     return pad;
 }
@@ -401,6 +428,7 @@ int cm__open_settings_appkit(CMContext *cx) {
             const char *sp = resolve_schema_path();
             int n = sp ? load_schema(sp) : -1;
             if (n <= 0) { NSLog(@"[shell] settings schema not loaded: %s", gErr); return 1; }
+            gSchemaPath = @(sp);          /* record the resolved source for the window footer */
         }
         return build_window(cx);
     }

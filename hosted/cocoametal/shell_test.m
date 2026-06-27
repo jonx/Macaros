@@ -41,6 +41,12 @@ static NSMenuItem *item(NSMenu *m, NSString *t) {
     for (NSMenuItem *it in m.itemArray) if ([it.title isEqual:t]) return it;
     return nil;
 }
+static int view_has_label(NSView *v, NSString *needle) {
+    if ([v isKindOfClass:[NSTextField class]] &&
+        [[(NSTextField *)v stringValue] containsString:needle]) return 1;
+    for (NSView *s in v.subviews) if (view_has_label(s, needle)) return 1;
+    return 0;
+}
 
 int main(int argc, const char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -111,6 +117,8 @@ int main(int argc, const char **argv) {
             if ([w.title hasPrefix:@"AROS Settings"]) { sw = w; break; }
         check(sw != nil, "Settings… opened the schema-driven settings window");
         check(sw && sw.toolbar.items.count >= 4, "settings window generated tab toolbar from schema");
+        check(sw && view_has_label(sw.contentView, @"Schema:"),
+              "settings window shows where the schema was loaded from (footer)");
 
         /* (4) Movie recording: present N frames -> cm__record_frame appends -> probe .mov */
         upload_fn   cm_upload_    = (upload_fn)  dlsym(h, "cm_upload_rect");
