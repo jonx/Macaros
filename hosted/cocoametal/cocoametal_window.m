@@ -252,7 +252,7 @@ void cm_try_window(CMContext *cx, const char *title) {
         footer.wantsLayer = YES;
         footer.layer.backgroundColor = [NSColor colorWithWhite:0.11 alpha:1.0].CGColor;
         footer.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-        NSTextField *brand = [NSTextField labelWithString:@"Daedalus — AROS on Apple Silicon"];
+        NSTextField *brand = [NSTextField labelWithString:@"Daedalos — AROS on Apple Silicon"];
         brand.font = [NSFont systemFontOfSize:10];
         brand.textColor = [NSColor secondaryLabelColor];
         brand.frame = NSMakeRect(10, (FOOTER_H - 14) / 2.0, w - 20, 14);

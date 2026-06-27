@@ -26,7 +26,9 @@
 #import <CoreMedia/CoreMedia.h>
 #include "cocoametal.h"
 
-/* ------------------------------------------------------------------ icon ---- */
+/* ------------------------------------------------------------------ icon ----
+ * Daedalos's wings: a white feather on a sky-gradient rounded rect. Drawn with
+ * CoreGraphics (no window server needed) so it sets even on a headless/bare run. */
 static NSImage *cmsh_make_icon(void) {
     const int S = 256;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -34,36 +36,59 @@ static NSImage *cmsh_make_icon(void) {
                                            (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
     if (!c) { CGColorSpaceRelease(cs); return nil; }
     CGContextClearRect(c, CGRectMake(0, 0, S, S));
-    CGFloat inset = S * 0.08, r = S * 0.22;
-    CGPathRef path = CGPathCreateWithRoundedRect(
+
+    /* rounded-rect background, clipped, filled with a vertical sky gradient */
+    CGFloat inset = S * 0.06, r = S * 0.22;
+    CGPathRef bg = CGPathCreateWithRoundedRect(
         CGRectMake(inset, inset, S - 2 * inset, S - 2 * inset), r, r, NULL);
-    CGContextAddPath(c, path); CGContextClip(c);
-    CGFloat h = S / 2.0;
-    CGContextSetRGBFillColor(c, 0.16, 0.20, 0.85, 1); CGContextFillRect(c, CGRectMake(0, 0, h, h));
-    CGContextSetRGBFillColor(c, 0.92, 0.85, 0.15, 1); CGContextFillRect(c, CGRectMake(h, 0, h, h));
-    CGContextSetRGBFillColor(c, 0.88, 0.18, 0.18, 1); CGContextFillRect(c, CGRectMake(0, h, h, h));
-    CGContextSetRGBFillColor(c, 0.20, 0.78, 0.28, 1); CGContextFillRect(c, CGRectMake(h, h, h, h));
-    CGContextSetRGBStrokeColor(c, 0, 0, 0, 0.35); CGContextSetLineWidth(c, S * 0.012);
-    CGContextMoveToPoint(c, h, inset); CGContextAddLineToPoint(c, h, S - inset);
-    CGContextMoveToPoint(c, inset, h); CGContextAddLineToPoint(c, S - inset, h);
+    CGContextSaveGState(c);
+    CGContextAddPath(c, bg); CGContextClip(c);
+    CGFloat locs[2] = {0.0, 1.0};
+    CGFloat cols[8] = { 0.09, 0.11, 0.30, 1.0,    /* deep indigo (bottom) */
+                        0.22, 0.46, 0.86, 1.0 };  /* sky blue    (top)    */
+    CGGradientRef grad = CGGradientCreateWithColorComponents(cs, cols, locs, 2);
+    CGContextDrawLinearGradient(c, grad, CGPointMake(0, inset), CGPointMake(0, S - inset), 0);
+    CGGradientRelease(grad);
+
+    /* white feather, centred and gently tilted */
+    CGContextTranslateCTM(c, S / 2.0, S / 2.0);
+    CGContextRotateCTM(c, -0.22);
+    CGFloat fh = S * 0.66, fw = S * 0.19;          /* feather length / half-width */
+    CGContextSetRGBFillColor(c, 1, 1, 1, 0.97);
+    CGContextBeginPath(c);
+    CGContextMoveToPoint(c, 0,  fh / 2);                          /* top tip   */
+    CGContextAddQuadCurveToPoint(c,  fw, 0, 0, -fh / 2);          /* right edge */
+    CGContextAddQuadCurveToPoint(c, -fw, 0, 0,  fh / 2);          /* left edge  */
+    CGContextClosePath(c); CGContextFillPath(c);
+    /* central shaft (rachis) in the sky colour for contrast */
+    CGContextSetRGBStrokeColor(c, 0.22, 0.46, 0.86, 0.95);
+    CGContextSetLineWidth(c, S * 0.016); CGContextSetLineCap(c, kCGLineCapRound);
+    CGContextMoveToPoint(c, 0, -fh / 2 * 0.88); CGContextAddLineToPoint(c, 0, fh / 2 * 0.84);
     CGContextStrokePath(c);
+    CGContextRestoreGState(c);
+
     CGImageRef img = CGBitmapContextCreateImage(c);
     NSImage *ns = img ? [[NSImage alloc] initWithCGImage:img size:NSMakeSize(S, S)] : nil;
     if (img) CGImageRelease(img);
-    CGPathRelease(path); CGContextRelease(c); CGColorSpaceRelease(cs);
+    CGPathRelease(bg); CGContextRelease(c); CGColorSpaceRelease(cs);
     return ns;
 }
 
 static void cmsh_show_about(void) {
     [NSApp orderFrontStandardAboutPanel:@{
-        NSAboutPanelOptionApplicationName: @"Daedalus",
-        NSAboutPanelOptionApplicationVersion: @"hosted-darwin-aarch64",
+        NSAboutPanelOptionApplicationName:    @"Daedalos",
+        NSAboutPanelOptionApplicationVersion: @"0.1",                 /* shown as “Version 0.1” */
+        NSAboutPanelOptionVersion:            @"hosted darwin-aarch64", /* the build, in ( ) */
         NSAboutPanelOptionCredits:
-            [[NSAttributedString alloc]
-                initWithString:@"Daedalus — the macOS host that gives AROS its wings on "
-                               @"Apple Silicon.\nRuns AROS, the open-source AmigaOS "
-                               @"reimplementation, in a native Cocoa/Metal window.\n"
-                               @"AROS is distributed under the AROS Public License."],
+            [[NSAttributedString alloc] initWithString:
+                @"The macOS host that gives AROS its wings on Apple Silicon.\n\n"
+                @"Daedalos runs AROS — the open-source AmigaOS reimplementation — "
+                @"natively in a Cocoa/Metal window. AROS draws into a framebuffer it "
+                @"owns; Daedalos presents it with Metal and bridges keyboard, mouse, "
+                @"display, clipboard and host folders.\n\n"
+                @"AROS is distributed under the AROS Public License.\n"
+                @"Named for Daedalos, the craftsman who built the wings and taught "
+                @"Icaros to fly."],
     }];
 }
 
@@ -164,8 +189,8 @@ static NSMenu *cmsh_submenu(NSMenu *bar, NSString *title) {
 static void cmsh_build_menu(CMShellController *c) {
     NSMenu *bar = [[NSMenu alloc] initWithTitle:@"MainMenu"];
 
-    NSMenu *app = cmsh_submenu(bar, @"Daedalus");
-    cmsh_add(app, @"About Daedalus", @selector(aboutAction:), c, @"", 0);
+    NSMenu *app = cmsh_submenu(bar, @"Daedalos");
+    cmsh_add(app, @"About Daedalos", @selector(aboutAction:), c, @"", 0);
     [app addItem:[NSMenuItem separatorItem]];
     cmsh_add(app, @"Settings…", @selector(settingsAction:), c, @",", NSEventModifierFlagCommand);
     [app addItem:[NSMenuItem separatorItem]];
@@ -173,12 +198,12 @@ static void cmsh_build_menu(CMShellController *c) {
     NSMenu *servicesMenu = [[NSMenu alloc] initWithTitle:@"Services"];
     services.submenu = servicesMenu; [app addItem:services]; [NSApp setServicesMenu:servicesMenu];
     [app addItem:[NSMenuItem separatorItem]];
-    cmsh_add(app, @"Hide Daedalus", @selector(hide:), nil, @"h", NSEventModifierFlagCommand);
+    cmsh_add(app, @"Hide Daedalos", @selector(hide:), nil, @"h", NSEventModifierFlagCommand);
     cmsh_add(app, @"Hide Others", @selector(hideOtherApplications:), nil, @"h",
              NSEventModifierFlagCommand | NSEventModifierFlagOption);
     cmsh_add(app, @"Show All", @selector(unhideAllApplications:), nil, @"", 0);
     [app addItem:[NSMenuItem separatorItem]];
-    cmsh_add(app, @"Quit Daedalus", @selector(terminate:), nil, @"q", NSEventModifierFlagCommand);
+    cmsh_add(app, @"Quit Daedalos", @selector(terminate:), nil, @"q", NSEventModifierFlagCommand);
 
     NSMenu *file = cmsh_submenu(bar, @"File");
     cmsh_add(file, @"Take Screenshot", @selector(shotAction:), c, @"3",

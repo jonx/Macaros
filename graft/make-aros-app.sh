@@ -2,8 +2,8 @@
 # make-aros-app.sh — wrap hosted AROS in a first-class macOS .app bundle.
 #
 # ADDITIVE + non-colliding: a sibling to run-window.sh (which keeps its relocatable
-# bare-binary model). This packages the same pieces as a double-clickable Daedalus.app:
-#   Contents/MacOS/Daedalus              launcher script (CFBundleExecutable) — sets env
+# bare-binary model). This packages the same pieces as a double-clickable Daedalos.app:
+#   Contents/MacOS/Daedalos              launcher script (CFBundleExecutable) — sets env
 #   Contents/MacOS/AROSBootstrap     the hosted-AROS binary (signed w/ entitlements)
 #   Contents/MacOS/AROSBootstrap.conf + aros-host-conf.sh
 #   Contents/Frameworks/cocoametal.dylib + settings.json   (dladdr-relative schema)
@@ -12,7 +12,7 @@
 # The launcher exports AROS_DARWIN_THREADED, points the dylib at the bundled schema,
 # and sources aros-host-conf.sh so the GUI's aros-host.conf drives the boot.
 #
-#   ./make-aros-app.sh            build build/Daedalus.app from the discovered build
+#   ./make-aros-app.sh            build build/Daedalos.app from the discovered build
 #   ./make-aros-app.sh --check    unattended structural self-check (no AROS build needed)
 #
 # Note (v1 limitation): AROSBootstrap.conf's module paths point at the EXTERNAL AROS
@@ -26,15 +26,15 @@ ROOT="$(cd "$HERE/.." && pwd)"
 DYLIB="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
 ENT="${AROS_CTL_ENT:-$HERE/aros-host.entitlements.plist}"
-APP="${AROS_APP:-$ROOT/build/Daedalus.app}"
+APP="${AROS_APP:-$ROOT/build/Daedalos.app}"
 
 INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Daedalus</string>
-  <key>CFBundleDisplayName</key><string>Daedalus</string>
+  <key>CFBundleName</key><string>Daedalos</string>
+  <key>CFBundleDisplayName</key><string>Daedalos</string>
   <key>CFBundleIdentifier</key><string>org.aros.hosted</string>
-  <key>CFBundleExecutable</key><string>Daedalus</string>
+  <key>CFBundleExecutable</key><string>Daedalos</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -67,7 +67,7 @@ assemble() {   # assemble <bootd> <app>
     cp "$SCHEMA" "$_app/Contents/Frameworks/settings.json"
     cp "$SCHEMA" "$_app/Contents/Resources/settings.json"
     cp "$HERE/aros-host-conf.sh" "$_app/Contents/MacOS/aros-host-conf.sh"
-    printf '%s' "$LAUNCHER"   > "$_app/Contents/MacOS/Daedalus"; chmod +x "$_app/Contents/MacOS/Daedalus"
+    printf '%s' "$LAUNCHER"   > "$_app/Contents/MacOS/Daedalos"; chmod +x "$_app/Contents/MacOS/Daedalos"
     printf '%s' "$INFO_PLIST" > "$_app/Contents/Info.plist"
 }
 
@@ -95,18 +95,18 @@ if [ "${1:-}" = "--check" ]; then
     TMP="$(mktemp -d)"; BD="$TMP/bootd"; mkdir -p "$BD"
     printf '#!/bin/sh\nexit 0\n' > "$BD/AROSBootstrap"; chmod +x "$BD/AROSBootstrap"
     printf 'module /x/exec.library\nmemory 64\n' > "$BD/AROSBootstrap.conf"
-    assemble "$BD" "$TMP/Daedalus.app"
-    A="$TMP/Daedalus.app/Contents"
+    assemble "$BD" "$TMP/Daedalos.app"
+    A="$TMP/Daedalos.app/Contents"
     plutil -lint "$A/Info.plist" >/dev/null 2>&1; ck $? "Info.plist is valid"
-    [ -x "$A/MacOS/Daedalus" ];                       ck $? "MacOS/Daedalus launcher present + executable"
+    [ -x "$A/MacOS/Daedalos" ];                       ck $? "MacOS/Daedalos launcher present + executable"
     [ -f "$A/MacOS/AROSBootstrap" ];              ck $? "MacOS/AROSBootstrap present"
     [ -f "$A/Frameworks/cocoametal.dylib" ];      ck $? "Frameworks/cocoametal.dylib present"
     [ -f "$A/Frameworks/settings.json" ];         ck $? "Frameworks/settings.json (dladdr-relative)"
     [ -f "$A/Resources/settings.json" ];          ck $? "Resources/settings.json (AROS_SETTINGS_SCHEMA)"
     [ -f "$A/MacOS/aros-host-conf.sh" ];          ck $? "MacOS/aros-host-conf.sh present"
-    grep -q 'AROS_DARWIN_THREADED=1' "$A/MacOS/Daedalus";       ck $? "launcher sets AROS_DARWIN_THREADED"
-    grep -q 'AROS_SETTINGS_SCHEMA' "$A/MacOS/Daedalus";         ck $? "launcher points the dylib at the bundled schema"
-    grep -q 'aros-host-conf.sh' "$A/MacOS/Daedalus";            ck $? "launcher sources aros-host-conf.sh"
+    grep -q 'AROS_DARWIN_THREADED=1' "$A/MacOS/Daedalos";       ck $? "launcher sets AROS_DARWIN_THREADED"
+    grep -q 'AROS_SETTINGS_SCHEMA' "$A/MacOS/Daedalos";         ck $? "launcher points the dylib at the bundled schema"
+    grep -q 'aros-host-conf.sh' "$A/MacOS/Daedalos";            ck $? "launcher sources aros-host-conf.sh"
     codesign --verify "$A/Frameworks/cocoametal.dylib" 2>/dev/null; ck $? "bundled dylib codesign verifies"
     rm -rf "$TMP"
     [ "$fail" = 0 ] && { echo "[APP] PASS structural self-check"; exit 0; } || { echo "[APP] FAIL"; exit 1; }
@@ -134,4 +134,4 @@ fi
 codesign -s - -f "$APP" 2>/dev/null || true
 
 echo ">> built $APP"
-echo ">> open it:  open '$APP'      (or: '$APP/Contents/MacOS/Daedalus' to see stdout)"
+echo ">> open it:  open '$APP'      (or: '$APP/Contents/MacOS/Daedalos' to see stdout)"
