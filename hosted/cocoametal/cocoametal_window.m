@@ -536,6 +536,18 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
                      * Keep the physical state transition only: first down + up. */
                     break;
                 }
+                /* Host app shell: a Command-modified keyDown that matches an enabled
+                 * main-menu item is handled by the menu (⌘Q, ⌘,, ⌘W, ⌃⌘F, ⌃⌘R, …)
+                 * and NOT forwarded to AROS. Non-menu Command combos and every
+                 * non-Command key fall through to AROS unchanged. (A future "Capture
+                 * Input" mode will bypass this to hand the guest the Amiga/Cmd key;
+                 * the matching keyUp is harmless to AROS — a key-up with no prior
+                 * down just re-marks an already-up key.) */
+                if (ev.type == NSEventTypeKeyDown &&
+                    (ev.modifierFlags & NSEventModifierFlagCommand) &&
+                    [app mainMenu] && [[app mainMenu] performKeyEquivalent:ev]) {
+                    break;   /* consumed by the menu */
+                }
                 e->type = CM_EV_KEY;
                 e->code = (int)ev.keyCode;       /* macOS virtual keycode */
                 e->pressed = (ev.type == NSEventTypeKeyDown) ? 1 : 0;

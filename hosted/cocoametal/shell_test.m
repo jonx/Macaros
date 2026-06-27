@@ -12,8 +12,12 @@
  * mock sink). Headless-safe (no screenshot, no TCC). Clean-room: AppKit docs [PUB].
  */
 #import <AppKit/AppKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include "cocoametal.h"
 
@@ -21,6 +25,10 @@ typedef CMContext *(*open_fn)(int, int, const CMPixelDesc *, const char *);
 typedef void       (*close_fn)(CMContext *);
 typedef int        (*getopt_fn)(CMContext *, int, long *);
 typedef int        (*pump_fn)(CMContext *, CMEvent *, int);
+typedef void       (*upload_fn)(CMContext *, const void *, int, int, int, int, int);
+typedef void       (*present_fn)(CMContext *);
+typedef int        (*recstart_fn)(CMContext *, const char *, int, int);
+typedef int        (*recstop_fn)(CMContext *);
 
 static int g_fail = 0;
 static int check(int c, const char *w) { if (!c) { g_fail++; printf("    FAIL: %s\n", w); } return c; }
@@ -94,6 +102,53 @@ int main(int argc, const char **argv) {
         for (int i = 0; i < n; i++)
             if (ev[i].type == CM_EV_SETTING && ev[i].code == CM_OPT_CLIPBOARD_SHARE) saw = 1;
         check(saw, "Share Clipboard surfaced CM_EV_SETTING (AROS-facing relay)");
+
+        /* (3) Settings… opens the schema-driven window generated from settings.json */
+        NSMenuItem *settings = item(bar.itemArray.firstObject.submenu, @"Settings…");
+        [NSApp sendAction:settings.action to:settings.target from:settings];
+        NSWindow *sw = nil;
+        for (NSWindow *w in [NSApp windows])
+            if ([w.title hasPrefix:@"AROS Settings"]) { sw = w; break; }
+        check(sw != nil, "Settings… opened the schema-driven settings window");
+        check(sw && sw.toolbar.items.count >= 4, "settings window generated tab toolbar from schema");
+
+        /* (4) Movie recording: present N frames -> cm__record_frame appends -> probe .mov */
+        upload_fn   cm_upload_    = (upload_fn)  dlsym(h, "cm_upload_rect");
+        present_fn  cm_present_   = (present_fn) dlsym(h, "cm_present");
+        recstart_fn cm_rec_start_ = (recstart_fn)dlsym(h, "cm_record_start");
+        recstop_fn  cm_rec_stop_  = (recstop_fn) dlsym(h, "cm_record_stop");
+        if (cm_upload_ && cm_present_ && cm_rec_start_ && cm_rec_stop_) {
+            const int W = 320, HH = 200, N = 8;
+            NSString *mov = [NSTemporaryDirectory() stringByAppendingPathComponent:@"aros-gshell.mov"];
+            int rs = cm_rec_start_(cx, mov.UTF8String, 10, 0);
+            check(rs == 0, "cm_record_start ok");
+            if (rs == 0) {
+                uint8_t *fb = (uint8_t *)calloc((size_t)W * HH, 4);
+                for (int f = 0; f < N; f++) {
+                    uint8_t v = (uint8_t)(f * 30);
+                    for (int i = 0; i < W * HH; i++) {
+                        fb[i*4] = v; fb[i*4+1] = 0; fb[i*4+2] = (uint8_t)(255 - v); fb[i*4+3] = 255;
+                    }
+                    cm_upload_(cx, fb, W * 4, 0, 0, W, HH);
+                    cm_present_(cx);                 /* each present appends one frame */
+                }
+                free(fb);
+                check(cm_rec_stop_(cx) == 0, "cm_record_stop ok");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:mov] options:nil];
+                NSArray<AVAssetTrack *> *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+                double dur = CMTimeGetSeconds(asset.duration);
+                CGSize sz = tracks.count ? tracks.firstObject.naturalSize : CGSizeZero;
+#pragma clang diagnostic pop
+                check(tracks.count >= 1, "movie has a video track");
+                check(dur > 0, "movie duration > 0");
+                check((int)sz.width == W && (int)sz.height == HH, "movie frame size matches logical W×H");
+                printf("    movie: %dx%d, %.2fs, %lu track(s)\n",
+                       (int)sz.width, (int)sz.height, dur, (unsigned long)tracks.count);
+                [[NSFileManager defaultManager] removeItemAtPath:mov error:NULL];
+            }
+        }
 
         cm_close_(cx);
     }

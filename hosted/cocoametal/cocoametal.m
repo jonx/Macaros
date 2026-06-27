@@ -216,6 +216,11 @@ void cm__resync_layer(CMContext *cx);
  * cocoametal_shell.m. cm_open calls it once, on the main thread, after the window. */
 void cm__install_shell(CMContext *cx);
 
+/* Movie capture per-present frame hook. Strong override in cocoametal_shell.m
+ * (AVFoundation: append the current frame to the recording); weak no-op below so
+ * the not-recording path and non-shell builds are free. cm_present calls it. */
+void cm__record_frame(CMContext *cx);
+
 /* Build a texture descriptor for a BGRA8 shared texture. */
 static MTLTextureDescriptor *bgra8_desc(int w, int h, MTLTextureUsage usage) {
     MTLTextureDescriptor *d =
@@ -547,6 +552,7 @@ void cm_present(CMContext *cx) {
             }
         }
     }
+    cm__record_frame(cx);   /* host-shell: append this frame if recording (no-op otherwise) */
 }
 
 int cm_set_effect(CMContext *cx, CMEffect effect) {
@@ -868,17 +874,11 @@ __attribute__((weak)) void cm__install_shell(CMContext *cx) {
     (void)cx;
 }
 
-/* Movie capture (cm_record_*) is STUBBED until the AVFoundation recorder spike.
- * The ABI slots + the menu item exist so the wiring is complete; the impl returns
- * nonzero ("not yet"). These are non-weak (the contract symbols); the AVFoundation
- * implementation will replace them in cocoametal_shell.m at the recorder spike. */
-int cm_record_start(CMContext *cx, const char *path, int fps, int codec) {
-    (void)cx; (void)path; (void)fps; (void)codec;
-    return -1;   /* TODO: AVAssetWriter over cm_readback frames */
-}
-int cm_record_stop(CMContext *cx) {
+/* Movie capture: the per-present frame hook is a weak no-op here (the
+ * not-recording path and non-shell builds). The strong override + the real
+ * cm_record_start/cm_record_stop (AVFoundation) live in cocoametal_shell.m. */
+__attribute__((weak)) void cm__record_frame(CMContext *cx) {
     (void)cx;
-    return -1;
 }
 
 /* cm_open_settings: the real native AppKit panel lives in cocoametal_settings.m

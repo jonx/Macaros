@@ -21,6 +21,9 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreVideo/CoreVideo.h>
+#import <CoreMedia/CoreMedia.h>
 #include "cocoametal.h"
 
 /* ------------------------------------------------------------------ icon ---- */
@@ -289,4 +292,102 @@ int cm_capture_png(CMContext *cx, const char *path) {
     CGColorSpaceRelease(cs);
     free(buf);
     return rc;
+}
+
+/* ------------------------------------------ cm_record_* (movie via AVFoundation)
+ * Frame source = the per-present hook cm__record_frame (called from cm_present),
+ * so capture is driven by AROS's own present cadence — deterministic and
+ * unattended-verifiable (N presents -> N frames), no run-loop timer. The frames
+ * are our own cm_readback pixels, so there is NO Screen-Recording / TCC. */
+@interface CMRecorder : NSObject
+@property (nonatomic, strong) AVAssetWriter *writer;
+@property (nonatomic, strong) AVAssetWriterInput *input;
+@property (nonatomic, strong) AVAssetWriterInputPixelBufferAdaptor *adaptor;
+@property (nonatomic, assign) int w, h, fps;
+@property (nonatomic, assign) long frameIdx;
+@property (nonatomic, assign) BOOL active;
+@end
+@implementation CMRecorder @end
+
+static CMRecorder *gRec = nil;
+
+int cm_record_start(CMContext *cx, const char *path, int fps, int codec) {
+    if (!cx || !path) return 1;
+    if (gRec && gRec.active) return 2;                 /* already recording */
+    int tw = 0, th = 0, scale = 0;
+    if (cm_target_size(cx, &tw, &th, &scale) != 0 || scale <= 0) return 3;
+    int w = tw / scale, h = th / scale;                 /* logical dims (cm_readback) */
+    if (w <= 0 || h <= 0) return 3;
+    if (fps <= 0) fps = 30;
+
+    @autoreleasepool {
+        NSString *p = @(path);
+        [[NSFileManager defaultManager] removeItemAtPath:p error:NULL];
+        NSError *err = nil;
+        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:[NSURL fileURLWithPath:p]
+                                                         fileType:AVFileTypeQuickTimeMovie error:&err];
+        if (!writer) { NSLog(@"[shell] record: writer failed: %@", err); return 4; }
+        NSString *codecType = (codec == 1) ? AVVideoCodecTypeHEVC : AVVideoCodecTypeH264;
+        AVAssetWriterInput *input = [AVAssetWriterInput
+            assetWriterInputWithMediaType:AVMediaTypeVideo
+                           outputSettings:@{ AVVideoCodecKey: codecType,
+                                             AVVideoWidthKey: @(w), AVVideoHeightKey: @(h) }];
+        input.expectsMediaDataInRealTime = NO;
+        AVAssetWriterInputPixelBufferAdaptor *adaptor =
+            [AVAssetWriterInputPixelBufferAdaptor
+                assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input
+                                           sourcePixelBufferAttributes:@{
+                    (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                    (NSString *)kCVPixelBufferWidthKey: @(w),
+                    (NSString *)kCVPixelBufferHeightKey: @(h) }];
+        if (![writer canAddInput:input]) { NSLog(@"[shell] record: cannot add input"); return 5; }
+        [writer addInput:input];
+        if (![writer startWriting]) { NSLog(@"[shell] record: startWriting failed: %@", writer.error); return 6; }
+        [writer startSessionAtSourceTime:kCMTimeZero];
+
+        CMRecorder *r = [CMRecorder new];
+        r.writer = writer; r.input = input; r.adaptor = adaptor;
+        r.w = w; r.h = h; r.fps = fps; r.frameIdx = 0; r.active = YES;
+        gRec = r;
+    }
+    return 0;
+}
+
+void cm__record_frame(CMContext *cx) {
+    CMRecorder *r = gRec;
+    if (!cx || !r || !r.active || !r.input.isReadyForMoreMediaData) return;
+    @autoreleasepool {
+        CVPixelBufferRef pb = NULL;
+        CVPixelBufferPoolRef pool = r.adaptor.pixelBufferPool;
+        if (pool) (void)CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &pb);
+        if (!pb && CVPixelBufferCreate(NULL, r.w, r.h, kCVPixelFormatType_32BGRA,
+                                       NULL, &pb) != kCVReturnSuccess) return;
+        CVPixelBufferLockBaseAddress(pb, 0);
+        void  *dst    = CVPixelBufferGetBaseAddress(pb);
+        size_t stride = CVPixelBufferGetBytesPerRow(pb);
+        cm_readback(cx, dst, (int)stride, r.w, r.h);    /* BGRA8 logical frame */
+        CVPixelBufferUnlockBaseAddress(pb, 0);
+        if ([r.adaptor appendPixelBuffer:pb withPresentationTime:CMTimeMake(r.frameIdx, r.fps)])
+            r.frameIdx++;
+        CVPixelBufferRelease(pb);
+    }
+}
+
+int cm_record_stop(CMContext *cx) {
+    (void)cx;
+    CMRecorder *r = gRec;
+    if (!r || !r.active) return 1;
+    r.active = NO;
+    @autoreleasepool {
+        [r.input markAsFinished];
+        __block BOOL done = NO;
+        [r.writer finishWritingWithCompletionHandler:^{ done = YES; }];
+        /* bounded wait so the .mov is finalized when we return (pump the run loop). */
+        CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 5.0;
+        while (!done && CFAbsoluteTimeGetCurrent() < deadline)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true);
+        NSLog(@"[shell] recording stopped: %ld frames -> %@", r.frameIdx, r.writer.outputURL.path);
+    }
+    gRec = nil;
+    return 0;
 }
