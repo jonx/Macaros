@@ -83,12 +83,13 @@ sub ea_kind {
 #                    M68k_LINE4.c stays BYTE-VERBATIM; only the build-dir copy is patched.
 use strict; use warnings;
 my ($src, $out, @opts) = @ARGV;
-die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge] [--fpu-sandbox] [--libm-asm-fix]\n" unless $src && $out;
+die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge] [--fpu-sandbox] [--libm-asm-fix] [--rmw-sandbox]\n" unless $src && $out;
 my $ea_sandbox    = grep { $_ eq '--ea-sandbox' } @opts;
 my $movem_sandbox = grep { $_ eq '--movem-sandbox' } @opts;
 my $move_no_merge = grep { $_ eq '--move-no-merge' } @opts;
 my $fpu_sandbox   = grep { $_ eq '--fpu-sandbox' } @opts;     # [J5o] M68k_LINEF.c
 my $libm_asm_fix  = grep { $_ eq '--libm-asm-fix' } @opts;    # [J5o] math/libm.h
+my $rmw_sandbox   = grep { $_ eq '--rmw-sandbox' } @opts;     # [J5u] LINE8/9/B/C/D RMW-to-mem
 local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close $fh;
 
 # ===================== [J5o] LIBM.H CLANG ASM-CONSTRAINT FIX =====================
@@ -489,6 +490,59 @@ if ($ea_sandbox) {
                  . "uint32_t *j5d_ea_mem(uint32_t *ptr, unsigned kind, uint8_t reg_An, uint8_t val, int index_amount);\n"
                  . "uint32_t *j5d_ea_addr_offset(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t val, int offset, int offset_32bit);\n"
                  . "uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t val, uint8_t index, uint8_t shift);\n";
+        if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
+            my $head = $1; substr($code, length($head), 0) = $decl;
+        } else { $code = $decl . $code; }
+    }
+}
+
+# ===================== [J5u] RMW MEMORY-DESTINATION SANDBOX REWRITE =====================
+# Applied to M68k_LINE8/9/B/C/D (--rmw-sandbox). The REAL Emu68 EMIT_<ALU>_reg decoders, for
+# a read-modify-write ALU op with a MEMORY destination (`or.l Dn,<ea>` / `add.l Dn,<ea>` /
+# `and`/`sub`/`eor`), resolve the destination EA address ONCE (EMIT_LoadFromEffectiveAddress
+# size 0 -> `dest` holds the 68k ADDRESS) and then emit their OWN raw ldr/<op>/str round-trip
+# straight off `dest`:  *ptr++ = ldr_offset(dest, tmp, 0); ... *ptr++ = str_offset(dest, tmp, 0);
+# That is the 1:1-MMU + big-endian-CPU assumption, wrong TWICE on the little-endian sandbox:
+# (1) `dest` is a 68k address, not a host pointer, so the raw deref faults (esp. abs.l, where
+# `dest` is a high 68k constant); (2) it skips the big-endian REV. Unlike MOVE's memory stores
+# (which funnel through the darwinized M68k_EA.c helpers), these RMW touches are emitted INLINE
+# in the LINE8/9/B/C/D decoders and were NEVER sandbox-translated — the hand-built corpus has
+# no `<alu> Dn,(ea)` site, so it stayed latent until real compiler output (vbcc `g |= x;`).
+# We rewrite EACH such `ldr*/str*_offset[_pre/postindex](dest, tmp, OFF)` site to OUR existing
+# (An)-class emitter j5d_ea_mem (j5d_ea_helpers.c): host = base_adjust(x12) + dest (UXTW), the
+# big-endian REV, AND the pre/post-index An update (the -(An)/(An)+ cases) via its index_amount
+# argument — exactly as the [J5d] direct-site rewrite does for reg_An. KIND (size/store/signed/
+# index) is derived MECHANICALLY by ea_kind() from the encoder name, identical to --ea-sandbox.
+# `(dest, tmp)` as (base, value) appears ONLY in these RMW blocks (the BCD/ADDX/SUBX paths use
+# an_src/regx/regy/...), so the match is exact. The QUARANTINE files stay BYTE-VERBATIM. Run
+# BEFORE the alias rewrite (these sites contain no aliases).
+if ($rmw_sandbox) {
+    my $rmw_rewrites = 0;
+    # Base operand is the literal `dest` (the resolved 68k EA address from EMIT_Load-
+    # FromEffectiveAddress size 0); the VALUE operand is the load/op-result/immediate
+    # register — `tmp` for the ALU ops, `immed` for the LINE0 immediate ops, etc. We key
+    # ONLY on base==`dest` (the BCD/ADDX/SUBX paths use an_src/regx/regy/dst as base, so
+    # they never match). Plain (non pre/post) sites are always offset 0 — the decoder folds
+    # any displacement into `dest` first — so routing them through j5d_ea_mem (which accesses
+    # at [dest+0] for index==0) is faithful; the pre/post amount rides index_amount.
+    $code =~ s{
+        \*ptr\+\+\s*=\s*
+        ((?:ldr|str)[bh]?_offset(?:_preindex|_postindex)?)
+        \(\s*dest\s*,\s*([A-Za-z_]\w*)\s*,\s*([^;]+?)\s*\)\s*;
+    }{
+        my ($enc, $val, $off) = ($1, $2, $3);
+        my $imm_num = ($off =~ /^\s*-?\d+\s*$/) ? ($off + 0) : 0;  # suffix drives index; heuristic n/a
+        # A plain offset site MUST be 0 (no index suffix, displacement already in `dest`);
+        # j5d_ea_mem index==0 ignores the amount, so a nonzero plain offset would mistranslate.
+        die "!! --rmw-sandbox: plain (dest,$val) site with nonzero offset '$off' in $src — unhandled\n"
+            if ($enc !~ /_(pre|post)index$/ && $imm_num != 0);
+        my $kind = ea_kind($enc, $imm_num);
+        $rmw_rewrites++;
+        "ptr = j5d_ea_mem(ptr, ${kind}u, dest, ${val}, ${off}); /* [J5u] RMW-EA: was ${enc} */";
+    }gex;
+    if ($rmw_rewrites) {
+        my $decl = "\n/* [J5u] darwinize: RMW memory-destination sandbox EA helper (OURS, j5d_ea_helpers.c) */\n"
+                 . "uint32_t *j5d_ea_mem(uint32_t *ptr, unsigned kind, uint8_t reg_An, uint8_t val, int index_amount);\n";
         if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
             my $head = $1; substr($code, length($head), 0) = $decl;
         } else { $code = $decl . $code; }

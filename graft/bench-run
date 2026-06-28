@@ -1,0 +1,156 @@
+#!/bin/sh
+#
+# bench-run -- run the in-tree AROS benchmark suite (and any other self-terminating
+# benchmark, e.g. a ported Dhrystone) on booted darwin-aarch64 AROS, then print and
+# save the results.
+#
+# It boots windowed AROS headlessly via graft/aros-ctl, feeds a generated
+# Startup-Sequence that runs each benchmark with stdout redirected to a writable
+# host volume (MacRW:), polls for completion, then prints the captured output.
+# No build step -- build the binaries first (see below).
+#
+# Usage:
+#   graft/bench-run                          # default known-good set
+#   graft/bench-run exec/allocvec clib/memset
+#   graft/bench-run clib/dhrystone           # once Dhrystone is built into the suite
+#   graft/bench-run C:Dhrystone SYS:Path/To/Prog
+#   BENCH_DRYRUN=1 graft/bench-run           # just print the generated Startup-Sequence
+#
+# Each argument is one benchmark, run in order. An argument containing ':' is used
+# as a literal AROS path (e.g. C:Dhrystone, SYS:...); otherwise it is taken relative
+# to $BENCH_BASE (default SYS:Developer/Debug/Tests/benchmarks/), e.g. "clib/memset".
+#
+# Build the in-tree suite first, from the AROS build dir (PATH set to the crosstools):
+#   make test-benchmarks-exec-quick test-benchmarks-clib-quick
+# Float results need the printf fix in stdcio.library/posixc.library -- see
+# docs/features/benchmarks/README.md and graft/UPSTREAM-NOTES.md item 34.
+#
+# Knobs (env): BENCH_BASE, BENCH_TIMEOUT (s, default 180), BENCH_WAIT (warmup s,
+# default 5), BENCH_DRYRUN, BENCH_RUN_DIR, AROS_CTL_BOOTD (passed to aros-ctl).
+set -u
+
+# Resolve this script's own dir (following symlinks) -> repo root.
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"   # .../graft
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"             # repo root
+
+BENCH_BASE="${BENCH_BASE:-SYS:Developer/Debug/Tests/benchmarks}"
+TIMEOUT="${BENCH_TIMEOUT:-180}"
+WARMUP="${BENCH_WAIT:-5}"
+RUN_DIR="${BENCH_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${BENCH_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+LOGSRC="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+
+# Default set: self-terminating, headless, no host-side interaction. Deliberately
+# excludes exec/copymem (does not complete in this harness), clib/stdio (overflows
+# the emul-handler stack -- UPSTREAM-NOTES item 35), and exec/taskswitch2 (waits for
+# CTRL-C unless rebuilt with SELF_TIMED_TEST=1). Pass names explicitly to override.
+if [ "$#" -gt 0 ]; then
+    BENCHES="$*"
+else
+    BENCHES="exec/allocvec exec/allocpooled clib/memset clib/string"
+fi
+
+resolve() { case "$1" in *:*) printf '%s' "$1" ;; *) printf '%s/%s' "$BENCH_BASE" "$1" ;; esac; }
+
+# Build the Startup-Sequence to a temp file (so dry-run can show it without booting).
+mkdir -p "$RUN_DIR"
+STARTUP="$RUN_DIR/bench-$STAMP.startup"
+{
+    echo 'Version'
+    echo 'FailAt 21'
+    echo 'Echo "=== AROS darwin-aarch64 benchmarks ===" >MacRW:bench.txt'
+    for b in $BENCHES; do
+        echo 'Echo "" >>MacRW:bench.txt'
+        echo "Echo \"[$b]\" >>MacRW:bench.txt"
+        echo "$(resolve "$b") >>MacRW:bench.txt"
+    done
+    echo 'Echo "" >>MacRW:bench.txt'
+    echo 'Echo "=== DONE ===" >>MacRW:bench.txt'
+    echo 'Wait 999999'
+} > "$STARTUP"
+
+if [ -n "${BENCH_DRYRUN:-}" ]; then
+    echo "== generated Startup-Sequence ($STARTUP) =="
+    cat "$STARTUP"
+    exit 0
+fi
+
+# Single-instance lock (shared with the other AROS harness scripts).
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+HOST_DIR="$RUN_DIR/bench-$STAMP"
+LOG="$RUN_DIR/bench-$STAMP.log"
+SHOT="$RUN_DIR/bench-$STAMP.png"
+OUT="$HOST_DIR/bench.txt"
+mkdir -p "$HOST_DIR"
+
+fail() {
+    echo "FAIL: $*" >&2
+    [ -s "$OUT" ] && { echo >&2; cat "$OUT" >&2; }
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    exit 1
+}
+
+echo "== AROS benchmark run =="
+echo "benches:    $BENCHES"
+echo "startup:    $STARTUP"
+echo "output:     $OUT"
+echo "screenshot: $SHOT"
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+: > "$LOGSRC" 2>/dev/null || true   # fresh log so crash detection isn't fooled by a stale run
+AROS_CTL_STARTUP_FILE="$STARTUP" \
+AROS_HOST_VOLUME="MacRW:$HOST_DIR;WRITE" \
+    "$HERE/aros-ctl" run >/dev/null 2>&1 || fail "launch failed"
+
+sleep "$WARMUP"
+i=0
+while [ "$i" -lt "$TIMEOUT" ]; do
+    if [ -f "$OUT" ] && grep -q '=== DONE ===' "$OUT"; then break; fi
+    if "$HERE/aros-ctl" crash 2>/dev/null | grep -q .; then break; fi
+    if ! "$HERE/aros-ctl" status >/dev/null 2>&1; then break; fi
+    sleep 2; i=$((i + 2))
+done
+
+"$HERE/aros-ctl" shot "$SHOT" >/dev/null 2>&1 || true
+cp -f "$LOGSRC" "$LOG" 2>/dev/null || true
+
+[ -f "$OUT" ] || fail "no benchmark output produced (boot failed?)"
+
+echo
+echo "---------------- results ----------------"
+cat "$OUT"
+echo "-----------------------------------------"
+
+rc=0
+if "$HERE/aros-ctl" crash 2>/dev/null | grep -q .; then
+    echo >&2
+    echo "WARNING: a crash/alert was logged during the run:" >&2
+    "$HERE/aros-ctl" crash 2>/dev/null | head -8 >&2
+    rc=2
+fi
+if ! grep -q '=== DONE ===' "$OUT"; then
+    echo >&2
+    echo "WARNING: run did not reach the DONE marker (timeout/crash/exit) -- results are partial." >&2
+    rc=2
+fi
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+echo "log:        $LOG"
+exit "$rc"

@@ -252,9 +252,16 @@ int main(int argc, char **argv)
      * we want exactly ONE clean "send this file" banner for the user. We print it ourselves
      * from diag.last_bundle after the run.  The bundle(s) are still written. */
     diag.quiet_banner = 1;
-    j5d_set_diag(&diag);
-    j5d_interp_set_diag(&diag);
-    j5n_signal_install(&diag);                             /* catch a genuine host fault too */
+    /* JIT68K_NO_DIAG: skip registering the diagnostics so the engine keeps block CHAINING ON
+     * (the hot path — block->block branches instead of a C-dispatcher hop per block). This
+     * trades fault localization (no crash bundle on a fault) for speed, which is what you want
+     * when TIMING a known-good program. Default (unset) keeps full diagnostics + the safe,
+     * chaining-off, every-block-localizable path. */
+    if (!getenv("JIT68K_NO_DIAG")) {
+        j5d_set_diag(&diag);
+        j5d_interp_set_diag(&diag);
+        j5n_signal_install(&diag);                         /* catch a genuine host fault too */
+    }
 
     /* ====================================================================================
      * --diff: the [J5n] differential lockstep checker.  HONEST SCOPE: the engine's lockstep

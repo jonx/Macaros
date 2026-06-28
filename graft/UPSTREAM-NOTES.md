@@ -266,6 +266,38 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     died on AT_DeadEnd|AN_ExecLib. Added the AArch64 PrepareContext (args in x0-x7,
     x29=0, x30=fallBack, 16-byte-aligned sp). The boot now runs *through* exec init.
 
+## C-library correctness (surfaced by the in-tree benchmark suite)
+
+34. **`printf("%f")` printed the format specifier literally — float conversions
+    were compiled out of the C library.** AROS's shared format engine
+    (`compiler/fmtprintf/fmtprintf.c`) gates `%[aAeEfFgG]` behind
+    `#ifdef FULL_SPECIFIERS`. Every consumer defines it unconditionally
+    (`__vcscan`, `__vwformat`, `__vwscanf`, the kernel `_vkprintf`) **except
+    `__vcformat`**, which gated it on `#ifndef STDC_STATIC`. This is a direct
+    consequence of item 26 (linking `-lstdc.static` early): the freestanding
+    archive's *strong*, float-less `__vcformat` is pulled to satisfy
+    `printf`/`vfprintf` and **shadows** the float-capable `StdCBase` dispatcher in
+    `-lstdc_rel`. So `printf`/`vfprintf` from `posixc.library` **and**
+    `stdcio.library` (i.e. every C program) rendered `%f`/`%lf`/`%g` verbatim,
+    while `sprintf` (via `stdc.library`, which keeps its own float-ON `__vcformat`)
+    worked — and integer conversions were unaffected, which made it look like a
+    vararg bug rather than a missing case. *Fix (on our branch):* drop the lone
+    `#ifndef STDC_STATIC` gate in `compiler/crt/stdc/__vcformat.c` so float support
+    is unconditional, matching the sibling engines; the float math it pulls
+    (`log10`/`pow`/`isinf`/…) resolves through the weak `StdCBase` library stubs.
+    Rebuild `libstdc.static.a` + `posixc.library` + `stdcio.library`. Fixes float
+    output system-wide (`printf`, `CPUInfo`-style tools, any app). Verified with
+    `developer/debug/test/benchmarks` (exec + clib) — `allocvec`/`allocpooled`/
+    `memset` now print real rates instead of `%f`.
+
+35. **[OPEN] `clib/stdio` benchmark overflows the emul-handler task stack.**
+    `developer/debug/test/benchmarks/clib/stdio` (heavy formatted output to a
+    host-mapped volume) trips `[KRN] Task EMU went out of stack limits` followed by
+    an unrecoverable trap in the emul-handler; the other exec/clib benchmarks run
+    clean. Likely the emul-handler process-task stack is undersized for the volume
+    of the stdio write path on Darwin (or a deep host-write recursion). Not yet
+    diagnosed — excluded from the benchmark run for now.
+
 ---
 
 *Status — **AROS boots through exec init; building the BASE kickstart toward a CLI***.

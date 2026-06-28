@@ -330,6 +330,7 @@ static int is_terminator(uint16_t op)
     if ((op & 0xFFC0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
     if ((op & 0xFFC0u) == 0x81C0u) return 1;     /* divs.w  ([J5i] vector 5 on /0) */
     if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
+    if ((op & 0xF0F8u) == 0x50C8u) return 1;     /* [J5u] DBcc Dn,disp16 (decrement-and-branch loop) */
     if ((op & 0xF1FFu) == 0x41F9u) return 1;     /* lea abs.l,An (dispatcher-decoded)*/
     if ((op & 0xF1FFu) == 0x41FAu) return 1;     /* lea (d16,pc),An (dispatcher-decoded)*/
     /* [J5q] FP conditional control-flow — decoded at the DISPATCHER (like integer Bcc),
@@ -1519,11 +1520,18 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 
     uint64_t base_adjust = (uint64_t)(uintptr_t)sb->host_mem - (uint64_t)sb->origin;
     uint32_t pc = entry_pc;
-    uint32_t steps = 0;
+    uint64_t steps = 0;
     uint32_t depth = 0;                              /* current nested-call depth   */
 
+    /* Runaway guard: bound dispatcher steps so a corrupt/looping program can't hang the
+     * unattended harness. Default 2,000,000 (≈9M instructions). A legitimate long run — a
+     * benchmark, say — raises it via the JIT68K_STEP_CAP env var (decimal or 0x-hex). */
+    uint64_t step_cap = 2000000u;
+    { const char *e = getenv("JIT68K_STEP_CAP");
+      if (e && *e) { unsigned long long v = strtoull(e, (char **)0, 0); if (v) step_cap = (uint64_t)v; } }
+
     for (;;) {
-        if (++steps > 2000000u) RFAIL("dispatcher step cap (runaway)");
+        if (++steps > step_cap) RFAIL("dispatcher step cap (runaway)");
 
         /* [J5i] ADDRESS / BUS error: a jump/return to a PC OUTSIDE the sandbox (a corrupt
          * return address, a wild computed jmp/jsr(An), a bad branch target) is the hosted
@@ -1824,6 +1832,32 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             } else {                                 /* BRA (cc4==0) or Bcc         */
                 int take = (cc4 == 0x0) ? 1 : bcc_taken(cc4, st->ccr);
                 pc = take ? target : after;
+            }
+        }
+        else if ((top & 0xF0F8u) == 0x50C8u) {       /* [J5u] DBcc Dn,disp16 (decrement-and-branch) */
+            /* Loop primitive (the integer twin of the [J5q] FDBcc above): if the 68k
+             * condition is TRUE the loop EXITS (fall through); else Dn.W -= 1 and, while the
+             * .W counter has not run past -1, branch to (PC-of-disp)+disp16. The condition
+             * field reuses bcc_taken (cc>=2); cc=0 is DBT (always true -> exit), cc=1 is
+             * DBF/DBRA (always false -> pure counter). Only the low WORD of Dn is the counter;
+             * the high word is preserved. vbcc emits DBF for its movem/struct-copy loops, which
+             * the hand-built corpus never used — so DBcc was missing from is_terminator until
+             * real compiler output surfaced it. */
+            unsigned cc4 = (top >> 8) & 0xFu;
+            unsigned dn  = top & 7u;
+            int16_t  disp16  = be16s(thost + 2);     /* signed 16-bit displacement       */
+            uint32_t disp_pc = tpc + 2;              /* disp is relative to the disp word */
+            uint32_t after   = tpc + 4;              /* opcode + disp = 4 bytes          */
+            int cond_true = (cc4 == 0x0) ? 1 : (cc4 == 0x1) ? 0 : bcc_taken(cc4, st->ccr);
+            if (cond_true) {
+                pc = after;                          /* condition true -> exit the loop  */
+            } else {
+                uint16_t cnt = (uint16_t)(st->d[dn] & 0xFFFFu);
+                cnt = (uint16_t)(cnt - 1);
+                st->d[dn] = (st->d[dn] & 0xFFFF0000u) | cnt;   /* .W counter, hi word kept */
+                pc = (cnt == 0xFFFFu)                /* counter expired (-1) -> fall through */
+                     ? after
+                     : (uint32_t)((int64_t)disp_pc + disp16);
             }
         }
         else if ((top & 0xF1FFu) == 0x41F9u) {       /* lea abs.l,An (address compute) */
