@@ -127,7 +127,7 @@ Still needed:
 
 ## 4. Desktop, Datatypes, Zune, And Userland
 
-Status: Wanderer baseline works; broad userland still needs expansion.
+Status: Wanderer baseline works; initial useful desktop payload now builds.
 
 Source areas:
 
@@ -143,6 +143,9 @@ Already present:
 - `lddemon` tracing and `C:TestLib` make library-load failures observable.
 - `png.library`, `picture.datatype`, and `png.datatype` build/open.
 - `C/Decoration` is present in the current build image.
+- `Prefs/Zune`, `Prefs/Wanderer`, `System/About`, `Tools/Editor`,
+  `Tools/ScreenGrabber`, `Utilities/MultiView`, and `Utilities/Clock` build in
+  the current darwin-aarch64 image.
 
 Still needed:
 
@@ -155,8 +158,10 @@ Still needed:
 - Add a library/device load matrix run at boot or under `aros-ctl`: important
   libraries, classes, datatypes, and devices should be opened once and reported
   as PASS/FAIL.
-- Expand datatype coverage beyond the currently verified picture/png path.
-  `heic.datatype` has an explicit aarch64 stack-pointer compile blocker.
+- Expand datatype/tool coverage beyond this first payload. The broad meta-targets
+  still pull much larger dependency sets; build those deliberately, one group at
+  a time. `heic.datatype` still has an explicit aarch64 stack-pointer compile
+  blocker.
 
 ## 5. Host Volume / Emul Handler
 

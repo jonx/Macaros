@@ -39,7 +39,7 @@ deployment, or input failures.
    - Success: one command answers "am I running what I built?" and one command
      answers "does the desktop load chain open?"
 
-4. **Build/deploy the fuller desktop set.**
+4. **Build/deploy the fuller desktop set.** DONE in current build image.
    - Wanderer itself only installs the desktop, classes, icons, env defaults, and
      `WANDERER:Tools`.
    - Add the surrounding useful desktop targets: `workbench-prefs`,
@@ -47,6 +47,11 @@ deployment, or input failures.
      where they build on darwin-aarch64.
    - Success: `SYS:Prefs/Zune`, `SYS:Prefs/Wanderer`, `SYS:System/About`,
      `SYS:Tools`, and `SYS:Utilities` exist where expected.
+   - Verified built targets: `workbench-system-aboutaros`,
+     `workbench-prefs-zune`, `workbench-prefs-wanderer`,
+     `workbench-tools-editor`, `workbench-tools-screengrabber`,
+     `workbench-utilities-multiview`, and `workbench-utilities-clock`.
+   - `./graft/deploy-check` now reports all desktop presence checks as `OK`.
 
 5. **Verify the desktop visually.**
    - Check menu open/close, Tools menu enablement, GUI settings, About, window
