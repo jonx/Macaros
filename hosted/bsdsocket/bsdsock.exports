@@ -34,3 +34,8 @@ _hs_send
 _hs_send_all
 _hs_recv
 _hs_recv_nonblock
+
+# Async DNS (bsdsock_resolve.c) — getaddrinfo on a detached thread; AROS polls.
+_hs_resolve_start
+_hs_resolve_poll
+_hs_resolve_free

@@ -130,6 +130,17 @@ int  pump_drain(PumpSig *sig, PumpReady *out, int max);
  * exposed for completeness. */
 void pump_wake_kqueue(void);
 
+/* ------------------------------------------------------------------------- *
+ * Async DNS (bsdsock_resolve.c) for bsdsocket.library's gethostbyname. The
+ * lookup runs on a detached host pthread (getaddrinfo can block); the AROS side
+ * timer-polls the result (R-DARWIN-WAKE), never blocking its single thread.
+ * ------------------------------------------------------------------------- */
+typedef struct ResolveJob ResolveJob;
+
+ResolveJob *hs_resolve_start(const char *name);   /* NULL on failure          */
+int         hs_resolve_poll(ResolveJob *, unsigned *ip_net_out);  /* 1 ok / -1 fail / 0 pending */
+void        hs_resolve_free(ResolveJob *);         /* after poll != 0          */
+
 #ifdef __cplusplus
 }
 #endif

@@ -16,6 +16,7 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <string.h>
 
 #include <aros/libcall.h>
@@ -98,6 +99,39 @@ int main(void)
                 Printf("[N6] FAIL: sent=%ld recv=%ld errno %ld first='%s'\n",
                        (LONG)sent, (LONG)n, (LONG)Errno(), b);
             CloseSocket(s);
+        }
+    }
+
+    /* ---- [DNS] gethostbyname -> connect -> fetch (real DNS) -------------- */
+    {
+        struct hostent *he = gethostbyname("one.one.one.one");   /* -> 1.1.1.1 */
+        if (!he || !he->h_addr_list || !he->h_addr_list[0])
+            Printf("[DNS] FAIL: gethostbyname, errno %ld\n", (LONG)Errno());
+        else
+        {
+            unsigned ip; int s;
+            memcpy(&ip, he->h_addr_list[0], 4);                  /* network order */
+            s = connect_to(ip, 0x5000);                          /* :80 */
+            if (s < 0)
+                Printf("[DNS] FAIL: connect resolved host, errno %ld\n", (LONG)Errno());
+            else
+            {
+                const char *req = "GET / HTTP/1.0\r\nHost: one.one.one.one\r\n\r\n";
+                char b[80]; int n, i;
+                send(s, req, strlen(req), 0);
+                memset(b, 0, sizeof b);
+                n = recv(s, b, sizeof b - 1, 0);
+                if (n > 4 && strncmp(b, "HTTP/1", 6) == 0)
+                {
+                    for (i = 0; i < n; i++) if (b[i] == '\r' || b[i] == '\n') { b[i] = 0; break; }
+                    Printf("[DNS] PASS: resolved one.one.one.one -> %ld.%ld.%ld.%ld, fetched '%s'\n",
+                           (LONG)(ip & 0xff), (LONG)((ip >> 8) & 0xff),
+                           (LONG)((ip >> 16) & 0xff), (LONG)((ip >> 24) & 0xff), b);
+                }
+                else
+                    Printf("[DNS] FAIL: fetch n=%ld, errno %ld\n", (LONG)n, (LONG)Errno());
+                CloseSocket(s);
+            }
         }
     }
 
