@@ -18,11 +18,20 @@
 #   aros-ctl cmdc           press Command-C
 #   aros-ctl cmdv           press Command-V
 #   aros-ctl mouse X Y      move pointer to logical X,Y
-#   aros-ctl click [BTN]    click (0=left default,1=right,2=middle)
-#   aros-ctl button BTN P   raw mouse button BTN pressed P
+#   aros-ctl resize W H     resize native host window content area
+#   aros-ctl click [BTN] [X Y] click (0=left default,1=right,2=middle)
+#   aros-ctl button BTN P [X Y] raw mouse button BTN pressed P
+#   aros-ctl menu [X Y]     open focused app menu (right-button hold+nudge)
+#   aros-ctl menuup [X Y]   release menu right-button hold
+#   aros-ctl setting KEY VALUE [Y] inject a CM_EV_SETTING event
+#   aros-ctl clipboard on|off toggle clipboard sharing through CM_EV_SETTING
 #   aros-ctl shot [PATH]    screenshot -> PATH (.png via sips, else .ppm)
+#   aros-ctl record start [PATH] [FPS]  start recording a .mov (stop with: record stop)
+#   aros-ctl record SECS [PATH] [FPS]   record SECS seconds then auto-stop (returns now)
+#   aros-ctl record stop    finalize a manual recording
 #   aros-ctl log [N]        last N log lines (default 40)
-#   aros-ctl crash          extract crash/alert lines from the log
+#   aros-ctl crash          extract fatal crash/alert lines from the log
+#   aros-ctl warn           extract non-fatal warning lines from the log
 #   aros-ctl libs           list host dylibs mapped by AROSBootstrap (path + version)
 #   aros-ctl wait [SECS]    sleep, letting AROS run/render (default 1)
 set -u
@@ -69,13 +78,95 @@ find_bootd() {
     printf '%s\n' "$best"
 }
 
+stop_pid() {
+    local pid="$1"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.2
+    done
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+}
+
+stop_instances_for_bootd() {
+    local bootd="$1"
+    local pid
+
+    if [ -f "$PIDF" ]; then
+        pid="$(cat "$PIDF" 2>/dev/null)"
+        stop_pid "$pid" || true
+    fi
+
+    if [ -n "$bootd" ]; then
+        ps -axo pid=,command= 2>/dev/null | while read -r pid command; do
+            case "$command" in
+                *"/Daedalos -c $bootd/AROSBootstrap.conf"|*"./Daedalos -c $bootd/AROSBootstrap.conf"|*"/AROSBootstrap -c $bootd/AROSBootstrap.conf"|*"./AROSBootstrap -c $bootd/AROSBootstrap.conf")
+                    stop_pid "$pid" || true
+                    ;;
+            esac
+        done
+    fi
+
+    rm -f "$PIDF" "$FIFO"
+}
+
 # Overridable so parallel sessions (e.g. a host-volume test) don't fight over one
 # window: set AROS_CTL_FIFO/LOG/PIDF to isolate an instance.
 FIFO="${AROS_CTL_FIFO:-/tmp/aros-cm.ctl}"
 LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
 PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
 
-ctl() { [ -p "$FIFO" ] && printf '%s\n' "$*" > "$FIFO"; }
+ctl() {
+    if [ ! -p "$FIFO" ]; then
+        echo "aros-ctl: no control FIFO at $FIFO; start AROS with: aros-ctl run" >&2
+        return 1
+    fi
+    if [ ! -f "$PIDF" ]; then
+        echo "aros-ctl: no pidfile at $PIDF; refusing to write stale FIFO $FIFO" >&2
+        return 1
+    fi
+    local pid
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        echo "aros-ctl: recorded process is not running; refusing to write stale FIFO $FIFO" >&2
+        return 1
+    fi
+    (
+        printf '%s\n' "$*" > "$FIFO"
+    ) &
+    local writer="$!"
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if ! kill -0 "$writer" 2>/dev/null; then
+            wait "$writer"
+            return $?
+        fi
+        sleep 0.05
+    done
+    kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null
+    echo "aros-ctl: timed out writing to control FIFO $FIFO" >&2
+    return 1
+}
+
+hash_file() {
+    [ -f "$1" ] || return 1
+    shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+}
+
+copy_if_changed() {
+    local src="$1" dst="$2" label="$3" sh dh
+    [ -f "$src" ] || return 0
+    sh="$(hash_file "$src" || true)"
+    dh="$(hash_file "$dst" || true)"
+    [ -n "$sh" ] && [ "$sh" = "$dh" ] && return 0
+    cp -f "$src" "$dst" 2>/dev/null || {
+        echo "aros-ctl: WARN: could not deploy $label to $dst" >&2
+        return 1
+    }
+}
 
 write_startup_sequence() {
     local startup="$AROS/S/Startup-Sequence"
@@ -144,7 +235,12 @@ write_startup_sequence() {
             # lands as a readable file), then ConClip (the con-handler/string-
             # gadget edithook + rendezvous port) so RAmiga+C/V in the console
             # route through clipboard.device.
-            printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' > "$startup"
+            {
+                printf '%s\n' \
+                    'Version' \
+                    'Assign CLIPS: SYS:clips' \
+                    'Run ConClip'
+            } > "$startup"
             ;;
         *)
             echo "aros-ctl: unknown AROS_CTL_STARTUP_MODE=${AROS_CTL_STARTUP_MODE}" >&2
@@ -186,6 +282,7 @@ char2vk() {
 LSHIFT=56   # macOS kVK_Shift
 LCMD=55     # macOS kVK_Command
 CMOD=8      # CM_MOD_CMD
+CM_OPT_CLIPBOARD_SHARE=20
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 
@@ -199,6 +296,7 @@ run)
         exit 1
     fi
     echo "boot dir: $BOOTD" >&2
+    stop_instances_for_bootd "$BOOTD"
     AROS="$(cd "$BOOTD/../.." && pwd)"
     artifact_line() {
         local label="$1" path="$2" stamp hash
@@ -207,12 +305,16 @@ run)
         hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print substr($1,1,12)}')"
         echo "$label ${hash:-????????????} $stamp" >&2
     }
-    mkdir -p "$HOME/lib"; [ -f "$DYLIB_SRC" ] && cp -f "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib"
+    mkdir -p "$HOME/lib"
+    copy_if_changed "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib" "cocoametal.dylib" || true
     # Clipboard bridge host shim: the AROS sync task loads it by bare name via
     # hostlib.resource, so it must sit in ~/lib like cocoametal.dylib. Without it
     # the bridge starts but silently no-ops (no NSPasteboard access).
-    [ -f "$ROOT/build/libpasteboard.dylib" ] && cp -f "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib"
-    [ -f "$ROOT/hosted/cocoametal/settings.json" ] && cp -f "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json"
+    copy_if_changed "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib" "libpasteboard.dylib" || true
+    # Future CoreAudio/AHI host shim. Safe to deploy before the AROS-side driver
+    # exists; deploy-check then catches stale audio host ABI artifacts early.
+    copy_if_changed "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib" "libcoreaudio.dylib" || true
+    copy_if_changed "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" "settings.json" || true
     mkdir -p "$AROS/Devs/Monitors"
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
@@ -275,49 +377,66 @@ MacRW:$HOST_FOLDER;WRITE"
     artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
+    mkdir -p "$ROOT/run/darwin-aarch64"
     ( cd "$BOOTD" && exec nohup env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
         DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
+        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
         ./Daedalos -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
     echo $! > "$PIDF"
     echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
     ;;
 stop)
-    stopped=0
-    if [ -f "$PIDF" ]; then
-        pid="$(cat "$PIDF" 2>/dev/null)"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
-            for _ in 1 2 3 4 5; do
-                kill -0 "$pid" 2>/dev/null || break
-                sleep 0.2
-            done
-            kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
-            stopped=1
-        fi
-    fi
-    if [ "$stopped" = 0 ]; then
-        BOOTD="$(find_bootd)"
-        if [ -n "$BOOTD" ]; then
-            ps -axo pid=,command= | while read -r pid command; do
-                case "$command" in
-                    *"/Daedalos -c $BOOTD/AROSBootstrap.conf"|*"./Daedalos -c $BOOTD/AROSBootstrap.conf"|*"/AROSBootstrap -c $BOOTD/AROSBootstrap.conf"|*"./AROSBootstrap -c $BOOTD/AROSBootstrap.conf")
-                        kill "$pid" 2>/dev/null
-                        ;;
-                esac
-            done
-        fi
-    fi
-    rm -f "$PIDF" "$FIFO"
+    BOOTD="$(find_bootd)"
+    stop_instances_for_bootd "$BOOTD"
     echo "stopped"
     ;;
 key)    ctl "K ${1:-0} ${2:-1} ${3:-0}";;
 cmdc)   ctl "K $LCMD 1 $CMOD"; ctl "K 8 1 $CMOD"; ctl "K 8 0 $CMOD"; ctl "K $LCMD 0 0";;
 cmdv)   ctl "K $LCMD 1 $CMOD"; ctl "K 9 1 $CMOD"; ctl "K 9 0 $CMOD"; ctl "K $LCMD 0 0";;
-button) ctl "B ${1:-0} ${2:-1}";;
+button)
+    if [ $# -ge 4 ]; then
+        ctl "B ${1:-0} ${2:-1} ${3:-0} ${4:-0}"
+    else
+        ctl "B ${1:-0} ${2:-1}"
+    fi
+    ;;
 mouse)  ctl "M ${1:-0} ${2:-0}";;
-click)  b="${1:-0}"; ctl "B $b 1"; ctl "B $b 0";;
+resize) ctl "R ${1:-800} ${2:-600}";;
+click)
+    b="${1:-0}"
+    if [ $# -ge 3 ]; then
+        ctl "B $b 1 ${2:-0} ${3:-0}"
+        ctl "B $b 0 ${2:-0} ${3:-0}"
+    else
+        ctl "B $b 1"
+        ctl "B $b 0"
+    fi
+    ;;
+menu)
+    x="${1:-70}"
+    y="${2:-8}"
+    if [ "$x" -gt 0 ]; then nx=$((x - 1)); else nx=$((x + 1)); fi
+    ctl "M $x $y" || exit 1
+    ctl "B 1 1 $x $y" || exit 1
+    ctl "M $nx $y" || exit 1
+    ;;
+menuup)
+    x="${1:-70}"
+    y="${2:-8}"
+    ctl "B 1 0 $x $y"
+    ;;
+setting)
+    ctl "G ${1:-0} ${2:-0} ${3:-0}"
+    ;;
+clipboard)
+    case "${1:-on}" in
+        on|ON|1|true|TRUE|yes|YES) ctl "G $CM_OPT_CLIPBOARD_SHARE 1 0" ;;
+        off|OFF|0|false|FALSE|no|NO) ctl "G $CM_OPT_CLIPBOARD_SHARE 0 0" ;;
+        *) echo "usage: aros-ctl clipboard on|off" >&2; exit 1 ;;
+    esac
+    ;;
 enter)  ctl "K 36 1"; ctl "K 36 0";;
 type)
     text="$*"
@@ -331,9 +450,15 @@ type)
     done
     ;;
 shot)
-    out="${1:-/tmp/aros-shot.png}"
+    mkdir -p "$ROOT/run/darwin-aarch64"
+    out="${1:-$ROOT/run/darwin-aarch64/shot-$(date +%Y%m%d-%H%M%S).png}"
+    case "$out" in
+        /*) ;;
+        *) out="$(pwd)/$out" ;;
+    esac
     ppm="${out%.png}.ppm"
-    ctl "S $ppm"
+    rm -f "$ppm"
+    ctl "S $ppm" || exit 1
     sleep 0.4
     if [ "${out##*.}" = "png" ] && [ -f "$ppm" ]; then
         sips -s format png "$ppm" --out "$out" >/dev/null 2>&1 && echo "shot -> $out" || echo "shot -> $ppm (sips failed)"
@@ -341,8 +466,36 @@ shot)
         echo "shot -> $ppm"
     fi
     ;;
+record)
+    # Movie recording of the AROS framebuffer (AVFoundation; no Screen-Recording/TCC).
+    # Path is on the HOST filesystem, written by cocoametal.dylib. Avoid spaces.
+    case "${1:-}" in
+        stop)
+            ctl "V stop" || exit 1
+            echo "recording stopped"
+            ;;
+        start|[0-9]*)
+            # "record start [path] [fps]" — manual stop (aros-ctl record stop), or
+            # "record <secs> [path] [fps]" — timed: auto-stops after <secs>, returns now
+            mkdir -p "$ROOT/run/darwin-aarch64"
+            if [ "$1" = "start" ]; then secs=0; else secs="$1"; fi
+            shift
+            out="${1:-$ROOT/run/darwin-aarch64/movie-$(date +%Y%m%d-%H%M%S).mov}"
+            case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
+            fps="${2:-30}"
+            ctl "V start $out $fps $secs" || exit 1
+            if [ "$secs" != "0" ]; then
+                echo "recording ${secs}s -> $out (@${fps}fps; auto-stops, no stop needed)"
+            else
+                echo "recording -> $out (@${fps}fps); stop with: aros-ctl record stop"
+            fi
+            ;;
+        *)  echo "usage: aros-ctl record {start [path] [fps] | <secs> [path] [fps] | stop}" >&2; exit 1;;
+    esac
+    ;;
 log)    tail -n "${1:-40}" "$LOG" 2>/dev/null;;
-crash)  grep -nE "Trap signal|Alert|stack limits|Module |Function |supervisor mode|Privilege" "$LOG" 2>/dev/null | head -40;;
+crash)  grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" "$LOG" 2>/dev/null | head -40;;
+warn)   grep -nE "supervisor mode|WARN|WARNING" "$LOG" 2>/dev/null | head -40;;
 libs)
     # Host (macOS) dylibs mapped into the AROS process — path + version. Verifies
     # which host shim actually loaded and from where (e.g. ~/lib/cocoametal.dylib).
@@ -363,6 +516,6 @@ libs)
     ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {run|stop|type|enter|key|cmdc|cmdv|mouse|click|button|shot|log|crash|libs|wait}" >&2
+    echo "usage: aros-ctl {run|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|wait}" >&2
     exit 1;;
 esac

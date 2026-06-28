@@ -179,16 +179,39 @@ panel) · *Drives & Sharing* (mounted host-folder list + Share-clipboard toggle)
 PPM writer (`cocoametal_control.m:57–86`) is the throwaway precursor; this is the public,
 PNG, menu-driven version. **No TCC** — we own the readback pixels.
 
-### R-CAPTURE-VIDEO — movie recording `[OURS]`+`[PUB]`
+### R-CAPTURE-VIDEO — movie recording `[OURS]`+`[PUB]` — **IMPLEMENTED**
 
 `int cm_record_start(CMContext *cx, const char *path, int fps, int codec)` /
-`int cm_record_stop(CMContext *cx)`. `[PUB]` AVFoundation: an `AVAssetWriter` +
-`AVAssetWriterInput` + `AVAssetWriterInputPixelBufferAdaptor`; per present, convert the
-offscreen-oracle readback into a `CVPixelBuffer` and append with a monotonically paced
-presentation timestamp (fps-derived). `codec` selects `AVVideoCodecTypeH264`/`HEVC`.
-**No ScreenCaptureKit, no Screen-Recording/TCC** — the frames are our own buffer, not a
-screen grab. `stop` finalizes the file. Recommend AVFoundation over FFmpeg (native, no
-external dependency). Frame pacing is the one subtlety — settle the pts model in [G5].
+`int cm_record_stop(CMContext *cx)` (cocoametal_shell.m). `[PUB]` AVFoundation: an
+`AVAssetWriter` + `AVAssetWriterInput` + `AVAssetWriterInputPixelBufferAdaptor`; each
+`cm_present` calls `cm__record_frame`, which converts the offscreen-oracle readback into
+a `CVPixelBuffer` and appends it. `codec` selects `AVVideoCodecTypeH264`/`HEVC`. **No
+ScreenCaptureKit, no Screen-Recording/TCC** — the frames are our own buffer, not a screen
+grab. `stop` finalizes the file (pumps the run loop until `finishWriting` completes).
+
+**PTS model (settled, [G5]):** frames are appended per AROS present, which is *sparse*
+on a static screen, so a frame-index/fps timestamp would compress a quiet demo in time.
+Timestamps are therefore **wall-clock** (elapsed since `record_start`, timescale 600),
+with a strictly-increasing guard for bursts — a demo that ran N seconds is an N-second
+movie that plays back at real time. Verified live: an ~11 s scripted demo → an 8.9 s
+real-time movie; a tight 8-frame burst stays valid.
+
+**Driven two ways.** (1) **Menu** File ▸ Record Movie… toggles to "Stop Recording"
+(`CMShellController.recordingOn`). (2) **Control harness / FIFO** (`cocoametal_control.m`
+`V start <path> [fps] [secs]` / `V stop`, surfaced as `aros-ctl record start|<secs>|stop`)
+— for scripted auto-recorded demos. A **timed** recording (`secs>0`, e.g. `record 25`)
+schedules an in-app `dispatch_after` auto-stop (`cm__record_autostop`, generation-safe so
+a manual Stop or a later take isn't clobbered), so the caller returns immediately and the
+recording stops itself.
+
+**Output location:** screenshots and movies default to the project `run/darwin-aarch64/`
+folder — the menu reads `$AROS_RUN_DIR` (exported by `aros-ctl`/`run-window`), the harness
+writes there directly; both timestamp the filename so scripted demos don't clobber.
+
+**Audio (future seam):** the writer has only a video input today. Audio drops in as a
+second `AVAssetWriterInput(AVMediaTypeAudio)` + a `cm__record_audio()` hook (mirroring
+`cm__record_frame`) fed from the CoreAudio capture's playback ring — same writer/session,
+so A/V stay muxed and time-aligned. Marked in `cm_record_start`.
 
 ### R-VOLUME — runtime host-folder volume management `[AROS]`+`[OURS]`
 

@@ -264,8 +264,13 @@ int        cm_get_option_str(CMContext *, int key, char *buf, int buflen);
  * No Screen-Recording/TCC — the pixels are ours. Returns 0 on success. */
 int        cm_capture_png(CMContext *, const char *path);
 
-/* Movie capture (AVFoundation). STUBBED until the recorder spike — returns
- * nonzero ("not yet"). The menu item + ABI slot exist so the wiring is complete. */
+/* Movie capture (AVFoundation H.264/HEVC). cm_record_start opens an AVAssetWriter;
+ * each cm_present appends the current frame (cm__record_frame); cm_record_stop
+ * finalizes the .mov. No Screen-Recording/TCC — the frames are our own offscreen
+ * oracle, not a screen grab. Driven from File ▸ Record (menu) and the control FIFO
+ * ("V start <path> [fps]" / "V stop"). `codec`: 0 = H.264, 1 = HEVC. Audio is a
+ * future drop-in (a second AVAssetWriterInput fed from the CoreAudio capture — see
+ * the audio seam in cm_record_start, cocoametal_shell.m). Returns 0 on success. */
 int        cm_record_start(CMContext *, const char *path, int fps, int codec);
 int        cm_record_stop(CMContext *);
 

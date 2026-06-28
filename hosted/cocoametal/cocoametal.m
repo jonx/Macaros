@@ -877,9 +877,19 @@ __attribute__((weak)) void cm__install_shell(CMContext *cx) {
 
 /* Movie capture: the per-present frame hook is a weak no-op here (the
  * not-recording path and non-shell builds). The strong override + the real
- * cm_record_start/cm_record_stop (AVFoundation) live in cocoametal_shell.m. */
+ * cm_record_start/cm_record_stop/cm__record_autostop (AVFoundation) live in
+ * cocoametal_shell.m. The record symbols are also weak no-ops here so TUs that use
+ * the control protocol (cocoametal_control.m's "V" command) link without the
+ * AVFoundation shell (e.g. the d1/d2t test binaries). */
 __attribute__((weak)) void cm__record_frame(CMContext *cx) {
     (void)cx;
+}
+__attribute__((weak)) int  cm_record_start(CMContext *cx, const char *path, int fps, int codec) {
+    (void)cx; (void)path; (void)fps; (void)codec; return 99;   /* no recorder in this build */
+}
+__attribute__((weak)) int  cm_record_stop(CMContext *cx) { (void)cx; return 1; }
+__attribute__((weak)) void cm__record_autostop(CMContext *cx, double seconds) {
+    (void)cx; (void)seconds;
 }
 
 /* cm_open_settings: the real native AppKit panel lives in cocoametal_settings.m

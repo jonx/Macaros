@@ -17,7 +17,11 @@
  *   K <vk> <pressed>     key event   (vk = macOS virtual keycode, pressed 1/0)
  *   M <x> <y>            mouse move  (logical, top-left)
  *   B <button> <pressed> mouse button(0=left 1=right 2=middle)
+ *   R <w> <h>            resize host window content area (logical points)
+ *   G <key> <value> [y]  AROS-facing setting event (CM_EV_SETTING)
  *   S <path>             screenshot the framebuffer to <path> (binary PPM)
+ *   V start <path> [fps] [secs]  start recording to a .mov; if secs>0, auto-stop after secs
+ *   V stop               finalize the recording
  */
 
 #import <Foundation/Foundation.h>
@@ -30,10 +34,19 @@
 #include <string.h>
 #include "cocoametal.h"
 
+/* Implemented in cocoametal_window.m. This is an internal harness hook, not part
+ * of the exported cm_* ABI. */
+void cm__resize_window(CMContext *cx, int w, int h);
+
+/* Implemented in cocoametal_shell.m (weak no-op in cocoametal.m for non-shell
+ * builds). Schedules an auto-stop of the current recording after `seconds`. */
+void cm__record_autostop(CMContext *cx, double seconds);
+
 /* ---- injection ring (main-thread only: reader + drainer both run there) ---- */
 #define CM_INJ_MAX 256
 static CMEvent g_inj[CM_INJ_MAX];
 static int     g_injHead, g_injTail;
+static int     g_mouseX, g_mouseY;
 
 static void cm__inj_push(const CMEvent *e) {
     int next = (g_injTail + 1) % CM_INJ_MAX;
@@ -117,14 +130,34 @@ static void cm__control_exec(CMContext *cx, char *line) {
         int x, y;
         if (sscanf(line + 1, "%d %d", &x, &y) == 2) {
             e.type = CM_EV_MOUSEMOVE; e.x = x; e.y = y;
+            g_mouseX = x; g_mouseY = y;
             cm__inj_push(&e);
         }
         break;
     }
     case 'B': {
-        int b, pressed;
-        if (sscanf(line + 1, "%d %d", &b, &pressed) == 2) {
+        int b, pressed, x, y;
+        int n = sscanf(line + 1, "%d %d %d %d", &b, &pressed, &x, &y);
+        if (n >= 2) {
             e.type = CM_EV_MOUSEBTN; e.code = b; e.pressed = pressed;
+            if (n >= 4) {
+                g_mouseX = x; g_mouseY = y;
+            }
+            e.x = g_mouseX; e.y = g_mouseY;
+            cm__inj_push(&e);
+        }
+        break;
+    }
+    case 'R': {
+        int w, h;
+        if (sscanf(line + 1, "%d %d", &w, &h) == 2)
+            cm__resize_window(cx, w, h);
+        break;
+    }
+    case 'G': {
+        int key, value, y = 0;
+        if (sscanf(line + 1, "%d %d %d", &key, &value, &y) >= 2) {
+            e.type = CM_EV_SETTING; e.code = key; e.x = value; e.y = y;
             cm__inj_push(&e);
         }
         break;
@@ -133,6 +166,20 @@ static void cm__control_exec(CMContext *cx, char *line) {
         char path[1024];
         if (sscanf(line + 1, " %1023s", path) == 1)
             cm__control_shot(cx, path);
+        break;
+    }
+    case 'V': {   /* movie recording: "V start <path> [fps] [seconds]" | "V stop" */
+        char sub[16], path[1024]; int fps = 30; double secs = 0;
+        int n = sscanf(line + 1, " %15s %1023s %d %lf", sub, path, &fps, &secs);
+        if (n >= 1 && strcmp(sub, "stop") == 0) {
+            NSLog(@"[cm-control] record stop (rc=%d)", cm_record_stop(cx));
+        } else if (n >= 2 && strcmp(sub, "start") == 0) {
+            if (fps <= 0) fps = 30;
+            int rc = cm_record_start(cx, path, fps, 0);
+            NSLog(@"[cm-control] record start %s @%dfps%s (rc=%d)",
+                  path, fps, secs > 0 ? " (timed)" : "", rc);
+            if (rc == 0 && secs > 0) cm__record_autostop(cx, secs);   /* auto-stop after N s */
+        }
         break;
     }
     default:

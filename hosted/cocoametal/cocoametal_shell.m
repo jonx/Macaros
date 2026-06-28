@@ -103,8 +103,23 @@ static void cmsh_show_about(void) {
 /* --------------------------------------------------------------- controller -- */
 @interface CMShellController : NSObject <NSApplicationDelegate>
 @property (nonatomic, assign) CMContext *cx;
-@property (nonatomic) BOOL fullscreenOn, scanlinesOn, retinaOn, clipboardOn, captureInputOn;
+@property (nonatomic) BOOL fullscreenOn, scanlinesOn, retinaOn, clipboardOn, captureInputOn, recordingOn;
 @end
+
+/* Where screenshots / recordings go: $AROS_RUN_DIR (the project's run/darwin-aarch64,
+ * set by aros-ctl / run-window) if present, else ~/Desktop for a standalone app.
+ * Timestamped so scripted demos don't clobber each other. */
+static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
+    const char *rd = getenv("AROS_RUN_DIR");
+    NSString *dir = (rd && *rd) ? @(rd)
+                  : [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.dateFormat = @"yyyyMMdd-HHmmss";
+    return [dir stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"AROS-%@-%@.%@", prefix, [f stringFromDate:[NSDate date]], ext]];
+}
 
 @implementation CMShellController
 
@@ -114,15 +129,29 @@ static void cmsh_show_about(void) {
 
 /* File */
 - (void)shotAction:(id)s {
-    NSString *p = [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop/AROS-screenshot.png"];
+    NSString *p = cmsh_capture_path(@"screenshot", @"png");
     int rc = cm_capture_png(_cx, p.UTF8String);
     if (rc == 0) NSLog(@"[shell] screenshot -> %@", p);
     else         NSLog(@"[shell] screenshot failed (%d) -> %@", rc, p);
 }
 - (void)recordAction:(id)s {
-    NSString *p = [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop/AROS-movie.mov"];
-    int rc = cm_record_start(_cx, p.UTF8String, 30, 0);
-    if (rc != 0) NSLog(@"[shell] movie recording not wired yet (AVFoundation spike pending)");
+    NSMenuItem *item = (NSMenuItem *)s;
+    if (_recordingOn) {
+        int rc = cm_record_stop(_cx);
+        _recordingOn = NO;
+        item.title = @"Record Movie…";
+        NSLog(@"[shell] recording stopped (rc=%d)", rc);
+    } else {
+        NSString *p = cmsh_capture_path(@"movie", @"mov");
+        int rc = cm_record_start(_cx, p.UTF8String, 30, 0);
+        if (rc == 0) {
+            _recordingOn = YES;
+            item.title = @"Stop Recording";
+            NSLog(@"[shell] recording -> %@", p);
+        } else {
+            NSLog(@"[shell] record start failed (rc=%d) -> %@", rc, p);
+        }
+    }
 }
 - (void)openVolumeAction:(id)s {
     NSOpenPanel *op = [NSOpenPanel openPanel];
@@ -369,6 +398,8 @@ int cm_capture_png(CMContext *cx, const char *path) {
 @property (nonatomic, assign) int w, h, fps;
 @property (nonatomic, assign) long frameIdx;
 @property (nonatomic, assign) BOOL active;
+@property (nonatomic, assign) CFAbsoluteTime startTime;  /* wall-clock anchor for real-time PTS */
+@property (nonatomic, assign) CMTime lastPTS;            /* keep PTS strictly increasing */
 @end
 @implementation CMRecorder @end
 
@@ -405,12 +436,22 @@ int cm_record_start(CMContext *cx, const char *path, int fps, int codec) {
                     (NSString *)kCVPixelBufferHeightKey: @(h) }];
         if (![writer canAddInput:input]) { NSLog(@"[shell] record: cannot add input"); return 5; }
         [writer addInput:input];
+
+        /* AUDIO SEAM (future, when the CoreAudio capture lands): add a second input
+         *   AVAssetWriterInput *audio = [AVAssetWriterInput
+         *       assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:<AAC>];
+         *   [writer addInput:audio];  // store on the CMRecorder
+         * and append CMSampleBuffers from a cm__record_audio() hook (mirroring
+         * cm__record_frame) fed by the audio device's playback ring — same writer +
+         * session, so A/V stay muxed and time-aligned. Video-only until then. */
+
         if (![writer startWriting]) { NSLog(@"[shell] record: startWriting failed: %@", writer.error); return 6; }
         [writer startSessionAtSourceTime:kCMTimeZero];
 
         CMRecorder *r = [CMRecorder new];
         r.writer = writer; r.input = input; r.adaptor = adaptor;
         r.w = w; r.h = h; r.fps = fps; r.frameIdx = 0; r.active = YES;
+        r.startTime = CFAbsoluteTimeGetCurrent(); r.lastPTS = kCMTimeInvalid;
         gRec = r;
     }
     return 0;
@@ -430,8 +471,16 @@ void cm__record_frame(CMContext *cx) {
         size_t stride = CVPixelBufferGetBytesPerRow(pb);
         cm_readback(cx, dst, (int)stride, r.w, r.h);    /* BGRA8 logical frame */
         CVPixelBufferUnlockBaseAddress(pb, 0);
-        if ([r.adaptor appendPixelBuffer:pb withPresentationTime:CMTimeMake(r.frameIdx, r.fps)])
+        /* Real-time PTS: frames are appended per AROS present (sparse on static
+         * screens), so timestamp by wall-clock — a demo that ran N seconds becomes
+         * an N-second movie. The guard keeps PTS strictly increasing for bursts. */
+        CMTime pts = CMTimeMakeWithSeconds(CFAbsoluteTimeGetCurrent() - r.startTime, 600);
+        if (CMTIME_IS_VALID(r.lastPTS) && CMTimeCompare(pts, r.lastPTS) <= 0)
+            pts = CMTimeAdd(r.lastPTS, CMTimeMake(1, 600));
+        if ([r.adaptor appendPixelBuffer:pb withPresentationTime:pts]) {
+            r.lastPTS = pts;
             r.frameIdx++;
+        }
         CVPixelBufferRelease(pb);
     }
 }
@@ -453,4 +502,23 @@ int cm_record_stop(CMContext *cx) {
     }
     gRec = nil;
     return 0;
+}
+
+/* Auto-stop the CURRENT recording after `seconds` — the harness "record N seconds"
+ * form (aros-ctl record 25). The timer lives in the app process (not the harness),
+ * so the caller returns immediately while the recording runs and stops itself.
+ * Generation-safe: captures this session and only fires if gRec is still it and
+ * active, so a manual Stop or a later recording is never clobbered. Main queue
+ * (where cm_record_stop pumps the writer's finalize). */
+void cm__record_autostop(CMContext *cx, double seconds) {
+    if (seconds <= 0) return;
+    CMRecorder *target = gRec;
+    if (!target || !target.active) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (gRec == target && target.active) {
+            NSLog(@"[shell] auto-stop after %.1fs", seconds);
+            cm_record_stop(cx);
+        }
+    });
 }

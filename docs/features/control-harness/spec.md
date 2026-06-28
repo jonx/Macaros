@@ -79,6 +79,8 @@ One command per line into `$AROS_CM_CONTROL`, parsed by `cm__control_exec` with
 | `M <x> <y>` | `"%d %d"`, ==2 | enqueue `CM_EV_MOUSEMOVE` `{x, y}` |
 | `B <button> <pressed>` | `"%d %d"`, ==2 | enqueue `CM_EV_MOUSEBTN` `{code=button, pressed}` |
 | `S <path>` | `" %1023s"`, ==1 | `cm__control_shot(path)` immediately (not enqueued) |
+| `V start <path> [fps] [secs]` | `" %15s %1023s %d %lf"` | `cm_record_start(path,fps)`; if `secs>0`, schedule an in-app auto-stop after `secs` (`cm__record_autostop`). Not enqueued. |
+| `V stop` | subcmd `stop` | `cm_record_stop()` — finalize the `.mov`. |
 
 - `vk` is a **macOS virtual keycode** (`kVK_*`); `pressed` is 1 (down) / 0 (up);
   `mods` is an optional `CM_MOD_*` bitmask, default 0.
