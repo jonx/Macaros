@@ -34,6 +34,18 @@ AROS is a single wake primitive: at graft, `Signal(task, sigbit)`; in the spikes
 stand-in (a self-pipe `write()`, or a callback the test installs). Nothing else about a
 driver changes between spike and graft — only this seam is swapped. `[AROS]` `exec.Signal`.
 
+> **DARWIN-AARCH64 CAVEAT (2026-06-28, grounded — overrides R-W2 on this port).** A
+> foreign host thread **must not** call `exec.Signal` here. A task woken from host
+> interrupt/thread context runs in "supervisor mode" under the threaded darwin scheduler
+> and **trips every semaphore op** (`arch/all-darwin/hidd/cocoa/cocoa_input.c:546`). The
+> two proven darwin drivers both **poll `timer.device` (`Delay()`)** instead: input polls
+> at ~50 Hz, the working clipboard bridge at ~5 Hz, and neither host thread `Signal`s
+> AROS. So on darwin the seam degrades: the host thread sets an `_Atomic` ready flag
+> (R-W1) and the AROS task **polls it on a `Delay()` tick** (re-probe per R-W3) rather
+> than `Wait()`ing on a host-raised `Signal`. The `Signal` mapping stays valid on hosts
+> where host-context `Signal` is safe (e.g. the Linux ports); it is the *delivery* that
+> is per-host, not the contract. bsdsocket-net spec §R-DARWIN-WAKE carries the detail.
+
 **R-W3 — Check-before-park / re-probe (no lost wakeup).** The AROS side checks its
 received-signal state *before* it `Wait()`s, so a wake that races ahead of the park is
 still seen (`[AROS]` H9: `Wait` checks `tc_SigRecvd` before blocking). For **readiness**

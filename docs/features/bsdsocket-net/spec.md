@@ -256,7 +256,39 @@ raising an exec `Signal` from outside the guest's normal flow, and that one pump
 suffices rather than a thread per socket — independently derived; our mechanism (kqueue +
 `exec.Signal`) follows from H4/H6/H9 + macOS `kqueue` docs.
 
-### R-PARK — a would-block guest call becomes register-then-`Wait`-then-retry
+### R-DARWIN-WAKE — host-thread `Signal` is UNSAFE on darwin; poll the stash on the timer
+
+**Finding (2026-06-28, grounded — overrides the `Signal`-from-pump mechanism in R-PUMP
+step 2 / R-PARK / R-WAITSELECT on darwin-aarch64).** On this hosted port a foreign
+host thread (or host interrupt context) **must not** raise an `exec` `Signal` into an
+AROS task. The two proven darwin drivers both discovered this and both resolve it by
+**polling `timer.device` (`Delay()`)** instead of taking a host-context wake:
+
+- `arch/all-darwin/hidd/cocoa/cocoa_input.c:546` — verbatim: *"Poll on the timer
+  (`Delay`) rather than a VBlank interrupt server: a task woken from the host
+  SIGALRM/VBlank interrupt context runs in 'supervisor mode' under the threaded darwin
+  scheduler, which trips every semaphore op. The `timer.device` wakeup path is the one
+  the rest of the boot uses safely."* `[AROS]`
+- `arch/all-darwin/hidd/cocoa/cocoa_clipboard.c` — the **working** clipboard bridge is
+  the *"polling variant — robust under the threaded host scheduler"*: a low-pri task
+  polls `host_pb_change_count()` on a `Delay(10)` tick; the host poller never `Signal`s
+  AROS. `[AROS]`/`[OURS]`
+
+**Consequence for this feature.** Keep the kqueue pump exactly as built — it still does
+the efficient in-kernel readiness wait and stashes results for `pump_drain` (so we are
+*not* busy-polling the sockets). But the AROS side's "park" is **not** `Wait(readySig)`
+woken by the pump; it is a **`timer.device` `Delay()` poll loop** that, each tick, calls
+`pump_drain()` (the cheap atomic stash) and tests its `*sigmask`/`sigintr` bits via
+`SetSignal(0,…)`, with the caller's `timeout` as the deadline. The pump's
+`ps_create_cb` wake callback degrades to setting an `_Atomic` "ready" flag the poll reads
+(R-W1) — it does **not** call `Signal`. Latency is one timer tick (~10–20 ms), which is
+immaterial for sockets and is the price of safety on this port. This is the
+hybrid: **kqueue for efficient readiness, timer-poll for the safe AROS handoff.**
+`[DERIVED]` from the two `[AROS]` drivers above + H6; it supersedes the `Signal`-seam of
+[host-wake-pattern.md](../host-wake-pattern.md) R-W2 *on darwin* (the seam's spike
+self-pipe and graft stay valid on hosts where host-context `Signal` is safe).
+
+### R-PARK — a would-block guest call becomes register-then-poll-then-retry
 
 **Requirement.** When a host socket op returns `EWOULDBLOCK`/`EAGAIN` (or `EINPROGRESS` for
 `connect`), the library does **not** spin and does **not** block the host. It:

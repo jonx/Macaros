@@ -281,11 +281,21 @@ Three problems, three grounded solutions:
    - The library registers the fd's readiness need with the kqueue pump and does an
      exec `Wait(sigmask)` on a per-base signal bit (the H9 Wait/Signal machinery,
      `hosted/signal.c`, grounded in `rom/exec/{wait,signal}.c`).
-   - The pump's `kevent()` fires on readiness → pump `Signal()`s the waiting task →
-     the task re-issues the non-blocking call, which now succeeds.
-   This is precisely the H10/H11 "block for a reply, get signalled" loop
+   - The pump's `kevent()` fires on readiness → stashes it (`pump_drain`) and (on
+     darwin) sets an atomic ready flag → the AROS task, polling on a `timer.device`
+     tick, sees it and re-issues the non-blocking call, which now succeeds.
+   This is the H10/H11 "block for a reply, then make progress" loop
    (`hosted/device.c` WaitPort/ReplyMsg), with the kqueue pump playing the role of
    the device task's reply.
+
+   > **Darwin wake correction (grounded, see spec §R-DARWIN-WAKE).** The pump thread
+   > does **not** `Signal()` the AROS task: on hosted darwin-aarch64 a host-context
+   > wake runs the woken task in "supervisor mode" and trips every semaphore op
+   > (`cocoa_input.c:546`), which is why both proven darwin drivers (input, clipboard)
+   > **poll `timer.device`** instead. So the kqueue pump stays (efficient in-kernel
+   > readiness + `pump_drain` stash), but the AROS-side park is a `Delay()` poll of
+   > `pump_drain`, not a `Wait` on a host-raised signal. kqueue for readiness,
+   > timer-poll for the safe handoff.
 
 2. **WaitSelect = kqueue + Wait on one signal.** Implement LVO 21 as: translate the
    `fd_set`s into kqueue registrations; arrange that the *exec Signals* in
