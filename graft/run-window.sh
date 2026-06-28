@@ -149,7 +149,12 @@ write_startup_sequence() {
             # Startup-sequence: print the version, then make clipboard.device
             # use a visible backing directory and start ConClip for console
             # copy/paste.
-            printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' > "$startup"
+            {
+                printf '%s\n' \
+                    'Version' \
+                    'Assign CLIPS: SYS:clips' \
+                    'Run ConClip'
+            } > "$startup"
             ;;
         *)
             echo "run-window.sh: unknown AROS_CTL_STARTUP_MODE=${AROS_CTL_STARTUP_MODE}" >&2
@@ -176,9 +181,14 @@ RUNNING_PIDS="$(ps -axo pid=,command= | awk -v conf="$BOOTD/AROSBootstrap.conf" 
     }
 ')"
 if [ -n "$RUNNING_PIDS" ]; then
-    echo "run-window.sh: this boot tree is already running (pid(s): $RUNNING_PIDS)." >&2
-    echo "  Close that window, or kill those pid(s), then run again." >&2
-    exit 1
+    echo ">> stopping previous Daedalos instance(s) for this boot tree: $RUNNING_PIDS"
+    for pid in $RUNNING_PIDS; do
+        kill "$pid" 2>/dev/null || true
+    done
+    sleep 0.4
+    for pid in $RUNNING_PIDS; do
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    done
 fi
 
 # Host shim: cocoametal.dylib must resolve by bare name under the hardened
@@ -189,6 +199,9 @@ mkdir -p "$HOME/lib"
 # via hostlib.resource, so it lives in ~/lib like cocoametal.dylib. Without it the
 # bridge starts but silently no-ops (build it with: make pasteboard-dylib).
 [ -f "$ROOT/build/libpasteboard.dylib" ] && cp -f "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib"
+# Future CoreAudio/AHI host shim, deployed beside the other HostLib dylibs so the
+# AROS-side audio driver can load it by bare name once it lands.
+[ -f "$ROOT/build/libcoreaudio.dylib" ] && cp -f "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib"
 if [ ! -f "$HOME/lib/cocoametal.dylib" ]; then
     echo "cocoametal.dylib missing — build it:" >&2
     echo "    cd ~/Source/aros-aarch64 && make cocoametal-dylib" >&2
@@ -290,16 +303,19 @@ cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
               || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
 
 echo ">> A 'Daedalos' window will open — click it for keyboard focus, then type."
+mkdir -p "$ROOT/run/darwin-aarch64"   # File > screenshot/Record Movie land here
 cd "$BOOTD"
 if [ -n "${AROS_CM_CONTROL:-}" ]; then
     exec env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$AROS_CM_CONTROL" \
         DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
+        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
         ./Daedalos -c "$BOOTD/AROSBootstrap.conf"
 else
     exec env AROS_DARWIN_THREADED=1 DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
+        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
         ./Daedalos -c "$BOOTD/AROSBootstrap.conf"
 fi
