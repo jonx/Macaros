@@ -1,0 +1,5 @@
+_pdf_begin
+_pdf_add_raster_page
+_pdf_add_text_page
+_pdf_finish
+_pdf_raster_to_pdf
