@@ -1,6 +1,6 @@
 # Host volume — share a Mac folder with AROS
 
-> Status: **working & verified on darwin-aarch64 (2026-06-26)**.
+> Status: **working & verified on darwin-aarch64 (2026-06-28)**.
 > This is the practical "what & how". For the design and the
 > implementation spec, see [design.md](design.md) and [spec.md](spec.md).
 
@@ -157,6 +157,9 @@ List     MacRW:                       shows the flags + comment
   machine with the metadata intact (unlike macOS xattrs).
 - The `rwx` bits still come from the file's real Unix permissions, so `chmod` on
   the Mac and `Protect` in AROS agree.
+- On the handler path, comments are returned in filesystem-handler BSTR form so
+  DOS converts them to normal C strings for commands. This is why `List` shows
+  `: needs RAD:` rather than dropping the first comment character.
 
 ## How it works (no disk driver!)
 
@@ -200,3 +203,25 @@ All of the above is implemented and verified two-sided on hosted AROS (the macOS
 side seeds fixtures and re-reads them; AROS drives the operations). See the
 "Implementation status" table in [spec.md](spec.md) for the per-requirement
 verdicts and the intentional deviations from the original spec.
+
+Current smoke coverage:
+
+```sh
+make hosted-hostvolume
+./graft/hostvol-smoke
+```
+
+`hosted-hostvolume` exercises the shared Unicode/normalization/sidecar glue
+against the real macOS filesystem. `hostvol-smoke` boots AROS and proves
+MacRO/MacRW create/read/copy/rename/delete, read-only refusal, case-insensitive
+lookup, long ASCII names, mounted NFD host-name lookup via an NFC/Latin-1 AROS
+name, UTF-8 `grün` host-name access via Latin-1 AROS bytes, AROS Latin-1 filename
+creation as UTF-8 on the host, sidecar creation/rename/delete cleanup, and
+`List` visibility of comments/protection flags. Screenshots and logs land under
+`run/darwin-aarch64/hostvol-<timestamp>*`.
+
+Darwin hosted `hostlib.resource` uses `Forbid()` / `Permit()` for the global
+host-call gate. Do not switch it back to a normal semaphore on this port without
+reproving host-volume startup: filesystem packets can reach hostlib while Exec
+considers the EMU task to be in supervisor context, and `ReleaseSemaphore()` will
+raise a recoverable alert there.

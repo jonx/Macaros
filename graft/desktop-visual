@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# desktop-visual -- launch known GUI desktop payloads and save proof images.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_DESKTOP_VISUAL_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${AROS_DESKTOP_VISUAL_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$RUN_DIR"
+
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+fail() {
+    echo "FAIL: $*" >&2
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    exit 1
+}
+
+shot="$RUN_DIR/desktop-visual-$STAMP.png"
+log="$RUN_DIR/desktop-visual-$STAMP.log"
+
+extra='Run <NIL: >NIL: QUIET Clock'
+
+echo "== desktop visual =="
+echo "screenshot: $shot"
+echo "log copy:   $log"
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+AROS_CTL_DESKTOP_EXTRA="$extra" AROS_CTL_STARTUP_MODE=desktop "$HERE/aros-ctl" run || fail "launch failed"
+sleep "${AROS_DESKTOP_VISUAL_WAIT:-8}"
+"$HERE/aros-ctl" shot "$shot" || fail "screenshot failed"
+
+cp -f "${AROS_CTL_LOG:-/tmp/aros-window.log}" "$log" 2>/dev/null || true
+
+if "$HERE/aros-ctl" crash | grep -q .; then
+    "$HERE/aros-ctl" crash >&2 || true
+    fail "crash markers found"
+fi
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+echo "PASS: visual desktop proof saved"

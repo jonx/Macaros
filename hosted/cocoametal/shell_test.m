@@ -25,6 +25,8 @@ typedef CMContext *(*open_fn)(int, int, const CMPixelDesc *, const char *);
 typedef void       (*close_fn)(CMContext *);
 typedef int        (*getopt_fn)(CMContext *, int, long *);
 typedef int        (*pump_fn)(CMContext *, CMEvent *, int);
+typedef int        (*setoptstr_fn)(CMContext *, int, const char *);
+typedef int        (*getoptstr_fn)(CMContext *, int, char *, int);
 typedef void       (*upload_fn)(CMContext *, const void *, int, int, int, int, int);
 typedef void       (*present_fn)(CMContext *);
 typedef int        (*recstart_fn)(CMContext *, const char *, int, int);
@@ -47,6 +49,18 @@ static int view_has_label(NSView *v, NSString *needle) {
     for (NSView *s in v.subviews) if (view_has_label(s, needle)) return 1;
     return 0;
 }
+static int saw_setting(CMEvent *ev, int n, int code, int x) {
+    for (int i = 0; i < n; i++)
+        if (ev[i].type == CM_EV_SETTING && ev[i].code == code &&
+            (x < 0 || ev[i].x == x)) return 1;
+    return 0;
+}
+static int dir_has_png(NSString *dir) {
+    NSArray<NSString *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
+    for (NSString *f in files)
+        if ([f hasPrefix:@"AROS-screenshot-"] && [f hasSuffix:@".png"]) return 1;
+    return 0;
+}
 
 int main(int argc, const char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -61,6 +75,8 @@ int main(int argc, const char **argv) {
     close_fn  cm_close_ = (close_fn) dlsym(h, "cm_close");
     getopt_fn cm_get_   = (getopt_fn)dlsym(h, "cm_get_option");
     pump_fn   cm_pump_  = (pump_fn)  dlsym(h, "cm_pump_events");
+    setoptstr_fn cm_set_str_ = (setoptstr_fn)dlsym(h, "cm_set_option_str");
+    getoptstr_fn cm_get_str_ = (getoptstr_fn)dlsym(h, "cm_get_option_str");
     if (!cm_open_ || !cm_close_ || !cm_get_ || !cm_pump_) {
         printf("[GSHELL] FAIL dlsym\n"); return 1;
     }
@@ -73,6 +89,7 @@ int main(int argc, const char **argv) {
             .blueShift = 0, .greenShift = 8, .redShift = 16, .alphaShift = 24,
             .blueMask = 0x000000FF, .greenMask = 0x0000FF00,
             .redMask = 0x00FF0000, .alphaMask = 0xFF000000 };
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"sharing.clipboard"];
         CMContext *cx = cm_open_(320, 200, &fmt, "AROS [GSHELL]");
         if (!cx) { printf("[GSHELL] FAIL cm_open NULL\n"); return 1; }
 
@@ -86,6 +103,20 @@ int main(int argc, const char **argv) {
         check(item(machine, @"Reset") &&
               item(item(machine, @"Power").submenu, @"Force Quit"),
               "Machine ▸ Reset + Power ▸ Force Quit present");
+        CMEvent ev[16]; int n = cm_pump_(cx, ev, 16);
+        long cs = -1; cm_get_(cx, CM_OPT_CLIPBOARD_SHARE, &cs);
+        check(cs == 1 && !saw_setting(ev, n, CM_OPT_CLIPBOARD_SHARE, -1),
+              "Share Clipboard default is ON without an early AROS-facing event");
+
+        /* (1b) File ▸ Take Screenshot uses the real menu action and AROS_RUN_DIR. */
+        NSString *shotDir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"aros-gshell-shot-%@", NSUUID.UUID.UUIDString]];
+        [[NSFileManager defaultManager] createDirectoryAtPath:shotDir
+                                  withIntermediateDirectories:YES attributes:nil error:NULL];
+        setenv("AROS_RUN_DIR", shotDir.UTF8String, 1);
+        [NSApp sendAction:shot.action to:shot.target from:shot];
+        check(dir_has_png(shotDir), "Take Screenshot wrote AROS-screenshot-*.png to AROS_RUN_DIR");
+        [[NSFileManager defaultManager] removeItemAtPath:shotDir error:NULL];
 
         /* (2a) host-acted: Scanlines -> cm_set_option(EFFECT) inside the dylib */
         NSMenuItem *scan = item(view, @"Scanlines");
@@ -98,16 +129,71 @@ int main(int argc, const char **argv) {
         long sm = -1; cm_get_(cx, CM_OPT_SCALE_MODE, &sm);
         check(sm == CM_SCALE_PIXEL_PERFECT, "Scaling ▸ Pixel-Perfect -> real SCALE_MODE");
 
+        NSMenuItem *linear = item(sub(view, @"Filter"), @"Linear");
+        [NSApp sendAction:linear.action to:linear.target from:linear];
+        long flt = -1; cm_get_(cx, CM_OPT_FILTER, &flt);
+        check(flt == CM_FILTER_LINEAR, "Filter ▸ Linear -> real FILTER=LINEAR");
+
+        NSMenuItem *fs = item(view, @"Enter Full Screen");
+        [NSApp sendAction:fs.action to:fs.target from:fs];
+        long fullscreen = -1; cm_get_(cx, CM_OPT_FULLSCREEN, &fullscreen);
+        check(fullscreen == 1, "Enter Full Screen -> real FULLSCREEN=1");
+
+        NSMenuItem *retina = item(view, @"Retina / HiDPI");
+        [NSApp sendAction:retina.action to:retina.target from:retina];
+        long hi = -1; cm_get_(cx, CM_OPT_RETINA, &hi);
+        check(hi == 1, "Retina / HiDPI -> real RETINA=1");
+
+        NSMenuItem *dark = item(sub(view, @"Theme"), @"Dark");
+        [NSApp sendAction:dark.action to:dark.target from:dark];
+        long theme = -1; cm_get_(cx, CM_OPT_THEME, &theme);
+        check(theme == CM_THEME_DARK, "Theme ▸ Dark -> real THEME=DARK");
+
         /* (2b) AROS-facing: Share Clipboard -> cm_set_option(CLIPBOARD_SHARE) ->
          * recorded + surfaced as a CM_EV_SETTING the AROS side pulls */
         NSMenuItem *clip = item(machine, @"Share Clipboard");
+        check(clip.state == NSControlStateValueOn, "Share Clipboard menu starts checked");
         [NSApp sendAction:clip.action to:clip.target from:clip];
-        long cs = -1; cm_get_(cx, CM_OPT_CLIPBOARD_SHARE, &cs);
-        check(cs == 1, "Share Clipboard -> CLIPBOARD_SHARE=1 recorded");
-        CMEvent ev[16]; int n = cm_pump_(cx, ev, 16), saw = 0;
-        for (int i = 0; i < n; i++)
-            if (ev[i].type == CM_EV_SETTING && ev[i].code == CM_OPT_CLIPBOARD_SHARE) saw = 1;
-        check(saw, "Share Clipboard surfaced CM_EV_SETTING (AROS-facing relay)");
+        cs = -1; cm_get_(cx, CM_OPT_CLIPBOARD_SHARE, &cs);
+        check(cs == 0, "Share Clipboard first click -> CLIPBOARD_SHARE=0 recorded");
+        n = cm_pump_(cx, ev, 16);
+        check(saw_setting(ev, n, CM_OPT_CLIPBOARD_SHARE, 0),
+              "Share Clipboard OFF surfaced CM_EV_SETTING (AROS-facing relay)");
+        [NSApp sendAction:clip.action to:clip.target from:clip];
+        cs = -1; cm_get_(cx, CM_OPT_CLIPBOARD_SHARE, &cs);
+        check(cs == 1, "Share Clipboard second click -> CLIPBOARD_SHARE=1 recorded");
+        n = cm_pump_(cx, ev, 16);
+        check(saw_setting(ev, n, CM_OPT_CLIPBOARD_SHARE, 1),
+              "Share Clipboard ON surfaced CM_EV_SETTING (AROS-facing relay)");
+
+        NSMenuItem *reset = item(machine, @"Reset");
+        [NSApp sendAction:reset.action to:reset.target from:reset];
+        long power = -1; cm_get_(cx, CM_OPT_POWER, &power);
+        n = cm_pump_(cx, ev, 16);
+        check(power == CM_POWER_RESET && saw_setting(ev, n, CM_OPT_POWER, CM_POWER_RESET),
+              "Machine ▸ Reset records and relays CM_OPT_POWER=RESET");
+
+        NSMenuItem *forceQuit = item(item(machine, @"Power").submenu, @"Force Quit");
+        [NSApp sendAction:forceQuit.action to:forceQuit.target from:forceQuit];
+        power = -1; cm_get_(cx, CM_OPT_POWER, &power);
+        n = cm_pump_(cx, ev, 16);
+        check(power == CM_POWER_FORCE_QUIT && saw_setting(ev, n, CM_OPT_POWER, CM_POWER_FORCE_QUIT),
+              "Power ▸ Force Quit records and relays CM_OPT_POWER=FORCE_QUIT");
+
+        if (cm_set_str_ && cm_get_str_) {
+            const char *spec = "Mac:/tmp;WRITE";
+            char got[128];
+            check(cm_set_str_(cx, CM_OPT_VOLUME_ADD, spec) == 0,
+                  "cm_set_option_str(VOLUME_ADD) accepted host volume spec");
+            check(cm_get_str_(cx, CM_OPT_VOLUME_ADD, got, sizeof got) == 0 &&
+                  strcmp(got, spec) == 0,
+                  "cm_get_option_str(VOLUME_ADD) returns the recorded spec");
+            n = cm_pump_(cx, ev, 16);
+            check(saw_setting(ev, n, CM_OPT_VOLUME_ADD, -1),
+                  "VOLUME_ADD surfaced CM_EV_SETTING for AROS-facing relay");
+        } else {
+            check(0, "cm_set/get_option_str symbols exported");
+        }
 
         /* (3) Settings… opens the schema-driven window generated from settings.json */
         NSMenuItem *settings = item(bar.itemArray.firstObject.submenu, @"Settings…");

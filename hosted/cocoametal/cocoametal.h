@@ -109,6 +109,17 @@ typedef enum {
     CM_FILTER__COUNT
 } CMFilter;
 
+/* Value for CM_OPT_THEME: the host app's appearance. HOST-ACTED — the shim sets
+ * NSApp.appearance so all chrome (title bar, menus, Settings, the window status
+ * bar) themes coherently. The black Metal area (the guest framebuffer) is never
+ * recolored. SYSTEM follows the macOS setting; LIGHT/DARK force it for this app. */
+typedef enum {
+    CM_THEME_SYSTEM = 0,         /* follow the macOS appearance (default) */
+    CM_THEME_LIGHT  = 1,         /* force Aqua (light) */
+    CM_THEME_DARK   = 2,         /* force Dark Aqua */
+    CM_THEME__COUNT
+} CMTheme;
+
 /* Option keys for cm_set_option / cm_get_option. Numbered with deliberate GAPS
  * so each group can grow without renumbering the other (append-only contract).
  *
@@ -122,16 +133,17 @@ typedef enum {
     CM_OPT_FULLSCREEN  = 0x02,   /* value = 0/1                   */
     CM_OPT_FILTER      = 0x03,   /* value = a CMFilter            */
     CM_OPT_RETINA      = 0x04,   /* value = 0/1 (host-shell v3; recorded pref) */
-    /* 0x05..0x0F reserved for future HOST-acted keys */
+    CM_OPT_THEME       = 0x05,   /* value = a CMTheme (host app appearance) */
+    /* 0x06..0x0F reserved for future HOST-acted keys */
 
-    /* --- AROS-facing, STUBBED on the host (surfaced via CM_EV_SETTING) ---
-     * NOT host-acted. The host records nothing functional for these; it only
-     * emits a CM_EV_SETTING carrying the key + value(s) for the AROS side. */
+    /* --- settings surfaced via CM_EV_SETTING for AROS visibility ---
+     * Most are not host-acted; AUDIO_VOLUME is the exception, applying host
+     * CoreAudio gain immediately and also emitting a mirrored setting event. */
     CM_OPT_REQUEST_MODE_W = 0x10,/* requested display mode width  (px)  */
     CM_OPT_REQUEST_MODE_H = 0x11,/* requested display mode height (px); paired
                                   * with _MODE_W in CM_EV_SETTING.y      */
     CM_OPT_KEYMAP         = 0x12,/* requested AROS keymap id            */
-    CM_OPT_AUDIO_VOLUME   = 0x13,/* requested audio volume (0..100)     */
+    CM_OPT_AUDIO_VOLUME   = 0x13,/* host CoreAudio gain percent         */
     /* host-shell v3 (append-only): the menu/settings surface these AROS-facing
      * requests; the AROS side pulls them via cm_pump_events (CM_EV_SETTING). The
      * VOLUME_* keys carry a STRING (the mount spec) read with cm_get_option_str. */
@@ -230,11 +242,13 @@ int        cm_abi_version(void);
  * Append-only symbol-array entries 10/11/12 (after cm_abi_version at 9). */
 
 /* Set an option (key from CMOption, value interpreted per that key).
- *   HOST-ACTED keys (CM_OPT_EFFECT, SCALE_MODE, FULLSCREEN, FILTER) take effect
+ *   HOST-ACTED keys (CM_OPT_EFFECT, SCALE_MODE, FULLSCREEN, FILTER,
+ *   AUDIO_VOLUME) take effect
  *   immediately on the LIVE present path — never the offscreen oracle (§6).
- *   AROS-FACING keys (CM_OPT_REQUEST_MODE_W/H, KEYMAP, AUDIO_VOLUME) are NOT
- *   acted on by the host; instead the shim enqueues a CM_EV_SETTING (pull-only)
- *   for the AROS side. Returns 0 on success, nonzero for an unknown key / bad value. */
+ *   AROS-FACING keys (CM_OPT_REQUEST_MODE_W/H, KEYMAP) are not acted on by the
+ *   host; instead the shim enqueues a CM_EV_SETTING (pull-only) for the AROS
+ *   side. Audio volume is also mirrored as a CM_EV_SETTING for UI/log visibility.
+ *   Returns 0 on success, nonzero for an unknown key / bad value. */
 int        cm_set_option(CMContext *, int key, long value);
 
 /* Read the current host-side value of an option (for the panel + tests). For an

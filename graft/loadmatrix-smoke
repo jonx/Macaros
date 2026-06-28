@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+# loadmatrix-smoke -- run C:LoadMatrix inside AROS and save the result.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_LOADMATRIX_SMOKE_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${AROS_LOADMATRIX_SMOKE_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+WAIT="${AROS_LOADMATRIX_SMOKE_WAIT:-6}"
+TIMEOUT="${AROS_LOADMATRIX_SMOKE_TIMEOUT:-30}"
+mkdir -p "$RUN_DIR"
+
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+HOST_DIR="$RUN_DIR/loadmatrix-$STAMP"
+STARTUP="$RUN_DIR/loadmatrix-$STAMP.startup"
+LOG="$RUN_DIR/loadmatrix-$STAMP.log"
+SHOT="$RUN_DIR/loadmatrix-$STAMP.png"
+OUT="$HOST_DIR/loadmatrix.txt"
+mkdir -p "$HOST_DIR"
+
+fail() {
+    echo "FAIL: $*" >&2
+    [ -s "$OUT" ] && { echo >&2; cat "$OUT" >&2; }
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    exit 1
+}
+
+cat > "$STARTUP" <<'EOF'
+Version
+FailAt 21
+If NOT EXISTS "RAM:T"
+    MakeDir "RAM:T"
+EndIf
+Assign "T:" "RAM:T"
+Assign CLIPS: SYS:clips
+If EXISTS "C:AddAudioModes"
+    If EXISTS "DEVS:AudioModes/COREAUDIO"
+        AddAudioModes DEVS:AudioModes/COREAUDIO QUIET
+    EndIf
+EndIf
+LoadMatrix >MacRW:loadmatrix.txt
+Wait 999999
+EOF
+
+echo "== load matrix smoke =="
+echo "output:     $OUT"
+echo "startup:    $STARTUP"
+echo "screenshot: $SHOT"
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+AROS_CTL_STARTUP_FILE="$STARTUP" \
+AROS_HOST_VOLUME="MacRW:$HOST_DIR;WRITE" \
+    "$HERE/aros-ctl" run || fail "launch failed"
+
+sleep "$WAIT"
+i=0
+while [ "$i" -lt "$TIMEOUT" ] && [ ! -s "$OUT" ]; do
+    sleep 1
+    i=$((i + 1))
+done
+"$HERE/aros-ctl" shot "$SHOT" >/dev/null 2>&1 || true
+cp -f "${AROS_CTL_LOG:-/tmp/aros-window.log}" "$LOG" 2>/dev/null || true
+
+[ -s "$OUT" ] || fail "LoadMatrix output was not written"
+
+if grep -q '^FAIL' "$OUT"; then
+    fail "LoadMatrix reported failures"
+fi
+
+if "$HERE/aros-ctl" crash | grep -q .; then
+    "$HERE/aros-ctl" crash >&2 || true
+    fail "crash markers found"
+fi
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+cat "$OUT"
+echo "PASS: LoadMatrix completed without failures"

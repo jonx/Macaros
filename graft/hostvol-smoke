@@ -1,0 +1,146 @@
+#!/bin/sh
+#
+# hostvol-smoke -- regression smoke for launch-time MacRO:/MacRW: host volumes.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_HOSTVOL_SMOKE_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${AROS_HOSTVOL_SMOKE_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+WAIT="${AROS_HOSTVOL_SMOKE_WAIT:-15}"
+mkdir -p "$RUN_DIR"
+
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+HOST_DIR="$RUN_DIR/hostvol-$STAMP"
+STARTUP="$RUN_DIR/hostvol-$STAMP.startup"
+LOG="$RUN_DIR/hostvol-$STAMP.log"
+SHOT="$RUN_DIR/hostvol-$STAMP.png"
+mkdir -p "$HOST_DIR"
+
+fail() {
+    echo "FAIL: $*" >&2
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    exit 1
+}
+
+cat > "$HOST_DIR/host-input.txt" <<EOF
+host-visible input
+EOF
+cat > "$HOST_DIR/MixedCaseHost.txt" <<EOF
+mixed-case input
+EOF
+HOST_NFD_CAFE="$(printf 'caf\145\314\201.txt')"
+HOST_GRUN="$(printf 'gr\303\274n.txt')"
+HOST_AROS_GRUN="$(printf 'aros-gr\303\274n.txt')"
+printf 'nfd cafe input\n' > "$HOST_DIR/$HOST_NFD_CAFE"
+printf 'utf8 latin1 input\n' > "$HOST_DIR/$HOST_GRUN"
+
+cat > "$STARTUP" <<'EOF'
+Version
+FailAt 21
+If NOT EXISTS "RAM:T"
+    MakeDir "RAM:T"
+EndIf
+Assign "T:" "RAM:T"
+Assign CLIPS: SYS:clips
+MakeDir MacRW:hvdir
+Echo "alpha" TO MacRW:hvdir/alpha.txt
+Filenote MacRW:hvdir/alpha.txt "host note"
+Protect MacRW:hvdir/alpha.txt S ADD QUIET
+Copy MacRW:hvdir/alpha.txt MacRW:hvdir/copy.txt
+Rename MacRW:hvdir/copy.txt MacRW:hvdir/renamed.txt
+Echo "delete" TO MacRW:hvdir/delete.txt
+Filenote MacRW:hvdir/delete.txt "gone note"
+Delete MacRW:hvdir/delete.txt
+Type MacRO:host-input.txt TO MacRW:hvdir/readback.txt
+Type MacRO:mixedcasehost.txt TO MacRW:hvdir/case-read.txt
+Echo "long" TO MacRW:hvdir/long-name-abcdefghijklmnopqrstuvwxyz-0123456789.txt
+Dir MacRW:hvdir >MacRW:hvdir/dir.txt
+List MacRW:hvdir >MacRW:hvdir/list.txt
+MakeDir MacRO:should-not-exist
+EOF
+{
+    # AROS paths are Latin-1 bytes. These lines prove the mounted emul-handler
+    # path, not just the standalone host-volume glue:
+    #   caf\351.txt      -> host lookup of NFD "cafe + combining acute"
+    #   gr\374n.txt      -> host UTF-8 "grün" read via Latin-1 AROS name
+    #   aros-gr\374n.txt -> AROS Latin-1 create becomes host UTF-8 "grün"
+    printf 'Type MacRO:caf\351.txt TO MacRW:hvdir/nfd-read.txt\n'
+    printf 'Type MacRO:gr\374n.txt TO MacRW:hvdir/latin1-read.txt\n'
+    printf 'Echo "aros latin1 create" TO MacRW:hvdir/aros-gr\374n.txt\n'
+    printf 'Wait 999999\n'
+} >> "$STARTUP"
+
+echo "== host volume smoke =="
+echo "host dir:   $HOST_DIR"
+echo "startup:    $STARTUP"
+echo "screenshot: $SHOT"
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+AROS_CTL_STARTUP_FILE="$STARTUP" \
+AROS_HOST_VOLUME="MacRO:$HOST_DIR
+MacRW:$HOST_DIR;WRITE" \
+    "$HERE/aros-ctl" run || fail "launch failed"
+
+sleep "$WAIT"
+"$HERE/aros-ctl" shot "$SHOT" >/dev/null 2>&1 || true
+cp -f "${AROS_CTL_LOG:-/tmp/aros-window.log}" "$LOG" 2>/dev/null || true
+
+[ -f "$HOST_DIR/hvdir/alpha.txt" ] || fail "MacRW create did not produce alpha.txt"
+[ -f "$HOST_DIR/hvdir/renamed.txt" ] || fail "MacRW rename did not produce renamed.txt"
+[ ! -e "$HOST_DIR/hvdir/copy.txt" ] || fail "MacRW rename left old copy.txt"
+[ ! -e "$HOST_DIR/hvdir/delete.txt" ] || fail "MacRW delete left delete.txt"
+[ ! -e "$HOST_DIR/should-not-exist" ] || fail "MacRO read-only mount allowed MakeDir"
+[ -f "$HOST_DIR/hvdir/dir.txt" ] || fail "Dir output was not written"
+[ -f "$HOST_DIR/hvdir/list.txt" ] || fail "List output was not written"
+[ -f "$HOST_DIR/hvdir/readback.txt" ] || fail "MacRO readback was not written"
+[ -f "$HOST_DIR/hvdir/case-read.txt" ] || fail "case-insensitive MacRO readback was not written"
+[ -f "$HOST_DIR/hvdir/nfd-read.txt" ] || fail "NFD host filename readback was not written"
+[ -f "$HOST_DIR/hvdir/latin1-read.txt" ] || fail "Latin-1 host filename readback was not written"
+[ -f "$HOST_DIR/hvdir/long-name-abcdefghijklmnopqrstuvwxyz-0123456789.txt" ] || fail "long filename create failed"
+[ -f "$HOST_DIR/hvdir/$HOST_AROS_GRUN" ] || fail "AROS Latin-1 filename create did not produce host UTF-8 name"
+[ -f "$HOST_DIR/hvdir/.alpha.txt.amimeta" ] || fail "metadata sidecar was not written"
+[ -f "$HOST_DIR/hvdir/.renamed.txt.amimeta" ] || fail "renamed metadata sidecar was not written"
+
+grep -q "alpha" "$HOST_DIR/hvdir/alpha.txt" || fail "alpha.txt content mismatch"
+grep -q "alpha" "$HOST_DIR/hvdir/renamed.txt" || fail "renamed.txt content mismatch"
+grep -q "host-visible input" "$HOST_DIR/hvdir/readback.txt" || fail "readback content mismatch"
+grep -q "mixed-case input" "$HOST_DIR/hvdir/case-read.txt" || fail "case readback content mismatch"
+grep -q "nfd cafe input" "$HOST_DIR/hvdir/nfd-read.txt" || fail "NFD readback content mismatch"
+grep -q "utf8 latin1 input" "$HOST_DIR/hvdir/latin1-read.txt" || fail "Latin-1 readback content mismatch"
+grep -q "long" "$HOST_DIR/hvdir/long-name-abcdefghijklmnopqrstuvwxyz-0123456789.txt" || fail "long filename content mismatch"
+grep -q "aros latin1 create" "$HOST_DIR/hvdir/$HOST_AROS_GRUN" || fail "AROS Latin-1 filename content mismatch"
+grep -q "comment host note" "$HOST_DIR/hvdir/.alpha.txt.amimeta" || fail "sidecar comment mismatch"
+grep -q "^prot " "$HOST_DIR/hvdir/.alpha.txt.amimeta" || fail "sidecar protection missing"
+grep -q "^prot " "$HOST_DIR/hvdir/.renamed.txt.amimeta" || fail "renamed sidecar protection missing"
+[ ! -e "$HOST_DIR/hvdir/.delete.txt.amimeta" ] || fail "delete left metadata sidecar"
+grep -q "host note" "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show sidecar-backed comment"
+grep -Eq 'alpha\.txt[[:space:]]+[0-9]+[[:space:]]+s--rwed' "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show protection flags for alpha.txt"
+! grep -q "amimeta" "$HOST_DIR/hvdir/dir.txt" || fail "Dir exposed .amimeta sidecar"
+! grep -q "amimeta" "$HOST_DIR/hvdir/list.txt" || fail "List exposed .amimeta sidecar"
+
+if "$HERE/aros-ctl" crash | grep -q .; then
+    "$HERE/aros-ctl" crash >&2 || true
+    fail "crash markers found"
+fi
+
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+echo "PASS: host volume smoke completed"

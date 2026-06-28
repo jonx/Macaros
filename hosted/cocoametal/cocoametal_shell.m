@@ -180,6 +180,17 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
     [(NSMenuItem *)s setState:_retinaOn ? NSControlStateValueOn : NSControlStateValueOff];
     cm_set_option(_cx, CM_OPT_RETINA, _retinaOn);
 }
+/* View ▸ Theme: System / Light / Dark. Host-acted (cm_set_option sets NSApp.appearance
+ * so the whole app + the status bar theme together). Also written to the defaults store
+ * so the choice persists and the Settings popup agrees (theme is a sticky app pref, so
+ * unlike the live-only toggles above it persists from the menu too). Radio checkmark. */
+- (void)themeAction:(id)s {
+    NSMenuItem *item = (NSMenuItem *)s;
+    cm_set_option(_cx, CM_OPT_THEME, (long)item.tag);
+    [[NSUserDefaults standardUserDefaults] setInteger:item.tag forKey:@"cocoametal.theme"];
+    for (NSMenuItem *it in item.menu.itemArray)
+        it.state = (it.tag == item.tag) ? NSControlStateValueOn : NSControlStateValueOff;
+}
 
 /* Machine (lifecycle + host integration) */
 - (void)resetAction:(id)s     { cm_set_option(_cx, CM_OPT_POWER, CM_POWER_RESET); }
@@ -303,6 +314,17 @@ static void cmsh_build_menu(CMShellController *c) {
     cmsh_add(filter, @"Linear", @selector(filterAction:), c, @"", 0).tag = CM_FILTER_LINEAR;
     cmsh_add(view, @"Scanlines", @selector(scanlinesAction:), c, @"", 0);
     cmsh_add(view, @"Retina / HiDPI", @selector(retinaAction:), c, @"", 0);
+    [view addItem:[NSMenuItem separatorItem]];
+    NSMenu *theme = [[NSMenu alloc] initWithTitle:@"Theme"];
+    NSMenuItem *th = [[NSMenuItem alloc] initWithTitle:@"Theme" action:NULL keyEquivalent:@""];
+    th.submenu = theme; [view addItem:th];
+    cmsh_add(theme, @"System", @selector(themeAction:), c, @"", 0).tag = CM_THEME_SYSTEM;
+    cmsh_add(theme, @"Light",  @selector(themeAction:), c, @"", 0).tag = CM_THEME_LIGHT;
+    cmsh_add(theme, @"Dark",   @selector(themeAction:), c, @"", 0).tag = CM_THEME_DARK;
+    /* Reflect the persisted choice as the initial checkmark (default System). */
+    NSInteger curTheme = [[NSUserDefaults standardUserDefaults] integerForKey:@"cocoametal.theme"];
+    for (NSMenuItem *it in theme.itemArray)
+        it.state = (it.tag == curTheme) ? NSControlStateValueOn : NSControlStateValueOff;
 
     NSMenu *machine = cmsh_submenu(bar, @"Machine");
     cmsh_add(machine, @"Reset", @selector(resetAction:), c, @"r",
@@ -316,7 +338,10 @@ static void cmsh_build_menu(CMShellController *c) {
     [machine addItem:[NSMenuItem separatorItem]];
     cmsh_add(machine, @"Capture Input", @selector(captureInputAction:), c, @"i",
              NSEventModifierFlagControl | NSEventModifierFlagCommand);
-    cmsh_add(machine, @"Share Clipboard", @selector(clipboardShareAction:), c, @"", 0);
+    NSMenuItem *share = cmsh_add(machine, @"Share Clipboard", @selector(clipboardShareAction:), c, @"", 0);
+    id sharePref = [[NSUserDefaults standardUserDefaults] objectForKey:@"sharing.clipboard"];
+    c.clipboardOn = sharePref ? [[NSUserDefaults standardUserDefaults] boolForKey:@"sharing.clipboard"] : YES;
+    share.state = c.clipboardOn ? NSControlStateValueOn : NSControlStateValueOff;
 
     NSMenu *window = cmsh_submenu(bar, @"Window");
     cmsh_add(window, @"Minimize", @selector(performMiniaturize:), nil, @"m", NSEventModifierFlagCommand);

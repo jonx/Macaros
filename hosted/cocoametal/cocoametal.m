@@ -28,6 +28,8 @@
 
 #include <signal.h>
 #include <pthread.h>
+#include <dlfcn.h>
+#include <limits.h>
 /* Hop a cm_* call onto the main thread (AppKit/Metal require it; under the AROS
  * "inversion" cm_* are called from AROS's dedicated thread). ALL signals are
  * blocked on the calling (AROS) thread for the duration of the sync: AROS's
@@ -128,6 +130,8 @@ struct CMContext {
      * are the side-channel cm_get_option_str returns. */
     long                     reqClipboard, reqAudioDevice, reqPower;
     int                      retina;
+    int                      theme;       /* CM_OPT_THEME (a CMTheme; host-acted appearance) */
+    int                      powerReq;    /* last CM_POWER_* request, or -1 = none (running) */
     char                     reqVolumeAdd[512];
     char                     reqVolumeRemove[256];
 
@@ -222,6 +226,55 @@ void cm__install_shell(CMContext *cx);
  * the not-recording path and non-shell builds are free. cm_present calls it. */
 void cm__record_frame(CMContext *cx);
 
+/* CM_OPT_THEME: apply the host app appearance (a CMTheme) to NSApp.appearance, so
+ * title bar / menus / Settings / the window status bar all theme coherently. Strong
+ * override in cocoametal_statusbar.m (AppKit); weak no-op stub below for headless /
+ * non-AppKit builds. cm_set_option calls it after recording cx->theme. Main thread. */
+void cm__apply_theme_appkit(CMContext *cx, int theme);
+
+typedef void (*CMCoreAudioSetVolumeFn)(int percent);
+
+static void cm__set_coreaudio_volume(long value) {
+    int percent = (int)value;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    static void *handle = NULL;
+    static CMCoreAudioSetVolumeFn setVolume = NULL;
+    static int tried = 0;
+
+    if (!tried) {
+        tried = 1;
+        Dl_info info;
+        if (dladdr((const void *)&cm__set_coreaudio_volume, &info) && info.dli_fname) {
+            char path[PATH_MAX];
+            size_t n = strlcpy(path, info.dli_fname, sizeof path);
+            if (n < sizeof path) {
+                char *slash = strrchr(path, '/');
+                if (slash) {
+                    slash[1] = '\0';
+                    if (strlcat(path, "libcoreaudio.dylib", sizeof path) < sizeof path)
+                        handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+                }
+            }
+        }
+        if (!handle)
+            handle = dlopen("libcoreaudio.dylib", RTLD_LAZY | RTLD_LOCAL);
+        if (!handle)
+            handle = dlopen("@rpath/libcoreaudio.dylib", RTLD_LAZY | RTLD_LOCAL);
+        if (handle)
+            setVolume = (CMCoreAudioSetVolumeFn)dlsym(handle, "ca_set_global_volume");
+        if (!setVolume) {
+            const char *err = dlerror();
+            fprintf(stderr, "[Cocoa] CoreAudio volume hook unavailable: %s\n",
+                    err ? err : "unknown");
+        }
+    }
+
+    if (setVolume)
+        setVolume(percent);
+}
+
 /* Build a texture descriptor for a BGRA8 shared texture. */
 static MTLTextureDescriptor *bgra8_desc(int w, int h, MTLTextureUsage usage) {
     MTLTextureDescriptor *d =
@@ -255,6 +308,7 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
     if (!cx) return NULL;
     cx->device = dev;
     cx->w = w; cx->h = h;
+    cx->powerReq = -1;                     /* no power request yet: Power LED = green/running */
     if (fmt) cx->fmt = *fmt;
 
     cx->queue = [dev newCommandQueue];
@@ -342,6 +396,7 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
     cx->scaleMode = CM_SCALE_ASPECT_FIT;
     cx->fullscreen = 0;
     cx->filter = CM_FILTER_NEAREST;
+    cx->reqClipboard = 1;                 /* default sharing policy; no early CM_EV_SETTING */
     cx->setHead = cx->setTail = 0;
 
     /* Try to bring up a live window + CAMetalLayer (non-fatal). Sets cx->scale
@@ -671,12 +726,18 @@ int cm_set_option(CMContext *cx, int key, long value) {
         return 0;
     case CM_OPT_AUDIO_VOLUME:
         cx->reqAudioVolume = value;
+        cm__set_coreaudio_volume(value);
         cm__enqueue_setting(cx, CM_OPT_AUDIO_VOLUME, (int)value, 0);
         return 0;
 
     /* ---- host-shell v3 ---- */
     case CM_OPT_RETINA:                        /* host-acted presentation pref */
         cx->retina = value ? 1 : 0;
+        return 0;
+    case CM_OPT_THEME:                         /* host-acted: app appearance */
+        if (value < 0 || value >= CM_THEME__COUNT) return 2;
+        cx->theme = (int)value;
+        cm__apply_theme_appkit(cx, cx->theme);  /* no-op headless (weak stub) */
         return 0;
     case CM_OPT_CLIPBOARD_SHARE:               /* AROS-facing */
         cx->reqClipboard = value ? 1 : 0;
@@ -688,6 +749,7 @@ int cm_set_option(CMContext *cx, int key, long value) {
         return 0;
     case CM_OPT_POWER:                         /* AROS-facing lifecycle request */
         cx->reqPower = value;
+        cx->powerReq = (int)value;             /* status-bar Power LED color */
         cm__enqueue_setting(cx, CM_OPT_POWER, (int)value, 0);
         return 0;
 
@@ -709,6 +771,7 @@ int cm_get_option(CMContext *cx, int key, long *value) {
     case CM_OPT_KEYMAP:           v = cx->reqKeymap;             break;
     case CM_OPT_AUDIO_VOLUME:     v = cx->reqAudioVolume;        break;
     case CM_OPT_RETINA:           v = (long)cx->retina;          break;
+    case CM_OPT_THEME:            v = (long)cx->theme;           break;
     case CM_OPT_CLIPBOARD_SHARE:  v = cx->reqClipboard;          break;
     case CM_OPT_AUDIO_DEVICE:     v = cx->reqAudioDevice;        break;
     case CM_OPT_POWER:            v = cx->reqPower;              break;
@@ -928,6 +991,24 @@ __attribute__((weak)) int cm__window_is_fullscreen(CMContext *cx) {
     return 0;
 }
 
+/* Weak no-op for cm__apply_theme_appkit (forward-declared near the top so
+ * cm_set_option can call it). Strong override in cocoametal_statusbar.m sets
+ * NSApp.appearance; headless / no AppKit just keeps the recorded cx->theme. */
+__attribute__((weak)) void cm__apply_theme_appkit(CMContext *cx, int theme) {
+    (void)cx; (void)theme;
+}
+
+/* Weak no-op for cm__build_status_bar (the window's footer/LED view). Strong
+ * override in cocoametal_statusbar.m builds the real NSVisualEffectView + LEDs;
+ * the non-statusbar test builds (d1/d2t/input/fullscreen/livedraw link
+ * cocoametal_window.m but not the status bar) get nil here and skip the footer.
+ * @class keeps this AppKit-free TU from importing AppKit just for the return type. */
+@class NSView;
+__attribute__((weak)) NSView *cm__build_status_bar(CMContext *cx, int width, int height) {
+    (void)cx; (void)width; (void)height;
+    return nil;
+}
+
 /* Weak no-op for cm__resync_layer (forward-declared near the top so cm_present can
  * call it). Strong override in cocoametal_window.m glues the live drawable to the
  * content view; headless / no AppKit has no layer so this is a no-op. */
@@ -996,6 +1077,12 @@ int cm_abi_version(void) {
 id   cm__device(CMContext *cx)    { return cx ? cx->device : nil; }
 int  cm__logical_w(CMContext *cx) { return cx ? cx->w : 0; }
 int  cm__logical_h(CMContext *cx) { return cx ? cx->h : 0; }
+/* Monotonic count of cm_present calls — the status bar's Activity LED samples this
+ * on a timer (grew since last tick => AROS pushed a frame => the machine is busy). */
+int  cm__present_count(CMContext *cx) { return cx ? cx->presentCount : 0; }
+/* The recorded power-lifecycle request (a CM_POWER_*), for the status bar's Power
+ * LED color. -1 = no request yet (green/running). */
+int  cm__power_state(CMContext *cx) { return cx ? cx->powerReq : -1; }
 void cm__set_window(CMContext *cx, void *window, void *layer, int scale) {
     if (!cx) return;
     cx->window = window;

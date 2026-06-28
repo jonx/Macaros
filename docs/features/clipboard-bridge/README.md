@@ -16,9 +16,10 @@ be pasted on the other:
 - **Copy in AROS → paste on the Mac.** Mark text in the AROS console and
   **Right-Amiga + C**, then ⌘V in any Mac app — the AROS text appears.
 
-No menu command, no files to shuffle: the sync runs continuously in the background
-while AROS is up. Text crosses the charset boundary correctly (see below), and a
-clip you just sent never echoes back as a phantom second copy.
+No files to shuffle: by default the sync runs continuously in the background while
+AROS is up. The Settings panel / Machine menu can pause it at runtime. Text crosses
+the charset boundary correctly (see below), and a clip you just sent never echoes
+back as a phantom second copy.
 
 ## Quick start
 
@@ -151,13 +152,25 @@ The bridge is intentionally conservative:
   for a successful bridge event.
 - IFF `CHRS` chunks are concatenated with overflow checks; invalid/empty chunks
   are ignored, and non-FTXT clips are skipped.
+- The Settings / Machine menu "Share Clipboard" toggle defaults to enabled, matching
+  the bridge's historical behavior. AROS-facing settings are intentionally not
+  injected during `cm_open`; doing so can fire while the guest is still in early
+  display/load bring-up. Runtime toggles remain the safe path until a guest-ready
+  persisted-settings handoff exists.
+- Runtime `CM_OPT_CLIPBOARD_SHARE` changes are consumed by the AROS-side Cocoa input
+  task; they flip a clipboard-enable flag observed by the bridge. Disabling pauses
+  both directions; re-enabling re-baselines both change counters so stale clips are
+  not replayed.
+- The control harness can exercise this path without opening the Settings panel:
+  `graft/aros-ctl clipboard off` / `graft/aros-ctl clipboard on`.
+- `graft/clipboard-smoke` now verifies the Mac→AROS path and the runtime toggle:
+  it deploys current artifacts, explicitly enables sharing so local user defaults
+  cannot skew the test, proves a token crosses while enabled, a token does not
+  cross while disabled, re-enable re-baselines without replaying the disabled
+  token, and a fresh token crosses after resume.
 
 Still to wire:
 
-- The Settings / Machine menu "Share Clipboard" toggle currently enqueues the
-  host `CM_OPT_CLIPBOARD_SHARE` setting, but the AROS-side bridge still runs
-  unconditionally once started. The next clean step is to let the input/settings
-  event path update a `clipboard_enabled` flag that this poll loop observes.
 - There is still no explicit bridge shutdown path; host process exit tears it
   down. Proper app lifecycle should add a stop signal before closing host shims.
 
@@ -170,6 +183,18 @@ can watch exactly where a clip stops. Tail the log filtered to the bridge:
 ```sh
 tail -f /tmp/aros-window.log | grep 'clip:'      # or: graft/aros-ctl log 40
 ```
+
+For the repeatable host-side regression test:
+
+```sh
+./graft/clipboard-smoke
+```
+
+This uses `pbcopy` as the Mac-side source and the bridge log as the oracle. It
+saves `run/darwin-aarch64/clipboard-smoke-<timestamp>.log` and restores the
+previous textual macOS clipboard content when possible. It proves Mac→AROS and
+runtime pause/resume; AROS→Mac still needs a real selection test or an AROS-side
+clip-writer helper before it can be fully unattended.
 
 | # | Link | How to check | Healthy sign |
 |---|------|--------------|--------------|
@@ -208,8 +233,8 @@ shim, the bridge, or the clipboard write.
 
 > **The Amiga key:** on a Mac keyboard **either ⌘** (left or right) maps to
 > Right-Amiga, so ⌘C/⌘V *inside the AROS window* act as the Amiga clipboard keys
-> Right-Amiga+C/V — not macOS copy/paste. (The Daedalos **Edit menu** Copy/Paste are
-> still inert AppKit stubs; wiring them to inject Right-Amiga+C/V is a planned convenience.)
+> Right-Amiga+C/V — not macOS copy/paste. The Daedalos **Edit menu** Copy/Paste
+> items synthesize those same Right-Amiga+C/V chords into AROS.
 
 ### Requires up-to-date console binaries
 
@@ -225,5 +250,6 @@ make kernel-console-quick kernel-fs-con-quick   # in the AROS build tree
 `run-window.sh` / `aros-ctl` then pull the rebuilt `console.device` + `con-handler` into
 the kickstart automatically.
 
-The bridge runs unconditionally while AROS is up. Gating it behind the Settings
-"Share Clipboard" toggle is a planned follow-up — see [spec.md](spec.md).
+The bridge defaults to sharing enabled. The Settings / Machine menu "Share
+Clipboard" toggle, and `graft/aros-ctl clipboard on|off`, pause/resume the running
+bridge through `CM_OPT_CLIPBOARD_SHARE`.

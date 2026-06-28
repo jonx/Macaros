@@ -55,6 +55,10 @@ void cm__set_resize_pending(CMContext *cx);
 int  cm__take_close_pending(CMContext *cx);
 int  cm__take_resize_pending(CMContext *cx);
 
+/* The window status bar (native-material footer: brand + Power/Activity LEDs).
+ * Implemented in cocoametal_statusbar.m; returns a view framed at (0,0,w,h). */
+NSView *cm__build_status_bar(CMContext *cx, int width, int height);
+
 /* ---- the CAMetalLayer-fills-the-content-view contract (INTERFACE.md §2a/§9) ---
  * THE BUG THIS FIXES (measured): the live CAMetalLayer's frame + drawableSize were
  * set ONCE at cm_try_window and NEVER updated when the content view resized. On a
@@ -250,17 +254,12 @@ void cm_try_window(CMContext *cx, const char *title) {
         NSView *root = [[NSView alloc] initWithFrame:frame];
         win.contentView = root;
 
-        NSView *footer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, w, FOOTER_H)];
-        footer.wantsLayer = YES;
-        footer.layer.backgroundColor = [NSColor colorWithWhite:0.11 alpha:1.0].CGColor;
-        footer.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-        NSTextField *brand = [NSTextField labelWithString:@"Daedalos — AROS on Apple Silicon"];
-        brand.font = [NSFont systemFontOfSize:10];
-        brand.textColor = [NSColor secondaryLabelColor];
-        brand.frame = NSMakeRect(10, (FOOTER_H - 14) / 2.0, w - 20, 14);
-        brand.autoresizingMask = NSViewWidthSizable;
-        [footer addSubview:brand];
-        [root addSubview:footer];
+        /* The status bar: native-material background that tracks the theme, brand
+         * label on the left, Power + Activity LEDs on the right. Built in
+         * cocoametal_statusbar.m; sits below the Metal view so the rounded bottom
+         * corners never clip the AROS image. */
+        NSView *footer = cm__build_status_bar(cx, w, (int)FOOTER_H);
+        if (footer) [root addSubview:footer];   /* nil in non-statusbar test builds (weak stub) */
 
         CMContentView *view = [[CMContentView alloc] initWithFrame:NSMakeRect(0, FOOTER_H, w, h)];
         view.wantsLayer = YES;                 /* triggers -makeBackingLayer (CAMetalLayer) */
@@ -353,6 +352,23 @@ void cm__set_fullscreen_appkit(CMContext *cx, int on) {
          * it here so a window made before this field existed still toggles). */
         win.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
         [win toggleFullScreen:nil];         /* async animated transition; returns now */
+    }
+}
+
+/* Harness hook: resize the live host window's content area and surface the same
+ * one-shot CM_EV_RESIZE the delegate reports during a human resize. The AROS
+ * logical framebuffer size stays unchanged; this exercises host geometry,
+ * drawable resync, event coalescing, and the AROS-side resize handling path. */
+void cm__resize_window(CMContext *cx, int w, int h) {
+    if (!cx || w <= 0 || h <= 0) return;
+    void *winp = cm__get_window(cx);
+    if (!winp) return;
+    @autoreleasepool {
+        NSWindow *win = (__bridge NSWindow *)winp;
+        const CGFloat FOOTER_H = 22;
+        [win setContentSize:NSMakeSize((CGFloat)w, (CGFloat)h + FOOTER_H)];
+        cm__sync_layer_to_view(cm__metal_view(win));
+        cm__set_resize_pending(cx);
     }
 }
 

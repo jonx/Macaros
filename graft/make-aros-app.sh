@@ -6,7 +6,8 @@
 #   Contents/MacOS/Daedalos              launcher script (CFBundleExecutable) — sets env
 #   Contents/MacOS/AROSBootstrap     the hosted-AROS binary (signed w/ entitlements)
 #   Contents/MacOS/AROSBootstrap.conf + aros-host-conf.sh
-#   Contents/Frameworks/cocoametal.dylib + settings.json   (dladdr-relative schema)
+#   Contents/Frameworks/cocoametal.dylib + optional host shims + settings.json
+#       optional shims: libpasteboard.dylib, libcoreaudio.dylib, libbsdsockhost.dylib
 #   Contents/Resources/settings.json (AROS_SETTINGS_SCHEMA)
 #   Contents/Info.plist
 # The launcher exports AROS_DARWIN_THREADED, points the dylib at the bundled schema,
@@ -24,6 +25,9 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 DYLIB="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
+PASTEBOARD="${AROS_CTL_PASTEBOARD_DYLIB:-$ROOT/build/libpasteboard.dylib}"
+COREAUDIO="${AROS_CTL_COREAUDIO_DYLIB:-$ROOT/build/libcoreaudio.dylib}"
+BSDSOCK="${AROS_CTL_BSDSOCK_DYLIB:-$ROOT/build/libbsdsockhost.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
 ENT="${AROS_CTL_ENT:-$HERE/aros-host.entitlements.plist}"
 APP="${AROS_APP:-$ROOT/build/Daedalos.app}"
@@ -64,6 +68,9 @@ assemble() {   # assemble <bootd> <app>
     cp "$_bd/AROSBootstrap" "$_app/Contents/MacOS/AROSBootstrap"
     [ -f "$_bd/AROSBootstrap.conf" ] && cp "$_bd/AROSBootstrap.conf" "$_app/Contents/MacOS/AROSBootstrap.conf"
     cp "$DYLIB"  "$_app/Contents/Frameworks/cocoametal.dylib"
+    [ -f "$PASTEBOARD" ] && cp "$PASTEBOARD" "$_app/Contents/Frameworks/libpasteboard.dylib"
+    [ -f "$COREAUDIO" ] && cp "$COREAUDIO" "$_app/Contents/Frameworks/libcoreaudio.dylib"
+    [ -f "$BSDSOCK" ] && cp "$BSDSOCK" "$_app/Contents/Frameworks/libbsdsockhost.dylib"
     cp "$SCHEMA" "$_app/Contents/Frameworks/settings.json"
     cp "$SCHEMA" "$_app/Contents/Resources/settings.json"
     cp "$HERE/aros-host-conf.sh" "$_app/Contents/MacOS/aros-host-conf.sh"
@@ -101,6 +108,18 @@ if [ "${1:-}" = "--check" ]; then
     [ -x "$A/MacOS/Daedalos" ];                       ck $? "MacOS/Daedalos launcher present + executable"
     [ -f "$A/MacOS/AROSBootstrap" ];              ck $? "MacOS/AROSBootstrap present"
     [ -f "$A/Frameworks/cocoametal.dylib" ];      ck $? "Frameworks/cocoametal.dylib present"
+    if [ -f "$PASTEBOARD" ]; then
+        [ -f "$A/Frameworks/libpasteboard.dylib" ];    ck $? "Frameworks/libpasteboard.dylib present"
+        codesign --verify "$A/Frameworks/libpasteboard.dylib" 2>/dev/null; ck $? "bundled libpasteboard.dylib codesign verifies"
+    fi
+    if [ -f "$COREAUDIO" ]; then
+        [ -f "$A/Frameworks/libcoreaudio.dylib" ];     ck $? "Frameworks/libcoreaudio.dylib present"
+        codesign --verify "$A/Frameworks/libcoreaudio.dylib" 2>/dev/null; ck $? "bundled libcoreaudio.dylib codesign verifies"
+    fi
+    if [ -f "$BSDSOCK" ]; then
+        [ -f "$A/Frameworks/libbsdsockhost.dylib" ];    ck $? "Frameworks/libbsdsockhost.dylib present"
+        codesign --verify "$A/Frameworks/libbsdsockhost.dylib" 2>/dev/null; ck $? "bundled libbsdsockhost.dylib codesign verifies"
+    fi
     [ -f "$A/Frameworks/settings.json" ];         ck $? "Frameworks/settings.json (dladdr-relative)"
     [ -f "$A/Resources/settings.json" ];          ck $? "Resources/settings.json (AROS_SETTINGS_SCHEMA)"
     [ -f "$A/MacOS/aros-host-conf.sh" ];          ck $? "MacOS/aros-host-conf.sh present"
@@ -126,6 +145,9 @@ assemble "$BOOTD" "$APP"
 # (allow-jit / dyld-env / library-validation — see aros-host.entitlements.plist), then
 # the bundle. The launcher script execs AROSBootstrap, which carries its own signature.
 codesign -s - -f "$APP/Contents/Frameworks/cocoametal.dylib" 2>/dev/null || true
+[ -f "$APP/Contents/Frameworks/libpasteboard.dylib" ] && codesign -s - -f "$APP/Contents/Frameworks/libpasteboard.dylib" 2>/dev/null || true
+[ -f "$APP/Contents/Frameworks/libcoreaudio.dylib" ] && codesign -s - -f "$APP/Contents/Frameworks/libcoreaudio.dylib" 2>/dev/null || true
+[ -f "$APP/Contents/Frameworks/libbsdsockhost.dylib" ] && codesign -s - -f "$APP/Contents/Frameworks/libbsdsockhost.dylib" 2>/dev/null || true
 if [ -f "$ENT" ]; then
     codesign -s - -f -o runtime --entitlements "$ENT" "$APP/Contents/MacOS/AROSBootstrap" 2>/dev/null || true
 else

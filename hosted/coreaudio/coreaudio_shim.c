@@ -58,10 +58,14 @@ struct CAContext {
     _Atomic uint32_t head;          /* consumer advances (frames consumed) */
     _Atomic uint32_t tail;          /* producer advances (frames produced) */
 
-    /* CoreAudio offline render path */
+    /* CoreAudio render paths */
     AudioUnit       unit;           /* kAudioUnitSubType_GenericOutput */
+    AudioUnit       liveUnit;       /* kAudioUnitSubType_DefaultOutput */
     unsigned        rateHz;         /* negotiated sample rate */
     int             started;        /* ca_start called, ca_stop not yet */
+    int             liveOutput;     /* live DefaultOutput requested */
+    int             formatSet;      /* ca_set_format succeeded */
+    int             loggedFirstPush;
 
     /* diagnostics (R-RT* guards / underrun oracle) */
     _Atomic unsigned long pushed;
@@ -71,6 +75,8 @@ struct CAContext {
 };
 
 #define CHANNELS 2
+
+static _Atomic int g_masterVolumePercent = 100;
 
 /* Round n up to the next power of two (>= 2). */
 static uint32_t next_pow2(uint32_t n) {
@@ -137,7 +143,8 @@ static OSStatus ca_render_cb(void *inRefCon,
     uint32_t avail = tail - head;                 /* frames available (wraps ok) */
 
     UInt32 take = (avail < want) ? avail : want;
-    const float inv = 1.0f / 32768.0f;
+    int percent = atomic_load_explicit(&g_masterVolumePercent, memory_order_relaxed);
+    const float inv = (1.0f / 32768.0f) * ((float)percent / 100.0f);
 
     /* Drain `take` frames from the ring into the float output. */
     for (UInt32 i = 0; i < take; i++) {
@@ -162,12 +169,23 @@ static OSStatus ca_render_cb(void *inRefCon,
     return noErr;
 }
 
-int ca_set_format(CAContext *c, unsigned *inOutRateHz) {
-    if (!c || !inOutRateHz) return -1;
-    unsigned rate = *inOutRateHz ? *inOutRateHz : 44100;
+static int ca_make_output_unit(OSType subtype, AudioUnit *outUnit) {
+    AudioComponentDescription desc = {0};
+    desc.componentType = kAudioUnitType_Output;
+    desc.componentSubType = subtype;
+    desc.componentManufacturer = kAudioUnitManufacturer_Apple;
 
-    /* Canonical AudioUnit format: 32-bit float, interleaved stereo LinearPCM.
-     * [PUB] AudioStreamBasicDescription. Frame = 2 floats = 8 bytes. */
+    AudioComponent comp = AudioComponentFindNext(NULL, &desc);
+    if (!comp) return -1;
+
+    OSStatus err = AudioComponentInstanceNew(comp, outUnit);
+    if (err != noErr || !*outUnit) return -2;
+
+    return 0;
+}
+
+static int ca_configure_unit(CAContext *c, AudioUnit unit, unsigned rate,
+                             int setOutputScope) {
     AudioStreamBasicDescription asbd = {0};
     asbd.mSampleRate       = (Float64)rate;
     asbd.mFormatID         = kAudioFormatLinearPCM;
@@ -175,33 +193,62 @@ int ca_set_format(CAContext *c, unsigned *inOutRateHz) {
     asbd.mFramesPerPacket  = 1;
     asbd.mChannelsPerFrame = CHANNELS;
     asbd.mBitsPerChannel   = 32;
-    asbd.mBytesPerFrame    = CHANNELS * sizeof(float);   /* interleaved */
+    asbd.mBytesPerFrame    = CHANNELS * sizeof(float);
     asbd.mBytesPerPacket   = asbd.mBytesPerFrame;
 
     OSStatus err;
-    /* Output scope (what GenericOutput emits on AudioUnitRender) and input scope
-     * (what its render callback supplies) both set to our float32 stereo. */
-    err = AudioUnitSetProperty(c->unit, kAudioUnitProperty_StreamFormat,
-                               kAudioUnitScope_Output, 0, &asbd, sizeof asbd);
-    if (err != noErr) return -2;
-    err = AudioUnitSetProperty(c->unit, kAudioUnitProperty_StreamFormat,
+    if (setOutputScope) {
+        err = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                   kAudioUnitScope_Output, 0, &asbd, sizeof asbd);
+        if (err != noErr) return -2;
+    }
+
+    err = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
                                kAudioUnitScope_Input, 0, &asbd, sizeof asbd);
     if (err != noErr) return -3;
 
-    /* Wire the render callback (the consumer). [PUB]
-     * kAudioUnitProperty_SetRenderCallback. */
     AURenderCallbackStruct cb = {0};
     cb.inputProc       = ca_render_cb;
     cb.inputProcRefCon = c;
-    err = AudioUnitSetProperty(c->unit, kAudioUnitProperty_SetRenderCallback,
+    err = AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback,
                                kAudioUnitScope_Input, 0, &cb, sizeof cb);
     if (err != noErr) return -4;
 
-    err = AudioUnitInitialize(c->unit);
+    err = AudioUnitInitialize(unit);
     if (err != noErr) return -5;
 
+    return 0;
+}
+
+int ca_set_format(CAContext *c, unsigned *inOutRateHz) {
+    if (!c || !inOutRateHz) return -1;
+    unsigned rate = *inOutRateHz ? *inOutRateHz : 44100;
+
+    int rc = ca_configure_unit(c, c->unit, rate, 1);
+    if (rc != 0) return rc;
+
+    if (c->liveOutput) {
+        rc = ca_make_output_unit(kAudioUnitSubType_DefaultOutput, &c->liveUnit);
+        if (rc != 0) return -10 + rc;
+
+        rc = ca_configure_unit(c, c->liveUnit, rate, 0);
+        if (rc != 0) {
+            AudioComponentInstanceDispose(c->liveUnit);
+            c->liveUnit = NULL;
+            return -20 + rc;
+        }
+    }
+
     c->rateHz = rate;
+    c->formatSet = 1;
     *inOutRateHz = rate;        /* offline unit accepts what we ask */
+    return 0;
+}
+
+int ca_enable_live_output(CAContext *c, int enabled) {
+    if (!c) return -1;
+    if (c->started) return -2;
+    c->liveOutput = enabled ? 1 : 0;
     return 0;
 }
 
@@ -218,7 +265,21 @@ int ca_start(CAContext *c) {
     sigfillset(&full);
     pthread_sigmask(SIG_BLOCK, &full, &saved);
 
+    if (c->liveOutput) {
+        if (!c->formatSet || !c->liveUnit) {
+            pthread_sigmask(SIG_SETMASK, &saved, NULL);
+            return -2;
+        }
+        OSStatus err = AudioOutputUnitStart(c->liveUnit);
+        if (err != noErr) {
+            pthread_sigmask(SIG_SETMASK, &saved, NULL);
+            return -3;
+        }
+    }
+
     c->started = 1;
+    fprintf(stderr, "[CoreAudio] ca_start live=%d rate=%u cap=%u\n",
+            c->liveOutput, c->rateHz, c->cap);
 
     pthread_sigmask(SIG_SETMASK, &saved, NULL);
     return 0;
@@ -226,11 +287,25 @@ int ca_start(CAContext *c) {
 
 void ca_stop(CAContext *c) {
     if (!c) return;
+    if (c->started && c->liveOutput && c->liveUnit)
+        AudioOutputUnitStop(c->liveUnit);
+    fprintf(stderr,
+            "[CoreAudio] ca_stop pushed=%lu consumed=%lu underruns=%lu rtAROSCalls=%lu\n",
+            atomic_load_explicit(&c->pushed, memory_order_relaxed),
+            atomic_load_explicit(&c->consumed, memory_order_relaxed),
+            atomic_load_explicit(&c->underruns, memory_order_relaxed),
+            atomic_load_explicit(&c->rtAROSCalls, memory_order_relaxed));
     c->started = 0;
 }
 
 void ca_close(CAContext *c) {
     if (!c) return;
+    if (c->liveUnit) {
+        AudioOutputUnitStop(c->liveUnit);
+        AudioUnitUninitialize(c->liveUnit);
+        AudioComponentInstanceDispose(c->liveUnit);
+        c->liveUnit = NULL;
+    }
     if (c->unit) {
         AudioUnitUninitialize(c->unit);
         AudioComponentInstanceDispose(c->unit);
@@ -275,6 +350,11 @@ int ca_ring_push(CAContext *c, const short *src, int frames) {
     /* Release: publish the bytes written above before the new tail is visible. */
     atomic_store_explicit(&c->tail, tail + n, memory_order_release);
     atomic_fetch_add_explicit(&c->pushed, (unsigned long)n, memory_order_relaxed);
+    if (!c->loggedFirstPush && n > 0) {
+        c->loggedFirstPush = 1;
+        fprintf(stderr, "[CoreAudio] first ring push frames=%u free_before=%u\n",
+                n, free_frames);
+    }
     return (int)n;
 }
 
@@ -284,6 +364,19 @@ void ca_get_stats(CAContext *c, CAStats *out) {
     out->consumed    = atomic_load_explicit(&c->consumed, memory_order_relaxed);
     out->underruns   = atomic_load_explicit(&c->underruns, memory_order_relaxed);
     out->rtAROSCalls = atomic_load_explicit(&c->rtAROSCalls, memory_order_relaxed);
+}
+
+void ca_set_global_volume(int percent) {
+    if (percent < 0)
+        percent = 0;
+    if (percent > 100)
+        percent = 100;
+    atomic_store_explicit(&g_masterVolumePercent, percent, memory_order_relaxed);
+    fprintf(stderr, "[CoreAudio] global volume=%d%%\n", percent);
+}
+
+int ca_get_global_volume(void) {
+    return atomic_load_explicit(&g_masterVolumePercent, memory_order_relaxed);
 }
 
 /* ---- WAV writer (RIFF/WAVE, 16-bit PCM) ----------------------------------- */

@@ -44,6 +44,13 @@ Takeaway: **the surface is overwhelmingly present.** This is a *completeness &
 correctness* port (fix bugs as the build/run hits them), not a "write libc from
 scratch" port. The printf fix is the template for what each gap looks like.
 
+> **Shared substrate with [Rust on AROS](../rust-aros/README.md).** The `posixc`
+> hardening this needs is the *same* work Rust's `std` port needs (the `printf`
+> float bug is the prototype for both) — do it once, two payoffs. And once both
+> exist, Rust can FFI straight into native `libavcodec`. Rust's `net` is already
+> the cheaper of the two (it rides the live `bsdsocket`); the libc-completeness
+> grind is what they hold in common.
+
 ## Build approach
 
 ffmpeg uses its **own** configure (not autotools). Plan:

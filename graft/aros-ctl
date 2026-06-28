@@ -10,8 +10,10 @@
 # library's input/capture API.
 #
 # Usage:
+#   aros-ctl deploy         copy current host/AROS artifacts into the runnable image
 #   aros-ctl run            boot AROS windowed (background), log to $LOG
-#   aros-ctl stop           kill it
+#   aros-ctl status         report pid/fifo/log/crash state
+#   aros-ctl stop           request guest shutdown, then clean up
 #   aros-ctl type TEXT...   type text (lowercase/digits/space/punct; Up=shift)
 #   aros-ctl enter          press Return
 #   aros-ctl key VK P [MODS] raw key: macOS virtual keycode VK, pressed P (1/0)
@@ -110,6 +112,24 @@ stop_instances_for_bootd() {
     fi
 
     rm -f "$PIDF" "$FIFO"
+}
+
+request_guest_shutdown() {
+    local pid wait_left
+
+    [ -f "$PIDF" ] || return 1
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+    [ -p "$FIFO" ] || return 1
+
+    ctl "G $CM_OPT_POWER $CM_POWER_REQUEST_DOWN 0" >/dev/null 2>&1 || return 1
+    wait_left="${AROS_CTL_STOP_GRACE:-30}"
+    while [ "$wait_left" -gt 0 ]; do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.1
+        wait_left=$((wait_left - 1))
+    done
+    return 1
 }
 
 # Overridable so parallel sessions (e.g. a host-volume test) don't fight over one
@@ -218,6 +238,11 @@ write_startup_sequence() {
                     'If EXISTS "C:AddDataTypes"' \
                     '    AddDataTypes REFRESH QUIET' \
                     'EndIf' \
+                    'If EXISTS "C:AddAudioModes"' \
+                    '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \
+                    '        Run <NIL: >NIL: QUIET AddAudioModes DEVS:AudioModes/COREAUDIO QUIET' \
+                    '    EndIf' \
+                    'EndIf' \
                     'If EXISTS "C:IPrefs"' \
                     '    IPrefs' \
                     'EndIf' \
@@ -238,7 +263,16 @@ write_startup_sequence() {
             {
                 printf '%s\n' \
                     'Version' \
+                    'If NOT EXISTS "RAM:T"' \
+                    '    MakeDir "RAM:T"' \
+                    'EndIf' \
+                    'Assign "T:" "RAM:T"' \
                     'Assign CLIPS: SYS:clips' \
+                    'If EXISTS "C:AddAudioModes"' \
+                    '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \
+                    '        AddAudioModes DEVS:AudioModes/COREAUDIO QUIET' \
+                    '    EndIf' \
+                    'EndIf' \
                     'Run ConClip'
             } > "$startup"
             ;;
@@ -254,67 +288,32 @@ write_startup_sequence() {
     return 0
 }
 
-# char -> "VK SHIFT"  (macOS virtual keycodes). SHIFT=1 means hold left-shift.
-char2vk() {
-    case "$1" in
-        a) echo "0 0";;  b) echo "11 0";; c) echo "8 0";;  d) echo "2 0";;
-        e) echo "14 0";; f) echo "3 0";;  g) echo "5 0";;  h) echo "4 0";;
-        i) echo "34 0";; j) echo "38 0";; k) echo "40 0";; l) echo "37 0";;
-        m) echo "46 0";; n) echo "45 0";; o) echo "31 0";; p) echo "35 0";;
-        q) echo "12 0";; r) echo "15 0";; s) echo "1 0";;  t) echo "17 0";;
-        u) echo "32 0";; v) echo "9 0";;  w) echo "13 0";; x) echo "7 0";;
-        y) echo "16 0";; z) echo "6 0";;
-        0) echo "29 0";; 1) echo "18 0";; 2) echo "19 0";; 3) echo "20 0";;
-        4) echo "21 0";; 5) echo "23 0";; 6) echo "22 0";; 7) echo "26 0";;
-        8) echo "28 0";; 9) echo "25 0";;
-        ' ') echo "49 0";; '.') echo "47 0";; ',') echo "43 0";; '/') echo "44 0";;
-        ';') echo "41 0";; "'") echo "39 0";; '-') echo "27 0";; '=') echo "24 0";;
-        '[') echo "33 0";; ']') echo "30 0";; '\') echo "42 0";; '`') echo "50 0";;
-        ':') echo "41 1";; '_') echo "27 1";; '+') echo "24 1";; '?') echo "44 1";;
-        '!') echo "18 1";; '@') echo "19 1";; '#') echo "20 1";; '$') echo "21 1";;
-        '%') echo "23 1";; '^') echo "22 1";; '&') echo "26 1";; '*') echo "28 1";;
-        '(') echo "25 1";; ')') echo "29 1";; '"') echo "39 1";;
-        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk "$lc" | cut -d' ' -f1) 1";;
-        *) echo "";;
-    esac
+artifact_line() {
+    local label="$1" path="$2" stamp hash
+    [ -e "$path" ] || return 0
+    stamp="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$path" 2>/dev/null || echo '?')"
+    hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print substr($1,1,12)}')"
+    echo "$label ${hash:-????????????} $stamp" >&2
 }
 
-LSHIFT=56   # macOS kVK_Shift
-LCMD=55     # macOS kVK_Command
-CMOD=8      # CM_MOD_CMD
-CM_OPT_CLIPBOARD_SHARE=20
-
-cmd="${1:-}"; [ $# -gt 0 ] && shift
-
-case "$cmd" in
-run)
-    BOOTD="$(find_bootd)"
-    if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
-        echo "aros-ctl: no AROSBootstrap found." >&2
-        echo "  point AROS_CTL_BOOTD at <build>/bin/darwin-aarch64/AROS/boot/darwin," >&2
-        echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to /tmp/arosbuild)." >&2
-        exit 1
-    fi
-    echo "boot dir: $BOOTD" >&2
-    stop_instances_for_bootd "$BOOTD"
+deploy_boot_artifacts() {
+    [ -n "${BOOTD:-}" ] || return 1
     AROS="$(cd "$BOOTD/../.." && pwd)"
-    artifact_line() {
-        local label="$1" path="$2" stamp hash
-        [ -e "$path" ] || return 0
-        stamp="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$path" 2>/dev/null || echo '?')"
-        hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print substr($1,1,12)}')"
-        echo "$label ${hash:-????????????} $stamp" >&2
-    }
+
     mkdir -p "$HOME/lib"
     copy_if_changed "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib" "cocoametal.dylib" || true
     # Clipboard bridge host shim: the AROS sync task loads it by bare name via
     # hostlib.resource, so it must sit in ~/lib like cocoametal.dylib. Without it
     # the bridge starts but silently no-ops (no NSPasteboard access).
     copy_if_changed "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib" "libpasteboard.dylib" || true
-    # Future CoreAudio/AHI host shim. Safe to deploy before the AROS-side driver
-    # exists; deploy-check then catches stale audio host ABI artifacts early.
+    # CoreAudio/AHI host shim. The AROS-side CoreAudio driver loads this by bare
+    # name through hostlib.resource, so keep it beside the other host dylibs.
     copy_if_changed "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib" "libcoreaudio.dylib" || true
+    # bsdsocket.library host pump shim. The AROS-side library loads it by bare
+    # name through hostlib.resource for kqueue readiness and async DNS.
+    copy_if_changed "$ROOT/build/libbsdsockhost.dylib" "$HOME/lib/libbsdsockhost.dylib" "libbsdsockhost.dylib" || true
     copy_if_changed "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" "settings.json" || true
+
     mkdir -p "$AROS/Devs/Monitors"
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
@@ -352,12 +351,71 @@ MacRW:$HOST_FOLDER;WRITE"
         fi
     done
     write_startup_sequence
-    # Present as "Daedalos" in the menu bar / Dock — macOS names a non-bundled app
-    # by its executable filename, so run a signed copy named Daedalos. The discovered
-    # AROSBootstrap stays the build artifact we copy from (and the .conf keeps its name).
+
+    # Present as "Daedalos" in the menu bar / Dock -- macOS names a non-bundled
+    # app by its executable filename, so run a signed copy named Daedalos.
     cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
     [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Daedalos" 2>/dev/null \
                   || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
+}
+
+# char -> "VK SHIFT"  (macOS virtual keycodes). SHIFT=1 means hold left-shift.
+char2vk() {
+    case "$1" in
+        a) echo "0 0";;  b) echo "11 0";; c) echo "8 0";;  d) echo "2 0";;
+        e) echo "14 0";; f) echo "3 0";;  g) echo "5 0";;  h) echo "4 0";;
+        i) echo "34 0";; j) echo "38 0";; k) echo "40 0";; l) echo "37 0";;
+        m) echo "46 0";; n) echo "45 0";; o) echo "31 0";; p) echo "35 0";;
+        q) echo "12 0";; r) echo "15 0";; s) echo "1 0";;  t) echo "17 0";;
+        u) echo "32 0";; v) echo "9 0";;  w) echo "13 0";; x) echo "7 0";;
+        y) echo "16 0";; z) echo "6 0";;
+        0) echo "29 0";; 1) echo "18 0";; 2) echo "19 0";; 3) echo "20 0";;
+        4) echo "21 0";; 5) echo "23 0";; 6) echo "22 0";; 7) echo "26 0";;
+        8) echo "28 0";; 9) echo "25 0";;
+        ' ') echo "49 0";; '.') echo "47 0";; ',') echo "43 0";; '/') echo "44 0";;
+        ';') echo "41 0";; "'") echo "39 0";; '-') echo "27 0";; '=') echo "24 0";;
+        '[') echo "33 0";; ']') echo "30 0";; '\') echo "42 0";; '`') echo "50 0";;
+        ':') echo "41 1";; '_') echo "27 1";; '+') echo "24 1";; '?') echo "44 1";;
+        '!') echo "18 1";; '@') echo "19 1";; '#') echo "20 1";; '$') echo "21 1";;
+        '%') echo "23 1";; '^') echo "22 1";; '&') echo "26 1";; '*') echo "28 1";;
+        '(') echo "25 1";; ')') echo "29 1";; '"') echo "39 1";;
+        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk "$lc" | cut -d' ' -f1) 1";;
+        *) echo "";;
+    esac
+}
+
+LSHIFT=56   # macOS kVK_Shift
+LCMD=55     # macOS kVK_Command
+CMOD=8      # CM_MOD_CMD
+CM_OPT_CLIPBOARD_SHARE=20
+CM_OPT_POWER=24
+CM_POWER_REQUEST_DOWN=0
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+
+case "$cmd" in
+deploy)
+    BOOTD="$(find_bootd)"
+    if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
+        echo "aros-ctl: no AROSBootstrap found." >&2
+        echo "  point AROS_CTL_BOOTD at <build>/bin/darwin-aarch64/AROS/boot/darwin," >&2
+        echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to /tmp/arosbuild)." >&2
+        exit 1
+    fi
+    deploy_boot_artifacts
+    echo "deployed boot dir: $BOOTD"
+    ;;
+run)
+    BOOTD="$(find_bootd)"
+    if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
+        echo "aros-ctl: no AROSBootstrap found." >&2
+        echo "  point AROS_CTL_BOOTD at <build>/bin/darwin-aarch64/AROS/boot/darwin," >&2
+        echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to /tmp/arosbuild)." >&2
+        exit 1
+    fi
+    echo "boot dir: $BOOTD" >&2
+    stop_instances_for_bootd "$BOOTD"
+    deploy_boot_artifacts
     artifact_line "AROSBootstrap" "$BOOTD/AROSBootstrap"
     artifact_line "emul-handler" "$BOOTD/L/emul-handler"
     artifact_line "Cocoa monitor" "$AROS/Devs/Monitors/Cocoa"
@@ -389,8 +447,50 @@ MacRW:$HOST_FOLDER;WRITE"
     ;;
 stop)
     BOOTD="$(find_bootd)"
+    request_guest_shutdown || true
     stop_instances_for_bootd "$BOOTD"
     echo "stopped"
+    ;;
+status)
+    rc=0
+    pid="$(cat "$PIDF" 2>/dev/null || true)"
+    source="pidfile"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        pid="$(pgrep -n Daedalos 2>/dev/null || true)"
+        source="pgrep"
+    fi
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        echo "state=stopped"
+        echo "pidfile=$PIDF"
+        echo "fifo=$FIFO"
+        echo "log=$LOG"
+        exit 1
+    fi
+
+    echo "state=running"
+    echo "pid=$pid ($source)"
+    echo "pidfile=$PIDF"
+    if [ -p "$FIFO" ]; then
+        echo "fifo=$FIFO ok"
+    else
+        echo "fifo=$FIFO missing"
+        rc=2
+    fi
+    if [ -f "$LOG" ]; then
+        echo "log=$LOG"
+    else
+        echo "log=$LOG missing"
+        rc=2
+    fi
+    crash_lines="$(grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" "$LOG" 2>/dev/null | head -5 || true)"
+    if [ -n "$crash_lines" ]; then
+        echo "crash=present"
+        printf '%s\n' "$crash_lines"
+        rc=2
+    else
+        echo "crash=none"
+    fi
+    exit "$rc"
     ;;
 key)    ctl "K ${1:-0} ${2:-1} ${3:-0}";;
 cmdc)   ctl "K $LCMD 1 $CMOD"; ctl "K 8 1 $CMOD"; ctl "K 8 0 $CMOD"; ctl "K $LCMD 0 0";;
@@ -516,6 +616,6 @@ libs)
     ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {run|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|wait}" >&2
     exit 1;;
 esac

@@ -59,7 +59,10 @@ static long const_num(id v, long deflt) {
     if (!K) K = @{
         @"CM_OPT_EFFECT":@(CM_OPT_EFFECT), @"CM_OPT_SCALE_MODE":@(CM_OPT_SCALE_MODE),
         @"CM_OPT_FULLSCREEN":@(CM_OPT_FULLSCREEN), @"CM_OPT_FILTER":@(CM_OPT_FILTER),
-        @"CM_OPT_RETINA":@(CM_OPT_RETINA), @"CM_OPT_AUDIO_VOLUME":@(CM_OPT_AUDIO_VOLUME),
+        @"CM_OPT_RETINA":@(CM_OPT_RETINA), @"CM_OPT_THEME":@(CM_OPT_THEME),
+        @"CM_THEME_SYSTEM":@(CM_THEME_SYSTEM), @"CM_THEME_LIGHT":@(CM_THEME_LIGHT),
+        @"CM_THEME_DARK":@(CM_THEME_DARK),
+        @"CM_OPT_AUDIO_VOLUME":@(CM_OPT_AUDIO_VOLUME),
         @"CM_OPT_CLIPBOARD_SHARE":@(CM_OPT_CLIPBOARD_SHARE), @"CM_OPT_AUDIO_DEVICE":@(CM_OPT_AUDIO_DEVICE),
         @"CM_OPT_VOLUME_ADD":@(CM_OPT_VOLUME_ADD), @"CM_OPT_VOLUME_REMOVE":@(CM_OPT_VOLUME_REMOVE),
         @"CM_OPT_POWER":@(CM_OPT_POWER),
@@ -451,8 +454,10 @@ int cm__open_settings_appkit(CMContext *cx) {
 }
 
 /* Re-apply persisted host-acted display options at cm_open (schema-independent so
- * cm_open stays robust even before settings.json is located). Same cocoametal.*
- * keys the schema's `defaults` store uses, so the schema window and this agree. */
+ * cm_open stays robust even before settings.json is located). Do not enqueue
+ * AROS-facing options here: cm_open runs during early display bring-up, before the
+ * guest side is ready to consume settings events safely. Runtime settings/menu
+ * changes still use CM_EV_SETTING after the input task is live. */
 void cm__apply_persisted_options(CMContext *cx) {
     @autoreleasepool {
         NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
@@ -460,5 +465,6 @@ void cm__apply_persisted_options(CMContext *cx) {
         if ([d objectForKey:@"cocoametal.scaleMode"])  cm_set_option(cx, CM_OPT_SCALE_MODE, [d integerForKey:@"cocoametal.scaleMode"]);
         if ([d objectForKey:@"cocoametal.filter"])     cm_set_option(cx, CM_OPT_FILTER,     [d integerForKey:@"cocoametal.filter"]);
         if ([d objectForKey:@"cocoametal.fullscreen"]) cm_set_option(cx, CM_OPT_FULLSCREEN, [d integerForKey:@"cocoametal.fullscreen"]);
+        if ([d objectForKey:@"cocoametal.theme"])      cm_set_option(cx, CM_OPT_THEME,      [d integerForKey:@"cocoametal.theme"]);
     }
 }

@@ -1,0 +1,318 @@
+#!/bin/sh
+#
+# desktop-smoke -- run the darwin/aarch64 desktop path and capture proof.
+#
+# This is intentionally host-side and boring: verify deployment first, start the
+# desktop startup sequence, wait for it to settle, capture a screenshot through
+# the control FIFO, and fail loudly if the process exits or the log contains a
+# trap. Run it from a normal macOS Terminal session; heavily sandboxed runners may
+# be able to read the repo but not launch/control the GUI process.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_DESKTOP_SMOKE_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+RUN_STAMP="${AROS_DESKTOP_SMOKE_RUN_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$RUN_DIR"
+
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+SHOT="${1:-$RUN_DIR/desktop-$RUN_STAMP.png}"
+MENU_SHOT="${AROS_DESKTOP_SMOKE_MENU_SHOT:-${SHOT%.png}-menu.png}"
+MENU_SHOT_BASE="$MENU_SHOT"
+LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
+WAIT_SECS="${AROS_DESKTOP_SMOKE_WAIT:-8}"
+MENU_X="${AROS_DESKTOP_SMOKE_MENU_X:-70}"
+MENU_Y="${AROS_DESKTOP_SMOKE_MENU_Y:-8}"
+MENU_MODE="${AROS_DESKTOP_SMOKE_MENU_MODE:-menu}"
+MENU_REPEAT="${AROS_DESKTOP_SMOKE_MENU_REPEAT:-1}"
+INTERACT="${AROS_DESKTOP_SMOKE_INTERACT:-1}"
+INTERACT_SHOT="${AROS_DESKTOP_SMOKE_INTERACT_SHOT:-${SHOT%.png}-interaction.png}"
+RESIZE="${AROS_DESKTOP_SMOKE_RESIZE:-0}"
+RESIZE_SHOT="${AROS_DESKTOP_SMOKE_RESIZE_SHOT:-${SHOT%.png}-resize.png}"
+RESIZE_SEQ="${AROS_DESKTOP_SMOKE_RESIZE_SEQ:-900x640 760x560 1024x720 800x600}"
+STRESS="${AROS_DESKTOP_SMOKE_STRESS:-0}"
+STRESS_STEPS="${AROS_DESKTOP_SMOKE_STRESS_STEPS:-32}"
+STRESS_SHOT="${AROS_DESKTOP_SMOKE_STRESS_SHOT:-${SHOT%.png}-stress.png}"
+
+fail() {
+    echo "FAIL: $*" >&2
+    if [ -s "$LOG" ]; then
+        echo >&2
+        echo "last 80 log lines:" >&2
+        tail -n 80 "$LOG" >&2
+    fi
+    if [ "${AROS_DESKTOP_SMOKE_KEEP:-0}" != 1 ]; then
+        "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    fi
+    exit 1
+}
+
+pid_alive() {
+    [ -f "$PIDF" ] || return 1
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+log_has_failure() {
+    if [ "${AROS_DESKTOP_SMOKE_STRICT_LOG:-0}" = 1 ]; then
+        "$HERE/aros-ctl" crash | grep -q . && return 0
+    else
+        grep -qE 'Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege' "$LOG" 2>/dev/null && return 0
+    fi
+    grep -q 'cm_open(.*) -> 0x0000000000000000' "$LOG" 2>/dev/null
+}
+
+ppm_pixel_sum() {
+    ppm="${1%.png}.ppm"
+    x="$2"
+    y="$3"
+    [ -s "$ppm" ] || return 1
+
+    dims="$(sed -n '2p' "$ppm" 2>/dev/null)"
+    maxv="$(sed -n '3p' "$ppm" 2>/dev/null)"
+    set -- $dims
+    w="${1:-0}"
+    h="${2:-0}"
+    [ "$w" -gt "$x" ] && [ "$h" -gt "$y" ] || return 1
+
+    header_bytes="$(printf 'P6\n%s\n%s\n' "$dims" "$maxv" | wc -c | tr -d ' ')"
+    offset=$((header_bytes + (y * w + x) * 3))
+    set -- $(od -An -tu1 -j "$offset" -N 3 "$ppm" 2>/dev/null)
+    [ $# -eq 3 ] || return 1
+    echo $(($1 + $2 + $3))
+}
+
+menu_looks_open() {
+    # In the default Wanderer theme, pixel 20,88 is on the opened menu's bottom
+    # border. A closed desktop is gray there; an open menu is black.
+    [ "$(ppm_pixel_sum "$1" 20 88 || echo 999)" -lt 80 ]
+}
+
+screen_has_recoverable_alert() {
+    # The default desktop is gray at this point; the recoverable-alert body is
+    # bright. This catches on-screen Wanderer failures that do not emit a trap.
+    [ "$(ppm_pixel_sum "$1" 200 380 || echo 0)" -gt 650 ]
+}
+
+ppm_region_non_background_count() {
+    ppm="${1%.png}.ppm"
+    x1="$2"
+    y1="$3"
+    x2="$4"
+    y2="$5"
+    [ -s "$ppm" ] || return 1
+
+    perl -e '
+        use strict;
+        use warnings;
+        my ($file, $x1, $y1, $x2, $y2) = @ARGV;
+        open my $fh, "<:raw", $file or die "$file: $!";
+        my $magic = <$fh>;
+        my $dims = <$fh>;
+        my $maxv = <$fh>;
+        my ($w, $h) = split /\s+/, $dims;
+        my $count = 0;
+        for my $y (0 .. $h - 1) {
+            read($fh, my $row, $w * 3) == $w * 3 or die "short read";
+            next if $y < $y1 || $y > $y2;
+            for (my $x = $x1; $x <= $x2 && $x < $w; $x++) {
+                my $i = $x * 3;
+                my ($r, $g, $b) = unpack("CCC", substr($row, $i, 3));
+                $count++ if !($r == 153 && $g == 153 && $b == 153);
+            }
+        }
+        print "$count\n";
+    ' "$ppm" "$x1" "$y1" "$x2" "$y2"
+}
+
+desktop_looks_populated() {
+    # A blank Workbench screen can still be a live process. Wanderer's default
+    # desktop draws volume icons in this left band; the failed display-handoff
+    # regression had zero non-background pixels here.
+    [ "$(ppm_region_non_background_count "$1" 0 16 120 270 || echo 0)" -gt 800 ]
+}
+
+echo "== deploy-check =="
+AROS_CTL_STARTUP_MODE=desktop "$HERE/aros-ctl" deploy || fail "deploy failed"
+"$HERE/deploy-check" || fail "deploy-check failed"
+
+echo
+echo "== stop old instance =="
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+echo
+echo "== start desktop =="
+AROS_CTL_STARTUP_MODE=desktop "$HERE/aros-ctl" run || fail "desktop launch command failed"
+
+i=0
+while [ "$i" -lt "$WAIT_SECS" ]; do
+    sleep 1
+    i=$((i + 1))
+    pid_alive || fail "Daedalos exited during startup"
+    if log_has_failure; then
+        fail "startup failure markers appeared in the log"
+    fi
+done
+
+echo
+echo "== screenshot =="
+"$HERE/aros-ctl" shot "$SHOT" || fail "screenshot command failed"
+[ -s "$SHOT" ] || fail "screenshot was not created: $SHOT"
+screen_has_recoverable_alert "$SHOT" && fail "desktop screenshot shows a recoverable alert: $SHOT"
+desktop_looks_populated "$SHOT" || fail "desktop screenshot is blank/unpopulated: $SHOT"
+pid_alive || fail "Daedalos exited after screenshot capture"
+
+if log_has_failure; then
+    fail "failure markers appeared after screenshot"
+fi
+
+if [ "$INTERACT" = 1 ]; then
+    echo
+    echo "== pointer/click interaction =="
+    "$HERE/aros-ctl" mouse 420 280 || fail "mouse move failed"
+    sleep 0.4
+    pid_alive || fail "Daedalos exited after mouse move"
+    "$HERE/aros-ctl" click 0 42 33 || fail "left-click failed"
+    sleep 0.8
+    pid_alive || fail "Daedalos exited after left-click"
+    "$HERE/aros-ctl" shot "$INTERACT_SHOT" || fail "interaction screenshot command failed"
+    [ -s "$INTERACT_SHOT" ] || fail "interaction screenshot was not created: $INTERACT_SHOT"
+    screen_has_recoverable_alert "$INTERACT_SHOT" && fail "interaction screenshot shows a recoverable alert: $INTERACT_SHOT"
+    if log_has_failure; then
+        fail "failure markers appeared after pointer/click interaction"
+    fi
+fi
+
+if [ "$RESIZE" = 1 ]; then
+    echo
+    echo "== resize interaction =="
+    for size in $RESIZE_SEQ; do
+        case "$size" in
+        *x*)
+            rw="${size%x*}"
+            rh="${size#*x}"
+            ;;
+        *)
+            fail "bad resize size '$size' in AROS_DESKTOP_SMOKE_RESIZE_SEQ"
+            ;;
+        esac
+        "$HERE/aros-ctl" resize "$rw" "$rh" || fail "resize to ${rw}x${rh} failed"
+        sleep 0.35
+        pid_alive || fail "Daedalos exited after resize to ${rw}x${rh}"
+        if log_has_failure; then
+            fail "failure markers appeared after resize to ${rw}x${rh}"
+        fi
+    done
+    "$HERE/aros-ctl" shot "$RESIZE_SHOT" || fail "post-resize screenshot command failed"
+    [ -s "$RESIZE_SHOT" ] || fail "post-resize screenshot was not created: $RESIZE_SHOT"
+    screen_has_recoverable_alert "$RESIZE_SHOT" && fail "post-resize screenshot shows a recoverable alert: $RESIZE_SHOT"
+    desktop_looks_populated "$RESIZE_SHOT" || fail "post-resize screenshot is blank/unpopulated: $RESIZE_SHOT"
+fi
+
+if [ "$STRESS" = 1 ]; then
+    echo
+    echo "== bounded input stress =="
+    i=0
+    while [ "$i" -lt "$STRESS_STEPS" ]; do
+        case $((i % 8)) in
+        0) sx=32;  sy=32 ;;
+        1) sx=180; sy=48 ;;
+        2) sx=420; sy=180 ;;
+        3) sx=720; sy=80 ;;
+        4) sx=760; sy=520 ;;
+        5) sx=360; sy=540 ;;
+        6) sx=96;  sy=360 ;;
+        *) sx=420; sy=280 ;;
+        esac
+        "$HERE/aros-ctl" mouse "$sx" "$sy" || fail "stress mouse move $i failed"
+        if [ $((i % 10)) -eq 4 ]; then
+            "$HERE/aros-ctl" click 0 "$sx" "$sy" || fail "stress click $i failed"
+        fi
+        sleep 0.08
+        pid_alive || fail "Daedalos exited during input stress at step $i"
+        if log_has_failure; then
+            fail "failure markers appeared during input stress at step $i"
+        fi
+        i=$((i + 1))
+    done
+    "$HERE/aros-ctl" shot "$STRESS_SHOT" || fail "stress screenshot command failed"
+    [ -s "$STRESS_SHOT" ] || fail "stress screenshot was not created: $STRESS_SHOT"
+    screen_has_recoverable_alert "$STRESS_SHOT" && fail "stress screenshot shows a recoverable alert: $STRESS_SHOT"
+    desktop_looks_populated "$STRESS_SHOT" || fail "stress screenshot is blank/unpopulated: $STRESS_SHOT"
+fi
+
+if [ "${AROS_DESKTOP_SMOKE_MENU:-0}" = 1 ]; then
+    echo
+    echo "== menu right-click =="
+    i=1
+    while [ "$i" -le "$MENU_REPEAT" ]; do
+        case "$MENU_MODE" in
+        menu)
+            "$HERE/aros-ctl" menu "$MENU_X" "$MENU_Y" || fail "menu open failed"
+            if [ "${AROS_DESKTOP_SMOKE_MENU_NUDGE:-0}" = 1 ]; then
+                "$HERE/aros-ctl" mouse "$((MENU_X + 1))" "$MENU_Y" || fail "extra menu mouse nudge failed"
+            fi
+            ;;
+        raw)
+            "$HERE/aros-ctl" mouse "$MENU_X" "$MENU_Y" || fail "raw menu mouse move failed"
+            "$HERE/aros-ctl" button 1 1 "$MENU_X" "$MENU_Y" || fail "raw right-button down failed"
+            ;;
+        *)
+            fail "unknown AROS_DESKTOP_SMOKE_MENU_MODE=$MENU_MODE"
+            ;;
+        esac
+        sleep 1
+        pid_alive || fail "Daedalos exited after right-click"
+
+        if [ "$MENU_REPEAT" -gt 1 ]; then
+            this_menu_shot="${MENU_SHOT_BASE%.png}-$i.png"
+        else
+            this_menu_shot="$MENU_SHOT"
+        fi
+        "$HERE/aros-ctl" shot "$this_menu_shot" || fail "menu screenshot command failed"
+        "$HERE/aros-ctl" menuup "$MENU_X" "$MENU_Y" >/dev/null 2>&1 || true
+        [ -s "$this_menu_shot" ] || fail "menu screenshot was not created: $this_menu_shot"
+        screen_has_recoverable_alert "$this_menu_shot" && fail "menu screenshot shows a recoverable alert: $this_menu_shot"
+        if [ "${AROS_DESKTOP_SMOKE_MENU_ASSERT:-1}" = 1 ]; then
+            menu_looks_open "$this_menu_shot" || fail "menu screenshot does not look open: $this_menu_shot"
+        fi
+        MENU_SHOT="$this_menu_shot"
+        i=$((i + 1))
+        [ "$i" -le "$MENU_REPEAT" ] && sleep 0.4
+    done
+    pid_alive || fail "Daedalos exited after menu screenshot"
+    if log_has_failure; then
+        fail "failure markers appeared after menu screenshot"
+    fi
+fi
+
+echo
+echo "PASS: desktop is running; screenshot -> $SHOT"
+[ "$INTERACT" = 1 ] && echo "interaction screenshot: $INTERACT_SHOT"
+[ "$RESIZE" = 1 ] && echo "resize screenshot: $RESIZE_SHOT"
+[ "$STRESS" = 1 ] && echo "stress screenshot: $STRESS_SHOT"
+[ "${AROS_DESKTOP_SMOKE_MENU:-0}" = 1 ] && echo "menu screenshot: $MENU_SHOT"
+echo "log: $LOG"
+if "$HERE/aros-ctl" warn | grep -q .; then
+    echo "warnings:"
+    "$HERE/aros-ctl" warn
+fi

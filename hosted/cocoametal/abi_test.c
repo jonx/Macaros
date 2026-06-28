@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "cocoametal.h"   /* the shared ABI header — types only, no shim code */
 
@@ -103,6 +104,31 @@ static void build_scene(uint8_t *fb, int w, int h, int markX, int markY) {
             put_bgra(fb, w, x, y, c);
         }
     put_bgra(fb, w, markX, markY, C_MARK);
+}
+
+static int read_coreaudio_global_volume(const char *cmPath, int *outVolume) {
+    char path[PATH_MAX];
+    const char *slash = strrchr(cmPath, '/');
+    if (slash) {
+        size_t dirlen = (size_t)(slash - cmPath + 1);
+        if (dirlen >= sizeof path) return 0;
+        memcpy(path, cmPath, dirlen);
+        path[dirlen] = '\0';
+        if (strlcat(path, "libcoreaudio.dylib", sizeof path) >= sizeof path)
+            return 0;
+    } else {
+        if (strlcpy(path, "libcoreaudio.dylib", sizeof path) >= sizeof path)
+            return 0;
+    }
+
+    void *ca = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!ca)
+        return 0;
+    int (*get_volume)(void) = (int (*)(void))dlsym(ca, "ca_get_global_volume");
+    if (!get_volume)
+        return 0;
+    *outVolume = get_volume();
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -251,6 +277,18 @@ int main(int argc, char **argv) {
     if (!opt_set || !opt_get || !opt_bad) ok = 0;
     printf("[ABI]   cm_set/get_option(SCALE_MODE)=roundtrip:%s(%ld)  unknownKey=rejected:%s\n",
            (opt_set && opt_get) ? "yes" : "NO", ov, opt_bad ? "yes" : "NO");
+
+    long av = -1;
+    int ca_volume = -1;
+    int audio_set = (iface.cm_set_option(cx, CM_OPT_AUDIO_VOLUME, 25) == 0);
+    int audio_get = (iface.cm_get_option(cx, CM_OPT_AUDIO_VOLUME, &av) == 0 && av == 25);
+    int audio_host = (read_coreaudio_global_volume(path, &ca_volume) && ca_volume == 25);
+    iface.cm_set_option(cx, CM_OPT_AUDIO_VOLUME, 100);
+    if (!audio_set || !audio_get || !audio_host) ok = 0;
+    printf("[ABI]   cm_set/get_option(AUDIO_VOLUME)=roundtrip:%s(%ld)  coreaudio_gain:%s(%d)\n",
+           (audio_set && audio_get) ? "yes" : "NO", av,
+           audio_host ? "yes" : "NO", ca_volume);
+
     int os = iface.cm_open_settings(cx);   /* best-effort; either result is acceptable */
     printf("[ABI]   cm_open_settings -> %d (%s)\n", os,
            os == 0 ? "panel up" : "no window server / no-op");

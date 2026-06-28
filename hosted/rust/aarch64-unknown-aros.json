@@ -1,0 +1,28 @@
+{
+    "arch": "aarch64",
+    "llvm-target": "aarch64-unknown-none-elf",
+    "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
+    "target-pointer-width": 64,
+
+    "os": "aros",
+    "vendor": "unknown",
+    "env": "",
+
+    "features": "+v8a,+neon",
+    "max-atomic-width": 128,
+    "panic-strategy": "abort",
+    "relocation-model": "static",
+    "code-model": "large",
+    "disable-redzone": true,
+    "has-thread-local": false,
+    "dynamic-linking": false,
+    "executables": true,
+
+    "linker-flavor": "gnu-lld-cc",
+    "linker": "clang",
+    "pre-link-args": {
+        "gnu-lld-cc": ["-Wl,-maarch64elf_aros", "-Wl,--allow-multiple-definition"]
+    },
+    "crt-objects-fallback": "false",
+    "emit-debug-gdb-scripts": false
+}

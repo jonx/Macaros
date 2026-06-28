@@ -1,0 +1,86 @@
+#!/bin/sh
+#
+# startup-loop -- repeat desktop launch/screenshot/stop to catch brittle starts.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_STARTUP_LOOP_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${AROS_STARTUP_LOOP_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+COUNT="${1:-${AROS_STARTUP_LOOP_COUNT:-5}}"
+WAIT="${AROS_STARTUP_LOOP_WAIT:-8}"
+mkdir -p "$RUN_DIR"
+
+cleanup_lock() {
+    status=$?
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup_lock EXIT INT TERM
+
+fail() {
+    echo "FAIL: $*" >&2
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    exit 1
+}
+
+pid_alive() {
+    pidf="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
+    [ -f "$pidf" ] || return 1
+    pid="$(cat "$pidf" 2>/dev/null)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+log_has_failure() {
+    log="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+    grep -qE 'Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege|supervisor mode' "$log" 2>/dev/null && return 0
+    grep -q 'cm_open(.*) -> 0x0000000000000000' "$log" 2>/dev/null
+}
+
+echo "== startup loop =="
+echo "iterations: $COUNT"
+echo "artifacts:  $RUN_DIR"
+
+i=1
+while [ "$i" -le "$COUNT" ]; do
+    echo
+    echo "== iteration $i/$COUNT =="
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+    AROS_CTL_STARTUP_MODE=desktop "$HERE/aros-ctl" run || fail "launch failed at iteration $i"
+    sleep "$WAIT"
+    pid_alive || fail "Daedalos exited during iteration $i"
+
+    shot="$RUN_DIR/startup-loop-$STAMP-$i.png"
+    log="$RUN_DIR/startup-loop-$STAMP-$i.log"
+    "$HERE/aros-ctl" shot "$shot" || fail "screenshot failed at iteration $i"
+    cp -f "${AROS_CTL_LOG:-/tmp/aros-window.log}" "$log" 2>/dev/null || true
+
+    if log_has_failure; then
+        "$HERE/aros-ctl" crash >&2 || true
+        fail "crash markers found at iteration $i"
+    fi
+
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || fail "stop failed at iteration $i"
+    sleep 0.5
+    if pgrep -lf 'Daedalos .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >/dev/null 2>&1; then
+        pgrep -lf 'Daedalos .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >&2 || true
+        fail "orphaned Daedalos/AROSBootstrap after iteration $i"
+    fi
+    i=$((i + 1))
+done
+
+echo
+echo "PASS: startup loop completed"

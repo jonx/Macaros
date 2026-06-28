@@ -49,6 +49,7 @@
 #define RING_FRAMES 2048           /* ~46 ms cushion at 44.1 kHz (spec R-RING4) */
 #define TOTAL_FRAMES 220500        /* 5 s -> wraps a 2048-frame ring ~108x */
 #define WAV_PATH    "run/coreaudio-a.wav"
+#define VOL_WAV_PATH "run/coreaudio-volume50.wav"
 #define WATCHDOG_S  8
 
 /* ---- watchdog: never hang the loop ---------------------------------------- */
@@ -194,6 +195,90 @@ static int check_ring_logic(void) {
     return ok;
 }
 
+static int check_global_volume_gain(void) {
+    enum { FRAMES = 2048, RING = 4096 };
+    int ok = 1;
+    CAContext *c = ca_open(RING);
+    if (!c) {
+        printf("[A]   volume-gain: ca_open failed\n");
+        return 0;
+    }
+
+    unsigned rate = RATE;
+    if (ca_set_format(c, &rate) != 0 || rate != RATE || ca_start(c) != 0) {
+        printf("[A]   volume-gain: format/start failed\n");
+        ca_close(c);
+        return 0;
+    }
+
+    short pcm[FRAMES * CHANNELS];
+    double phase = 0.0;
+    const double dphi = 2.0 * M_PI * FREQ / (double)RATE;
+    for (int i = 0; i < FRAMES; i++) {
+        short s = (short)lrint((double)AMPL * sin(phase));
+        pcm[i * CHANNELS + 0] = s;
+        pcm[i * CHANNELS + 1] = s;
+        phase += dphi;
+        if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
+    }
+
+    ca_set_global_volume(50);
+    if (ca_get_global_volume() != 50) {
+        printf("[A]   volume-gain: getter returned %d after set 50\n",
+               ca_get_global_volume());
+        ok = 0;
+    }
+    if (ca_ring_push(c, pcm, FRAMES) != FRAMES) {
+        printf("[A]   volume-gain: ring push short\n");
+        ok = 0;
+    }
+    if (ok && ca_render_to_wav(c, VOL_WAV_PATH, FRAMES) != FRAMES) {
+        printf("[A]   volume-gain: render failed\n");
+        ok = 0;
+    }
+
+    CAStats st;
+    ca_get_stats(c, &st);
+    ca_stop(c);
+
+    if (ok) {
+        unsigned wrate = 0, wch = 0;
+        int16_t *wav = NULL;
+        long wframes = wav_read(VOL_WAV_PATH, &wrate, &wch, &wav);
+        if (wframes != FRAMES || wrate != RATE || wch != CHANNELS) {
+            printf("[A]   volume-gain: bad WAV shape frames=%ld rate=%u ch=%u\n",
+                   wframes, wrate, wch);
+            ok = 0;
+        } else {
+            double rms = compute_rms(wav, wframes, wch);
+            double expected = ((double)AMPL * 0.5) / sqrt(2.0);
+            double rms_err = fabs(rms - expected) / expected;
+            if (rms_err >= 0.06) {
+                printf("[A]   volume-gain: RMS %.1f vs expected %.1f (err %.2f%%)\n",
+                       rms, expected, rms_err * 100.0);
+                ok = 0;
+            } else {
+                printf("[A]   volume-gain: 50%% RMS=%.1f expected=%.1f err=%.2f%%\n",
+                       rms, expected, rms_err * 100.0);
+            }
+        }
+        free(wav);
+    }
+    if (st.underruns != 0) {
+        printf("[A]   volume-gain: underruns=%lu\n", st.underruns);
+        ok = 0;
+    }
+
+    ca_set_global_volume(100);
+    if (ca_get_global_volume() != 100) {
+        printf("[A]   volume-gain: getter returned %d after reset 100\n",
+               ca_get_global_volume());
+        ok = 0;
+    }
+    ca_close(c);
+    return ok;
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("[A] CoreAudio host ring + headless/silent offline-render proof\n");
@@ -212,6 +297,10 @@ int main(void) {
     int ringlogic = check_ring_logic();
     if (!ringlogic) ok = 0;
     printf("[A]   ring empty/full/wrap logic: %s\n", ringlogic ? "ok" : "BAD");
+
+    int volume = check_global_volume_gain();
+    if (!volume) ok = 0;
+    printf("[A]   global volume gain: %s\n", volume ? "ok" : "BAD");
 
     /* open the shim + negotiate format */
     CAContext *ctx = ca_open(RING_FRAMES);

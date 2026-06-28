@@ -1,0 +1,105 @@
+#!/bin/sh
+#
+# audio-smoke -- end-to-end AROS CoreAudio/AHI playback smoke.
+#
+# This avoids clipboard timing and sound datatypes. It boots AROS with a small
+# custom Startup-Sequence that registers the CoreAudio AHI mode and runs C:AHISmoke,
+# a direct ahi.device client that plays a generated tone through the host shim.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+
+RUN_DIR="${AROS_AUDIO_SMOKE_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+STAMP="${AROS_AUDIO_SMOKE_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
+SHOT="${AROS_AUDIO_SMOKE_SHOT:-$RUN_DIR/audio-smoke-$STAMP.png}"
+WAIT_SECS="${AROS_AUDIO_SMOKE_WAIT:-18}"
+STARTUP_FILE="${AROS_AUDIO_SMOKE_STARTUP:-$RUN_DIR/audio-smoke-startup-$STAMP}"
+
+mkdir -p "$RUN_DIR"
+
+fail() {
+    echo "FAIL: $*" >&2
+    if [ -s "$LOG" ]; then
+        echo >&2
+        echo "last 100 log lines:" >&2
+        tail -n 100 "$LOG" >&2
+    fi
+    if [ "${AROS_AUDIO_SMOKE_KEEP:-0}" != 1 ]; then
+        "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    fi
+    exit 1
+}
+
+pid_alive() {
+    [ -f "$PIDF" ] || return 1
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+log_has_failure() {
+    "$HERE/aros-ctl" crash | grep -q .
+}
+
+cat > "$STARTUP_FILE" <<'EOF'
+Version
+FailAt 21
+Assign CLIPS: SYS:clips
+AddAudioModes DEVS:AudioModes/COREAUDIO
+AHISmoke
+CpuInfo
+Wait 8
+EOF
+
+echo "== coreaudio host ABI/offline render =="
+(cd "$ROOT" && make coreaudio-abi) || fail "coreaudio-abi failed"
+cp -f "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib" || fail "could not deploy libcoreaudio.dylib"
+
+echo
+echo "== deploy current artifacts =="
+AROS_CTL_STARTUP_FILE="$STARTUP_FILE" "$HERE/aros-ctl" deploy || fail "deploy failed"
+
+echo
+echo "== deploy-check =="
+"$HERE/deploy-check" || fail "deploy-check failed"
+
+echo
+echo "== stop old instance =="
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+: > "$LOG"
+
+echo
+echo "== boot audio smoke startup =="
+AROS_CTL_STARTUP_FILE="$STARTUP_FILE" "$HERE/aros-ctl" run || fail "launch command failed"
+
+i=0
+while [ "$i" -lt "$WAIT_SECS" ]; do
+    sleep 1
+    i=$((i + 1))
+    pid_alive || fail "Daedalos exited during audio smoke"
+    log_has_failure && fail "failure markers appeared during audio smoke"
+done
+
+grep -q "CoreAudio] ca_start live=1" "$LOG" || fail "CoreAudio live output did not start"
+grep -q "CoreAudio] first ring push" "$LOG" || fail "AHI did not push PCM into CoreAudio ring"
+grep -q "CoreAudio] ca_stop pushed=" "$LOG" || fail "CoreAudio stop/stats line missing"
+
+echo
+echo "== screenshot =="
+"$HERE/aros-ctl" shot "$SHOT" || fail "screenshot command failed"
+[ -s "$SHOT" ] || fail "screenshot was not created: $SHOT"
+
+echo "PASS: AROS CoreAudio/AHI smoke survived and produced host audio"
+echo "screenshot: $SHOT"
+grep "CoreAudio]" "$LOG" | tail -n 8
+
+if [ "${AROS_AUDIO_SMOKE_KEEP:-0}" != 1 ]; then
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+fi

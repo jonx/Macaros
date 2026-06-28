@@ -49,6 +49,13 @@
       "label": "Full screen", "control": "checkbox",
       "store": "defaults", "key": "cocoametal.fullscreen", "default": 0,
       "apply": "hostOption", "applyKey": "CM_OPT_FULLSCREEN" },
+    { "ident": "general.appearance", "tier": "App", "tab": "General",
+      "label": "Appearance", "control": "popup",
+      "store": "defaults", "key": "cocoametal.theme", "default": "CM_THEME_SYSTEM",
+      "apply": "hostOption", "applyKey": "CM_OPT_THEME",
+      "choices": [ { "label": "System", "value": "CM_THEME_SYSTEM" },
+                   { "label": "Light", "value": "CM_THEME_LIGHT" },
+                   { "label": "Dark", "value": "CM_THEME_DARK" } ] },
 
     { "ident": "system.memory", "tier": "Machine", "tab": "System",
       "label": "RAM (MB)", "control": "slider",
@@ -57,7 +64,7 @@
 
     { "ident": "sharing.clipboard", "tier": "Machine", "tab": "Sharing",
       "label": "Share clipboard with the Mac", "control": "checkbox",
-      "store": "defaults", "key": "sharing.clipboard", "default": 0,
+      "store": "defaults", "key": "sharing.clipboard", "default": 1,
       "apply": "arosOption", "applyKey": "CM_OPT_CLIPBOARD_SHARE" },
     { "ident": "sharing.folder", "tier": "Machine", "tab": "Sharing",
       "label": "Shared folder", "control": "path",

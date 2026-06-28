@@ -1,0 +1,28 @@
+# aros-rt — the no_std Rust runtime shim for darwin-aarch64 AROS.
+#
+# This is the [RS1] deliverable: a #[global_allocator] wired to exec AllocVec/
+# FreeVec plus a #[panic_handler], so `core` + `alloc` (Vec/String/iterators)
+# work on AROS. It also carries the [RS0] selftest entrypoints (extern "C" fns a
+# minimal AROS C program links and calls). See ../README.md and
+# ../../../docs/features/rust-aros/README.md.
+#
+# Built out-of-tree from the Mac host with nightly + -Zbuild-std; it does NOT go
+# through mmake (same standalone convention as the other hosted/ shims). The
+# final AROS link is done by the AROS crosstools cc on the C side (rs0_main.c).
+[package]
+name = "aros-rt"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+# staticlib: the .a the AROS crosstools cc links into an AROS C program (C owns
+# AROS startup and calls into Rust — RS0/RS1). rlib too so `cargo build` is happy
+# and the crate can later be a dependency of a Rust-owned binary (RS3+).
+crate-type = ["staticlib", "rlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

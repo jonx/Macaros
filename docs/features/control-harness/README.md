@@ -29,11 +29,12 @@ would expose in-process (see [hosted/libaros/IDEAS.md](../../../hosted/libaros/I
 
 ```sh
 graft/aros-ctl run                 # boot AROS windowed (background)
+graft/aros-ctl status              # report pid/fifo/log/crash state
 graft/aros-ctl wait 3              # let it reach the "1>" prompt
 graft/aros-ctl type "echo hello"   # type at the shell
 graft/aros-ctl enter               # press Return
 graft/aros-ctl shot                # screenshot -> run/darwin-aarch64/ (no TCC)
-graft/aros-ctl stop                # kill it
+graft/aros-ctl stop                # ask AROS to shut down, then clean up
 ```
 
 **Record a scripted demo** — `record SECS` returns immediately and the app auto-stops
@@ -87,7 +88,8 @@ Invoke as `aros-ctl <cmd> [args]`.
 | Command | Effect |
 |---|---|
 | `run` | Boot AROS windowed in the background with the control FIFO; log to `$LOG`, pid to `$PIDF`. Stages a known-good boot (see [design.md](design.md) → "What `run` sets up"). |
-| `stop` | Kill the recorded pid, `pkill AROSBootstrap`, remove the FIFO + pidfile. |
+| `status` | Report whether the app is running, which pid source was used, whether the control FIFO/log exist, and whether crash markers are already present. Exit 0 = running/clean, 1 = stopped, 2 = running but stale control/log or crash markers. |
+| `stop` | Request guest shutdown through `CM_OPT_POWER`, wait briefly, then fall back to TERM/KILL cleanup and remove the FIFO + pidfile. |
 | `wait [SECS]` | `sleep` (default 1) — let AROS run/render between actions. |
 
 ### Input

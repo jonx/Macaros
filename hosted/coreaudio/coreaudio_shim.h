@@ -41,6 +41,12 @@ CAContext *ca_open(int ringFrames);
  * Returns 0 on success, nonzero on failure. */
 int  ca_set_format(CAContext *, unsigned *inOutRateHz);
 
+/* Enable/disable live macOS speaker output for this context. The default is
+ * disabled so the host ABI proof remains headless and silent. The AROS AHI
+ * bridge enables this before ca_start(), which makes the same render callback
+ * feed kAudioUnitSubType_DefaultOutput instead of only the offline WAV oracle. */
+int  ca_enable_live_output(CAContext *, int enabled);
+
 /* Arm the render callback. For the offline (headless, silent) proof this just
  * marks the unit renderable; no live output device is opened. The RT render
  * thread is born with all signals masked (R-RT3) for the AROS-host case; in the
@@ -76,6 +82,13 @@ int  ca_ring_capacity(CAContext *);
  *                 an AROS LVO (it never does; here it is structurally 0). */
 typedef struct { unsigned long pushed, consumed, underruns, rtAROSCalls; } CAStats;
 void ca_get_stats(CAContext *, CAStats *out);
+
+/* Process-global master output gain for live/offline CoreAudio contexts.
+ * `percent` is clamped to 0..100. It is intentionally global so host UI (the Mac
+ * app shell/settings) can change volume without needing a pointer to the
+ * currently-open AHI sub-driver instance. */
+void ca_set_global_volume(int percent);
+int  ca_get_global_volume(void);
 
 /* OFFLINE render for headless verification: pull `frames` stereo frames from the
  * ring by repeatedly driving AudioUnitRender (the GenericOutput unit pulls from

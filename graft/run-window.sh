@@ -134,6 +134,11 @@ write_startup_sequence() {
                     'If EXISTS "C:AddDataTypes"' \
                     '    AddDataTypes REFRESH QUIET' \
                     'EndIf' \
+                    'If EXISTS "C:AddAudioModes"' \
+                    '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \
+                    '        Run <NIL: >NIL: QUIET AddAudioModes DEVS:AudioModes/COREAUDIO QUIET' \
+                    '    EndIf' \
+                    'EndIf' \
                     'If EXISTS "C:IPrefs"' \
                     '    IPrefs' \
                     'EndIf' \
@@ -152,7 +157,16 @@ write_startup_sequence() {
             {
                 printf '%s\n' \
                     'Version' \
+                    'If NOT EXISTS "RAM:T"' \
+                    '    MakeDir "RAM:T"' \
+                    'EndIf' \
+                    'Assign "T:" "RAM:T"' \
                     'Assign CLIPS: SYS:clips' \
+                    'If EXISTS "C:AddAudioModes"' \
+                    '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \
+                    '        AddAudioModes DEVS:AudioModes/COREAUDIO QUIET' \
+                    '    EndIf' \
+                    'EndIf' \
                     'Run ConClip'
             } > "$startup"
             ;;
@@ -199,9 +213,12 @@ mkdir -p "$HOME/lib"
 # via hostlib.resource, so it lives in ~/lib like cocoametal.dylib. Without it the
 # bridge starts but silently no-ops (build it with: make pasteboard-dylib).
 [ -f "$ROOT/build/libpasteboard.dylib" ] && cp -f "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib"
-# Future CoreAudio/AHI host shim, deployed beside the other HostLib dylibs so the
-# AROS-side audio driver can load it by bare name once it lands.
+# CoreAudio/AHI host shim, deployed beside the other HostLib dylibs so the
+# AROS-side audio driver can load it by bare name.
 [ -f "$ROOT/build/libcoreaudio.dylib" ] && cp -f "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib"
+# bsdsocket.library host pump shim, deployed beside the other HostLib dylibs so
+# AROS-side networking can load it by bare name.
+[ -f "$ROOT/build/libbsdsockhost.dylib" ] && cp -f "$ROOT/build/libbsdsockhost.dylib" "$HOME/lib/libbsdsockhost.dylib"
 if [ ! -f "$HOME/lib/cocoametal.dylib" ]; then
     echo "cocoametal.dylib missing — build it:" >&2
     echo "    cd ~/Source/aros-aarch64 && make cocoametal-dylib" >&2

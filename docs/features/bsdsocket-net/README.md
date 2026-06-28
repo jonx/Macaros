@@ -33,14 +33,14 @@ Screenshots: [roundtrip-proof.png](roundtrip-proof.png) ·
 ```sh
 cd ~/Source/aros-aarch64
 make bsdsock-dylib                          # build the host pump shim
-cp build/libbsdsockhost.dylib ~/lib/        # deploy it (HostLib_Open finds it here)
+./graft/aros-ctl deploy                     # deploy it to ~/lib for HostLib_Open
 graft/bsdsock-livetest.sh                   # host unit tests + the live nettest
 ```
 
 `bsdsocket.library` and the `socktest`/`nettest` test commands are built into the
 AROS tree (`make workbench-libs-bsdsocket-unix` and `…-test-quick` in the configured
 build); the dylib is the one piece that lives in this repo and deploys to `~/lib`
-beside `cocoametal.dylib`/`libpasteboard.dylib`.
+beside `cocoametal.dylib`, `libpasteboard.dylib`, and `libcoreaudio.dylib`.
 
 ## How it works — forward at the socket layer, with a kqueue pump
 

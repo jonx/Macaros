@@ -1,0 +1,161 @@
+#!/bin/sh
+#
+# clipboard-smoke -- prove the darwin clipboard bridge and runtime toggle.
+#
+# This is host-side on purpose: macOS pbcopy changes NSPasteboard, the Cocoa HIDD
+# bridge observes it, and the boot log is the oracle for Mac -> AROS propagation.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+RUN_DIR="${AROS_CLIPBOARD_SMOKE_RUN_DIR:-$ROOT/run/darwin-aarch64}"
+RUN_STAMP="${AROS_CLIPBOARD_SMOKE_RUN_STAMP:-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$RUN_DIR"
+
+LOG="${AROS_CLIPBOARD_SMOKE_LOG:-/tmp/aros-clipboard-smoke-$RUN_STAMP.log}"
+FIFO="${AROS_CLIPBOARD_SMOKE_FIFO:-/tmp/aros-clipboard-smoke-$RUN_STAMP.ctl}"
+PIDF="${AROS_CLIPBOARD_SMOKE_PIDF:-/tmp/aros-clipboard-smoke-$RUN_STAMP.pid}"
+WAIT_SECS="${AROS_CLIPBOARD_SMOKE_WAIT:-12}"
+ORIG_CLIP="$(mktemp /tmp/aros-clipboard-orig.XXXXXX)"
+RESTORE_CLIP=0
+
+cleanup() {
+    status=$?
+    trap - EXIT INT TERM
+    if [ "$RESTORE_CLIP" = 1 ]; then
+        pbcopy < "$ORIG_CLIP" 2>/dev/null || true
+    fi
+    rm -f "$ORIG_CLIP"
+    AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+        "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup EXIT INT TERM
+
+if command -v pbpaste >/dev/null 2>&1 && command -v pbcopy >/dev/null 2>&1; then
+    if pbpaste > "$ORIG_CLIP" 2>/dev/null; then
+        RESTORE_CLIP=1
+    fi
+else
+    echo "FAIL: pbcopy/pbpaste are required for clipboard-smoke" >&2
+    exit 1
+fi
+
+fail() {
+    echo "FAIL: $*" >&2
+    if [ -s "$LOG" ]; then
+        echo >&2
+        echo "last 100 log lines:" >&2
+        tail -n 100 "$LOG" >&2
+    fi
+    exit 1
+}
+
+wait_log() {
+    pattern="$1"
+    timeout="${2:-$WAIT_SECS}"
+    i=0
+    while [ "$i" -lt "$timeout" ]; do
+        grep -F "$pattern" "$LOG" >/dev/null 2>&1 && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+wait_token_crossed() {
+    token="$1"
+    timeout="${2:-$WAIT_SECS}"
+    i=0
+    while [ "$i" -lt "$timeout" ]; do
+        if grep -F "host->AROS" "$LOG" 2>/dev/null | grep -F "$token" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+token_crossed() {
+    token="$1"
+    grep -F "host->AROS" "$LOG" 2>/dev/null | grep -F "$token" >/dev/null 2>&1
+}
+
+log_has_failure() {
+    grep -qE 'Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege|supervisor mode' "$LOG" 2>/dev/null && return 0
+    grep -q 'cm_open(.*) -> 0x0000000000000000' "$LOG" 2>/dev/null
+}
+
+echo "== deploy current artifacts =="
+AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+    "$HERE/aros-ctl" deploy || fail "deploy failed"
+
+echo
+echo "== deploy-check =="
+"$HERE/deploy-check" || fail "deploy-check failed"
+
+echo
+echo "== start console clipboard bridge =="
+AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+    "$HERE/aros-ctl" run || fail "launch command failed"
+
+wait_log "clipboard bridge up" "$WAIT_SECS" || fail "clipboard bridge did not come up"
+wait_log "baseline macOS cc=" "$WAIT_SECS" || fail "clipboard bridge did not baseline"
+log_has_failure && fail "startup failure markers appeared in the log"
+
+echo
+echo "== ensure runtime enabled =="
+AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+    "$HERE/aros-ctl" clipboard on || fail "clipboard on command failed"
+wait_log "clipboard sharing request 1" "$WAIT_SECS" || fail "runtime ON request was not consumed"
+
+echo
+echo "== Mac -> AROS =="
+TOKEN_ON="CLIPON_$$_$(date +%S)"
+printf '%s' "$TOKEN_ON" | pbcopy || fail "pbcopy failed"
+wait_token_crossed "$TOKEN_ON" "$WAIT_SECS" || fail "Mac -> AROS token did not cross: $TOKEN_ON"
+
+echo
+echo "== runtime disable =="
+AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+    "$HERE/aros-ctl" clipboard off || fail "clipboard off command failed"
+wait_log "runtime sharing OFF" "$WAIT_SECS" || fail "runtime OFF was not consumed"
+wait_log "sharing disabled; bridge paused" "$WAIT_SECS" || fail "bridge did not pause"
+
+TOKEN_OFF="CLIPOFF_$$_$(date +%S)"
+printf '%s' "$TOKEN_OFF" | pbcopy || fail "pbcopy while disabled failed"
+sleep 3
+token_crossed "$TOKEN_OFF" && fail "disabled bridge still propagated token: $TOKEN_OFF"
+
+echo
+echo "== runtime re-enable =="
+AROS_CTL_LOG="$LOG" AROS_CTL_FIFO="$FIFO" AROS_CTL_PIDF="$PIDF" \
+    "$HERE/aros-ctl" clipboard on || fail "clipboard on command failed"
+wait_log "runtime sharing ON" "$WAIT_SECS" || fail "runtime ON was not consumed"
+wait_log "sharing enabled; re-baselined" "$WAIT_SECS" || fail "bridge did not re-baseline"
+token_crossed "$TOKEN_OFF" && fail "disabled token replayed after re-enable: $TOKEN_OFF"
+
+TOKEN_RESUME="CLIPRESUME_$$_$(date +%S)"
+printf '%s' "$TOKEN_RESUME" | pbcopy || fail "pbcopy after re-enable failed"
+wait_token_crossed "$TOKEN_RESUME" "$WAIT_SECS" || fail "Mac -> AROS did not resume: $TOKEN_RESUME"
+log_has_failure && fail "failure markers appeared in the log"
+
+cp -f "$LOG" "$RUN_DIR/clipboard-smoke-$RUN_STAMP.log" 2>/dev/null || true
+
+echo
+echo "PASS: clipboard bridge propagated, paused, re-baselined, and resumed"
+echo "log: $LOG"
+echo "saved log: $RUN_DIR/clipboard-smoke-$RUN_STAMP.log"

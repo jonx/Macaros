@@ -1,0 +1,195 @@
+#!/bin/bash
+#
+# dep-scan -- static dependency-name scanner for a built AROS image.
+#
+# This is intentionally conservative: it does not execute AROS code and it does
+# not claim to model every runtime OpenLibrary/OpenDevice path. It extracts
+# embedded disk object names from a command/library/datatype, resolves them in the
+# current darwin-aarch64 boot image, and recurses through the files it finds.
+set -u
+
+SELF="${BASH_SOURCE[0]}"
+while [ -h "$SELF" ]; do
+    d="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$d/$SELF";; esac
+done
+HERE="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+
+find_bootd() {
+    if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
+    local d t best="" bt=0
+    local restore; restore="$(shopt -p nullglob)"; shopt -s nullglob
+    for d in \
+        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "$ROOT/build/AROS/boot/darwin" \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
+        /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do
+        [ -x "$d/AROSBootstrap" ] || continue
+        t="$(stat -f %m "$d/AROSBootstrap" 2>/dev/null || echo 0)"
+        [ "$t" -ge "$bt" ] && { bt="$t"; best="$d"; }
+    done
+    $restore
+    printf '%s\n' "$best"
+}
+
+usage() {
+    echo "usage: dep-scan [--strict] [--depth N] <aros-path-or-host-path>" >&2
+    echo "examples:" >&2
+    echo "  graft/dep-scan SYS:System/Wanderer/Wanderer" >&2
+    echo "  graft/dep-scan LIBS:muimaster.library" >&2
+    echo "  graft/dep-scan C:LoadMatrix" >&2
+}
+
+MAX_DEPTH=1
+STRICT=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --depth) shift; MAX_DEPTH="${1:-}"; [ -n "$MAX_DEPTH" ] || { usage; exit 2; };;
+        --strict) STRICT=1;;
+        -h|--help) usage; exit 0;;
+        --) shift; break;;
+        -*) usage; exit 2;;
+        *) break;;
+    esac
+    shift
+done
+[ $# -eq 1 ] || { usage; exit 2; }
+TARGET="$1"
+
+BOOTD="$(find_bootd)"
+[ -n "$BOOTD" ] && [ -x "$BOOTD/AROSBootstrap" ] || {
+    echo "dep-scan: no darwin-aarch64 boot dir found; set AROS_CTL_BOOTD" >&2
+    exit 1
+}
+AROS="$(cd "$BOOTD/../.." && pwd)"
+
+rel_lower() {
+    printf '%s' "$1" | tr 'A-Z' 'a-z'
+}
+
+find_by_basename() {
+    local name="$1"
+    find "$AROS" -type f -name "$name" -print -quit 2>/dev/null
+}
+
+resolve_name() {
+    local name="$1" vol rest lower
+    case "$name" in
+        /*) [ -f "$name" ] && printf '%s\n' "$name"; return;;
+    esac
+
+    case "$name" in
+        *:*)
+            vol="${name%%:*}"
+            rest="${name#*:}"
+            lower="$(rel_lower "$vol")"
+            case "$lower" in
+                sys)       [ -f "$AROS/$rest" ] && printf '%s\n' "$AROS/$rest"; return;;
+                c)         [ -f "$AROS/C/$rest" ] && printf '%s\n' "$AROS/C/$rest"; return;;
+                libs)      [ -f "$AROS/Libs/$rest" ] && printf '%s\n' "$AROS/Libs/$rest"; return;;
+                devs)      [ -f "$AROS/Devs/$rest" ] && printf '%s\n' "$AROS/Devs/$rest"; return;;
+                classes)   [ -f "$AROS/Classes/$rest" ] && printf '%s\n' "$AROS/Classes/$rest"; return;;
+                l)         [ -f "$AROS/L/$rest" ] && printf '%s\n' "$AROS/L/$rest"; return;;
+                system)    [ -f "$AROS/System/$rest" ] && printf '%s\n' "$AROS/System/$rest"; return;;
+                wanderer)  [ -f "$AROS/System/Wanderer/$rest" ] && printf '%s\n' "$AROS/System/Wanderer/$rest"; return;;
+            esac
+            ;;
+    esac
+
+    case "$name" in
+        *.library)  [ -f "$AROS/Libs/$name" ] && printf '%s\n' "$AROS/Libs/$name" && return
+                    [ -f "$AROS/Classes/$name" ] && printf '%s\n' "$AROS/Classes/$name" && return;;
+        *.device)   [ -f "$AROS/Devs/$name" ] && printf '%s\n' "$AROS/Devs/$name" && return;;
+        *.datatype) [ -f "$AROS/Classes/DataTypes/$name" ] && printf '%s\n' "$AROS/Classes/DataTypes/$name" && return;;
+        *.hidd)     [ -f "$AROS/Devs/Drivers/$name" ] && printf '%s\n' "$AROS/Devs/Drivers/$name" && return;;
+        *.audio)    [ -f "$AROS/Devs/AHI/$name" ] && printf '%s\n' "$AROS/Devs/AHI/$name" && return;;
+        *.mcc|*.mcp|*.gadget|*.image|*.class)
+                    found="$(find_by_basename "$name")"
+                    [ -n "${found:-}" ] && printf '%s\n' "$found" && return;;
+    esac
+
+    find_by_basename "$name"
+}
+
+extract_deps() {
+    local file="$1"
+    strings -a "$file" 2>/dev/null |
+        tr -d '\r' |
+        awk '
+            {
+                for (i = 1; i <= NF; i++) {
+                    gsub(/^[^A-Za-z0-9_.:+\/-]+/, "", $i)
+                    gsub(/[^A-Za-z0-9_.:+\/-]+$/, "", $i)
+                    print $i
+                }
+            }
+        ' |
+        grep -E '(^|/)[A-Za-z0-9_.+-]+\.(library|device|datatype|gadget|image|mcc|mcp|class|hidd|audio)$' |
+        sed 's#^.*/##' |
+        sort -fu
+}
+
+START="$(resolve_name "$TARGET")"
+[ -n "$START" ] || {
+    echo "dep-scan: could not resolve target: $TARGET" >&2
+    exit 1
+}
+
+declare -a q_path q_name q_depth
+q_path=("$START")
+q_name=("$TARGET")
+q_depth=(0)
+
+already_queued() {
+    local needle="$1" p
+    for p in "${q_path[@]}"; do
+        [ "$p" = "$needle" ] && return 0
+    done
+    return 1
+}
+
+printf 'dep-scan: boot=%s\n' "$BOOTD"
+printf 'dep-scan: target=%s -> %s\n' "$TARGET" "$START"
+printf 'dep-scan: static string scan; use --depth N for recursion and --strict to fail on MISS\n'
+printf 'dep-scan: verify final loadability with C:LoadMatrix/TestLib\n'
+
+missing=0
+idx=0
+while [ "$idx" -lt "${#q_path[@]}" ]; do
+    file="${q_path[$idx]}"
+    name="${q_name[$idx]}"
+    depth="${q_depth[$idx]}"
+    idx=$((idx + 1))
+
+    indent=""
+    for ((i=0; i<depth; i++)); do indent="$indent  "; done
+    rel="${file#$AROS/}"
+    printf '%s%s\n' "$indent$([ "$depth" -eq 0 ] && echo "ROOT " || echo "FILE ")" "$rel"
+
+    [ "$depth" -lt "$MAX_DEPTH" ] || continue
+
+    while IFS= read -r dep; do
+        [ -n "$dep" ] || continue
+        depfile="$(resolve_name "$dep")"
+        if [ -n "$depfile" ]; then
+            deprel="${depfile#$AROS/}"
+            printf '%s  OK   %-28s -> %s\n' "$indent" "$dep" "$deprel"
+            if ! already_queued "$depfile"; then
+                q_path+=("$depfile")
+                q_name+=("$dep")
+                q_depth+=("$((depth + 1))")
+            fi
+        else
+            printf '%s  MISS %-28s\n' "$indent" "$dep"
+            missing=$((missing + 1))
+        fi
+    done < <(extract_deps "$file")
+done
+
+printf 'dep-scan: missing=%d scanned=%d\n' "$missing" "${#q_path[@]}"
+if [ "$STRICT" -eq 1 ]; then
+    [ "$missing" -eq 0 ]
+else
+    exit 0
+fi

@@ -1,0 +1,13 @@
+_ca_open
+_ca_set_format
+_ca_enable_live_output
+_ca_start
+_ca_stop
+_ca_close
+_ca_ring_push
+_ca_ring_space
+_ca_ring_capacity
+_ca_get_stats
+_ca_set_global_volume
+_ca_get_global_volume
+_ca_render_to_wav

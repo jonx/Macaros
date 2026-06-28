@@ -11,6 +11,7 @@ done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 : "${AROS_HOST_CONF:=$HOME/Library/Application Support/AROS/aros-host.conf}"
+: "${AROS_APP:=$ROOT/build/Daedalos.app}"
 
 find_bootd() {
     if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
@@ -62,6 +63,8 @@ echo
 echo "host dylibs:"
 compare "cocoametal.dylib" "$ROOT/build/cocoametal.dylib" "$HOME/lib/cocoametal.dylib" || true
 compare "libpasteboard.dylib" "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib" || true
+compare "libcoreaudio.dylib" "$ROOT/build/libcoreaudio.dylib" "$HOME/lib/libcoreaudio.dylib" || true
+compare "libbsdsockhost.dylib" "$ROOT/build/libbsdsockhost.dylib" "$HOME/lib/libbsdsockhost.dylib" || true
 compare "settings.json" "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" || true
 
 echo
@@ -70,6 +73,36 @@ if [ -f "$AROS_HOST_CONF" ]; then
     line "aros-host.conf" "$AROS_HOST_CONF"
 else
     printf 'MISS                  -            -  %s\n' "$AROS_HOST_CONF"
+fi
+if [ -f "$HERE/aros-host-conf.sh" ]; then
+    eff_hv="$(
+        AROS_HOST_CONF="$AROS_HOST_CONF" sh -c '. "$1"; printf "%s" "${AROS_HOST_VOLUME:-}"' sh "$HERE/aros-host-conf.sh"
+    )"
+    if [ -n "$eff_hv" ]; then
+        echo "effective AROS_HOST_VOLUME:"
+        printf '%s\n' "$eff_hv" | sed 's/^/  /'
+    else
+        echo "effective AROS_HOST_VOLUME: <launcher default MacRO/MacRW if unset>"
+    fi
+fi
+
+echo
+echo "app bundle:"
+if [ -d "$AROS_APP" ]; then
+    APPC="$AROS_APP/Contents"
+    line "Daedalos.app" "$APPC/Info.plist"
+    line "app launcher" "$APPC/MacOS/Daedalos"
+    compare "app bootstrap" "$BOOTD/AROSBootstrap" "$APPC/MacOS/AROSBootstrap" || true
+    compare "app conf" "$BOOTD/AROSBootstrap.conf" "$APPC/MacOS/AROSBootstrap.conf" || true
+    compare "app cocoametal" "$ROOT/build/cocoametal.dylib" "$APPC/Frameworks/cocoametal.dylib" || true
+    compare "app pasteboard" "$ROOT/build/libpasteboard.dylib" "$APPC/Frameworks/libpasteboard.dylib" || true
+    compare "app coreaudio" "$ROOT/build/libcoreaudio.dylib" "$APPC/Frameworks/libcoreaudio.dylib" || true
+    compare "app bsdsock" "$ROOT/build/libbsdsockhost.dylib" "$APPC/Frameworks/libbsdsockhost.dylib" || true
+    compare "app schema fw" "$ROOT/hosted/cocoametal/settings.json" "$APPC/Frameworks/settings.json" || true
+    compare "app schema res" "$ROOT/hosted/cocoametal/settings.json" "$APPC/Resources/settings.json" || true
+    compare "app host conf" "$HERE/aros-host-conf.sh" "$APPC/MacOS/aros-host-conf.sh" || true
+else
+    printf 'SKIP                  -            -  %s\n' "$AROS_APP"
 fi
 
 echo
@@ -84,6 +117,14 @@ line "intuition.library" "$AROS/Libs/intuition.library"
 line "stdc.library" "$AROS/Libs/stdc.library"
 line "posixc.library" "$AROS/Libs/posixc.library"
 line "muimaster.library" "$AROS/Libs/muimaster.library"
+line "ahi.device" "$AROS/Devs/ahi.device"
+line "AddAudioModes" "$AROS/C/AddAudioModes"
+line "CoreAudio AHI" "$AROS/Devs/AHI/coreaudio.audio"
+line "CoreAudio mode" "$AROS/Devs/AudioModes/COREAUDIO"
+line "AHISmoke" "$AROS/C/AHISmoke"
+line "bsdsocket.library" "$AROS/Libs/bsdsocket.library"
+line "socktest" "$AROS/C/socktest"
+line "nettest" "$AROS/C/nettest"
 line "TestLib" "$AROS/C/TestLib"
 line "LoadMatrix" "$AROS/C/LoadMatrix"
 line "Wanderer" "$AROS/System/Wanderer/Wanderer"

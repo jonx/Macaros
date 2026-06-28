@@ -1,6 +1,11 @@
 # CoreAudio audio — host-backed sound for AROS (audio.device / AHI)
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: implemented and audibly proven · Target: aarch64-darwin hosted · Drafted 2026-06-24 · Updated 2026-06-28
+
+Implementation status: the design below is now historical context plus the
+contract the implementation followed. The current live status is in
+[`README.md`](README.md): host shim, AROS `CoreAudio` AHI sub-driver,
+`DEVS:AudioModes/COREAUDIO`, `C:AHISmoke`, and `make audio-smoke` are all present.
 
 ## What & why
 
