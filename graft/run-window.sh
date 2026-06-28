@@ -37,6 +37,10 @@ done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"   # .../graft
 ROOT="$(cd "$HERE/.." && pwd)"             # repo root
 
+: "${AROS_HOST_CONF:=$HOME/Library/Application Support/AROS/aros-host.conf}"
+export AROS_HOST_CONF
+[ -f "$HERE/aros-host-conf.sh" ] && . "$HERE/aros-host-conf.sh"
+
 # cocoametal host shim (built into the repo's build/) and the entitlements that
 # travel beside this script. Override AROS_CTL_DYLIB / AROS_CTL_ENT if relocated.
 DYLIB_SRC="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
@@ -78,6 +82,85 @@ artifact_line() {
     stamp="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$path" 2>/dev/null || echo '?')"
     hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print substr($1,1,12)}')"
     echo ">> $label ${hash:-????????????} $stamp"
+}
+
+write_startup_sequence() {
+    startup="$AROS/S/Startup-Sequence"
+
+    if [ -n "${AROS_CTL_STARTUP_FILE:-}" ]; then
+        cp -f "$AROS_CTL_STARTUP_FILE" "$startup"
+    else
+        case "${AROS_CTL_STARTUP_MODE:-console}" in
+        desktop|wanderer)
+            # A compact desktop boot path. The stock Startup-Sequence does much
+            # more, but these are the pieces Wanderer expects before it starts.
+            {
+                printf '%s\n' \
+                    'Version' \
+                    'FailAt 21' \
+                    'If NOT EXISTS "RAM:Clipboards"' \
+                    '    MakeDir "RAM:Clipboards"' \
+                    'EndIf' \
+                    'If NOT EXISTS "RAM:T"' \
+                    '    MakeDir "RAM:T"' \
+                    'EndIf' \
+                    'If NOT EXISTS "RAM:ENV"' \
+                    '    MakeDir "RAM:ENV"' \
+                    '    Assign "ENV:" "RAM:ENV"' \
+                    'EndIf' \
+                    'Assign "T:" "RAM:T"' \
+                    'Assign "CLIPS:" "SYS:clips"' \
+                    'Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'Assign "LOCALE:" "SYS:Locale"' \
+                    'Assign "LIBS:" "SYS:Classes" ADD' \
+                    'Assign "HELP:" "LOCALE:Help" DEFER' \
+                    'Assign "IMAGES:" "SYS:System/Images" DEFER' \
+                    'Assign "WANDERER:" "SYS:System/Wanderer" DEFER' \
+                    'Assign "THEMES:" "SYS:Prefs/Presets/Themes" >NIL:' \
+                    'Assign "THEME:" "THEMES:AROSDefault"' \
+                    'If EXISTS "THEME:Images"' \
+                    '    Assign "IMAGES:" "THEME:Images" PREPEND' \
+                    'EndIf' \
+                    'Path "C:" "SYS:System" "S:" "SYS:Prefs" QUIET' \
+                    'If EXISTS "SYS:Fonts"' \
+                    '    Assign "FONTS:" "SYS:Fonts"' \
+                    'EndIf' \
+                    'If EXISTS "SYS:Tools"' \
+                    '    Path "SYS:Tools" QUIET ADD' \
+                    'EndIf' \
+                    'If EXISTS "SYS:Utilities"' \
+                    '    Path "SYS:Utilities" QUIET ADD' \
+                    'EndIf' \
+                    'If EXISTS "C:AddDataTypes"' \
+                    '    AddDataTypes REFRESH QUIET' \
+                    'EndIf' \
+                    'If EXISTS "C:IPrefs"' \
+                    '    IPrefs' \
+                    'EndIf' \
+                    'Run <NIL: >NIL: QUIET ConClip' \
+                    'If EXISTS "WANDERER:Wanderer"' \
+                    '    Run <NIL: >NIL: QUIET WANDERER:Wanderer' \
+                    '    Wait 2' \
+                    '    EndCLI' \
+                    'EndIf'
+            } > "$startup"
+            ;;
+        console)
+            # Startup-sequence: print the version, then make clipboard.device
+            # use a visible backing directory and start ConClip for console
+            # copy/paste.
+            printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' > "$startup"
+            ;;
+        *)
+            echo "run-window.sh: unknown AROS_CTL_STARTUP_MODE=${AROS_CTL_STARTUP_MODE}" >&2
+            exit 1
+            ;;
+        esac
+    fi
+
+    [ -n "${AROS_CTL_STARTUP_EXTRA:-}" ] && printf '%s\n' "$AROS_CTL_STARTUP_EXTRA" \
+        >> "$startup"
+    return 0
 }
 
 # Refuse to relaunch over the exact same boot tree while an older instance is
@@ -130,6 +213,12 @@ mkdir -p "$AROS/clips"
 # without shell.resource the Initial CLI never starts and the boot hangs).
 grep -v '^arguments ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
     && mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
+if [ -n "${AROS_HOST_MEMORY:-}" ]; then
+    grep -v '^memory ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
+        || cp "$BOOTD/AROSBootstrap.conf" "$BOOTD/AROSBootstrap.conf.tmp"
+    printf 'memory %s\n' "$AROS_HOST_MEMORY" >> "$BOOTD/AROSBootstrap.conf.tmp"
+    mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
+fi
 for M in \
     Devs/shell.resource Devs/task.resource \
     Devs/Drivers/hiddclass.hidd Devs/Drivers/gfx.hidd \
@@ -147,9 +236,7 @@ for M in \
     fi
 done
 
-# Startup-sequence: print the version, then make clipboard.device use a visible
-# backing directory and start ConClip for console copy/paste.
-printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' > "$AROS/S/Startup-Sequence"
+write_startup_sequence
 
 # Share a Mac folder with AROS as TWO volumes, both mapped to the same folder:
 #   MacRO:  read-only   (writes are refused with "disk is write-protected")
@@ -158,17 +245,24 @@ printf 'Version\nAssign CLIPS: SYS:clips\nRun ConClip\n' > "$AROS/S/Startup-Sequ
 # These are mounted by emul-handler itself from the AROS_HOST_VOLUME env var
 # (one "<Vol>:<path>[;WRITE]" per line). ;WRITE is OUR keyword — it is delivered
 # this way precisely so it never passes through (and is mangled by) AROS's Mount.
-HOST_FOLDER="${1:-$HOME/AROS/Shared}"
-mkdir -p "$HOST_FOLDER"
-[ -e "$HOST_FOLDER/ReadMe" ] || \
-    printf 'Files here show up in AROS as MacRO: (read-only) and MacRW: (read/write).\n' \
-        > "$HOST_FOLDER/ReadMe"
-AROS_HOST_VOLUME="MacRO:$HOST_FOLDER
+if [ -z "${AROS_HOST_VOLUME:-}" ]; then
+    HOST_FOLDER="${1:-$HOME/AROS/Shared}"
+    mkdir -p "$HOST_FOLDER"
+    [ -e "$HOST_FOLDER/ReadMe" ] || \
+        printf 'Files here show up in AROS as MacRO: (read-only) and MacRW: (read/write).\n' \
+            > "$HOST_FOLDER/ReadMe"
+    AROS_HOST_VOLUME="MacRO:$HOST_FOLDER
 MacRW:$HOST_FOLDER;WRITE"
-export AROS_HOST_VOLUME
-echo ">> Sharing $HOST_FOLDER as MacRO: (read-only) and MacRW: (read/write)."
+    export AROS_HOST_VOLUME
+    echo ">> Sharing $HOST_FOLDER as MacRO: (read-only) and MacRW: (read/write)."
+else
+    export AROS_HOST_VOLUME
+    echo ">> Sharing volumes from $AROS_HOST_CONF:"
+    printf '%s\n' "$AROS_HOST_VOLUME" | sed 's/^/>>   /'
+fi
 artifact_line "AROSBootstrap" "$BOOTD/AROSBootstrap"
 artifact_line "emul-handler" "$BOOTD/L/emul-handler"
+artifact_line "Cocoa monitor" "$AROS/Devs/Monitors/Cocoa"
 artifact_line "locale.library" "$AROS/Libs/locale.library"
 artifact_line "timer.device" "$BOOTD/Devs/timer.device"
 [ -e "$BOOTD/Devs/timer.device" ] || artifact_line "timer.device" "$AROS/Devs/timer.device"
@@ -177,6 +271,12 @@ artifact_line "cybergraphics.library" "$AROS/Libs/cybergraphics.library"
 artifact_line "coolimages.library" "$AROS/Libs/coolimages.library"
 artifact_line "muimaster.library" "$AROS/Libs/muimaster.library"
 artifact_line "stdc.library" "$AROS/Libs/stdc.library"
+artifact_line "posixc.library" "$AROS/Libs/posixc.library"
+artifact_line "png.library" "$AROS/Libs/png.library"
+artifact_line "picture.datatype" "$AROS/Classes/DataTypes/picture.datatype"
+artifact_line "png.datatype" "$AROS/Classes/DataTypes/png.datatype"
+artifact_line "TestLib" "$AROS/C/TestLib"
+artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
 artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
 
 # Present in the macOS menu bar / Dock as "Daedalos" (the host app), not the

@@ -132,6 +132,35 @@ Run >SYS:conclip.log ConClip      # console <-> clipboard.device (R-Amiga C/V)
 the kickstart module set. With `CLIPS:` assigned to a host folder, a clip is also
 a readable file at `<AROS>/clips/0` — handy for verification.
 
+## Hardening Notes
+
+The bridge is intentionally conservative:
+
+- It waits for the `ConClip.rendezvous` port before opening `clipboard.device`.
+  That is the readiness gate; do not replace it with an arbitrary delay.
+- It is a `Process`, not a bare task, because `clipboard.device` file-backs to
+  `CLIPS:` and needs DOS process context.
+- Host calls remain wrapped in the existing `Forbid()` + `HostLib_Lock()`
+  discipline. The host calls are short; do not hold this lock while doing AROS
+  file/IFF work.
+- Text payloads are capped at 1 MiB in both directions. Oversized Mac text and
+  oversized AROS FTXT clips are skipped with a log line instead of allocating
+  unbounded memory inside the poll task.
+- A failed `NSPasteboard` write no longer advances the self-write token or host
+  baseline. Failed writes remain visible as failures instead of being mistaken
+  for a successful bridge event.
+- IFF `CHRS` chunks are concatenated with overflow checks; invalid/empty chunks
+  are ignored, and non-FTXT clips are skipped.
+
+Still to wire:
+
+- The Settings / Machine menu "Share Clipboard" toggle currently enqueues the
+  host `CM_OPT_CLIPBOARD_SHARE` setting, but the AROS-side bridge still runs
+  unconditionally once started. The next clean step is to let the input/settings
+  event path update a `clipboard_enabled` flag that this poll loop observes.
+- There is still no explicit bridge shutdown path; host process exit tears it
+  down. Proper app lifecycle should add a stop signal before closing host shims.
+
 ## Verifying it works — layer by layer
 
 The bridge is a chain of links; copy/paste "not working" almost always means one

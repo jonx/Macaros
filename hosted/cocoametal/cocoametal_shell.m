@@ -329,10 +329,15 @@ int cm_capture_png(CMContext *cx, const char *path) {
     if (!buf) return 3;
     if (cm_readback(cx, buf, (int)stride, w, h) != 0) { free(buf); return 4; }
 
-    /* BGRA8 bytes -> CGImage (little-endian + alpha-first reads memory as B,G,R,A). */
+    /* BGRA8 bytes -> CGImage. The 32-bit little-endian word is 0xAARRGGBB, so the
+     * low 3 memory bytes are B,G,R. AROS renders an OPAQUE framebuffer but leaves
+     * the alpha byte at 0; the live window looks right only because the Metal layer
+     * is opaque. So capture as opaque (skip alpha) -- with premultiplied alpha the
+     * whole desktop goes transparent and a PNG viewer renders it white (the bug:
+     * only the icon, which carried alpha, survived). */
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     CGContextRef ctx = CGBitmapContextCreate(buf, w, h, 8, stride, cs,
-        (CGBitmapInfo)(kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little));
+        (CGBitmapInfo)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little));
     CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
     int rc = 5;
     if (img) {

@@ -46,6 +46,19 @@ faithfully reproduces input and stays inside the unattended loop. It is also the
 seed of the embeddable library's input/capture API.
 → [README](control-harness/README.md) · [design](control-harness/design.md) · [spec](control-harness/spec.md)
 
+Two more built tools live alongside it for **bring-up debugging** — the `TestLib`
+load-tester and the toggleable `lddemon` loader trace — that turn "`OpenLibrary`
+returned `NULL`" into a step-by-step picture (file loaded? resident registered?).
+→ [Debug & bring-up tools](debug-tools/README.md)
+
+For the current source-tree gap map, see the
+[Darwin AArch64 port inventory](darwin-aarch64-port-inventory.md). It records what
+is already adapted, what is merely hardened enough for the desktop baseline, and
+what still needs to be created.
+
+For the active work order, see the
+[Darwin AArch64 TODO](darwin-aarch64-todo.md).
+
 ## How they group
 
 - **The standout** — [68k JIT](68k-jit/design.md). The uniquely-Apple-Silicon payoff and

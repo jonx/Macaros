@@ -1,0 +1,104 @@
+#!/bin/sh
+#
+# deploy-check -- quick stale-build/deployment sanity check for darwin-aarch64.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+: "${AROS_HOST_CONF:=$HOME/Library/Application Support/AROS/aros-host.conf}"
+
+find_bootd() {
+    if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
+    best=""; bt=0
+    for d in \
+        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "$ROOT/build/AROS/boot/darwin" \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
+        /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do
+        [ -x "$d/AROSBootstrap" ] || continue
+        t="$(stat -f %m "$d/AROSBootstrap" 2>/dev/null || echo 0)"
+        if [ "$t" -ge "$bt" ]; then bt="$t"; best="$d"; fi
+    done
+    printf '%s\n' "$best"
+}
+
+hash12() {
+    [ -f "$1" ] || { printf '%s' "missing"; return; }
+    shasum -a 256 "$1" 2>/dev/null | awk '{print substr($1,1,12)}'
+}
+
+stamp() {
+    [ -e "$1" ] || { printf '%s' "-"; return; }
+    stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$1" 2>/dev/null || printf '%s' "-"
+}
+
+line() {
+    label="$1"; path="$2"
+    printf '%-22s %-12s %s  %s\n' "$label" "$(hash12 "$path")" "$(stamp "$path")" "$path"
+}
+
+compare() {
+    label="$1"; src="$2"; dst="$3"
+    sh="$(hash12 "$src")"; dh="$(hash12 "$dst")"
+    if [ "$sh" = "$dh" ] && [ "$sh" != "missing" ]; then status="OK"; else status="WARN"; fi
+    printf '%-22s %-4s src=%s dst=%s\n' "$label" "$status" "$sh" "$dh"
+    [ "$status" = OK ]
+}
+
+BOOTD="$(find_bootd)"
+if [ -z "$BOOTD" ]; then
+    echo "deploy-check: no boot dir found" >&2
+    exit 1
+fi
+AROS="$(cd "$BOOTD/../.." && pwd)"
+
+echo "boot dir: $BOOTD"
+echo
+echo "host dylibs:"
+compare "cocoametal.dylib" "$ROOT/build/cocoametal.dylib" "$HOME/lib/cocoametal.dylib" || true
+compare "libpasteboard.dylib" "$ROOT/build/libpasteboard.dylib" "$HOME/lib/libpasteboard.dylib" || true
+compare "settings.json" "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" || true
+
+echo
+echo "host config:"
+if [ -f "$AROS_HOST_CONF" ]; then
+    line "aros-host.conf" "$AROS_HOST_CONF"
+else
+    printf 'MISS                  -            -  %s\n' "$AROS_HOST_CONF"
+fi
+
+echo
+echo "key AROS artifacts:"
+line "AROSBootstrap" "$BOOTD/AROSBootstrap"
+line "emul-handler" "$BOOTD/L/emul-handler"
+line "Cocoa monitor" "$AROS/Storage/Monitors/Cocoa"
+line "Devs/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
+compare "Cocoa deployed" "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa" || true
+line "graphics.library" "$AROS/Libs/graphics.library"
+line "intuition.library" "$AROS/Libs/intuition.library"
+line "stdc.library" "$AROS/Libs/stdc.library"
+line "posixc.library" "$AROS/Libs/posixc.library"
+line "muimaster.library" "$AROS/Libs/muimaster.library"
+line "TestLib" "$AROS/C/TestLib"
+line "LoadMatrix" "$AROS/C/LoadMatrix"
+line "Wanderer" "$AROS/System/Wanderer/Wanderer"
+
+echo
+echo "desktop presence:"
+for p in \
+    "$AROS/Prefs/Zune" \
+    "$AROS/Prefs/Wanderer" \
+    "$AROS/System/About" \
+    "$AROS/Tools" \
+    "$AROS/Utilities" ; do
+    if [ -e "$p" ]; then
+        printf 'OK   %s\n' "$p"
+    else
+        printf 'MISS %s\n' "$p"
+    fi
+done
