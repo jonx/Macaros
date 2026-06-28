@@ -58,6 +58,13 @@ typedef struct PumpSig PumpSig;
 PumpSig *ps_create(void);
 void     ps_destroy(PumpSig *);
 
+/* GRAFT SEAM: create a wake target whose ps_wake() calls `wake(cookie)` instead of
+ * the self-pipe. The AROS bsdsocket.library installs Signal(task, readySig) here —
+ * ps_create() (self-pipe) is the standalone-proof path; ps_create_cb() is the
+ * production path. `wake` is invoked on the pump (host) thread, so it must be safe
+ * to call from a foreign OS thread (docs/features/host-wake-pattern.md). */
+PumpSig *ps_create_cb(void (*wake)(void *cookie), void *cookie);
+
 /* Park the calling task until the pump (or another waker) raises this PumpSig.
  * Returns >0 if woken by a wake, 0 on timeout (timeout_ms < 0 = wait forever).
  * This is the stand-in for exec Wait(readySig) (spec R-PARK step 2). The

@@ -246,9 +246,9 @@ identical to Amiga's (Amiga's *is* BSD sockets). Two pieces:
 
 ### AROS side (bsdsocket.library backed by the host)
 
-A new library, `arch/all-darwin/bsdsocket/` (or `arch/all-unix/bsdsocket/` if the
-non-blocking+kqueue design proves portable to Linux too — decide at port time),
-structured as a port of `arch/all-mingw32/bsdsocket/`:
+A new library, `arch/all-unix/bsdsocket/` (the readiness primitive isolated so only
+`readiness_kqueue.c` is darwin-specific — see "Cross-host reuse and the in-tree
+gap"), structured as a port of `arch/all-mingw32/bsdsocket/`:
 
 - **Same LVO functionlist** — copy `bsdsocket.conf` verbatim (it's host-neutral).
 - **Same per-task base** — `BSDSocket_OpenLib`/`CloseLib` and `struct TaskBase`
@@ -341,7 +341,7 @@ no manual step). Early spikes are standalone host-socket probes (the Phase-2
   would-block socket surfaces `EWOULDBLOCK` (35). Proves the translation table.
 
 - **[N5] graft into the real `bsdsocket.library`.** Build the new
-  `arch/all-darwin/bsdsocket/` as an actual AROS module (per-task `OpenLibrary` →
+  `arch/all-unix/bsdsocket/` as an actual AROS module (per-task `OpenLibrary` →
   `SocketBase`, the real LVO table), and rerun [N1]/[N2] *through the library jump
   vectors* (the H8/H12 LVO dispatch). PASS = same round-trip, now via
   `__AROS_GETVECADDR(SocketBase, LVO)`.
@@ -370,6 +370,62 @@ Localhost loopback needs no entitlement on macOS (unlike raw BPF/`utun`, which i
 exactly why we forward at the *socket* layer, not the NIC layer). Timeouts use the
 existing bash watchdog (NOTES.md "portable timeout") so a hung connect is reaped
 into a FAIL, preserving the unattended guarantee.
+
+## What proves "the internet works" in AROS — the test tools
+
+Two complementary ways to verify, both grounded in what AROS actually ships and in
+the unattended loop:
+
+**1. The automated spikes (the loop's source of truth).** `[N1]` (localhost TCP
+echo round-trip) and `[N6]` (a real `HTTP/1.0 GET`) are the hermetic,
+harness-asserted proofs that bytes move both ways. `[N1]` is loopback-only (no DNS,
+no entitlement); `[N6]` is the flagship "AROS is on the internet" demo.
+
+**2. Shipped AROS network commands — but only the socket-client ones.** AROS's `C:`
+ships `ping`, `traceroute`, `nslookup`, `netstat`, `route`, `arp`, `ifconfig`,
+`ip`/`ipf`/`ipnat`, `resolve`, `hostname` (built from
+`workbench/network/common/C/`). Because we forward at the **socket** layer (the Mac
+owns the stack), they fall into classes — only the first two work through a
+forwarder:
+
+| Class | Commands | Through host-passthrough |
+|-------|----------|--------------------------|
+| Socket clients (TCP/UDP) | a fetch / `HTTP GET`, SMB (`smbfs`), any app on `bsdsocket.library` | **work** — this is the whole point |
+| Resolver-gated | `resolve`, `nslookup`, `hostname` | work **once `gethostbyname` (LVO 35) lands** (deferred; §Risks) |
+| Raw sockets | `ping`, `traceroute` | **don't** — `socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)` needs host root/entitlement (verified in `ping.c:631`); we avoid raw to stay TCC-free |
+| Stack-internal | `netstat`, `route`, `arp`, `ifconfig`, `ip`/`ipf`/`ipnat` | **don't** — they read/configure the *AROS* stack via `kvm_read`/AROSTCP symbols (verified in `netstat/main.c`); with the Mac owning the stack there is nothing to introspect |
+
+So the natural user-facing smoke test is **`resolve <host>`** (once the resolver
+lands) plus a small **fetch** command — there is *no* shipped TCP-fetch tool
+(`telnet`/`ftp`/`wget`) in the base tree, so `[N6]` doubles as that command. `ping`
+is explicitly **not** a goal: a working `ping` needs either a privilege grant or a
+`SOCK_RAW`→`SOCK_DGRAM` ICMP shim, and the stack-config tools need the native
+AROSTCP stack — both belong to the AROSTCP-on-SANA-II route this feature rejects.
+
+## Cross-host reuse and the in-tree gap
+
+**This does not exist in AROS today — for any unix host.** A tree-wide search finds
+exactly one host-passthrough `bsdsocket.library`: `arch/all-mingw32/bsdsocket/`
+(Windows/Winsock — and even it leaves `WaitSelect`/`recv`/`connect` as
+`#warning TODO`). The only host-backed networking for *unix* hosts is the SANA-II
+NIC route (Linux-only, runs AROS's own AROSTCP);
+`workbench/network/stacks/AROSTCP/bsdsocket/` is that native stack, not a forwarder.
+So a working unix/darwin host-socket `bsdsocket.library` is **net-new for AROS**.
+
+**And the bulk of it benefits every hosted AROS, not just darwin-aarch64.** The
+design isolates the only platform-specific piece — the readiness primitive
+(kqueue) — behind the `pump_*` seam; everything above it is host-neutral: the
+per-task `SocketBase`/`dTable`, the LVO bodies, the errno discipline, and above all
+the **`WaitSelect`↔`Signal` bridge** that mingw32 left unfinished. Swap
+`kqueue`→`epoll`/`poll` in one file and the same module gives **every unix-hosted
+AROS flavour** (`linux-x86_64`/`i386`/`arm`/`aarch64`) real host-socket networking;
+the `WaitSelect` algorithm even ports back to finish the Windows stub. Per-host
+specifics are small and isolated: the readiness backend, the errno value table
+(Linux errno ≠ BSD/AmiTCP), and the `sockaddr` `sa_len` detail (BSD has it, Linux
+doesn't). This is why the module is placed at `arch/all-unix/bsdsocket/`, not
+`arch/all-darwin/` (see spec.md "Build / integration") — though only the darwin
+kqueue backend is built and verified in our loop; the Linux `epoll` backend is a
+bounded follow-on, not claimed here.
 
 ## Risks & open questions
 

@@ -38,9 +38,17 @@
  * Coalescing: at most one byte is ever in flight, so N wakes collapse to one
  * (spec R-RACE: correctness never depends on the COUNT of signals). */
 struct PumpSig {
-    int  rfd, wfd;          /* self-pipe: read end, write end */
+    int  rfd, wfd;          /* self-pipe: read end, write end (cb==NULL path) */
     int  latched;           /* 1 = a wake is pending (guarded by mtx) */
     pthread_mutex_t mtx;
+    /* GRAFT SEAM (spec R-PUMP step 2). When a wake callback is installed via
+     * ps_create_cb(), ps_wake() invokes it instead of the self-pipe — this is
+     * where the standalone proof's self-pipe wake becomes the AROS side's
+     * Signal(task, readySig). The callback runs ON the pump (host) thread, so the
+     * AROS-side implementation owns the host-wake discipline (see
+     * docs/features/host-wake-pattern.md). NULL ⇒ self-pipe path (ps_wait). */
+    void (*wake)(void *cookie);
+    void  *cookie;          /* the wake target identity (the SocketBase in the graft) */
 };
 
 PumpSig *ps_create(void) {
@@ -55,7 +63,22 @@ PumpSig *ps_create(void) {
     s->rfd = fds[0];
     s->wfd = fds[1];
     s->latched = 0;
+    s->wake = NULL;
+    s->cookie = NULL;
     pthread_mutex_init(&s->mtx, NULL);
+    return s;
+}
+
+/* Create a wake target whose ps_wake() invokes `wake(cookie)` instead of latching
+ * the self-pipe — the AROS graft installs Signal(task, readySig) here (spec R-PUMP
+ * "raises the target task's per-base readySig"). Reuses ps_create()'s setup so the
+ * self-pipe + mutex still exist as an inert fallback (ps_wait is unused on this
+ * path); a couple of fds per SocketBase, acceptable since bases are per-task. */
+PumpSig *ps_create_cb(void (*wake)(void *cookie), void *cookie) {
+    PumpSig *s = ps_create();
+    if (!s) return NULL;
+    s->wake   = wake;
+    s->cookie = cookie;
     return s;
 }
 
@@ -69,6 +92,10 @@ void ps_destroy(PumpSig *s) {
 
 void ps_wake(PumpSig *s) {
     if (!s) return;
+    /* Graft seam: a registered AROS wake callback (Signal) takes precedence over
+     * the self-pipe. Called from the pump thread — the callback must be safe to
+     * invoke from a foreign OS thread (host-wake pattern). */
+    if (s->wake) { s->wake(s->cookie); return; }
     pthread_mutex_lock(&s->mtx);
     if (!s->latched) {
         s->latched = 1;

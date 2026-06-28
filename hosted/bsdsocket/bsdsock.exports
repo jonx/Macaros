@@ -1,0 +1,36 @@
+# Exported dynamic symbols for build/libbsdsockhost.dylib — the host BSD-socket
+# pump + non-blocking socket shim the AROS-side bsdsocket.library
+# (arch/all-unix/bsdsocket) loads via hostlib.resource (HostLib_Open +
+# HostLib_GetPointer), the peer of cocoametal.dylib / libpasteboard.dylib. Listed
+# explicitly (not a glob) so the export table is exactly the bsdsock_host.h +
+# bsdsock_shim.h contract. The standalone [N] proof links the .c directly, so the
+# test driver (bsdsock_test.c / bsdsock_abi_test.c) is NOT part of this dylib.
+
+# The kqueue pump control surface (bsdsock_host.h)
+_pump_start
+_pump_stop
+_pump_register
+_pump_unregister
+_pump_drain
+_pump_wake_kqueue
+
+# The readiness-signal seam — self-pipe stand-in (test) + the Signal-callback
+# graft path (ps_create_cb). The AROS side uses ps_create_cb + pump_drain + its
+# own exec Wait(readySig); ps_wait is the standalone fallback.
+_ps_create
+_ps_create_cb
+_ps_destroy
+_ps_wait
+_ps_wake
+
+# Non-blocking host socket wrappers (bsdsock_shim.h). The AROS side may call these
+# or libSystem's socket ops directly; hs_set_nonblock / the connect SO_ERROR and
+# partial-send discipline are the reusable bits.
+_hs_set_nonblock
+_hs_socket
+_hs_close
+_hs_connect
+_hs_send
+_hs_send_all
+_hs_recv
+_hs_recv_nonblock

@@ -44,7 +44,15 @@ resolver as a bring-up gate (`gethostbyname` is designed here but its blocking-r
 offload is deferred past the core suite); `sendmsg`/`recvmsg` (LVO 45/46),
 `GetSocketEvents` (LVO 50), and the Roadshow extensions (LVO 61+) beyond declaring their
 vectors; multi-host portability of this module to Linux (the dir name is chosen to allow it
-later — §"Build / integration" — but Linux is not a deliverable here).
+later — §"Build / integration" — but Linux is not a deliverable here). **Also out — the
+shipped network commands that cannot ride a socket forwarder:** the raw-socket utilities
+`ping`/`traceroute` (they need host root / `SOCK_RAW` — `ping.c:631`; a privilege grant or a
+`SOCK_RAW`→`SOCK_DGRAM` ICMP shim is a separate feature) and the stack-introspection/config
+tools `netstat`/`route`/`arp`/`ifconfig`/`ip`/`ipf`/`ipnat` (they read/configure the AROS
+stack via `kvm`/AROSTCP internals — `netstat/main.c` — and there is no AROS stack when the
+Mac owns it). The supported surface is socket-client apps (HTTP/SMB/…) plus the
+resolver-gated `resolve`/`nslookup`/`hostname`; see design.md "What proves the internet
+works in AROS — the test tools".
 
 ## Architecture
 
@@ -85,7 +93,7 @@ AROS side (aarch64, AROS crosstools)              Host side (Apple libSystem)
   boundary `hosted/device.c` proved for `pread`/`pwrite` (H11).
 - Spike-phase paths: host-socket probes + the pump live under `hosted/` (the Phase-2
   "prove the mechanism in a file" style, like `hosted/device.c`). At graft, the AROS side
-  lands in the proposed `arch/all-darwin/bsdsocket/`.
+  lands in `arch/all-unix/bsdsocket/` (§"Build / integration").
 
 ## The host interface (`HostSockInterface`) — `[PUB]` + `[OURS]`
 
@@ -364,11 +372,20 @@ AROS values (from `sys/errno.h`) and their macOS counterparts (`/usr/include/sys
 | `ECONNREFUSED` | 61 | 61 | identity |
 | `EBADF` | 9 | 9 | identity |
 | `EINVAL` | 22 | 22 | identity |
+| `EOPNOTSUPP` | 45 | **102** | **map 102→45 — NON-identity** |
 
 Many AmiTCP values were taken *from* 4.3BSD, so the socket-range table is **mostly identity**
 on macOS (which is also BSD-derived) — but the low range (file/process errnos) diverges and a
 handful of socket errnos may too. **Do not assume identity:** build the table explicitly,
-entry by entry, and let spike [N4] catch any mismatch. `errnoSize` may be 1/2/4 — store with
+entry by entry, and let spike [N4] catch any mismatch.
+
+> **[N4]/[NERR] result (confirmed 2026-06-28):** the explicit table earned its keep — macOS
+> renumbered **`EOPNOTSUPP` to 102** (out of the BSD range), while AmiTCP keeps it at **45**, so
+> a socket op returning `EOPNOTSUPP` on Darwin **must** be mapped `102 → 45` (a raw passthrough
+> would corrupt it). Everything else in the BSD socket range (35–65) and the common low errnos
+> verified identity. Table + host unit test: `hosted/bsdsocket/errno_xlate.{c,h}` +
+> `errno_test.c` (`make bsdsock-errno`, 25/25). The table is pure int→int (no `errno.h`
+> dependency) so the same file compiles in the host test and the AROS module. `errnoSize` may be 1/2/4 — store with
 the right width (`SBTC_ERRNOBYTEPTR`/`WORDPTR`/`LONGPTR` tags, `socketbasetags.h`). Resolver
 errors map to the per-task `h_errno` (`SBTC_HERRNO`/`SBTC_HERRNOLONGPTR`).
 
@@ -443,7 +460,7 @@ server logs the bytes it echoed; AROS asserts `recv == sent`) — the H11 two-si
 - **[N4] errno fidelity.** `connect` to a closed port → assert AROS `Errno()` returns AROS
   `ECONNREFUSED` (61), not a raw/unmapped value; a `recv` on a would-block socket surfaces
   `EWOULDBLOCK` (35). Proves the translation table (and catches any non-identity entry).
-- **[N5] graft into the real `bsdsocket.library`.** Build `arch/all-darwin/bsdsocket/` as a
+- **[N5] graft into the real `bsdsocket.library`.** Build `arch/all-unix/bsdsocket/` as a
   real AROS module (per-task `OpenLibrary` → `SocketBase`, the real LVO jump table) and
   rerun [N1]/[N2] **through the library vectors** (`__AROS_GETVECADDR(SocketBase, LVO)`).
   PASS = same round-trip, now via LVO dispatch.
@@ -467,10 +484,18 @@ rather than a Windows event object `[AROS]`/`[OURS]`.
 
 ## Build / integration
 
-- **Module location.** New module `arch/all-darwin/bsdsocket/`. If the non-blocking+kqueue
-  design proves Linux-portable later (Linux would swap `kqueue`→`epoll` in R-PUMP only), it
-  can move to `arch/all-unix/bsdsocket/` — decide at port time; the bridge is written so only
-  the readiness-primitive file changes.
+- **Module location (decided): `arch/all-unix/bsdsocket/`**, with the readiness primitive
+  isolated in a single `readiness_kqueue.c` (the one swappable file). A tree-wide search
+  confirms **no host-passthrough `bsdsocket` exists for any unix host** — only Windows
+  `arch/all-mingw32/bsdsocket/`; the unix hosts have only the Linux-only SANA-II NIC route
+  (native AROSTCP). So the host-neutral core here — per-task base, `dTable`, the LVO bodies,
+  errno discipline, and the `WaitSelect`↔`Signal` bridge mingw32 left as a `#warning TODO` —
+  is net-new for AROS **and benefits every hosted AROS flavour**: swap `kqueue`→`epoll`/`poll`
+  in `readiness_kqueue.c` and `linux-*` hosts get the same module. We build and verify **only**
+  the darwin/kqueue backend in our loop (the Linux `epoll` backend is a bounded follow-on, not
+  claimed here). Per-host specifics beyond the readiness file are small and isolated: the errno
+  value table (Linux errno ≠ BSD/AmiTCP) and the `sockaddr` `sa_len` byte (BSD has it, Linux
+  doesn't).
 - **Copy host-neutral, replace host-specific.** Copy `bsdsocket.conf` verbatim; port the
   `TaskBase`/`OpenLib`/`CloseLib`/`dTable` shape from mingw32; **rewrite** the host interface
   build (`bsdsocket_init.c` → libc instead of Winsock), the per-call host invocation, and
