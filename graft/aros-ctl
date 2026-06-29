@@ -238,12 +238,16 @@ write_startup_sequence() {
                     'If EXISTS "DEVS:Keymaps"' \
                     '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
                     'EndIf'
-                if [ -n "${AROS_CTL_KEYMAP:-}" ]; then
-                    printf '%s\n' \
-                        'If EXISTS "C:SetKeyboard"' \
-                        "    SetKeyboard \"${AROS_CTL_KEYMAP}\"" \
-                        'EndIf'
+                # Seed the saved keymap from the host config on first boot; an
+                # interactive `LoadKeymap <name>` overrides it (writes ENVARC:Keymap).
+                if [ -n "${AROS_CTL_KEYMAP:-}" ] && [ ! -s "$AROS/Prefs/Env-Archive/Keymap" ]; then
+                    mkdir -p "$AROS/Prefs/Env-Archive" 2>/dev/null
+                    printf '%s' "$AROS_CTL_KEYMAP" > "$AROS/Prefs/Env-Archive/Keymap"
                 fi
+                printf '%s\n' \
+                    'If EXISTS "C:LoadKeymap"' \
+                    '    LoadKeymap RESTORE' \
+                    'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
                     'Assign "LIBS:" "SYS:Classes" ADD' \
@@ -645,8 +649,42 @@ libs)
         printf '  %s%s\n' "$dy" "${ver:+  (v$ver)}"
     done
     ;;
+diag)
+    # Capture WHERE the (possibly frozen) AROS host process is stuck, then kill it.
+    #   aros-ctl diag          -> sample 2s, snapshot the log, then kill
+    #   aros-ctl diag 5        -> sample 5s
+    #   aros-ctl diag nokill   -> capture only, leave it running
+    # `sample` works on a hung process and needs no sudo for a same-user process.
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Daedalos 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running Daedalos (nothing to diagnose)" >&2; exit 1; }
+    dokill=1; secs=2
+    for a in "$@"; do case "$a" in nokill) dokill=0;; [0-9]*) secs="$a";; esac; done
+    mkdir -p "$ROOT/run/darwin-aarch64"
+    out="$ROOT/run/darwin-aarch64/diag-$(date +%Y%m%d-%H%M%S).txt"
+    echo "# diag pid $pid: sampling ${secs}s + log snapshot ..." >&2
+    {
+        echo "==== aros-ctl diag  pid=$pid ===="
+        echo "---- AROS log: traps / boot failures ----"
+        grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Privilege|Could not open|emergency shell|Display driver|Module |Function " "$LOG" 2>/dev/null | tail -25
+        echo; echo "---- last 30 log lines ----"; tail -n 30 "$LOG" 2>/dev/null
+        echo; echo "---- thread backtraces (sample ${secs}s) ----"
+        /usr/bin/sample "$pid" "$secs" -mayDie 2>&1
+    } > "$out"
+    echo "diag written -> $out"
+    echo "==== likely cause (log) ===="
+    grep -nE "Trap signal|unrecoverable|halting host|Alert|Privilege|emergency shell|Display driver|Could not open" "$LOG" 2>/dev/null | tail -8 || echo "  (no trap/boot-failure lines in log)"
+    echo "==== where it is (sample, top frames) ===="
+    sed -n '/Call graph/,/Total number/p' "$out" 2>/dev/null | head -28
+    if [ "$dokill" = 1 ]; then
+        kill -9 "$pid" 2>/dev/null; pkill -9 -x Daedalos 2>/dev/null
+        echo "killed pid $pid"
+    else
+        echo "(left running; omit 'nokill' to also kill)"
+    fi
+    ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|wait}" >&2
     exit 1;;
 esac

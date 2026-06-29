@@ -19,7 +19,7 @@
       "store": "defaults", "key": "input.autoCaptureFullscreen", "default": 1, "apply": "none" },
     { "ident": "input.keymap", "tier": "Machine", "tab": "Input",
       "label": "Keyboard layout", "control": "popup",
-      "store": "conf", "key": "keymap", "default": "pc104_usa", "apply": "bootOnly",
+      "store": "conf", "key": "keymap", "default": "pc105_f", "apply": "bootOnly",
       "choices": [ { "label": "US", "value": "pc104_usa" },
                    { "label": "French", "value": "pc105_f" },
                    { "label": "Belgian", "value": "pc105_b" },

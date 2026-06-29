@@ -41,6 +41,13 @@ ROOT="$(cd "$HERE/.." && pwd)"             # repo root
 export AROS_HOST_CONF
 [ -f "$HERE/aros-host-conf.sh" ] && . "$HERE/aros-host-conf.sh"
 
+# Default keyboard layout. Without a keymap loaded the keyboard.hidd emits raw
+# keycodes (everything comes out uppercase). pc105_f is the France AZERTY map;
+# the keymaps are built into DEVS:Keymaps and the Startup-Sequence SetKeyboard's
+# this. Override per-run with AROS_CTL_KEYMAP=pc105_gb / pc104_usa / ... .
+: "${AROS_CTL_KEYMAP:=pc105_f}"
+export AROS_CTL_KEYMAP
+
 # cocoametal host shim (built into the repo's build/) and the entitlements that
 # travel beside this script. Override AROS_CTL_DYLIB / AROS_CTL_ENT if relocated.
 DYLIB_SRC="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
@@ -147,12 +154,16 @@ write_startup_sequence() {
                     'If EXISTS "DEVS:Keymaps"' \
                     '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
                     'EndIf'
-                if [ -n "${AROS_CTL_KEYMAP:-}" ]; then
-                    printf '%s\n' \
-                        'If EXISTS "C:SetKeyboard"' \
-                        "    SetKeyboard \"${AROS_CTL_KEYMAP}\"" \
-                        'EndIf'
+                # Seed the saved keymap from the host config on first boot; an
+                # interactive `LoadKeymap <name>` overrides it (writes ENVARC:Keymap).
+                if [ -n "${AROS_CTL_KEYMAP:-}" ] && [ ! -s "$AROS/Prefs/Env-Archive/Keymap" ]; then
+                    mkdir -p "$AROS/Prefs/Env-Archive" 2>/dev/null
+                    printf '%s' "$AROS_CTL_KEYMAP" > "$AROS/Prefs/Env-Archive/Keymap"
                 fi
+                printf '%s\n' \
+                    'If EXISTS "C:LoadKeymap"' \
+                    '    LoadKeymap RESTORE' \
+                    'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
                     'Assign "LIBS:" "SYS:Classes" ADD' \

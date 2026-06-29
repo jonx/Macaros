@@ -42,6 +42,7 @@ aros_host_conf_load() {
     _hv="$(_val hostvolume)"; [ -n "$_hv" ]  && export AROS_HOST_VOLUME="$(_volume_spec "$_hv")"
     _mem="$(_val memory)";    [ -n "$_mem" ] && export AROS_HOST_MEMORY="$_mem"
     _keymap="$(_val keymap)"; [ -n "$_keymap" ] && export AROS_CTL_KEYMAP="$_keymap"
+    : "${AROS_CTL_KEYMAP:=pc105_f}"; export AROS_CTL_KEYMAP   # default to French AZERTY when unset
     return 0
 }
 
