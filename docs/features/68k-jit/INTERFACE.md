@@ -204,7 +204,11 @@ the JIT the real library bases.** AROS registers each library it exposes to 68k 
 — its 68k-space base + a pointer to its FD/LVO→register table — with the translator,
 then sets `jit68k_set_lvo_handler` to an AROS callback doing the marshal (read the
 declared args from `struct m68k_regs`, call the real native AArch64 `exec`/`dos`/
-`graphics` function, write the return into 68k `d0`). **The native libraries are
+`graphics` function, write the return into 68k `d0`). **The content of that
+FD/LVO→register table — generated from the same `genmodule`/`.conf` data AROS builds
+the libraries from — and the per-type byte-order/pointer rules the marshal applies are
+designed in [../68k-marshalling/README.md](../68k-marshalling/README.md)** (§1/§2); the
+mechanism here is unchanged. **The native libraries are
 unchanged** — they receive an ordinary `AROS_LH` call. A 68k program that draws
 ends up going 68k→(this bridge)→native graphics.library→host display driver — three
 defined boundaries, no shortcuts.

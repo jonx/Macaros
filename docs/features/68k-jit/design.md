@@ -7,6 +7,12 @@
 > the LVO bridge to the real library bases, the exception bridge, and the sandbox/
 > pointer boundary, each splitting JIT side (host-proven) vs AROS side (to wire).
 > Read it before wiring the AROS side; this design.md is the rationale behind it.
+>
+> **The endianness question** — "why has AROS never had an in-OS m68k emulator, and
+> isn't big-endian-on-little-endian impossible?" — is answered separately in
+> [../68k-marshalling/README.md](../68k-marshalling/README.md): which integration model
+> the impossibility argument actually kills, why this engine is built for the doable
+> one, and the typed-marshalling table/policy that feeds INTERFACE §3/§5.
 
 ## What & why
 

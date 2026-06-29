@@ -26,7 +26,7 @@ CLEANROOM.md           — the independent-work process that governs every spec.
 
 | Feature | One-line | Status |
 |---------|----------|--------|
-| [68k JIT](68k-jit/design.md) · [spec](68k-jit/spec.md) | A host 68k→AArch64 translator so the hosted AROS runs real classic Amiga binaries at native speed | design + spec done · `[J0]` → adapt Emu68 |
+| [68k JIT](68k-jit/design.md) · [spec](68k-jit/spec.md) · [marshalling](68k-marshalling/README.md) | A host 68k→AArch64 translator so the hosted AROS runs real classic Amiga binaries at native speed; the [marshalling boundary](68k-marshalling/README.md) doc answers the "big-endian-on-little-endian is impossible" objection and designs the typed library-call bridge | design + spec done · `[J0]` → adapt Emu68 |
 | [Cocoa/Metal display](cocoa-metal-display/design.md) · [spec](cocoa-metal-display/spec.md) | A live macOS window (Apple-native Metal) replacing H7's render-to-PNG | design + spec done · **`[D1]` shim GREEN** |
 | [Host app shell](host-app-shell/design.md) · [spec](host-app-shell/spec.md) | Make the window a first-class Mac app — menu bar, About, custom icon, two-tier Settings; the UI home for screenshot/video + drive/clipboard/sharing | design + spec done |
 | [Clipboard bridge](clipboard-bridge/design.md) · [spec](clipboard-bridge/spec.md) | Two-way copy/paste between macOS NSPasteboard and AROS `clipboard.device` | design + spec done |
@@ -87,14 +87,15 @@ the loadable drivers need the second. Neither is a privilege-escalation layer.
 A different shape from everything above: the deliverable is **ARM code built *for*
 AROS** (compiled by the crosstools / Rust's own LLVM), not a macOS facility bridged
 in through a `hostlib` shim. They share one substrate — **hardening `posixc`** (the
-`printf` float bug is the prototype) unblocks both — so the libc-completeness grind
-is done once for two payoffs, and Rust can FFI straight into native `libavcodec`
+`printf` float bug is the prototype) unblocks all three — so the libc-completeness grind
+is done once for several payoffs, and Rust can FFI straight into native `libavcodec`
 once both exist.
 
 | Feature | One-line | Status |
 |---------|----------|--------|
 | [Native ffmpeg / libav*](ffmpeg-native/README.md) | `libav*` built natively for aarch64 AROS so AROS programs `-lavcodec` | scoping · a *completeness/correctness* port on `posixc`, not a host bridge; `--disable-asm` is the baseline |
 | [Rust on AROS](rust-aros/README.md) | Rust targeting aarch64 AROS — no_std (core+alloc) now, std-on-`posixc` later | **`[RS0]`/`[RS1]` no_std RUNS ON AROS** (`graft/rust-smoke` — `RUST-AROS: ALL PASS`; [`hosted/rust/`](../../hosted/rust/)) · `#[global_allocator]` over `AllocVec` proven; std is an OS port; `net` rides on `bsdsocket` |
+| [Native .NET](dotnet-native/README.md) · [design](dotnet-native/design.md) | A .NET runtime ported to run managed code (eventually **PowerShell**) natively on aarch64 AROS | design · **runtime-port, not a PowerShell task**: recommend **Mono interpreter** (`MONO_AOT_MODE_INTERP`, modeled on `src/mono/wasi`) — not CoreCLR (two-PAL + JIT + W^X double-mapping), not NativeAOT (bans `Reflection.Emit` → can't host PS). The hard W^X part is **already proven** (`MAP_JIT` from the 68k JIT); the grind is shared `posixc` hardening + the SIGSEGV→managed-exception bridge. `[DN0]`–`[DN5]` foundation, `[DN6]` PowerShell = stretch |
 
 ## Driving & verifying it — the control harness (built)
 
