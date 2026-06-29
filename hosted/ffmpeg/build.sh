@@ -26,25 +26,29 @@ SYSROOT="$OUT/sysroot"             # where libavutil.a + headers install
 TARBALL="$OUT/ffmpeg-${FFVER}.tar.xz"
 mkdir -p "$OUT"
 
-# --- discover the AROS tree (so the wrapper + ar/nm/ranlib resolve) ----------
+# --- discover a COMPLETE SDK tree (not just newest clang; see aros-cc.sh) -----
 find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     best="" ; bt=0
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
-        /tmp/*/bin/darwin-aarch64 ; do
-        [ -x "$d/tools/crosstools/bin/clang" ] || continue
-        t="$(stat -f %m "$d/tools/crosstools/bin/clang" 2>/dev/null || echo 0)"
+        /tmp/*/bin/darwin-aarch64 \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
+        [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
+            && [ -e "$d/AROS/Developer/lib/libmui.a" ] \
+            && [ -x "$d/tools/collect-aros" ] || continue
+        t="$(stat -f %m "$d/AROS/Developer/lib/libmui.a" 2>/dev/null || echo 0)"
         if [ "$t" -ge "$bt" ]; then bt="$t"; best="$d"; fi
     done
     printf '%s\n' "$best"
 }
 T="$(find_tree)"
-[ -n "$T" ] && [ -x "$T/tools/crosstools/bin/clang" ] || {
-    echo "build: no AROS build tree (set AROS_BUILD=.../bin/darwin-aarch64)" >&2; exit 1; }
+[ -n "$T" ] || {
+    echo "build: no COMPLETE AROS SDK tree (need posixc/stdio.h + libmui.a + collect-aros; set AROS_BUILD)" >&2; exit 1; }
 export AROS_BUILD="$T"             # pin it so aros-cc.sh doesn't re-glob per probe
-XT="$T/tools/crosstools/bin"
+# ar/nm/ranlib are arch-agnostic (they archive/index/list ELF); use host llvm-* so
+# they do not depend on which crosstools the tree carries.
+LLVMBIN=/opt/homebrew/opt/llvm/bin
 echo "[ff0] AROS tree: $T"
 
 # --- fetch + verify pinned source --------------------------------------------
@@ -68,8 +72,8 @@ if [ "${1:-}" = "--reconf" ] || [ ! -f "$BLD/config.h" ]; then
     ( cd "$BLD" && "$SRC/configure" \
         --enable-cross-compile --arch=aarch64 --target-os=none \
         --cc="$DIR/aros-cc.sh" --ld="$DIR/aros-cc.sh" \
-        --extra-cflags="-include $DIR/aros-compat.h" \
-        --ar="$XT/llvm-ar" --ranlib="$XT/llvm-ranlib" --nm="$XT/llvm-nm" \
+        --extra-cflags="-D_GNU_SOURCE" \
+        --ar="$LLVMBIN/llvm-ar" --ranlib="$LLVMBIN/llvm-ranlib" --nm="$LLVMBIN/llvm-nm" \
         --enable-static --disable-shared --disable-asm --disable-autodetect \
         --disable-programs --disable-doc --disable-network \
         --disable-avcodec --disable-avformat --disable-avdevice --disable-avfilter \

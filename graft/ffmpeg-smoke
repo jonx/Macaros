@@ -29,17 +29,21 @@ find_tree() {
     best=""; bt=0
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
-        /tmp/*/bin/darwin-aarch64 ; do
-        [ -x "$d/tools/crosstools/bin/clang" ] || continue
-        t="$(stat -f %m "$d/tools/crosstools/bin/clang" 2>/dev/null || echo 0)"
+        /tmp/*/bin/darwin-aarch64 \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
+        [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
+            && [ -e "$d/AROS/Developer/lib/libmui.a" ] \
+            && [ -x "$d/tools/collect-aros" ] && [ -d "$d/AROS/C" ] || continue
+        t="$(stat -f %m "$d/AROS/Developer/lib/libmui.a" 2>/dev/null || echo 0)"
         [ "$t" -ge "$bt" ] && { bt="$t"; best="$d"; }
     done
     printf '%s\n' "$best"
 }
 T="$(find_tree)"
-[ -n "$T" ] && [ -d "$T/AROS/C" ] || { echo "ffmpeg-smoke: no AROS tree (set AROS_BUILD)" >&2; exit 1; }
+[ -n "$T" ] && [ -d "$T/AROS/C" ] || { echo "ffmpeg-smoke: no COMPLETE AROS SDK tree (set AROS_BUILD)" >&2; exit 1; }
 export AROS_BUILD="$T"
+# bench-run needs the boot dir of the SAME tree (not whatever it discovers)
+export AROS_CTL_BOOTD="${AROS_CTL_BOOTD:-$T/AROS/boot/darwin}"
 
 if [ "${1:-}" != "--no-build" ]; then
     echo "== ffmpeg-smoke: build libavutil for AROS =="

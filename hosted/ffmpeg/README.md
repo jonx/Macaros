@@ -5,13 +5,13 @@ cross-build **libavutil** for darwin-aarch64 AROS with the AROS crosstools and p
 it with one `C:` smoke. A **native software port** — ARM code built *for* AROS, not
 a macOS dylib bridged in — the C sibling of the [Rust port](../rust/README.md).
 
-## Status — build → link → deploy **GREEN**; on-AROS run via `graft/ffmpeg-smoke`
+## Status — **PROVEN LIVE on AROS** (2026-06-30)
 
-`graft/ffmpeg-smoke` runs the whole pipeline: cross-build libavutil → link the smoke
-into an AROS `C:` command → deploy → boot AROS → assert. The smoke prints, on AROS:
+Native libavutil (ffmpeg 8.1.2) runs on booted darwin-aarch64 AROS. Proof:
+`run/darwin-aarch64/proofs/ff0-on-aros-20260630.png`. On AROS:
 
 ```
-[FF0] libavutil 60.x.x  version_info="8.1.2"
+[FF0] libavutil 60.26.102  version_info=8.1.2
 [FF0] av_malloc(4096) ok, writable
 [FF0] av_mallocz(4096) ok, zeroed
 FFMPEG-AROS: [FF0] ALL PASS
@@ -23,9 +23,20 @@ What is proven and reproducible:
   the AROS crosstools, produce `libavutil.a` whose every member is
   `elf64-littleaarch64`. (`build.sh`)
 - **The smoke links into a real ET_REL AROS command** with no undefined symbols and
-  deploys into the AROS `C:` directory. (`graft/ffmpeg-smoke`)
-- The on-AROS assertion runs through the same `bench-run` harness as everything else;
-  it depends only on a healthy AROS windowed boot.
+  runs on booted AROS (`av_version_info` + `av_malloc`/`av_mallocz`/`av_free`).
+
+### Run / deploy reality (read before re-running)
+
+- **Toolchain trees are split.** SDK at `/tmp/arosbuild`, AROS-patched crosstools at
+  `/tmp/aros-crosstools`. Discovery requires a COMPLETE SDK (stale `/private/tmp`
+  scratchpad copies get OS-GC'd half-empty). See NOTES.md `[[aros-build-tree-layout]]`.
+- **`/tmp/arosbuild` is missing `Libs/stdcio.library`** (has the static lib + headers,
+  and posixc/stdc/dos/intuition runtime). FF0Smoke needs `StdCIOBase` via
+  libavutil/posixc. Deploy `stdcio.library` into `Libs/` (the tree owner should build
+  it; a stopgap copy from another tree works).
+- **Run with `graft/aros-ctl run`** (known-good console boot) + `type FF0Smoke` + `shot`.
+  `graft/ffmpeg-smoke`'s `bench-run` path cold-start-halts on `/tmp/arosbuild`; that
+  harness needs updating to the `aros-ctl` method.
 
 ## How it works — the toolchain recipe (verified live, see NOTES.md "[FF0]")
 
@@ -41,22 +52,23 @@ supplies the correct `aros/posixc`+`aros/stdc` includes itself, so libc headers
 | `-Wl,--allow-multiple-definition` (link) | the `AROS_LIBREQ` duplicate marker | UPSTREAM-NOTES item 18 |
 | `COMPILER_PATH=tools:crosstools/bin` | driver finds `collect-aros`; it finds `ld` | the `aarch64-darwin-aros-ld` wrapper |
 
-### posixc gaps found (the point of [FF0])
-libavutil compiled against AROS once four POSIX functions — present as symbols in
-`libposixc.a` but **under-declared in the headers** — were given correct prototypes in
-**`aros-compat.h`** (force-included via `--extra-cflags=-include`): `fdopen`,
-`mkstemp`, `tempnam`, `posix_memalign`. Correct prototypes, not blanket
-`-Wno-implicit-function-declaration` (which would truncate the pointer-returning ones
-on this LP64 target). The proper fix is to expose these in the AROS posixc headers
-upstream; the shim unblocks the port without touching the OS tree. One link dep:
-libavutil takes a global mutex, so the smoke links `-lpthread` (AROS `libpthread.a`).
+### posixc feature flags (the point of [FF0])
+libavutil needed four POSIX functions that AROS provides in `libposixc.a` but does
+not declare in the default include mode: `fdopen`, `mkstemp`, `tempnam`,
+`posix_memalign`. They are not missing, just gated behind feature-test macros
+(`fdopen`/`tempnam`/`mkstemp` behind `_GNU_SOURCE` or `_XOPEN_SOURCE`,
+`posix_memalign` behind `_GNU_SOURCE` or `_POSIX_C_SOURCE >= 200112`). `--target-os=none`
+left those macros off, so nothing was visible. The fix is one flag:
+`--extra-cflags=-D_GNU_SOURCE` (it turns the others on, per `aros/features.h`), and the
+build re-runs `configure` with it so its `HAVE_*` matches. Credit to Nick Andrews
+(kalamatee) for the feature-flag diagnosis. One link dep remains: libavutil takes a
+global mutex, so the smoke links `-lpthread` (AROS `libpthread.a`).
 
 ## Files
 
 | File | Role |
 |------|------|
 | `aros-cc.sh` | the `--cc`/linker for ffmpeg: AROS clang driver + the three flags. Reusable for any configure-style port. |
-| `aros-compat.h` | correct prototypes for posixc functions AROS has but under-declares; force-included into every ffmpeg compile. |
 | `build.sh` | fetch pinned ffmpeg → cross-`configure` (libavutil only, `--disable-asm`) → `make` → install to `build/ffmpeg/sysroot`. |
 | `ff0_main.c` | the AROS `C:` smoke (version string + `av_malloc`/`av_mallocz`/`av_free`). |
 | `../../graft/ffmpeg-smoke` | end-to-end: build → link → deploy → boot → assert. |
@@ -83,5 +95,5 @@ the [Rust std port](../rust/README.md) is exactly this `posixc`-hardening grind.
 ---
 
 *Native software port: no macOS bridge. ffmpeg is built by the AROS crosstools into
-ARM code for AROS. The `aros-compat.h` shim documents real, specific posixc
-header-exposure gaps rather than papering over them.*
+ARM code for AROS. The only AROS-side adjustment is one feature-flag
+(`-D_GNU_SOURCE`); the functions were always in `libposixc.a`.*
