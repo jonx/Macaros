@@ -16,6 +16,7 @@
 #   hostvolume <Name:path[;WRITE]>   -> AROS_HOST_VOLUME as a literal mount spec
 #   memory     <MB>                  -> AROS_HOST_MEMORY (the launcher applies it to the
 #                                       AROSBootstrap.conf `memory` line)
+#   keymap     <name>                -> AROS_CTL_KEYMAP (startup runs SetKeyboard)
 # Unknown keys are ignored; the file stays the source of truth for both GUI and CLI.
 
 aros_host_conf_load() {
@@ -40,6 +41,7 @@ aros_host_conf_load() {
     }
     _hv="$(_val hostvolume)"; [ -n "$_hv" ]  && export AROS_HOST_VOLUME="$(_volume_spec "$_hv")"
     _mem="$(_val memory)";    [ -n "$_mem" ] && export AROS_HOST_MEMORY="$_mem"
+    _keymap="$(_val keymap)"; [ -n "$_keymap" ] && export AROS_CTL_KEYMAP="$_keymap"
     return 0
 }
 
@@ -51,5 +53,6 @@ case "${0##*/}" in
         echo "AROS_HOST_CONF=${AROS_HOST_CONF:-$HOME/Library/Application Support/AROS/aros-host.conf}"
         echo "AROS_HOST_VOLUME=${AROS_HOST_VOLUME:-<unset>}"
         echo "AROS_HOST_MEMORY=${AROS_HOST_MEMORY:-<unset>}"
+        echo "AROS_CTL_KEYMAP=${AROS_CTL_KEYMAP:-<unset>}"
         ;;
 esac

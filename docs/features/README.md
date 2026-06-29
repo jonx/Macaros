@@ -94,7 +94,7 @@ once both exist.
 | Feature | One-line | Status |
 |---------|----------|--------|
 | [Native ffmpeg / libav*](ffmpeg-native/README.md) | `libav*` built natively for aarch64 AROS so AROS programs `-lavcodec` | scoping · a *completeness/correctness* port on `posixc`, not a host bridge; `--disable-asm` is the baseline |
-| [Rust on AROS](rust-aros/README.md) | Rust targeting aarch64 AROS — no_std (core+alloc) now, std-on-`posixc` later | **`[RS0]`/`[RS1]` no_std start builds to aarch64-AROS ELF** ([`hosted/rust/`](../../hosted/rust/)) · codegen free; std is an OS port; `net` rides on `bsdsocket` |
+| [Rust on AROS](rust-aros/README.md) | Rust targeting aarch64 AROS — no_std (core+alloc) now, std-on-`posixc` later | **`[RS0]`/`[RS1]` no_std RUNS ON AROS** (`graft/rust-smoke` — `RUST-AROS: ALL PASS`; [`hosted/rust/`](../../hosted/rust/)) · `#[global_allocator]` over `AllocVec` proven; std is an OS port; `net` rides on `bsdsocket` |
 
 ## Driving & verifying it — the control harness (built)
 
@@ -117,6 +117,12 @@ The current **deployment workflow** is also documented, because this port has
 several runnable copies of the same artifacts (`~/lib`, the AROS boot image, app
 settings, and `aros-host.conf`). Use it whenever a fix appears not to take.
 → [Deployment workflow](deployment/README.md)
+
+Its companion, the **build workflow**, covers compiling AROS from source — the
+stable-directory rule, reusing the cross-toolchain (don't rebuild LLVM), the
+permanent `KOBJ_LDFLAGS`/`--without-x` fixes, and the symptom→cause table for the
+"I keep having to redo it" traps.
+→ [Build workflow](build/README.md)
 
 A third built tool **measures** rather than debugs: [`bench-run`](benchmarks/README.md)
 (`make bench`) runs AROS's in-tree `exec`/`clib` micro-benchmarks on booted AROS via

@@ -1,0 +1,43 @@
+#!/bin/sh
+# rust-smoke -- end-to-end proof that Rust runs on darwin-aarch64 AROS.
+#
+# Builds the no_std runtime crate (cross-compile to the aarch64-unknown-aros
+# target), links it into a real AROS C: command via collect-aros, deploys it, then
+# boots AROS and runs it -- asserting the [RS0] (codegen+link+startup) and [RS1]
+# (#[global_allocator] over AllocVec/FreeVec round-trips a Vec+String) milestones
+# both PASS. See docs/features/rust-aros/README.md and hosted/rust/README.md.
+#
+#   graft/rust-smoke              build + deploy + run, assert ALL PASS
+#   graft/rust-smoke --no-build   skip the build, just run what's deployed
+#
+# Knobs: AROS_BUILD (AROS tree), AROS_CTL_BOOTD (boot dir), RUST_NIGHTLY.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"   # .../graft
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"             # repo root
+RS="$ROOT/hosted/rust"
+
+if [ "${1:-}" != "--no-build" ]; then
+    echo "== rust-smoke: stage 1 (cross-compile crate) =="
+    "$RS/build.sh" --build || { echo "FAIL: stage 1 (cargo build-std)"; exit 1; }
+    echo "== rust-smoke: stage 2 (link AROS C: command + deploy) =="
+    "$RS/aros-build.sh" || { echo "FAIL: stage 2 (collect-aros link / deploy)"; exit 1; }
+fi
+
+echo "== rust-smoke: boot AROS and run C:RustHello =="
+OUT="$("$HERE/bench-run" C:RustHello 2>&1)"
+echo "$OUT"
+
+# Pass criteria: the program's own PASS markers, produced on booted AROS.
+echo "$OUT" | grep -q '\[RS0\] rust selftest magic .* PASS' \
+  && echo "$OUT" | grep -q '\[RS1\] alloc checksum .* PASS' \
+  && echo "$OUT" | grep -q 'RUST-AROS: ALL PASS' \
+  && { echo; echo "rust-smoke: PASS — Rust ([RS0]+[RS1]) runs on AROS"; exit 0; }
+
+echo; echo "rust-smoke: FAIL — see output above" >&2
+exit 1

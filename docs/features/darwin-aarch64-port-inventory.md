@@ -114,6 +114,11 @@ Keep these visible, but do not let them supersede port completion:
 - Whole-system save-state/resume. This needs its own checkpoint contract across
   Exec tasks, devices, files, timers, host shims, RAM, CPU state, and versioned
   metadata.
+- Host USB ([usb-iokit](usb-iokit/design.md)). Lowest priority / poor loop fit —
+  only enumeration (`[UB1]`–`[UB3]`) is unattended; defer behind audio & sockets.
+  Prior art to adapt: AROS already ships a **libusb vHCI** at `rom/usb/vusbhc/`
+  (the Poseidon HCD seam), so the host bridge forwards transfers to host **libusb**
+  and enumerates via **IOKit** rather than writing an HCD from scratch.
 
 ## 1. CPU / ABI / Toolchain
 
@@ -333,30 +338,56 @@ Still needed:
 
 ## 6. Networking
 
-Status: mostly missing for Darwin hosted.
+Status: implemented and proven at the core TCP/IP sockets layer; secondary
+compatibility surface remains.
 
 Source areas:
 
 - `docs/features/bsdsocket-net/`
-- `workbench/network/`
-- `arch/all-unix/devs/networks/`
-- `arch/all-mingw32/bsdsocket/` as a possible host-passthrough reference shape.
+- `hosted/bsdsocket/` in this repository
+- `/Users/user/Source/aros-upstream/arch/all-unix/bsdsocket/`
+- `/Users/user/Source/aros-upstream/workbench/network/`
+- `arch/all-unix/devs/networks/` for the separate SANA-II / native-stack path.
 
 What exists:
 
-- network headers are present in the image.
-- Unix `eth`/`tap` SANA-II style drivers exist under `arch/all-unix/devs/networks`.
-- AROSTCP source exists under `workbench/network/stacks/AROSTCP`.
+- A host-passthrough `bsdsocket.library` now exists under
+  `arch/all-unix/bsdsocket/`. It is the current darwin-aarch64 networking path:
+  AROS socket LVOs forward to macOS `libSystem` BSD sockets through
+  `hostlib.resource`.
+- `build/libbsdsockhost.dylib` provides the host kqueue readiness pump, async DNS
+  resolver, non-blocking socket helpers, and Darwin-to-AmiTCP errno table.
+- `graft/aros-ctl deploy`, `graft/run-window.sh`, and `graft/make-aros-app.sh`
+  deploy/bundle `libbsdsockhost.dylib`; `graft/deploy-check` verifies it, plus
+  `LIBS:bsdsocket.library`, `C:socktest`, and `C:nettest`.
+- Host proofs pass: `make hosted-bsdsocket`, `make bsdsock-abi`, and
+  `make bsdsock-errno`.
+- Live AROS proofs pass through `graft/bsdsock-livetest.sh`: localhost TCP
+  round-trip, `WaitSelect`, outbound HTTP fetch, and `gethostbyname` DNS fetch.
+  Current screenshot evidence is in `run/darwin-aarch64/` and
+  `docs/features/bsdsocket-net/`.
+- The implementation deliberately uses kqueue for efficient host readiness and
+  timer-poll `Delay()` handoff on the AROS side. It does not call `Signal()` from
+  the host pump thread.
+- Network headers, AROSTCP source, and Unix `eth`/`tap` SANA-II drivers still
+  exist, but they are not the path used to provide current Darwin hosted
+  internet access.
 
 Still needed:
 
-- There is no `arch/all-darwin/bsdsocket` host-passthrough implementation.
-- AROSTCP has an explicit 64-bit blocker:
-  `amiga_api.c` says it depends on 32-bit `fd_mask`/longword sizing.
-- Decide between two paths:
-  implement the planned Darwin host-passthrough `bsdsocket.library`, or make
-  AROSTCP + SANA-II viable on darwin-aarch64. The host-passthrough path is
-  probably the smaller first win.
+- Fill secondary LVOs as real applications need them:
+  `gethostbyaddr`, `get{net,serv,proto}by*`, `inet_*`,
+  `ObtainSocket` / `ReleaseSocket`, `Dup2Socket`, `SocketBaseTagList`,
+  `sendmsg` / `recvmsg`, and `GetSocketEvents`.
+- Add broader app-level socket-client coverage beyond the current `socktest` /
+  `nettest` proof, especially once a browser, FTP/telnet/IRC client, or package
+  tool is available in the image.
+- Decide later whether AROSTCP + SANA-II should also be made viable on
+  darwin-aarch64. That is now an optional native-stack project, not the first
+  path to internet access. AROSTCP still has the documented 32-bit
+  `fd_mask`/longword assumption.
+- Add longer repeated WaitSelect/DNS/connect stress coverage to catch lifecycle
+  leaks in the host pump and per-task `SocketBase` cleanup.
 
 ## 7. Audio
 
@@ -456,8 +487,19 @@ Still needed:
   needs the AROS-side string-option consumer.
 - Scalar AROS-facing settings now have a first AROS-side consumer: clipboard
   sharing toggles the bridge; power requests call the hosted shutdown/reset path;
-  audio, display-mode, keymap, and volume requests log clearly until those
-  backend surfaces land.
+  audio, display-mode, and volume requests log clearly until those backend
+  surfaces land. Keyboard layout is boot-wired through `aros-host.conf`
+  (`keymap pc105_f` for French) and desktop startup runs `C:SetKeyboard` when
+  `AROS_CTL_KEYMAP` is set.
+- `DEVS:Keymaps` is part of the desktop deployment surface now. The launchers
+  guard `Assign KEYMAPS:` so a missing payload does not raise a requester, and
+  `graft/deploy-check` reports the directory explicitly.
+- Classic bitmap fonts (`SYS:Fonts`) and the fallback image path
+  (`SYS:System/Images`) are staged into the boot image, so guarded desktop
+  assigns resolve cleanly even outside the active theme path.
+- `DEVS:Printers` remains a deferred TODO tied to the printing/CUPS bridge; it
+  should stay visible in `graft/deploy-check` but should not be treated as a
+  current desktop boot blocker.
 - `graft/aros-ctl stop` uses that power path before falling back to process
   signals; this fixed the repeated desktop startup loop that could surface
   supervisor-mode semaphore alerts on the next launch after a hard kill.
@@ -519,6 +561,7 @@ Highest-value additions:
    deliberate halt/quit/crash presentation.
 6. Add CoreAudio follow-up polish: build-rule cleanup, default AHI prefs,
    volume/mute, and longer audio stress.
-7. Integrate networking once the parallel `bsdsocket.library` work is ready.
+7. Expand networking beyond the proven core: secondary `bsdsocket.library` LVOs,
+   real socket-client app coverage, and longer WaitSelect/DNS/connect stress.
 8. Resume 68k JIT only after executable-memory policy and the desktop baseline
    are stable.

@@ -1,12 +1,12 @@
 # Rust on AROS (aarch64)
 
-Status: **scoping + an `[RS0]`/`[RS1]` starting point landed** — 2026-06-28. A
-bring-up plan grounded against the upstream tree and Rust's target model. The
-no_std path now has a real first commit to build from in
-[`hosted/rust/`](../../../hosted/rust/): a custom `aarch64-unknown-aros` target
-spec and a `#[global_allocator]` runtime crate that **cross-compile clean to
-aarch64-AROS ELF today** (stage 1 verified — see below). The std path (RS3+) is
-still scoping. Items not yet confirmed are marked **UNVERIFIED**.
+Status: **`[RS0]` + `[RS1]` PROVEN LIVE on AROS** — 2026-06-28. Rust
+cross-compiled on the Mac **runs on booted darwin-aarch64 AROS**: a custom
+`aarch64-unknown-aros` target + a `#[global_allocator]` over exec `AllocVec`/
+`FreeVec`, linked into a real AROS `C:` command, printing `RUST-AROS: ALL PASS`
+(`graft/rust-smoke`; code in [`hosted/rust/`](../../../hosted/rust/)). The no_std
+half of this plan is no longer scoping — it is built and verified. RS2+ and the
+full `std` port (RS3+) remain scoping. Items not yet confirmed: **UNVERIFIED**.
 
 ## Goal
 
@@ -64,15 +64,18 @@ of Rust's platform layer, but every piece it needs already exists in some form.
   `#![no_std]` **staticlib** (`-Zbuild-std=core`) exposing one `extern "C"` fn
   returning a constant; link into a minimal AROS C program; run on booted AROS →
   assert the Rust fn ran. Proves codegen + linking + startup interop.
-  → **concrete code: [`hosted/rust/`](../../../hosted/rust/). Stage 1 GREEN** —
-  the spec loads (`target_os="aros"`) and the crate cross-compiles to
-  `elf64-littleaarch64`; the AROS-side link/run is gated on the AROS C SDK.
+  → **DONE, PROVEN LIVE** ([`hosted/rust/`](../../../hosted/rust/)): the crate
+  cross-compiles to `elf64-littleaarch64` (GOT-free relocs), `collect-aros` links it
+  into an ET_REL AROS `C:` command (`startup.o`, not `elf-startup.o` — the one
+  gotcha), and on booted AROS the selftest returns the magic. Code model **must** be
+  `large` (AROS loads GOT-less), confirmed against a working `C:` command.
 - **[RS1]** alloc: `-Zbuild-std=core,alloc` + a `#[global_allocator]` over
   `AllocVec`/`FreeVec`; a Rust fn builds a `Vec`/`String`, returns a checksum →
   assert. Proves the allocator bridge + collections.
-  → **built & compiling** in [`hosted/rust/aros-rt`](../../../hosted/rust/aros-rt/src/lib.rs):
-  the allocator does aligned-allocation-over-`AllocVec`; the `[RS1]` digest is a
-  reproducible FNV-1a over a `Vec<u32>`+`String`. Same stage-1/stage-2 gate as RS0.
+  → **DONE, PROVEN LIVE** in [`hosted/rust/aros-rt`](../../../hosted/rust/aros-rt/src/lib.rs):
+  the allocator does aligned-allocation-over-`AllocVec`; on booted AROS the `[RS1]`
+  FNV-1a digest over a `Vec<u32>`+`String` matches the host value (`0xe5889f2d`) —
+  the `#[global_allocator]` round-trips real exec memory. `graft/rust-smoke` asserts it.
 - **[RS2]** `aros-sys` FFI shim crate: wrap a few AROS calls (`dos` `PutStr`,
   `timer`) so no_std Rust can do I/O. Demo: Rust prints via `dos.library` and times
   a loop on booted AROS.
@@ -106,9 +109,9 @@ wins, not a late one.
 
 ---
 
-*The `[RS0]`/`[RS1]` no_std starting point is built and cross-compiles to
-aarch64-AROS ELF ([`hosted/rust/`](../../../hosted/rust/)); RS2+ and all of std are
-still scoping. Like [ffmpeg-native](../ffmpeg-native/README.md), this is a **native
-software port**, not a `hostlib` bridge. The no_std path is nearly self-contained
-(core + alloc + an exec allocator shim); the std path rides on the same `posixc`
-hardening the rest of the native-stack work needs.*
+*`[RS0]`/`[RS1]` are built and **run on AROS** (`graft/rust-smoke`,
+[`hosted/rust/`](../../../hosted/rust/)); RS2+ and all of std are still scoping. Like
+[ffmpeg-native](../ffmpeg-native/README.md), this is a **native software port**, not
+a `hostlib` bridge. The no_std path is self-contained (core + alloc + an exec
+allocator shim — now proven); the std path rides on the same `posixc` hardening the
+rest of the native-stack work needs.*

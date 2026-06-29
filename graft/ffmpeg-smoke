@@ -1,0 +1,66 @@
+#!/bin/sh
+# ffmpeg-smoke -- end-to-end proof that native libavutil runs on darwin-aarch64 AROS.
+#
+# Builds libavutil for AROS (cross-compiled by the AROS crosstools), links the C:
+# smoke against it, deploys it, boots AROS and runs it -- asserting [FF0]: a real
+# library's version string + av_malloc/av_mallocz/av_free work on AROS. See
+# docs/features/ffmpeg-native/README.md and hosted/ffmpeg/README.md.
+#
+#   graft/ffmpeg-smoke              build libavutil + link + deploy + boot + assert
+#   graft/ffmpeg-smoke --no-build   skip the libavutil build, just relink/run
+#
+# Knobs: AROS_BUILD (AROS tree), AROS_CTL_BOOTD (boot dir).
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"   # .../graft
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"             # repo root
+FF="$ROOT/hosted/ffmpeg"
+SYSROOT="$ROOT/build/ffmpeg/sysroot"
+OUT="$ROOT/build/ffmpeg"
+
+# Find the AROS tree (.../bin/darwin-aarch64) the way deploy-check finds the boot dir.
+find_tree() {
+    if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
+    best=""; bt=0
+    for d in \
+        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
+        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
+        /tmp/*/bin/darwin-aarch64 ; do
+        [ -x "$d/tools/crosstools/bin/clang" ] || continue
+        t="$(stat -f %m "$d/tools/crosstools/bin/clang" 2>/dev/null || echo 0)"
+        [ "$t" -ge "$bt" ] && { bt="$t"; best="$d"; }
+    done
+    printf '%s\n' "$best"
+}
+T="$(find_tree)"
+[ -n "$T" ] && [ -d "$T/AROS/C" ] || { echo "ffmpeg-smoke: no AROS tree (set AROS_BUILD)" >&2; exit 1; }
+export AROS_BUILD="$T"
+
+if [ "${1:-}" != "--no-build" ]; then
+    echo "== ffmpeg-smoke: build libavutil for AROS =="
+    "$FF/build.sh" || { echo "FAIL: libavutil build"; exit 1; }
+fi
+[ -f "$SYSROOT/lib/libavutil.a" ] || { echo "FAIL: $SYSROOT/lib/libavutil.a missing"; exit 1; }
+
+echo "== ffmpeg-smoke: link C:FF0Smoke against libavutil.a =="
+# -lpthread: libavutil takes a global mutex; AROS provides libpthread.a but the
+# default lib group doesn't auto-link it. After -lavutil (it's the consumer).
+"$FF/aros-cc.sh" -O2 -I"$SYSROOT/include" \
+    "$FF/ff0_main.c" -L"$SYSROOT/lib" -lavutil -lpthread \
+    -o "$OUT/FF0Smoke" || { echo "FAIL: link FF0Smoke"; exit 1; }
+cp -f "$OUT/FF0Smoke" "$T/AROS/C/FF0Smoke" && chmod +x "$T/AROS/C/FF0Smoke"
+echo "   deployed -> $T/AROS/C/FF0Smoke"
+
+echo "== ffmpeg-smoke: boot AROS and run C:FF0Smoke =="
+RESULT="$("$HERE/bench-run" C:FF0Smoke 2>&1)"
+echo "$RESULT"
+
+echo "$RESULT" | grep -q 'FFMPEG-AROS: \[FF0\] ALL PASS' \
+  && { echo; echo "ffmpeg-smoke: PASS — native libavutil ([FF0]) runs on AROS"; exit 0; }
+echo; echo "ffmpeg-smoke: FAIL — see output above" >&2
+exit 1

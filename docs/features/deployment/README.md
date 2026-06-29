@@ -117,6 +117,30 @@ make cocoametal-shell
 
 Screenshots and logs land in `run/darwin-aarch64/`.
 
+## Desktop boot requirements (beyond the module set)
+
+Even a complete module set drops to the **emergency shell** or pops a volume
+**requester** unless two non-module payloads are staged into the AROS tree.
+`run-window.sh` (`ensure_desktop_payloads`) now stages both automatically; they
+are documented here because they are easy to miss when booting a tree by hand:
+
+- **`AROS.boot`** (CPU signature, content `aarch64`) at the AROS root.
+  `__dos_IsBootable()` opens `:AROS.boot` on each mounted volume and checks it
+  contains the CPU string; with no match **no volume is bootable** → `SYS:`
+  never resolves → `Display driver(s) failed to initialize. Entering emergency
+  shell.` Normally written by `make boot`; staged here because we boot the
+  `AROS/` build dir directly (no distfiles step).
+- **`Prefs/Presets/Themes/AROSDefault/`** (copied from `images/Themes/AROSDefault`
+  in the OS source). The desktop Startup-Sequence does `Assign THEMES:
+  SYS:Prefs/Presets/Themes` then `Assign THEME: THEMES:AROSDefault`; if the dir
+  is absent the assign fails and Wanderer pops **"Please insert volume THEMES"**,
+  blocking the desktop. Normally installed by distfiles.
+
+The display itself comes up via this chain — each link is a separate failure
+mode (see the build doc §3b): `emul-handler` boot → runs `C:AROSMonDrvs` → opens
+**`icon.library`** → enumerates `DEVS:Monitors` → runs the `Cocoa` monitor →
+`cocoametal.dylib` loads → `AddDisplayDriverA()` → display registered → Wanderer.
+
 ## Current Boundary
 
 Boot-time/configured host volumes are integrated. The optional live

@@ -125,6 +125,10 @@ line "AHISmoke" "$AROS/C/AHISmoke"
 line "bsdsocket.library" "$AROS/Libs/bsdsocket.library"
 line "socktest" "$AROS/C/socktest"
 line "nettest" "$AROS/C/nettest"
+line "SetKeyboard" "$AROS/C/SetKeyboard"
+# Rust-on-AROS no_std proof ([RS0]/[RS1]): built by hosted/rust/aros-build.sh,
+# run by graft/rust-smoke. compare = "is the deployed C: command the one I built?"
+compare "RustHello" "$ROOT/build/rust-aros/RustHello" "$AROS/C/RustHello" || true
 line "TestLib" "$AROS/C/TestLib"
 line "LoadMatrix" "$AROS/C/LoadMatrix"
 line "Wanderer" "$AROS/System/Wanderer/Wanderer"
@@ -134,6 +138,11 @@ echo "desktop presence:"
 for p in \
     "$AROS/Prefs/Zune" \
     "$AROS/Prefs/Wanderer" \
+    "$AROS/Fonts" \
+    "$AROS/System/Images" \
+    "$AROS/Devs/Keymaps" \
+    "$AROS/Locale/Catalogs" \
+    "$AROS/Prefs/Presets/Themes" \
     "$AROS/System/About" \
     "$AROS/Tools" \
     "$AROS/Utilities" ; do
@@ -143,3 +152,11 @@ for p in \
         printf 'MISS %s\n' "$p"
     fi
 done
+
+echo
+echo "deferred desktop TODO:"
+if [ -e "$AROS/Devs/Printers" ]; then
+    printf 'OK   %s\n' "$AROS/Devs/Printers"
+else
+    printf 'TODO %s  (printing/CUPS bridge not wired yet)\n' "$AROS/Devs/Printers"
+fi

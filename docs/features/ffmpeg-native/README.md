@@ -53,6 +53,12 @@ scratch" port. The printf fix is the template for what each gap looks like.
 
 ## Build approach
 
+> **Prior art (low value, optional):** an old ffmpeg port may exist in AROS's
+> *separate* `contrib`/`ports` repos, but it's x86-era and won't carry to an aarch64
+> native build — at most a glance for which codecs/flags someone enabled. The work
+> that matters (the `--target-os=aros` configure delta + current `posixc` gaps) is
+> fresh regardless.
+
 ffmpeg uses its **own** configure (not autotools). Plan:
 
 - Cross-build out-of-band with the AROS crosstools first (not an mmake module):

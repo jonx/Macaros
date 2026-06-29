@@ -1,0 +1,15 @@
+# Pin the exact toolchain [RS0]/[RS1] were proven on, so build.sh / graft/rust-smoke
+# produce identical objects on any machine instead of "whatever nightly is installed".
+#
+# Why nightly at all: the no_std-on-AROS build uses two *unstable* features —
+#   -Zbuild-std        (compile core/alloc from source for the custom target)
+#   -Zjson-target-spec (consume aarch64-unknown-aros.json)
+# both nightly-only. rust-src is what -Zbuild-std compiles core/alloc from.
+#
+# rustup auto-installs this toolchain + component on first build. To move the pin,
+# bump the date and re-run graft/rust-smoke to re-prove ALL PASS. Override ad hoc
+# with RUST_NIGHTLY=<toolchain> (build.sh honors it).
+[toolchain]
+channel = "nightly-2026-06-27"
+components = ["rust-src"]
+profile = "minimal"

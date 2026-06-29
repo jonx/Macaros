@@ -84,6 +84,40 @@ artifact_line() {
     echo ">> $label ${hash:-????????????} $stamp"
 }
 
+ensure_desktop_payloads() {
+    upstream="${AROS_UPSTREAM:-$ROOT/../aros-upstream}"
+    fontsrc="$upstream/workbench/fonts"
+
+    if [ -d "$fontsrc" ]; then
+        mkdir -p "$AROS/Fonts"
+        for d in fixed arial stop ttcourier XEN; do
+            [ -d "$fontsrc/$d" ] || continue
+            mkdir -p "$AROS/Fonts/$d"
+            cp -p "$fontsrc/$d"/* "$AROS/Fonts/$d/" 2>/dev/null || true
+        done
+    fi
+
+    # Stage the AROSDefault theme + the boot signature. The build steps that
+    # normally produce these (distfiles for the theme, `make boot` for AROS.boot)
+    # are not run when we boot the AROS/ build dir directly, so without them:
+    #  - no theme  -> Startup-Sequence "Assign THEMES:" fails -> Wanderer pops a
+    #    "Please insert volume THEMES" requester and the desktop is blocked;
+    #  - no AROS.boot -> __dos_IsBootable() rejects the hosted volume -> "Display
+    #    driver(s) failed to initialize. Entering emergency shell."
+    themesrc="$upstream/images/Themes/AROSDefault"
+    if [ -d "$themesrc" ] && [ ! -d "$AROS/Prefs/Presets/Themes/AROSDefault" ]; then
+        mkdir -p "$AROS/Prefs/Presets/Themes"
+        cp -Rp "$themesrc" "$AROS/Prefs/Presets/Themes/"
+    fi
+    [ -f "$AROS/AROS.boot" ] || printf 'aarch64\n' > "$AROS/AROS.boot"
+
+    default_images="$AROS/Prefs/Presets/Themes/AROSDefault/images"
+    if [ -d "$default_images" ]; then
+        mkdir -p "$AROS/System/Images"
+        cp -Rp "$default_images/." "$AROS/System/Images/"
+    fi
+}
+
 write_startup_sequence() {
     startup="$AROS/S/Startup-Sequence"
 
@@ -110,7 +144,16 @@ write_startup_sequence() {
                     'EndIf' \
                     'Assign "T:" "RAM:T"' \
                     'Assign "CLIPS:" "SYS:clips"' \
-                    'Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'If EXISTS "DEVS:Keymaps"' \
+                    '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'EndIf'
+                if [ -n "${AROS_CTL_KEYMAP:-}" ]; then
+                    printf '%s\n' \
+                        'If EXISTS "C:SetKeyboard"' \
+                        "    SetKeyboard \"${AROS_CTL_KEYMAP}\"" \
+                        'EndIf'
+                fi
+                printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
                     'Assign "LIBS:" "SYS:Classes" ADD' \
                     'Assign "HELP:" "LOCALE:Help" DEFER' \
@@ -237,6 +280,7 @@ mkdir -p "$AROS/Devs/Monitors"
 [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
 rm -f "$AROS/Devs/Monitors/headless"
 mkdir -p "$AROS/clips"
+ensure_desktop_payloads
 
 # Clean conf (no boot narration) + ensure the full standard module set and the
 # resident shell.resource are in the kickstart (same list as run-shell.sh —

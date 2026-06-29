@@ -21,6 +21,7 @@ box that's a black box; these turn it into a readable, step-by-step picture.
 | `make hosted-coreaudio` | "Does the CoreAudio ring/offline render path work?" | `hosted/coreaudio/a_test.c` | host-side make target |
 | `make coreaudio-abi` | "Does the deployable CoreAudio dylib ABI work?" | `hosted/coreaudio/a_test.c` via `libcoreaudio.dylib` | host-side make target |
 | `make audio-smoke` | "Can real AROS play through CoreAudio/AHI?" | `graft/audio-smoke` + `C:AHISmoke` | host-side command |
+| `graft/rust-smoke` | "Does cross-built Rust build, link, deploy, and **run** on AROS?" | `hosted/rust/` + `C:RustHello` | host-side command |
 | `make cocoametal-shell` | "Do the native app menu/actions drive the real dylib ABI?" | `hosted/cocoametal/shell_test.m` | host-side make target |
 | lddemon loader trace | "*Why* did that disk-library load fail?" | `rom/lddemon/lddemon.c` | **OFF** — flip `__lddemon_trace` + rebuild |
 | `C:GrabScreen` | "Dump the live framebuffer to a file" | `workbench/c/GrabScreen.c` | always on (a command) |
@@ -153,8 +154,14 @@ hashes/timestamps for the files that most often go stale:
   and `aros-host-conf.sh` if the bundle exists
 - `Storage/Monitors/Cocoa` vs `Devs/Monitors/Cocoa`
 - bootstrap, `emul-handler`, key libraries, `TestLib`, `LoadMatrix`, Wanderer
+- `build/rust-aros/RustHello` vs `AROS/C/RustHello` — the cross-built Rust
+  no_std program (`[RS0]`/`[RS1]`); `compare` flags it when `hosted/rust/aros-build.sh`
+  rebuilt the staticlib but the deployed `C:` command is stale (see §14)
 - presence of the fuller desktop payload: `Prefs/Zune`, `Prefs/Wanderer`,
-  `System/About`, `Tools`, `Utilities`
+- `Fonts`, `System/Images`, `Devs/Keymaps`, `Locale/Catalogs`,
+  `Prefs/Presets/Themes`, `System/About`, `Tools`, `Utilities`
+- deferred desktop TODOs such as `Devs/Printers`, which should remain visible
+  without being treated as an immediate boot/deployment failure
 
 Interpretation:
 
@@ -164,8 +171,44 @@ Interpretation:
   are testing without a fresh launch.
 - `MISS` in desktop presence means the fuller desktop set has not been
   built/deployed yet. It is not a loader failure by itself.
+- `MISS` on `Devs/Keymaps` means keyboard-layout selection will not work. The
+  launchers guard `Assign KEYMAPS:` to avoid a requester, but French/other
+  layouts need the keymap payload and `C:SetKeyboard`.
+- `MISS` on `Fonts` or `System/Images` means optional desktop resource payloads
+  are absent. The launcher guards `FONTS:` and the theme path usually covers
+  images, but keeping both present makes the desktop image closer to a normal
+  Workbench installation.
+- `TODO` under deferred desktop TODOs is deliberate. Today `Devs/Printers` is a
+  reminder for the future CUPS/printer bridge, not a reason to block Wanderer
+  or the shell.
 
 For the full deployment map, see [deployment](../deployment/README.md).
+
+### Keyboard Layout Smoke
+
+The desktop startup assigns `KEYMAPS:` only when `DEVS:Keymaps` exists. A launch
+can select a boot-time keymap through the same config file used by memory and
+shared-folder settings:
+
+```
+keymap pc105_f
+```
+
+or from the shell:
+
+```
+AROS_CTL_KEYMAP=pc105_f AROS_CTL_STARTUP_MODE=desktop ./graft/run-window.sh
+```
+
+Inside AROS, the equivalent manual test is:
+
+```
+SetKeyboard pc105_f
+```
+
+`pc105_f` is the French PC105 keymap. This validates the AROS keymap resource
+path; host-side virtual-key to AROS raw-key translation still lives in the Cocoa
+input driver.
 
 ### Common startup requester: `Insert volume T:`
 
@@ -476,6 +519,49 @@ actions for screenshot, Settings, full screen, scaling/filter, Retina, theme,
 clipboard sharing, reset/power, volume-add string relay, and movie capture.
 
 This catches stale or broken Daedalos menu wiring before manual Wanderer testing.
+
+---
+
+## 14. `rust-smoke` — cross-built Rust runs on AROS
+
+```
+./graft/rust-smoke              # build + link + deploy + boot + assert
+./graft/rust-smoke --no-build   # just run what's already deployed
+```
+
+The end-to-end proof for the [Rust on AROS](../rust-aros/README.md) `[RS0]`/`[RS1]`
+milestones — the deployment workflow for a **native software port** (Rust code built
+*for* AROS), not a `hostlib` bridge. Three stages, then a live assertion:
+
+1. **Stage 1** (`hosted/rust/build.sh`): stock nightly + `-Zbuild-std=core,alloc`
+   cross-compiles the `aros-rt` no_std crate to the custom `aarch64-unknown-aros`
+   target → `libaros_rt.a` (genuine `elf64-littleaarch64`, GOT-free relocations).
+2. **Stage 2** (`hosted/rust/aros-build.sh`): the AROS crosstools compile the flat-C
+   glue + harness against real proto headers; `collect-aros` links them with the
+   staticlib into an **ET_REL** `C:` command and deploys it to `AROS/C/RustHello`.
+   It auto-discovers the AROS build tree the way `deploy-check` finds the boot dir.
+3. **Run**: boots AROS via `graft/bench-run C:RustHello` and asserts the program's
+   own markers, produced on booted AROS:
+
+```
+aros-rt: [RS0] rust selftest ran
+[RS0] rust selftest magic 0x52533020 PASS
+[RS1] alloc checksum 0xe5889f2d PASS (Vec<u32>+String round-trip)
+RUST-AROS: ALL PASS
+```
+
+`[RS0]` proves codegen + link + startup interop; `[RS1]` proves the
+`#[global_allocator]` (aligned-allocation over exec `AllocVec`/`FreeVec`) round-trips
+a `Vec<u32>`+`String` on AROS — the FNV digest matches the host-computed value.
+
+**The one gotcha worth remembering:** the program must link `startup.o` (it defines
+`__startup_main` + the `PROGRAM_ENTRIES` symbol set), **not** `elf-startup.o`. A
+binary missing that set links cleanly but fails to load as
+`filesystem action type unknown` — which is a *load* failure, not a Rust problem
+(a pure-C program built the same wrong way fails identically). `deploy-check`'s
+`RustHello` row catches a stale deploy after a rebuild.
+
+Code, the target spec, and the full rationale: [`hosted/rust/README.md`](../../../hosted/rust/README.md).
 
 ---
 

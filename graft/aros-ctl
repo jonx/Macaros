@@ -188,6 +188,27 @@ copy_if_changed() {
     }
 }
 
+ensure_desktop_payloads() {
+    local upstream="${AROS_UPSTREAM:-$ROOT/../aros-upstream}"
+    local fontsrc="$upstream/workbench/fonts"
+    local d default_images
+
+    if [ -d "$fontsrc" ]; then
+        mkdir -p "$AROS/Fonts"
+        for d in fixed arial stop ttcourier XEN; do
+            [ -d "$fontsrc/$d" ] || continue
+            mkdir -p "$AROS/Fonts/$d"
+            cp -p "$fontsrc/$d"/* "$AROS/Fonts/$d/" 2>/dev/null || true
+        done
+    fi
+
+    default_images="$AROS/Prefs/Presets/Themes/AROSDefault/images"
+    if [ -d "$default_images" ]; then
+        mkdir -p "$AROS/System/Images"
+        cp -Rp "$default_images/." "$AROS/System/Images/"
+    fi
+}
+
 write_startup_sequence() {
     local startup="$AROS/S/Startup-Sequence"
 
@@ -214,7 +235,16 @@ write_startup_sequence() {
                     'EndIf' \
                     'Assign "T:" "RAM:T"' \
                     'Assign "CLIPS:" "SYS:clips"' \
-                    'Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'If EXISTS "DEVS:Keymaps"' \
+                    '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'EndIf'
+                if [ -n "${AROS_CTL_KEYMAP:-}" ]; then
+                    printf '%s\n' \
+                        'If EXISTS "C:SetKeyboard"' \
+                        "    SetKeyboard \"${AROS_CTL_KEYMAP}\"" \
+                        'EndIf'
+                fi
+                printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
                     'Assign "LIBS:" "SYS:Classes" ADD' \
                     'Assign "HELP:" "LOCALE:Help" DEFER' \
@@ -318,6 +348,7 @@ deploy_boot_artifacts() {
     [ -f "$AROS/Storage/Monitors/Cocoa" ] && cp -f "$AROS/Storage/Monitors/Cocoa" "$AROS/Devs/Monitors/Cocoa"
     rm -f "$AROS/Devs/Monitors/headless"
     mkdir -p "$AROS/clips"   # CLIPS: target (host-side, so the AROS startup-seq needs no MakeDir)
+    ensure_desktop_payloads
     if [ -z "${AROS_HOST_VOLUME:-}" ]; then
         HOST_FOLDER="${AROS_CTL_HOST_FOLDER:-$HOME/AROS/Shared}"
         mkdir -p "$HOST_FOLDER"
