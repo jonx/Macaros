@@ -163,6 +163,9 @@ write_startup_sequence() {
                 printf '%s\n' \
                     'If EXISTS "C:LoadKeymap"' \
                     '    LoadKeymap RESTORE' \
+                    'EndIf' \
+                    'If EXISTS "C:KeymapWatch"' \
+                    '    Run >NIL: C:KeymapWatch' \
                     'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \

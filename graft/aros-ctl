@@ -247,6 +247,9 @@ write_startup_sequence() {
                 printf '%s\n' \
                     'If EXISTS "C:LoadKeymap"' \
                     '    LoadKeymap RESTORE' \
+                    'EndIf' \
+                    'If EXISTS "C:KeymapWatch"' \
+                    '    Run >NIL: C:KeymapWatch' \
                     'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
@@ -683,8 +686,27 @@ diag)
         echo "(left running; omit 'nokill' to also kill)"
     fi
     ;;
+keymap)
+    # Switch the AROS keyboard layout from the host. Writes the persisted choice
+    # (ENVARC:Keymap); KeymapWatch (running in AROS) applies it live, and the boot
+    # restores it. No arg lists the current + available layouts.
+    BOOTD="$(find_bootd)"
+    [ -n "$BOOTD" ] || { echo "aros-ctl: no boot dir" >&2; exit 1; }
+    AROS="$(cd "$BOOTD/../.." && pwd)"
+    name="${1:-}"
+    if [ -z "$name" ]; then
+        echo "current: $(cat "$AROS/Prefs/Env-Archive/Keymap" 2>/dev/null || echo '(built-in default)')"
+        echo "available:"
+        ls "$AROS/Devs/Keymaps/"*.akmd 2>/dev/null | sed 's,.*/,  ,; s,\.akmd$,,'
+        echo "usage: aros-ctl keymap <name>"
+        exit 0
+    fi
+    mkdir -p "$AROS/Prefs/Env-Archive" 2>/dev/null
+    printf '%s' "$name" > "$AROS/Prefs/Env-Archive/Keymap"
+    echo "keymap -> $name  (live if KeymapWatch is running; persists across reboot)"
+    ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|keymap|wait}" >&2
     exit 1;;
 esac
