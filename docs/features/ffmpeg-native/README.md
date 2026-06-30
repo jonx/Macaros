@@ -133,14 +133,26 @@ RAM is not the limit either: hosted AROS RAM is `memory <MB>` in
 ## Codec sets for the viewer
 
 `build-video.sh` (FFView, the default) is a small safe set — mjpeg, mpeg1/2/4,
-png/bmp/gif — that has no known decoder crashes. `build-videox.sh` (FFViewX) adds
-the broader containers (mkv/webm, flv, mov/mp4, asf, ogg) and codecs; it loads
-just as fast (stripped). **Caveats in FFViewX:**
+png/bmp/gif, `--disable-asm` — that has no known decoder crashes. `build-videox.sh`
+(FFViewX) adds the broader containers (mkv/webm, flv, mov/mp4, asf, ogg) and codecs,
+and builds with **NEON asm enabled** (ffmpeg's aarch64 asm assembles cleanly with
+the AROS clang — the toolchain risk noted earlier did not materialise; it is faster
+and the proper, as-developed path). It loads just as fast (stripped). **Caveats:**
 
-- **h264/hevc decode currently crashes** on this target (a complex pure-C decoder
-  bug, the same class as the libswscale `yuv2rgb24` crash). h264-in-mp4 reaches
-  the decoder then traps; the simpler codecs work. Needs the same kind of
-  find-the-faulting-path debugging. This is the gating item for "play any mp4".
+- **h264/hevc decode crashes — a deep AROS-aarch64 issue, not a build-flag one.**
+  Investigated thoroughly: it crashes in **every** configuration — pure-C at
+  `-O2`/`-O1`/`-O0` and with NEON — each time decoding (and often playing) several
+  frames, then faulting at a *data-dependent* point in a different h264 function
+  (`ff_h264_decode_mb_cavlc`, `ff_h264_queue_decode_slice`, …). Ruled out: stack
+  size (a 1 MB `Stack` made no difference), optimisation level, pure-C vs NEON.
+  ffmpeg's source is correct (ASan-tested upstream), so this is an **AROS-aarch64
+  codegen/runtime bug** — a corrupted pointer/index that only faults on AROS's
+  memory layout. Fixing it needs sanitizer/debugger tooling AROS lacks (likely a
+  clang codegen issue under `-mcmodel=large` on the complex decoder, or an ABI
+  detail). It is real toolchain-level work, not a quick fix. mjpeg/mpeg1/2/4 are
+  unaffected and play fine. **Do not** work around it by transcoding the file —
+  the goal is ffmpeg decoding h264 as developed; player-side tricks (downscale to
+  fit) are fine and orthogonal.
 - Raw-ES demuxers (`h264`/`hevc`) are deliberately **off**: their fuzzy probe
   mis-claims other raw streams (a `.m4v` mpeg4 ES) and then scans the whole file
   via the custom AVIO and stalls. Container h264 still comes through mov/matroska.

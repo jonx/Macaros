@@ -42,14 +42,18 @@ DEMUXERS=image2,mjpeg,avi,mov,matroska,flv,mpegts,mpegps,asf,ogg,m4v,gif
 BSFS=h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe,mpeg4_unpack_bframes
 
 if [ "${1:-}" = "--reconf" ] || [ ! -f "$BLD/config.h" ]; then
-    echo "[videox] configure (broad image + video codecs)"
+    echo "[videox] configure (broad image + video codecs, NEON asm enabled)"
     rm -rf "$BLD"; mkdir -p "$BLD"
+    # NEON asm ON: how aarch64 ffmpeg is developed/optimised, and it assembles
+    # cleanly with the AROS clang. Faster, and the proper path for h264/hevc.
+    # (h264/hevc still crash here -- a deep AROS-aarch64 codegen/runtime issue in
+    # the decoder, not a build-flag problem; see ffmpeg-native README.)
     ( cd "$BLD" && "$SRC/configure" \
         --enable-cross-compile --arch=aarch64 --target-os=none \
         --cc="$DIR/aros-cc.sh" --ld="$DIR/aros-cc.sh" \
         --extra-cflags="-D_GNU_SOURCE" \
         --ar="$LLVMBIN/llvm-ar" --ranlib="$LLVMBIN/llvm-ranlib" --nm="$LLVMBIN/llvm-nm" \
-        --enable-static --disable-shared --disable-asm --disable-autodetect \
+        --enable-static --disable-shared --disable-autodetect \
         --disable-programs --disable-doc --disable-network --disable-pthreads \
         --disable-everything \
         --enable-avutil --enable-avcodec --enable-avformat --enable-swscale --enable-swresample \
