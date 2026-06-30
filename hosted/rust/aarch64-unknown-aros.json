@@ -8,7 +8,7 @@
     "vendor": "unknown",
     "env": "",
 
-    "features": "+v8a,+neon",
+    "features": "+v8a,+neon,+reserve-x18",
     "max-atomic-width": 128,
     "panic-strategy": "abort",
     "relocation-model": "static",
