@@ -31,7 +31,7 @@ the same way Phase 1/2 used `[M*]` / `[H*]`.
 | deployment | Deploy + run built artifacts; the several-copies trap | [README](deployment/README.md) |
 | control-harness | `aros-ctl`: puppet the windowed AROS headlessly (type/click/shot/log) | [README](control-harness/README.md) |
 | benchmarks | `bench-run` (`make bench`): in-tree exec/clib micro-benchmarks on booted AROS | [README](benchmarks/README.md) |
-| debug-tools | `TestLib` load-tester + `lddemon` loader trace for `OpenLibrary`-NULL bring-up | [README](debug-tools/README.md) |
+| debug-tools | bring-up diagnostics (`TestLib`, `lddemon` trace) + how to debug a crash/memory bug (trap backtrace, MUNGWALL, host lldb) | [README](debug-tools/README.md) |
 | crash-handling | A bounded guru with a symbolized backtrace | [design](crash-handling/design.md) |
 
 **Features & ports:**

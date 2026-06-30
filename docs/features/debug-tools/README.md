@@ -617,3 +617,79 @@ The host-side smoke scripts share one GUI/control-FIFO owner at a time. They tak
 running. Override with `AROS_HARNESS_LOCK_DIR` only when you deliberately use a
 separate log/control/pid namespace too; otherwise parallel runs will race on
 `/tmp/aros-window.log`, `/tmp/aros-cm.ctl`, and the live Daedalos process.
+
+---
+
+## Debugging a crash or memory bug — "is there a GDB for AROS?"
+
+When code **traps** (SIGSEGV) or **corrupts memory**, here is what's available,
+roughly in the order to reach for it. (The h264 decoder crash — see the
+[ffmpeg-native](../ffmpeg-native/README.md) doc — is the live example these were
+surveyed for.)
+
+### 1. The trap backtrace — free, always on
+
+AROS's fatal-trap handler prints to the debug log (`/tmp/aros-window.log` on
+hosted, or `graft/aros-ctl log`):
+
+```
+[KRN] Trap signal 11 [h2] ...
+      PC =... CPSR=...
+[KRN] Backtrace (innermost first): pc=...  FFViewX ff_h264_decode_mb_cavlc + 0xd94
+```
+
+The faulting PC plus a **symbolised backtrace** (module/function + offset). Always
+read this first. Caveat: it's the *symptom* site — for an out-of-bounds it faults
+where it reads, not where the bad index came from.
+
+### 2. MUNGWALL — the allocation guard (AROS's "sanitizer")
+
+`rom/exec/mungwall.c`: puts guard bytes around every `AllocMem`/pool allocation
+and checks them on free/scan, reporting overruns/underruns **with a backtrace at
+the moment of detection**. The closest thing to AddressSanitizer on AROS, and the
+right tool for a suspected out-of-bounds.
+
+- **Enable without a rebuild** — it's gated at runtime by `EXECF_MungWall`, set
+  when the kernel command line contains `mungwall`
+  (`rom/exec/prepareexecbase.c:330`). On hosted, the kernel command line is the
+  bootstrap's `arguments` key in `AROSBootstrap.conf`; pass it with:
+
+  ```sh
+  AROS_HOST_ARGS=mungwall ./graft/aros-ctl run
+  ```
+
+  (`aros-ctl`/`run-window.sh` add `arguments $AROS_HOST_ARGS` to the conf, which
+  it otherwise strips each run.)
+- It guards `AllocMem`/pools; posixc `malloc` (so ffmpeg `av_malloc`) reaches
+  those, so decoder buffers are covered. Other boot args: `sysdebug=...` (more
+  exec debug), `rakemem` (scrub freed memory to surface use-after-free).
+
+### 3. Host lldb — the GDB-equivalent (hosted only)
+
+Hosted AROS *is* a normal darwin process (`Daedalos`/`AROSBootstrap`), so it can
+be debugged with the **host** debugger:
+
+```sh
+lldb -p "$(cat /tmp/aros-cm.pid)"     # then: continue
+```
+
+lldb catches the SIGSEGV on the AROS thread before AROS's own handler, giving the
+**fault address + registers** ("which pointer was wild"). Symbols: AROS code is
+`LoadSeg`'d at runtime so lldb has none for it — start from the function the trap
+backtrace already named, or map the crash PC via the binary's symbol table and
+load base. (On native AROS, GDB ports exist in the contrib repos, but they target
+debugging *apps on native AROS*, not the hosted kernel.)
+
+### 4. Debug output and a debug build
+
+- `bug()` / `kprintf` write to the log; per-module tracing is `#define DEBUG 1`
+  in that source + rebuild (e.g. the `lddemon` trace row above). `sashimi`
+  captures the stream on a real install.
+- `--enable-debug=...` at AROS `configure` time builds with debug symbols,
+  assertions, and the memory debuggers compiled in — heavier, for deep work.
+
+### Picking one
+
+Symptom → tool: a **trap with a clear backtrace** → read it (1), then lldb (3)
+for the fault address. **Heap/buffer corruption or an OOB** that faults somewhere
+unrelated → **MUNGWALL (2)** first — it names the smashed allocation directly.

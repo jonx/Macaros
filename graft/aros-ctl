@@ -367,6 +367,11 @@ MacRW:$HOST_FOLDER;WRITE"
     fi
     grep -v '^arguments ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
         && mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
+    # Extra kernel command-line args (e.g. AROS_HOST_ARGS=mungwall to turn on the
+    # exec allocation guard, or sysdebug=...). See docs/features/debug-tools.
+    if [ -n "${AROS_HOST_ARGS:-}" ]; then
+        printf 'arguments %s\n' "$AROS_HOST_ARGS" >> "$BOOTD/AROSBootstrap.conf"
+    fi
     if [ -n "${AROS_HOST_MEMORY:-}" ]; then
         grep -v '^memory ' "$BOOTD/AROSBootstrap.conf" > "$BOOTD/AROSBootstrap.conf.tmp" 2>/dev/null \
             || cp "$BOOTD/AROSBootstrap.conf" "$BOOTD/AROSBootstrap.conf.tmp"
