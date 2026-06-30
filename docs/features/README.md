@@ -148,7 +148,7 @@ once both exist.
 
 | Feature | One-line | Status |
 |---------|----------|--------|
-| [Native ffmpeg / libav*](ffmpeg-native/README.md) | `libav*` built natively for aarch64 AROS so AROS programs `-lavcodec` | scoping · a *completeness/correctness* port on `posixc`, not a host bridge; `--disable-asm` is the baseline |
+| [Native ffmpeg / libav*](ffmpeg-native/README.md) | `libav*` built natively for aarch64 AROS so AROS programs `-lavcodec`; **FFView** image/video viewer on top | **WORKING** · `[FF0]`–`[FF3]` + FFView play image/video with play/pause; right-way I/O = dos-backed custom `AVIOContext`; full decoder set builds (`build-full.sh`), viewer links a curated subset; manual YUV→RGB (libswscale yuv2rgb kernel faults). Remaining: sws fix, threading, NEON, audio/datatype |
 | [Rust on AROS](rust-aros/README.md) | Rust targeting aarch64 AROS — no_std (core+alloc) now, std-on-`posixc` later | **`[RS0]`/`[RS1]` no_std RUNS ON AROS** (`graft/rust-smoke` — `RUST-AROS: ALL PASS`; [`hosted/rust/`](../../hosted/rust/)) · `#[global_allocator]` over `AllocVec` proven; std is an OS port; `net` rides on `bsdsocket` |
 | [Native .NET](dotnet-native/README.md) · [design](dotnet-native/design.md) | A .NET runtime ported to run managed code (eventually **PowerShell**) natively on aarch64 AROS | design · **runtime-port, not a PowerShell task**: recommend **Mono interpreter** (`MONO_AOT_MODE_INTERP`, modeled on `src/mono/wasi`) — not CoreCLR (two-PAL + JIT + W^X double-mapping), not NativeAOT (bans `Reflection.Emit` → can't host PS). The hard W^X part is **already proven** (`MAP_JIT` from the 68k JIT); the grind is shared `posixc` hardening + the SIGSEGV→managed-exception bridge. `[DN0]`–`[DN5]` foundation, `[DN6]` PowerShell = stretch |
 
