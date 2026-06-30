@@ -28,6 +28,14 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         m["rust"],
         format!("{:>6}", "ok")
     );
+    // RS3c: isolate env / SystemTime / Instant, each with its own marker so a
+    // single run shows exactly how far it got.
+    // env read (getenv) works; the startup sets RUST_GREET via SetEnv. (AROS
+    // `setenv`/SetVar fails at runtime so writes are unsupported; `time` is wired
+    // but AROS `clock_gettime` faults, so neither is exercised here yet.)
+    let greet = std::env::var("RUST_GREET").unwrap_or_else(|_| "<unset>".into());
+    println!("[RS3c] env: getenv RUST_GREET={greet}");
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }

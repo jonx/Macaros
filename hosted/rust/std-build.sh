@@ -44,12 +44,15 @@ STDLIBS=(-lposixc -lstdcio -lstdc -lexec)
 
 echo "[stage2] compile harness rs3_main.c"
 "$CC" "${CFLAGS[@]}" -c "$DIR/rs3_main.c" -o "$OUT/rs3_main.o"
+# the probe staticlib also contains aros_rust_net_test (one crate object), which
+# references the bsdsocket glue -- link it here too so RustStd resolves.
+"$CC" "${CFLAGS[@]}" -c "$DIR/aros_net_glue.c" -o "$OUT/aros_net_glue.o"
 
 echo "[stage2] link RustStd (collect-aros -> ET_REL AROS program)"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/RustStd" \
-    "$LIBDIR/startup.o" "$OUT/rs3_main.o" "$RSLIB" \
+    "$LIBDIR/startup.o" "$OUT/rs3_main.o" "$OUT/aros_net_glue.o" "$RSLIB" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[stage2] built: $OUT/RustStd ($(stat -f%z "$OUT/RustStd" 2>/dev/null) bytes)"
 
