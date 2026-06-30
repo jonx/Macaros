@@ -130,6 +130,9 @@ TODO before a real PR: real errno, a real CSPRNG, the `time`/`thread`/`env`/`arg
 `fs` pal pieces (RS3c), `net` via `bsdsocket` (RS4), and eventually `libc`-crate AROS
 support so the pal can drop its private `extern "C"` declarations.
 
+**Hands-on dev loop, tools/tests, the `x18` risk, and the full resume map:**
+[`hosted/rust/STD-PORT.md`](../../../hosted/rust/STD-PORT.md).
+
 ## Risks & decisions
 
 1. **std is the mountain** — RS0–RS2 are days; RS3+ is a Rust OS port (Redox-sized,

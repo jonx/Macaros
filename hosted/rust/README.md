@@ -1,6 +1,6 @@
-# `hosted/rust/` — the no_std Rust-on-AROS runtime shim (`[RS0]`/`[RS1]`)
+# `hosted/rust/` — Rust on AROS (no_std `[RS0]`/`[RS1]` + `std` `[RS3]`)
 
-The `[RS0]`/`[RS1]` milestones, behind the [Rust on AROS](../../docs/features/rust-aros/README.md)
+The Rust-on-AROS work, behind the [Rust on AROS](../../docs/features/rust-aros/README.md)
 plan: a custom Rust **target spec** for darwin-aarch64 AROS plus a `#![no_std]`
 **runtime crate** whose `#[global_allocator]` bridges to exec `AllocVec`/`FreeVec`.
 
@@ -8,6 +8,12 @@ Like [ffmpeg-native](../../docs/features/ffmpeg-native/README.md), this is a
 **native software port**, not a `hostlib` bridge: the artifact is ARM code *for
 AROS*, compiled by Rust's own LLVM, not a macOS dylib AROS dlopens. Developed
 standalone (outside mmake), the same convention as the other `hosted/` shims.
+
+> **`std` now runs on AROS too (`[RS3]`).** `println!`/`Vec`/`HashMap`/`format!` work
+> through the real standard library, via a fresh `sys/pal/aros` developed in a local
+> Rust clone. For the std port, the dev loop, the tools/tests, the resume map, and a
+> key `x18` risk, **start at [STD-PORT.md](STD-PORT.md)**. The rest of *this* file
+> covers the no_std `[RS0]`/`[RS1]` runtime, which `std` builds on.
 
 ## Status — **PROVEN LIVE on AROS** (`[RS0]` + `[RS1]`)
 
