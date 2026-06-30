@@ -99,35 +99,46 @@ converted a *single* frame; a playback loop hits it. The viewer therefore does
 its own YUV→RGB and only falls back to sws for non-YUV sources. Re-enabling sws
 for YUV is gated on fixing that kernel (candidate FF-followup).
 
-## Load time / relocations: the real cap
+## Load time: strip the symbol table
 
-AROS's `LoadSeg` **relocates the entire binary before the program runs**, and the
-relocation count scales with code size — under `-mcmodel=large` (required: AROS
-has no GOT) every absolute address is a 4-instruction `MOVW_UABS` sequence, so a
-static ffmpeg link is reloc-heavy. Measured:
+A static ffmpeg link carries a **huge symbol table** (~24 MB for the broad set).
+AROS `LoadSeg` reads the whole file — including `.symtab`, which it needs to
+resolve the relocations — before the program runs, and reading 30 MB through the
+emul-handler is what froze the launch (~25 s, before the screen even appears —
+looks like a hang, not a crash). Measured:
 
-| build | relocations | text | load |
+| build | file (deployed) | relocations | load |
 |---|---|---|---|
-| FF1Decode (mjpeg/png/bmp) | ~101 K | 1.7 MB | a few s (fine) |
-| FFView broad set (h264/hevc/vp8/vp9/...) | ~416 K | 5.5 MB | **~25 s freeze** |
-| FFView trimmed (mjpeg/mpeg1/2/4 + images) | ~51 K | 2.5 MB | **~2 s** |
+| FFView broad, **un**stripped | 30 MB | 416 K | **~25 s** |
+| FFView broad, **stripped** (FFViewX) | 8.2 MB | 436 K | **~2 s** |
+| FFView lite, stripped | 3.8 MB | 51 K | ~2 s |
 
-The broad set froze AROS for ~25 s during load (the relocation pass stalls the
-boot before the screen even appears — it looks like a hang, not a crash). Two
-levers, in order of impact:
-
-1. **Fewer codecs → fewer relocations.** This is the dominant cost; the trimmed
-   `build-video.sh` set is the fix (`get FFView under ~100 K relocs`).
-2. **Strip the symbol table** (`deploy.sh` runs `llvm-strip --strip-unneeded`):
-   a static ffmpeg link carries ~24 MB of symbols (the 30 MB → 3.8 MB drop). This
-   speeds the file *read*, but does **not** reduce the relocation count, so it
-   helps far less than trimming codecs. (A full strip would break the relocations,
-   which reference symbols — use `--strip-unneeded`, which is reloc-aware.)
+The decisive lever is **`llvm-strip --strip-unneeded`** (now in `deploy.sh`):
+same relocation count, 30 MB → 8 MB, ~25 s → ~2 s. So the cost was the symbol-table
+*read*, not the relocation *count* — the broad set loads as fast as the lite set
+once stripped. (Use `--strip-unneeded`, not a full strip: the relocations
+reference symbols, so `--strip-unneeded` keeps the ones they need and drops the
+rest; a full strip would break them.) The relocation pass itself is O(n) in
+memory and fast. `-mcmodel=large` is required regardless (AROS has no GOT).
 
 RAM is not the limit: hosted AROS RAM is `memory <MB>` in `AROSBootstrap.conf`
-(default 256 MB, cheap to raise from the Mac). Decode working set is just frame
-buffers (a 320×240 RGB24 frame ~230 KB, 1080p ~6 MB; FFView holds one decode
-frame + one RGB frame).
+(default 256 MB, cheap to raise). Decode working set is just frame buffers (a
+320×240 RGB24 frame ~230 KB, 1080p ~6 MB; FFView holds one decode + one RGB frame).
+
+## Codec sets for the viewer
+
+`build-video.sh` (FFView, the default) is a small safe set — mjpeg, mpeg1/2/4,
+png/bmp/gif — that has no known decoder crashes. `build-videox.sh` (FFViewX) adds
+the broader containers (mkv/webm, flv, mov/mp4, asf, ogg) and codecs; it loads
+just as fast (stripped). **Caveats in FFViewX:**
+
+- **h264/hevc decode currently crashes** on this target (a complex pure-C decoder
+  bug, the same class as the libswscale `yuv2rgb24` crash). h264-in-mp4 reaches
+  the decoder then traps; the simpler codecs work. Needs the same kind of
+  find-the-faulting-path debugging. This is the gating item for "play any mp4".
+- Raw-ES demuxers (`h264`/`hevc`) are deliberately **off**: their fuzzy probe
+  mis-claims other raw streams (a `.m4v` mpeg4 ES) and then scans the whole file
+  via the custom AVIO and stalls. Container h264 still comes through mov/matroska.
 
 ## libc surface (reference)
 
