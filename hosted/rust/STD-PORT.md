@@ -172,23 +172,34 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
 
 ## Resume map (do these next, roughly in order)
 
-**Done:** `reserve-x18` (target spec) and **net** — a Rust TCP round-trip over the
-bsdsocket bridge (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`). It needs
-`bsdsocket.library` built (`make workbench-libs-bsdsocket` in the build tree → it
-lands in `AROS/Libs`) and a TCP server on the **host** (the bridge is host-passthrough,
-so AROS's `127.0.0.1` is the Mac's loopback).
+**Done:** `reserve-x18`; **net** (a Rust TCP round-trip over the bsdsocket bridge,
+`aros_net_glue.c` + `net-build.sh` → `C:RustNet`; needs `bsdsocket.library` built via
+`make workbench-libs-bsdsocket` and a TCP server on the **host**, since the bridge is
+host-passthrough so AROS's `127.0.0.1` is the Mac's loopback); **real errno**
+(`sys/io/error/aros.rs`, NetBSD-numbered, matches the net errno 61); and **env reads**
+(`sys/env/aros.rs` getenv, verified).
+
+**Two AROS-side blockers found (not pal bugs — fix AROS, then the pal just works):**
+
+- **`time` faults at runtime.** `sys/time/aros.rs` is written and the `timespec`
+  layout is correct (LP64: `{i32 tv_sec; i64 tv_nsec}`, CLOCK_MONOTONIC=0,
+  REALTIME=2), but AROS `clock_gettime` SIGBUSes when called from the program —
+  an AROS timer/`clock_gettime` issue. Diagnose with a tiny C `clock_gettime`
+  command first; the pal is ready once it returns.
+- **`env` writes fail.** AROS `setenv` returns -1 (`SetVar(..., LV_VAR|GVF_LOCAL_ONLY)`
+  fails for a `C:` command's process), so `std::env::set_var` panics by design.
+  Reads work. Fix AROS `SetVar`/local-vars for loaded commands, or back writes with
+  a different mechanism.
 
 Remaining pal pieces, roughly in order:
 
-1. **Real errno**: `sys/io/error/aros.rs` over `posixc`'s errno location + `strerror`
-   (find AROS posixc's errno symbol — `__error`/`__errno_location`/macro).
-2. **`time`**: `sys/time/aros.rs` over `posixc` `clock_gettime` (CLOCK_MONOTONIC=0,
-   CLOCK_REALTIME=2; `time_t` is **32-bit** — mind the `timespec` layout). `Instant`/`SystemTime`.
-3. **`env`/`args`**: `posixc` `environ`/`getenv`; program args from the AROS startup.
-4. **`fs`**: `sys/fs` over `posixc` `open`/`read`/`write`/`stat` (or `dos`) — read a
+1. **`args`**: program args from the AROS startup (needs the C `main`'s argc/argv
+   threaded to Rust; `env` reads already work).
+2. **`fs`**: `sys/fs` over `posixc` `open`/`read`/`write`/`stat` (or `dos`) — read a
    `MacRW:` file from Rust.
-5. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`).
-6. **`std::net::TcpStream` proper**: wire `sys/net/aros.rs` onto the same bsdsocket
+3. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`). The
+   `std::env` global lock also leans on the sync pal, so this unblocks env writes too.
+4. **`std::net::TcpStream` proper**: wire `sys/net/aros.rs` onto the same bsdsocket
    calls the glue uses, so `std::net` works (the current test drives the bridge via
    the glue, not `std::net` itself yet).
 7. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
