@@ -99,30 +99,35 @@ converted a *single* frame; a playback loop hits it. The viewer therefore does
 its own YUV→RGB and only falls back to sws for non-YUV sources. Re-enabling sws
 for YUV is gated on fixing that kernel (candidate FF-followup).
 
-## Load time: strip the symbol table
+## Load time is not the problem (a corrected note)
 
-A static ffmpeg link carries a **huge symbol table** (~24 MB for the broad set).
-AROS `LoadSeg` reads the whole file — including `.symtab`, which it needs to
-resolve the relocations — before the program runs, and reading 30 MB through the
-emul-handler is what froze the launch (~25 s, before the screen even appears —
-looks like a hang, not a crash). Measured:
+An earlier version of this doc claimed a static ffmpeg binary took ~25 s to load
+("relocations", then "symbol-table read"). **Both were wrong — never reproduced
+under measurement.** Measured in console mode (`aros-ctl run` returns immediately,
+so the timer includes the boot):
 
-| build | file (deployed) | relocations | load |
-|---|---|---|---|
-| FFView broad, **un**stripped | 30 MB | 416 K | **~25 s** |
-| FFView broad, **stripped** (FFViewX) | 8.2 MB | 436 K | **~2 s** |
-| FFView lite, stripped | 3.8 MB | 51 K | ~2 s |
+| build | file | relocations | boot → main() | → window |
+|---|---|---|---|---|
+| FFView lite, stripped | 3.8 MB | 51 K | ~1 s | ~2 s |
+| FFViewX broad, stripped | 8.2 MB | 436 K | ~1 s | ~2 s |
+| FFView broad, **un**stripped | 31 MB | 436 K | ~1 s | ~2 s |
 
-The decisive lever is **`llvm-strip --strip-unneeded`** (now in `deploy.sh`):
-same relocation count, 30 MB → 8 MB, ~25 s → ~2 s. So the cost was the symbol-table
-*read*, not the relocation *count* — the broad set loads as fast as the lite set
-once stripped. (Use `--strip-unneeded`, not a full strip: the relocations
-reference symbols, so `--strip-unneeded` keeps the ones they need and drops the
-rest; a full strip would break them.) The relocation pass itself is O(n) in
-memory and fast. `-mcmodel=large` is required regardless (AROS has no GOT).
+The 31 MB unstripped binary loads as fast as the 3.8 MB one. Reading the file is
+~ms (the Mac caches it) and the relocation pass is O(n) in memory and fast. So
+**neither file size, symbol table, nor relocation count gates load** at these
+sizes. `--strip-unneeded` (in `deploy.sh`) is kept only because smaller binaries
+are tidier, not as a load fix. `-mcmodel=large` is required (AROS has no GOT).
 
-RAM is not the limit: hosted AROS RAM is `memory <MB>` in `AROSBootstrap.conf`
-(default 256 MB, cheap to raise). Decode working set is just frame buffers (a
+What actually looks like a "freeze":
+
+- **Intermittent boot stall.** Some boots stop right after `display registered`
+  and never reach `cm_open` (no screen) — a pre-existing hosted-boot flakiness,
+  more often in desktop mode. The window never appears; it reads as a hang. Retry.
+- **h264/hevc** — see below: those decoders crash, so opening an h264 file (e.g.
+  most `.mp4`/`.mov`) traps almost immediately.
+
+RAM is not the limit either: hosted AROS RAM is `memory <MB>` in
+`AROSBootstrap.conf` (default 256 MB). Decode working set is just frame buffers (a
 320×240 RGB24 frame ~230 KB, 1080p ~6 MB; FFView holds one decode + one RGB frame).
 
 ## Codec sets for the viewer
