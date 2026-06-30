@@ -69,10 +69,17 @@ EOF. (Audio is not wired — no AHI output yet; video only.)
 
 Pixel conversion is a **hand-written planar-YUV → RGB24** (`yuv_to_rgb24()`):
 chroma subsampling is read from the format descriptor (handles 4:2:0 / 4:2:2 /
-4:4:4), full- and limited-range BT.601. This exists because libswscale's
+4:4:4), full- and limited-range BT.601, with a **fit-to-window nearest-neighbour
+downscale** (large frames are scaled to fit the 800×600 screen — a player-side
+trick; ffmpeg is unmodified). This converter exists because libswscale's
 `yuv2rgb24_full` C writer **faults on this target** (a bug in the cross-built
 output path) — see below. Non-YUV sources (RGB/paletted images) fall back to sws.
 `WritePixelArray(RECTFMT_RGB)` blits the result.
+
+With the [x18 fix](#codec-sets-for-the-viewer), **FFViewX decodes h264 natively**:
+a 2784×1888 h264 `.mov` plays, downscaled to 740×502 (proof
+`run/.../proofs/ffview-testmov-h264-native-20260630.png`). 4K decode in pure-C +
+NEON is slow (sub-realtime) but it plays — no transcoding.
 
 ### Build + deploy FFView
 
