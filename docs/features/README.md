@@ -12,6 +12,61 @@ drivers; AROS reaches them via standard exec I/O.* And all must verify in the
 Screen-Recording manual step. Each carries its own spike plan with greppable markers,
 the same way Phase 1/2 used `[M*]` / `[H*]`.
 
+## Quick index — every folder, one line
+
+<!-- MAINTENANCE: keep this table in sync with the docs/features/ folders, same
+     turn you add/remove/rename one. One row per folder: name · one-line · entry
+     file (README.md, else design.md). See the repo-root CLAUDE.md. -->
+
+> **Before you build or run anything**, read [build](build/README.md) (never a
+> bare `make` — build module metatargets in a stable dir) and
+> [deployment](deployment/README.md) (why a fix "doesn't take" — several runnable
+> copies of the same artifacts).
+
+**Workflow & tooling** (read these before acting):
+
+| Folder | What | Start here |
+|---|---|---|
+| build | Compile AROS from source: metatargets, stable dir, toolchain reuse | [README](build/README.md) |
+| deployment | Deploy + run built artifacts; the several-copies trap | [README](deployment/README.md) |
+| control-harness | `aros-ctl`: puppet the windowed AROS headlessly (type/click/shot/log) | [README](control-harness/README.md) |
+| benchmarks | `bench-run` (`make bench`): in-tree exec/clib micro-benchmarks on booted AROS | [README](benchmarks/README.md) |
+| debug-tools | `TestLib` load-tester + `lddemon` loader trace for `OpenLibrary`-NULL bring-up | [README](debug-tools/README.md) |
+| crash-handling | A bounded guru with a symbolized backtrace | [design](crash-handling/design.md) |
+
+**Features & ports:**
+
+| Folder | What | Start here |
+|---|---|---|
+| 68k-jit | Host 68k→AArch64 translator to run classic Amiga binaries natively | [design](68k-jit/design.md) |
+| 68k-marshalling | The big-endian-on-LE library-call marshalling boundary for the JIT | [README](68k-marshalling/README.md) |
+| cocoa-metal-display | Live macOS Metal window as the AROS display | [design](cocoa-metal-display/design.md) |
+| host-app-shell | Make the window a first-class Mac app (menu/About/icon/Settings) | [design](host-app-shell/design.md) |
+| clipboard-bridge | Two-way macOS NSPasteboard ↔ AROS `clipboard.device` | [README](clipboard-bridge/README.md) |
+| host-volume | A real macOS folder mounted as an AROS volume | [README](host-volume/README.md) |
+| coreaudio-audio | Real sound via a CoreAudio-backed AHI sub-driver (built) | [README](coreaudio-audio/README.md) |
+| bsdsocket-net | TCP/IP by forwarding `bsdsocket.library` to the Mac's sockets (built) | [README](bsdsocket-net/README.md) |
+| printing | `printer.device` → CUPS / print-to-PDF | [README](printing/README.md) |
+| serial-bridge | `serial`/`parallel.device` → host tty/PTY via termios | [README](serial-bridge/README.md) |
+| midi-coremidi | `camd.library` driver → CoreMIDI send + receive | [README](midi-coremidi/README.md) |
+| usb-iokit | Poseidon HCD seam → libusb / IOKit (lowest priority) | [README](usb-iokit/README.md) |
+| fonts-coretext | The Mac's installed fonts inside AROS via CoreText | [README](fonts-coretext/README.md) |
+| system-monitor | `SysMon` Network/Disk/Host pages from a host-stats shim | [README](system-monitor/README.md) |
+| volume-mixer | Commodities volume slider → AHI master volume | [README](volume-mixer/README.md) |
+| processor-resource | darwin/AArch64 `processor.resource`: CPU facts via `sysctl` (shim built) | [README](processor-resource/README.md) |
+| native-modules | Disk-loadable AArch64 AROS code under W^X (`LoadSeg`) | [README](native-modules/README.md) |
+| memory-protection | Memory protection, resource tracking & virtual memory | [README](memory-protection/README.md) |
+| arexx-host-port | ARexx/REXX host-port message protocol; where the interpreter lives | [README](arexx-host-port/README.md) |
+| status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
+| rust-aros | Rust targeting aarch64 AROS (no_std runs; std later) | [README](rust-aros/README.md) |
+| ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
+| dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
+
+**Cross-cutting docs** (not a feature folder):
+[port inventory](darwin-aarch64-port-inventory.md) (gap map + work order) ·
+[host-wake-pattern](host-wake-pattern.md) (host-thread → AROS `Signal` pump) ·
+[CLEANROOM](CLEANROOM.md) (the independent-work process).
+
 ## Layout
 
 Each feature has its own folder:

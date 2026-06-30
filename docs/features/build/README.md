@@ -240,6 +240,7 @@ not, just leave it out.
 | `ld.lld: duplicate symbol __aros_libreq_SysBase` | `KOBJ_LDFLAGS` not reaching the kobj link | fixed in `make.cfg.in`/`make.tmpl` (§4) |
 | Suddenly building `LLVMSupport`/clang from source | configured without `--with-aros-toolchain=yes` | the guard now blocks it; reuse the toolchain (§2) |
 | SIGSEGV at kernel entry, **before** `[KRN]` prints | weak `SysBase` (genmodule regression) → kernel reads NULL | keep `SysBase` GLOBAL; `readelf -s` to verify (§4) |
+| SIGSEGV in `kernel.resource` startup, **before** `[KRN]` (fault `0xfffffffffffff480`) | hosted kickstart `memset`/`memcpy` bound to the weak `-lstdc` StdCBase stub (NULL StdCBase early) — `-lstdc.static` missing from the general `LDFLAGS` | `-lstdc.static` in `config/make.cfg.in` `LDFLAGS` (NOT just `KERNEL_LDFLAGS` — hosted kickstart is compiler=target). Verify `llvm-nm kernel.resource \| grep -w memset` is `T`, not `W`/`__memset_StdCBase_wrapper` |
 | Builds clean but the boot faults with no diagnostic | clang‑22 `va_start` header compiled by the clang‑20 binary | restore clang‑20.1.0 freestanding headers (§2) |
 | `[MMAKE] Nothing known about project kernel-kernel` | mmake rebuilt itself mid-run; stale metatarget DB | one target per `make` call (§3) |
 | `Display driver(s) failed… Entering emergency shell` | `icon.library` missing (no monitors load) **or** no `AROS.boot` signature | build the userland libs (§3b); stage `AROS.boot` (deploy doc) |
