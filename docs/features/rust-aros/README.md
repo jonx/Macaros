@@ -11,8 +11,12 @@ RUST-AROS: STD PASS
 ```
 
 That exercises `println!`, `Vec` + iterators, `HashMap` (drives the random pal + the
-allocator), and `format!`. `[RS0]`/`[RS1]` (no_std codegen + the `AllocVec` allocator)
-came first; **`[RS2]` (a no_std I/O shim) was skipped** — `std` doesn't reuse it.
+allocator), and `format!`. **`[RS4]` networking** also works: a `std` Rust program
+does a TCP round-trip over the **bsdsocket bridge** (3/3 byte-exact + a clean
+connect-refused path). The target now reserves `x18` (`+reserve-x18`), so Rust code
+is immune to the platform-register clobber. `[RS0]`/`[RS1]` (no_std codegen + the
+`AllocVec` allocator) came first; **`[RS2]` (a no_std I/O shim) was skipped** — `std`
+doesn't reuse it.
 `std` is brought up the upstream way: a fresh `sys/pal/aros` calling `posixc`
 directly, developed in a **local rust clone** (`/Users/user/Source/rust-aros`, not
 pushed) so it is PR-able to rust-lang/rust later. See [The `std` port](#the-std-port-rs3).

@@ -17,8 +17,14 @@ for design/status see [docs/features/rust-aros](../../docs/features/rust-aros/RE
   ```
   That is `println!`, `Vec` + iterators, `HashMap` (drives the random pal + the
   allocator), and `format!`, all through the real standard library.
-- **Next (RS3c/RS4):** fill the remaining pal modules (`time`, `thread`, `fs`,
-  `env`/`args`, `net`, real errno/CSPRNG). See [Resume map](#resume-map).
+- **`reserve-x18`** added to the target spec (x18 register uses 532 → 0) — Rust code
+  is now immune to the platform-register clobber.
+- **`[RS4]` net** — a `std`-using Rust program does a **TCP round-trip over the
+  bsdsocket bridge** on booted AROS (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`):
+  3/3 byte-exact echoes plus a clean connect-refused error path, no crash. The bridge
+  is x18-safe (glue + `bsdsocket.library` both `-ffixed-x18`).
+- **Next (RS3c):** the remaining pal modules — real errno, `time`, `env`/`args`,
+  `fs`, `thread`, then `std::net::TcpStream` proper. See [Resume map](#resume-map).
 
 ## The mental model: three trees
 
@@ -166,16 +172,26 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
 
 ## Resume map (do these next, roughly in order)
 
-1. **`reserve-x18`** in the target spec (see Known risks) — correctness, do first.
-2. **Real errno**: `sys/io/error/aros.rs` over `posixc`'s errno location + `strerror`
+**Done:** `reserve-x18` (target spec) and **net** — a Rust TCP round-trip over the
+bsdsocket bridge (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`). It needs
+`bsdsocket.library` built (`make workbench-libs-bsdsocket` in the build tree → it
+lands in `AROS/Libs`) and a TCP server on the **host** (the bridge is host-passthrough,
+so AROS's `127.0.0.1` is the Mac's loopback).
+
+Remaining pal pieces, roughly in order:
+
+1. **Real errno**: `sys/io/error/aros.rs` over `posixc`'s errno location + `strerror`
    (find AROS posixc's errno symbol — `__error`/`__errno_location`/macro).
-3. **`time`**: `sys/time/aros.rs` over `posixc` `clock_gettime` (`Instant`/`SystemTime`).
-4. **`env`/`args`**: `posixc` `environ`/`getenv`; program args from the AROS startup.
-5. **`fs`**: `sys/fs` over `posixc` `open`/`read`/`write`/`stat` (or `dos`) — then read
-   a `MacRW:` file from Rust.
-6. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`).
-7. **`net`** over **`bsdsocket`** (already live) — a Rust `TcpStream`.
-8. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
+2. **`time`**: `sys/time/aros.rs` over `posixc` `clock_gettime` (CLOCK_MONOTONIC=0,
+   CLOCK_REALTIME=2; `time_t` is **32-bit** — mind the `timespec` layout). `Instant`/`SystemTime`.
+3. **`env`/`args`**: `posixc` `environ`/`getenv`; program args from the AROS startup.
+4. **`fs`**: `sys/fs` over `posixc` `open`/`read`/`write`/`stat` (or `dos`) — read a
+   `MacRW:` file from Rust.
+5. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`).
+6. **`std::net::TcpStream` proper**: wire `sys/net/aros.rs` onto the same bsdsocket
+   calls the glue uses, so `std::net` works (the current test drives the bridge via
+   the glue, not `std::net` itself yet).
+7. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
    private `extern "C"` decls, and upstreaming the target spec.
 
 ---
