@@ -1,0 +1,13 @@
+[package]
+name = "std-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Spike: can `std` build for aarch64-unknown-aros at all? A staticlib that uses
+# std::println so the std platform layer (stdio) must compile + link.
+[lib]
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
