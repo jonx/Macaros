@@ -77,9 +77,11 @@ output path) — see below. Non-YUV sources (RGB/paletted images) fall back to s
 `WritePixelArray(RECTFMT_RGB)` blits the result.
 
 With the [x18 fix](#codec-sets-for-the-viewer), **FFViewX decodes h264 natively**:
-a 2784×1888 h264 `.mov` plays, downscaled to 740×502 (proof
-`run/.../proofs/ffview-testmov-h264-native-20260630.png`). 4K decode in pure-C +
-NEON is slow (sub-realtime) but it plays — no transcoding.
+a 2784×1888 **60fps** h264 `.mov` (Main profile) plays at full speed on M-series,
+downscaled to fit the screen (proofs `ffview-testmov-h264-native-20260630.png`,
+`ffview-stats-overlay-20260630.png`). Native ARM decode, no transcoding. An
+earlier note here called this 4K decode "sub-realtime"; that was never measured
+and is withdrawn, it plays smoothly at the source 60fps.
 
 ### Build + deploy FFView
 
@@ -130,8 +132,8 @@ What actually looks like a "freeze":
 - **Intermittent boot stall.** Some boots stop right after `display registered`
   and never reach `cm_open` (no screen) — a pre-existing hosted-boot flakiness,
   more often in desktop mode. The window never appears; it reads as a hang. Retry.
-- **h264/hevc** — see below: those decoders crash, so opening an h264 file (e.g.
-  most `.mp4`/`.mov`) traps almost immediately.
+- **h264/hevc** used to crash on open; **fixed** by `-ffixed-x18` (see below), so
+  h264 `.mp4`/`.mov` now decode and play at full speed.
 
 RAM is not the limit either: hosted AROS RAM is `memory <MB>` in
 `AROSBootstrap.conf` (default 256 MB). Decode working set is just frame buffers (a
