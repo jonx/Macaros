@@ -688,8 +688,29 @@ debugging *apps on native AROS*, not the hosted kernel.)
 - `--enable-debug=...` at AROS `configure` time builds with debug symbols,
   assertions, and the memory debuggers compiled in — heavier, for deep work.
 
+### 5. A minimal host-behaviour probe (the `x18` case)
+
+Sometimes the bug is the *host platform*, not AROS. The h264 crash above came down
+to macOS clobbering register `x18` (the reserved platform register) across signal
+delivery — which AROS's signal-based preemption relies on. Rather than argue from
+theory, [`x18probe.c`](x18probe.c) settles it in 30 lines of host C: hold a
+sentinel in `x18`, let a timer signal fire, read `x18` back from the signal
+context. It prints `CLOBBERED` (macOS zeroes it) every run.
+
+```sh
+cc -arch arm64 -O0 -D_XOPEN_SOURCE -Wno-deprecated-declarations \
+   docs/features/debug-tools/x18probe.c -o /tmp/x18probe && /tmp/x18probe
+```
+
+This is the template for any "does the host preserve X across a signal?" question:
+reproduce the exact host mechanism (here, a timer signal mid-compute) in a tiny
+standalone program, no AROS boot required. Result and the fix: [NOTES.md](../../../NOTES.md)
+and the [ffmpeg-native](../ffmpeg-native/README.md) `x18` section.
+
 ### Picking one
 
 Symptom → tool: a **trap with a clear backtrace** → read it (1), then lldb (3)
 for the fault address. **Heap/buffer corruption or an OOB** that faults somewhere
 unrelated → **MUNGWALL (2)** first — it names the smashed allocation directly.
+A **crash that only happens under preemption / on this host** → a host-behaviour
+probe (5).

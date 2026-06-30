@@ -155,17 +155,18 @@ and the proper, as-developed path). It loads just as fast (stripped). **Caveats:
   pinned it: `fault addr=0x268`, instruction `ldr w2, [x18, x2]`, **`x18 = 0`** —
   the GetBitContext bitstream buffer pointer lived in `x18`. `x18` is the AAPCS64
   platform register, **reserved on Darwin**; AROS-hosted runs on Darwin and
-  preempts via signals, which don't preserve `x18`, so the aros clang target
+  preempts via signals, and macOS **zeroes `x18` in the signal frame** (proven
+  with [`x18probe.c`](../debug-tools/x18probe.c)), so the aros clang target
   (which doesn't know to reserve it) put a long-lived pointer there and a
   mid-decode preemption wiped it to NULL. **Fix:** `-ffixed-x18` in `aros-cc.sh`
   (the correct Darwin ABI). h264/hevc now decode and play. This is *not* an ffmpeg
   bug — it's a target-ABI flag, the as-developed way to build for a platform that
   reserves x18.
 - **Port-wide implication:** nothing in the AROS aarch64 toolchain reserves `x18`,
-  so the OS itself has the same latent bug — it just rarely keeps a live value in
-  x18 across a preemption. A prime suspect for the intermittent hosted-boot stall.
-  The proper follow-up is `-ffixed-x18` (or x18 preservation) across the whole
-  aarch64-darwin toolchain. See [NOTES.md](../../../NOTES.md).
+  so the OS itself has the same latent bug. The host cannot rescue it: macOS wipes
+  `x18` before any AROS code runs, and the darwin `SAVEREGS` faithfully copies that
+  zero. So the fix is `-ffixed-x18` across the aarch64-AROS ABI, not host-side
+  preservation. See [NOTES.md](../../../NOTES.md).
 - Raw-ES demuxers (`h264`/`hevc`) are deliberately **off**: their fuzzy probe
   mis-claims other raw streams (a `.m4v` mpeg4 ES) and then scans the whole file
   via the custom AVIO and stalls. Container h264 still comes through mov/matroska.
