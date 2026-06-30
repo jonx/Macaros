@@ -21,7 +21,8 @@
  *
  * Conclusion: macOS zeroes x18 in the signal frame, so the host cannot preserve a
  * user x18 across a preemption no matter how faithfully it saves/restores. The
- * aarch64-AROS target must reserve x18 (-ffixed-x18). See ../../../NOTES.md.
+ * aarch64-AROS target must reserve x18 (-ffixed-x18). See ../../NOTES.md and
+ * this folder's README.md.
  */
 #define _XOPEN_SOURCE
 #include <stdio.h>

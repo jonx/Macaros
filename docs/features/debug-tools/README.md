@@ -25,6 +25,7 @@ box that's a black box; these turn it into a readable, step-by-step picture.
 | `make cocoametal-shell` | "Do the native app menu/actions drive the real dylib ABI?" | `hosted/cocoametal/shell_test.m` | host-side make target |
 | lddemon loader trace | "*Why* did that disk-library load fail?" | `rom/lddemon/lddemon.c` | **OFF** — flip `__lddemon_trace` + rebuild |
 | `C:GrabScreen` | "Dump the live framebuffer to a file" | `workbench/c/GrabScreen.c` | always on (a command) |
+| `hosted/x18probe/build.sh` | "Does macOS preserve `x18` across a signal?" | `hosted/x18probe/x18probe.c` | host-side build+run |
 
 ---
 
@@ -693,13 +694,13 @@ debugging *apps on native AROS*, not the hosted kernel.)
 Sometimes the bug is the *host platform*, not AROS. The h264 crash above came down
 to macOS clobbering register `x18` (the reserved platform register) across signal
 delivery — which AROS's signal-based preemption relies on. Rather than argue from
-theory, [`x18probe.c`](x18probe.c) settles it in 30 lines of host C: hold a
-sentinel in `x18`, let a timer signal fire, read `x18` back from the signal
-context. It prints `CLOBBERED` (macOS zeroes it) every run.
+theory, [`hosted/x18probe`](../../../hosted/x18probe/README.md) settles it in
+~30 lines of host C: hold a sentinel in `x18`, let a timer signal fire, read
+`x18` back from the signal context. It prints `CLOBBERED` (macOS zeroes it) every
+run.
 
 ```sh
-cc -arch arm64 -O0 -D_XOPEN_SOURCE -Wno-deprecated-declarations \
-   docs/features/debug-tools/x18probe.c -o /tmp/x18probe && /tmp/x18probe
+./hosted/x18probe/build.sh      # compile + run, no AROS needed
 ```
 
 This is the template for any "does the host preserve X across a signal?" question:

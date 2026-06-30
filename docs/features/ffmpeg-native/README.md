@@ -156,7 +156,7 @@ and the proper, as-developed path). It loads just as fast (stripped). **Caveats:
   the GetBitContext bitstream buffer pointer lived in `x18`. `x18` is the AAPCS64
   platform register, **reserved on Darwin**; AROS-hosted runs on Darwin and
   preempts via signals, and macOS **zeroes `x18` in the signal frame** (proven
-  with [`x18probe.c`](../debug-tools/x18probe.c)), so the aros clang target
+  with [`hosted/x18probe`](../../../hosted/x18probe/README.md)), so the aros clang target
   (which doesn't know to reserve it) put a long-lived pointer there and a
   mid-decode preemption wiped it to NULL. **Fix:** `-ffixed-x18` in `aros-cc.sh`
   (the correct Darwin ABI). h264/hevc now decode and play. This is *not* an ffmpeg
