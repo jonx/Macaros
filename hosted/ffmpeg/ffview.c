@@ -35,7 +35,8 @@ static AVPacket *g_pkt;
 static struct SwsContext *g_sws;
 static AVFrame *g_rgbframe;       /* RGB24 dst, av_frame_get_buffer-padded for sws */
 static int g_vs;                 /* video stream index */
-static int g_w, g_h;
+static int g_w, g_h;             /* decoded frame size */
+static int g_dw, g_dh;           /* on-screen size (downscaled to fit the screen) */
 static struct Window *g_win;
 static long g_count;             /* frames shown so far */
 
@@ -82,7 +83,7 @@ static int yuv_to_rgb24(void)
 {
     const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(g_frame->format);
     const unsigned char *Y, *U, *V;
-    int yls, uls, vls, ds, cw, ch, full, x, y;
+    int yls, uls, vls, ds, cw, ch, full, dx, dy, xstep, ystep, syf;
     unsigned char *o0;
 
     if (!d || d->nb_components < 3 || !(d->flags & AV_PIX_FMT_FLAG_PLANAR) ||
@@ -97,13 +98,21 @@ static int yuv_to_rgb24(void)
         || g_frame->format == AV_PIX_FMT_YUVJ420P || g_frame->format == AV_PIX_FMT_YUVJ422P
         || g_frame->format == AV_PIX_FMT_YUVJ444P || g_frame->format == AV_PIX_FMT_YUVJ440P;
 
-    for (y = 0; y < g_h; y++) {
-        const unsigned char *yr = Y + y * yls;
-        const unsigned char *ur = U + (y >> ch) * uls;
-        const unsigned char *vr = V + (y >> ch) * vls;
-        unsigned char *o = o0 + y * ds;
-        for (x = 0; x < g_w; x++) {
-            int yy = yr[x], uu = ur[x >> cw] - 128, vv = vr[x >> cw] - 128, r, g, b;
+    /* 16.16 fixed-point source step per dest pixel: == 1.0 when not scaling,
+       > 1.0 when downscaling to fit the screen. Nearest-neighbour. */
+    xstep = (g_w << 16) / g_dw;
+    ystep = (g_h << 16) / g_dh;
+    syf = 0;
+    for (dy = 0; dy < g_dh; dy++) {
+        int sy = syf >> 16; syf += ystep;
+        const unsigned char *yr = Y + sy * yls;
+        const unsigned char *ur = U + (sy >> ch) * uls;
+        const unsigned char *vr = V + (sy >> ch) * vls;
+        unsigned char *o = o0 + dy * ds;
+        int sxf = 0;
+        for (dx = 0; dx < g_dw; dx++) {
+            int sx = sxf >> 16; sxf += xstep;
+            int yy = yr[sx], uu = ur[sx >> cw] - 128, vv = vr[sx >> cw] - 128, r, g, b;
             if (full) {                                  /* full-range (JPEG) BT.601 */
                 r = yy + ((91881 * vv) >> 16);
                 g = yy - ((22554 * uu + 46802 * vv) >> 16);
@@ -128,22 +137,22 @@ static void blit(void)
         g_rgbframe = av_frame_alloc();
         if (!g_rgbframe) return;
         g_rgbframe->format = AV_PIX_FMT_RGB24;
-        g_rgbframe->width  = g_w;
-        g_rgbframe->height = g_h + 16;                 /* slack for any sws-path overrun */
+        g_rgbframe->width  = g_dw;                     /* on-screen (possibly downscaled) size */
+        g_rgbframe->height = g_dh + 16;                /* slack for any sws-path overrun */
         if (av_frame_get_buffer(g_rgbframe, 64) < 0) { av_frame_free(&g_rgbframe); return; }
-        g_rgbframe->height = g_h;
+        g_rgbframe->height = g_dh;
     }
 
     if (!yuv_to_rgb24()) {                             /* non-YUV (e.g. RGB/paletted image) */
         if (!g_sws)
-            g_sws = sws_getContext(g_w, g_h, g_frame->format, g_w, g_h, AV_PIX_FMT_RGB24,
+            g_sws = sws_getContext(g_w, g_h, g_frame->format, g_dw, g_dh, AV_PIX_FMT_RGB24,
                                    SWS_BILINEAR, NULL, NULL, NULL);
         if (g_sws)
             sws_scale(g_sws, (const unsigned char * const *)g_frame->data, g_frame->linesize,
                       0, g_h, g_rgbframe->data, g_rgbframe->linesize);
     }
     WritePixelArray(g_rgbframe->data[0], 0, 0, g_rgbframe->linesize[0], g_win->RPort,
-                    g_win->BorderLeft, g_win->BorderTop, g_w, g_h, RECTFMT_RGB);
+                    g_win->BorderLeft, g_win->BorderTop, g_dw, g_dh, RECTFMT_RGB);
     g_count++;
 }
 
@@ -194,13 +203,23 @@ int main(int argc, char **argv)
     trace("codec-open");
     if (!decode_next()) { msg("FFView: no frame decoded\n"); goto cleanup; }
     g_w = g_frame->width; g_h = g_frame->height;
+    /* Downscale (preserving aspect, never up) to fit the 800x600 screen minus
+       title/borders + WA_Left/Top. The blit converter samples at this size. */
+    {
+        const int mw = 740, mh = 536;
+        g_dw = g_w; g_dh = g_h;
+        if (g_dw > mw) { g_dh = (int)((long)g_dh * mw / g_dw); g_dw = mw; }
+        if (g_dh > mh) { g_dw = (int)((long)g_dw * mh / g_dh); g_dh = mh; }
+        if (g_dw < 1) g_dw = 1;
+        if (g_dh < 1) g_dh = 1;
+    }
     trace("decoded-first");
 
     g_win = OpenWindowTags(NULL,
         WA_Title,       (IPTR)"ffview",
-        WA_InnerWidth,  (IPTR)g_w,
-        WA_InnerHeight, (IPTR)g_h,
-        WA_Left,        (IPTR)40, WA_Top, (IPTR)28,
+        WA_InnerWidth,  (IPTR)g_dw,
+        WA_InnerHeight, (IPTR)g_dh,
+        WA_Left,        (IPTR)4, WA_Top, (IPTR)14,
         WA_Flags,       (IPTR)(WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_CLOSEGADGET | WFLG_ACTIVATE),
         WA_IDCMP,       (IPTR)(IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY),
         TAG_DONE);
