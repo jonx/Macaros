@@ -181,11 +181,15 @@ host-passthrough so AROS's `127.0.0.1` is the Mac's loopback); **real errno**
 
 **Two AROS-side blockers found (not pal bugs — fix AROS, then the pal just works):**
 
-- **`time` faults at runtime.** `sys/time/aros.rs` is written and the `timespec`
-  layout is correct (LP64: `{i32 tv_sec; i64 tv_nsec}`, CLOCK_MONOTONIC=0,
-  REALTIME=2), but AROS `clock_gettime` SIGBUSes when called from the program —
-  an AROS timer/`clock_gettime` issue. Diagnose with a tiny C `clock_gettime`
-  command first; the pal is ready once it returns.
+- **`time` faults from Rust (but `clock_gettime` works in C).** `sys/time/aros.rs`
+  is written and the `timespec` layout is correct (a C `ClockTest` command confirmed
+  `sizeof(timespec)=16`, `sizeof(long)=8`, and `clock_gettime` returns rc=0 with a
+  sane MONOTONIC uptime). So this is **not** an AROS `clock_gettime` bug; the Rust
+  path faulting (SIGBUS) is the **x18 clobber in the not-yet-`-ffixed-x18`
+  timer/posixc code** (intermittent in C, hit consistently from Rust's deeper call
+  path). The pending OS-wide `-ffixed-x18` rebuild (TODO.md) should unblock it; the
+  pal needs no change. (Separately, the hosted RTC isn't host-synced, so REALTIME is
+  ~1978 — see UPSTREAM-NOTES #36.)
 - **`env` writes fail.** AROS `setenv` returns -1 (`SetVar(..., LV_VAR|GVF_LOCAL_ONLY)`
   fails for a `C:` command's process), so `std::env::set_var` panics by design.
   Reads work. Fix AROS `SetVar`/local-vars for loaded commands, or back writes with

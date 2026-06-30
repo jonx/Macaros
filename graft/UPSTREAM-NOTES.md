@@ -311,3 +311,35 @@ no-display path is the **emul-handler emergency shell** (host stdin/stdout), so 
 prompt is reachable without a graphics HIDD. unixio.hidd still needs a host-header
 fix (`net/if.h` incomplete structs). Items 1, 5, 6, 10–33 are on the
 `aarch64-darwin-graft` branch.
+
+## Surfaced by porting Rust `std` (posixc runtime, hosted darwin-aarch64)
+
+Bringing up Rust's standard library exercised `posixc` the same way the ffmpeg port
+did. New issues found (candidate patches / bug reports):
+
+34. **The posixc/network headers pull the macOS SDK on darwin-aarch64.** Including
+    `<time.h>`, `<sys/socket.h>`, `<netinet/in.h>` &c from a target program drags in
+    the host's `<stdint.h>`/`<sys/types.h>` (Xcode SDK), which is either not found or
+    redefines `intmax_t`/`uintmax_t` against AROS's `aros/types/int_t.h`. Both the
+    ffmpeg glue and the Rust net glue had to be **header-clean** (declare the few
+    structs themselves) to build. *Fix:* the darwin-aarch64 header set should resolve
+    the C standard types from AROS/the crosstools, not the macOS SDK (the `__arm64__`
+    gating is incomplete here).
+
+35. **`setenv()` fails for a loaded `C:` command's process.** `setenv` →
+    `SetVar(name, value, -1, LV_VAR | GVF_LOCAL_ONLY)` returns failure (so `setenv`
+    returns -1) for a program loaded + run from the shell, so a libc that relies on it
+    (Rust `std::env::set_var`, which then panics by design) can't write env vars.
+    Reads (`getenv` → `GetVar`) work. *Likely cause:* the loaded command's `Process`
+    has no usable local-var list, or `GVF_LOCAL_ONLY` has nowhere to write. The
+    reads-work / writes-fail asymmetry is surprising and worth a look.
+
+36. **Hosted RTC isn't seeded from the host clock.** `clock_gettime(CLOCK_REALTIME)`
+    returns `tv_sec` ≈ 252460808 (~1978), not the host wall-clock — the hosted AROS
+    battclock/timer isn't seeded from the macOS host time at boot. `CLOCK_MONOTONIC`
+    is fine (uptime). Minor, but every `SystemTime::now()` / `time()` is wrong.
+
+> Not an AROS bug: `clock_gettime` itself works from a C command (rc=0, correct
+> `sizeof(timespec)`=16, `sizeof(long)`=8). The *Rust* path faulting on it is the x18
+> clobber in the not-yet-`-ffixed-x18` timer/posixc code (the x18 finding in
+> [NOTES.md](../NOTES.md); the OS-wide rebuild covers it).
