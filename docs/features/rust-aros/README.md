@@ -1,12 +1,22 @@
 # Rust on AROS (aarch64)
 
-Status: **`[RS0]` + `[RS1]` PROVEN LIVE on AROS** — 2026-06-28. Rust
-cross-compiled on the Mac **runs on booted darwin-aarch64 AROS**: a custom
-`aarch64-unknown-aros` target + a `#[global_allocator]` over exec `AllocVec`/
-`FreeVec`, linked into a real AROS `C:` command, printing `RUST-AROS: ALL PASS`
-(`graft/rust-smoke`; code in [`hosted/rust/`](../../../hosted/rust/)). The no_std
-half of this plan is no longer scoping — it is built and verified. RS2+ and the
-full `std` port (RS3+) remain scoping. Items not yet confirmed: **UNVERIFIED**.
+Status: **`[RS0]`..`[RS3]` PROVEN LIVE on AROS** — 2026-07-01. Real Rust **`std`**
+cross-compiled on the Mac **runs on booted darwin-aarch64 AROS**. A booted-AROS run
+prints, all through the real standard library:
+
+```
+hello from rust std on AROS
+[RS3] Vec sum=55  HashMap aros=64 rust=2021  fmt=    ok
+RUST-AROS: STD PASS
+```
+
+That exercises `println!`, `Vec` + iterators, `HashMap` (drives the random pal + the
+allocator), and `format!`. `[RS0]`/`[RS1]` (no_std codegen + the `AllocVec` allocator)
+came first; **`[RS2]` (a no_std I/O shim) was skipped** — `std` doesn't reuse it.
+`std` is brought up the upstream way: a fresh `sys/pal/aros` calling `posixc`
+directly, developed in a **local rust clone** (`/Users/user/Source/rust-aros`, not
+pushed) so it is PR-able to rust-lang/rust later. See [The `std` port](#the-std-port-rs3).
+Remaining `std` surface (threads, real `time`, `net`, `fs`) is **scoping / UNVERIFIED**.
 
 ## Goal
 
@@ -76,17 +86,49 @@ of Rust's platform layer, but every piece it needs already exists in some form.
   the allocator does aligned-allocation-over-`AllocVec`; on booted AROS the `[RS1]`
   FNV-1a digest over a `Vec<u32>`+`String` matches the host value (`0xe5889f2d`) —
   the `#[global_allocator]` round-trips real exec memory. `graft/rust-smoke` asserts it.
-- **[RS2]** `aros-sys` FFI shim crate: wrap a few AROS calls (`dos` `PutStr`,
-  `timer`) so no_std Rust can do I/O. Demo: Rust prints via `dos.library` and times
-  a loop on booted AROS.
-- **[RS3]** **std bring-up** (the big one): pick the sys approach, implement the
-  minimum — `stdio` (`println!`), `time`, `thread` spawn/join, `env`. `fn main()`
-  with `println!("hello from rust")` on booted AROS. Gated on `posixc`
-  completeness (shared with ffmpeg).
+- **[RS2]** ~~`aros-sys` no_std I/O shim~~ — **skipped**: `std` calls `posixc`
+  directly, not a hand-written shim, and `[RS0]` already proved linking/startup, so
+  this was a detour. Went straight to `std`.
+- **[RS3]** **std bring-up** — **DONE (core), PROVEN LIVE.** `println!`, `Vec`,
+  `HashMap`, `format!` run on booted AROS via a fresh `sys/pal/aros` (see
+  [The `std` port](#the-std-port-rs3)). Remaining surface (real `time`, `thread`
+  spawn/join, `env`/`args`, `fs`) is RS3c. Gated on `posixc` completeness (shared
+  with ffmpeg).
 - **[RS4]** std `net` over **`bsdsocket`** → a Rust `TcpStream` fetches a URL
   (reuses the live sockets path); std `fs` → read/write a `MacRW:` file.
 - **[RS5]** Cargo workflow: `cargo build --target aarch64-unknown-aros.json
   -Zbuild-std` + packaging, so arbitrary crates build for AROS routinely.
+
+## The `std` port (RS3)
+
+`std` is brought up the **upstream way** so it can become a rust-lang/rust PR: a
+fresh `sys/pal/aros` that calls `posixc` directly (no `libc`-crate AROS support
+needed yet), developed in a **local clone of the Rust std source**
+(`/Users/user/Source/rust-aros` — the toolchain's `rust-src` for
+`nightly-2026-06-27`, git-tracked, symlinked into the toolchain so `-Zbuild-std`
+builds from it). **Not pushed**, kept local until ready.
+
+What makes `std` compile + run for `aarch64-unknown-aros` (all in the clone):
+
+| Piece | Where | How |
+|---|---|---|
+| System allocator | `sys/alloc/aros.rs` | `posixc` `malloc` / `posix_memalign` |
+| stdio | `sys/stdio/aros.rs` | `posixc` `write`/`read` on fd 0/1/2 (= dos Input/Output) |
+| errno → ErrorKind | `sys/io/error` → `generic` | **stub** (errno=0); TODO real `posixc` errno |
+| randomness | `sys/random/aros.rs` | **weak** SplitMix64 (ASLR seed); TODO real CSPRNG |
+| TLS | `sys/thread_local` → `no_threads` | single-thread statics; pthread keys when `std::thread` lands |
+| known target | `library/std/build.rs` | adds `aros` so std is not `restricted_std` |
+
+Build + run: `hosted/rust/std-probe` is a `std` staticlib; `hosted/rust/std-build.sh`
+links it + `rs3_main.c` through `collect-aros` into `C:RustStd` (the RS0/RS1 recipe,
+minus `-lclang_rt.builtins` — these crosstools don't ship it and `std` doesn't need
+it). Run on booted AROS with output redirected to a `MacRW:` file: posixc `write(1)`
+honors the shell redirect, but `dos` `PutStr`/`pr_COS` does **not**, so capture std
+output via the redirect, not a C harness's own prints.
+
+TODO before a real PR: real errno, a real CSPRNG, the `time`/`thread`/`env`/`args`/
+`fs` pal pieces (RS3c), `net` via `bsdsocket` (RS4), and eventually `libc`-crate AROS
+support so the pal can drop its private `extern "C"` declarations.
 
 ## Risks & decisions
 
