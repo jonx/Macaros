@@ -52,7 +52,13 @@ DEV="$T/AROS/Developer/include"
 LIBDIR="$T/AROS/Developer/lib"
 export COMPILER_PATH="$T/tools:$CT/bin"
 
-COMMON=(--target=aarch64-unknown-aros -mcmodel=large)
+# -ffixed-x18: x18 is the platform register, RESERVED on Darwin. AROS-hosted runs
+# on Darwin and preempts via signals, where x18 is not preserved across the
+# task/signal machinery. The aros clang target doesn't know to reserve it, so it
+# happily allocates x18 for a long-lived value (e.g. the h264 GetBitContext buffer
+# pointer) -- which then gets clobbered to NULL mid-decode -> SIGSEGV. Reserving it
+# matches the host ABI and fixes the h264/hevc crashes. See ffmpeg-native README.
+COMMON=(--target=aarch64-unknown-aros -mcmodel=large -ffixed-x18)
 INC=(-isystem "$DEV/aros/posixc" -isystem "$DEV/aros/stdc" -isystem "$DEV" -isystem "$T/gen/include")
 
 # compile / preprocess / depgen only -> just the front end, no link machinery

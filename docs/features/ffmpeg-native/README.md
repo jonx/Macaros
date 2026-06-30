@@ -139,20 +139,24 @@ and builds with **NEON asm enabled** (ffmpeg's aarch64 asm assembles cleanly wit
 the AROS clang — the toolchain risk noted earlier did not materialise; it is faster
 and the proper, as-developed path). It loads just as fast (stripped). **Caveats:**
 
-- **h264/hevc decode crashes — a deep AROS-aarch64 issue, not a build-flag one.**
-  Investigated thoroughly: it crashes in **every** configuration — pure-C at
-  `-O2`/`-O1`/`-O0` and with NEON — each time decoding (and often playing) several
-  frames, then faulting at a *data-dependent* point in a different h264 function
-  (`ff_h264_decode_mb_cavlc`, `ff_h264_queue_decode_slice`, …). Ruled out: stack
-  size (a 1 MB `Stack` made no difference), optimisation level, pure-C vs NEON.
-  ffmpeg's source is correct (ASan-tested upstream), so this is an **AROS-aarch64
-  codegen/runtime bug** — a corrupted pointer/index that only faults on AROS's
-  memory layout. Fixing it needs sanitizer/debugger tooling AROS lacks (likely a
-  clang codegen issue under `-mcmodel=large` on the complex decoder, or an ABI
-  detail). It is real toolchain-level work, not a quick fix. mjpeg/mpeg1/2/4 are
-  unaffected and play fine. **Do not** work around it by transcoding the file —
-  the goal is ffmpeg decoding h264 as developed; player-side tricks (downscale to
-  fit) are fine and orthogonal.
+- **h264/hevc — FIXED. Root cause: the `x18` register.** h264 used to crash in
+  every config (pure-C `-O2`/`-O1`/`-O0`, NEON), decoding a few frames then
+  faulting at a data-dependent point in `ff_h264_decode_mb_cavlc` /
+  `ff_h264_queue_decode_slice`. The [fault-address trap dump](../debug-tools/README.md)
+  pinned it: `fault addr=0x268`, instruction `ldr w2, [x18, x2]`, **`x18 = 0`** —
+  the GetBitContext bitstream buffer pointer lived in `x18`. `x18` is the AAPCS64
+  platform register, **reserved on Darwin**; AROS-hosted runs on Darwin and
+  preempts via signals, which don't preserve `x18`, so the aros clang target
+  (which doesn't know to reserve it) put a long-lived pointer there and a
+  mid-decode preemption wiped it to NULL. **Fix:** `-ffixed-x18` in `aros-cc.sh`
+  (the correct Darwin ABI). h264/hevc now decode and play. This is *not* an ffmpeg
+  bug — it's a target-ABI flag, the as-developed way to build for a platform that
+  reserves x18.
+- **Port-wide implication:** nothing in the AROS aarch64 toolchain reserves `x18`,
+  so the OS itself has the same latent bug — it just rarely keeps a live value in
+  x18 across a preemption. A prime suspect for the intermittent hosted-boot stall.
+  The proper follow-up is `-ffixed-x18` (or x18 preservation) across the whole
+  aarch64-darwin toolchain. See [NOTES.md](../../../NOTES.md).
 - Raw-ES demuxers (`h264`/`hevc`) are deliberately **off**: their fuzzy probe
   mis-claims other raw streams (a `.m4v` mpeg4 ES) and then scans the whole file
   via the custom AVIO and stalls. Container h264 still comes through mov/matroska.
