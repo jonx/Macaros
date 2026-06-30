@@ -36,11 +36,15 @@ LLVMBIN=/opt/homebrew/opt/llvm/bin
 echo "[video] AROS tree: $T"
 [ -d "$SRC" ] || { echo "[video] ffmpeg source missing -- run build.sh first to fetch" >&2; exit 1; }
 
-DECODERS=mjpeg,mjpegb,png,bmp,gif,tiff,webp,ppm,targa,rawvideo,\
-h264,hevc,mpeg4,mpeg2video,mpeg1video,msmpeg4v2,msmpeg4v3,flv,vp8,vp9,wmv1,wmv2,cinepak,theora
-PARSERS=mjpeg,png,h264,hevc,mpeg4video,mpegvideo,vp8,vp9
-DEMUXERS=image2,mjpeg,avi,mov,matroska,gif,flv,mpegts,mpegps,asf,ogg,h264,hevc,m4v
-BSFS=h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe,mpeg4_unpack_bframes
+# Kept deliberately small: the AROS loader relocates the WHOLE binary before the
+# program runs, and the relocation count scales with code size. A broad set
+# (h264/hevc/vp8/vp9/...) pushed FFView to ~416K relocs and a ~25s load freeze;
+# this set keeps it near FF1Decode's ~100K (a few seconds). h264 etc. live in the
+# complete build (build-full.sh) for when a longer load is acceptable.
+DECODERS=mjpeg,png,bmp,gif,rawvideo,mpeg1video,mpeg2video,mpeg4
+PARSERS=mjpeg,png,mpeg4video,mpegvideo
+DEMUXERS=image2,mjpeg,avi,mov,m4v,gif,mpegps,mpegts
+BSFS=mpeg4_unpack_bframes
 
 if [ "${1:-}" = "--reconf" ] || [ ! -f "$BLD/config.h" ]; then
     echo "[video] configure (common image + video codecs)"

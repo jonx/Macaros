@@ -43,15 +43,15 @@ clang wrapper) with `--extra-cflags=-D_GNU_SOURCE` and link `-lpthread`
 |---|---|---|---|
 | `build.sh` | `sysroot-aros` | — | [FF0] libavutil only |
 | `build-ff1.sh` | `sysroot-ff1` | ~7 MB | [FF1] minimal codec (mjpeg/png/bmp) |
-| `build-video.sh` | `sysroot-video` | ~23 MB | **FFView** — common image+video codecs |
+| `build-video.sh` | `sysroot-video` | ~6.5 MB | **FFView** — mjpeg/mpeg1/2/4 + png/bmp/gif |
 | `build-full.sh` | `sysroot-full` | ~88 MB | the *complete* native decoder/demuxer set |
 
 `build-full.sh` proves ffmpeg ports **in full** (every native decoder, demuxer,
-parser, bsf, plus swscale/swresample, decode-only). But a binary that links the
-whole decoder registry is ~90 MB, and **relocating that at `LoadSeg` is too slow
-to be usable** (it never finishes booting). So FFView links `sysroot-video`, a
-curated common-format subset, giving a ~29 MB binary that loads. See
-[memory & binary size](#memory--binary-size).
+parser, bsf, plus swscale/swresample, decode-only). But linking the whole decoder
+registry is unusable on AROS — see [load time](#load-time--relocations-the-real-cap).
+FFView links `sysroot-video`, a small set (mjpeg, mpeg1/2/4, png, bmp, gif) chosen
+to keep the relocation count low; it gives a ~3.8 MB binary that loads in ~2 s.
+h264/hevc/vp8/vp9 live in the complete build for when a longer load is acceptable.
 
 ## FFView — the viewer
 
@@ -99,19 +99,35 @@ converted a *single* frame; a playback loop hits it. The viewer therefore does
 its own YUV→RGB and only falls back to sws for non-YUV sources. Re-enabling sws
 for YUV is gated on fixing that kernel (candidate FF-followup).
 
-## Memory & binary size
+## Load time / relocations: the real cap
 
-Hosted AROS RAM is set by `memory <MB>` in `AROSBootstrap.conf` (and
-`AROS_HOST_MEMORY`); the bootstrap default is 256 MB. A real Amiga had 0.5–128 MB;
-hosted AROS draws from the Mac, so RAM is cheap to raise. The constraints that
-bit us:
+AROS's `LoadSeg` **relocates the entire binary before the program runs**, and the
+relocation count scales with code size — under `-mcmodel=large` (required: AROS
+has no GOT) every absolute address is a 4-instruction `MOVW_UABS` sequence, so a
+static ffmpeg link is reloc-heavy. Measured:
 
-- **Binary size / relocation, not RAM, is the limit.** The 90 MB full-registry
-  binary fits in 256 MB but never finishes `LoadSeg` relocation. Keep the linked
-  decoder set curated (`build-video.sh`).
-- **Decode working set** is frame buffers: a 320×240 RGB24 frame is ~230 KB, a
-  1080p one ~6 MB. Small clips are comfortable; HD needs a RAM bump and prompt
-  frame freeing (FFView holds one decode frame + one RGB frame).
+| build | relocations | text | load |
+|---|---|---|---|
+| FF1Decode (mjpeg/png/bmp) | ~101 K | 1.7 MB | a few s (fine) |
+| FFView broad set (h264/hevc/vp8/vp9/...) | ~416 K | 5.5 MB | **~25 s freeze** |
+| FFView trimmed (mjpeg/mpeg1/2/4 + images) | ~51 K | 2.5 MB | **~2 s** |
+
+The broad set froze AROS for ~25 s during load (the relocation pass stalls the
+boot before the screen even appears — it looks like a hang, not a crash). Two
+levers, in order of impact:
+
+1. **Fewer codecs → fewer relocations.** This is the dominant cost; the trimmed
+   `build-video.sh` set is the fix (`get FFView under ~100 K relocs`).
+2. **Strip the symbol table** (`deploy.sh` runs `llvm-strip --strip-unneeded`):
+   a static ffmpeg link carries ~24 MB of symbols (the 30 MB → 3.8 MB drop). This
+   speeds the file *read*, but does **not** reduce the relocation count, so it
+   helps far less than trimming codecs. (A full strip would break the relocations,
+   which reference symbols — use `--strip-unneeded`, which is reloc-aware.)
+
+RAM is not the limit: hosted AROS RAM is `memory <MB>` in `AROSBootstrap.conf`
+(default 256 MB, cheap to raise from the Mac). Decode working set is just frame
+buffers (a 320×240 RGB24 frame ~230 KB, 1080p ~6 MB; FFView holds one decode
+frame + one RGB frame).
 
 ## libc surface (reference)
 
