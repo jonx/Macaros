@@ -477,6 +477,19 @@ run)
     artifact_line "TestLib" "$AROS/C/TestLib"
     artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
+    # Kill any stale Daedalos/AROSBootstrap for THIS boot tree before launching.
+    # A clean window-close or a CPU-fault guru does _exit() the process, but a hang
+    # or a crash that never reached that path leaves an instance holding the control
+    # FIFO + the window, so the next boot collides ("why can't AROS start again?").
+    # run-window.sh already does this; do it here too so every launch self-heals.
+    STALE_PIDS="$(ps -axo pid=,command= | awk -v conf="$BOOTD/AROSBootstrap.conf" '
+        index($0, conf) && (index($0,"/Daedalos ")||index($0,"./Daedalos ")||index($0," Daedalos ")||index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
+    if [ -n "$STALE_PIDS" ]; then
+        echo ">> stopping previous Daedalos instance(s) for this boot tree: $STALE_PIDS"
+        for p in $STALE_PIDS; do kill "$p" 2>/dev/null || true; done
+        sleep 0.4
+        for p in $STALE_PIDS; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true; done
+    fi
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
     mkdir -p "$ROOT/run/darwin-aarch64"
     ( cd "$BOOTD" && exec nohup env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
