@@ -145,7 +145,10 @@ for p in \
     "$AROS/Prefs/Presets/Themes" \
     "$AROS/System/About" \
     "$AROS/Tools" \
-    "$AROS/Utilities" ; do
+    "$AROS/Utilities" \
+    "$AROS/Utilities/Clock" \
+    "$AROS/Utilities/MultiView" \
+    "$AROS/Utilities/More" ; do
     if [ -e "$p" ]; then
         printf 'OK   %s\n' "$p"
     else

@@ -172,6 +172,12 @@ a *different* dead end:
 - **Wanderer + classes** — `make workbench-system-wanderer workbench-classes-zune
   workbench-libs-workbench`, plus `workbench-datatypes-picture`/`-png`, plus the
   Cocoa display HIDD/monitor `make kernel-hidd-cocoa`.
+- **Tools-menu utilities** — `make workbench-utilities-clock
+  workbench-utilities-multiview workbench-utilities-more`. Wanderer's Tools menu
+  launches `SYS:Utilities/{Clock,MultiView,More}`; a stale one crashes on launch
+  (old binary vs the merged `stdc.library` -> SIGSEGV in `__stdc_program_end`).
+  These live in `workbench/utilities/`, so they are NOT covered by `workbench-c`
+  or the `.userland-targets` set -- rebuild them explicitly with the desktop set.
 
 Rule of thumb: **rebuild the whole desktop set together** after any
 genmodule/startup/ABI change. A mixed tree (kickstart new, userland old) yields
