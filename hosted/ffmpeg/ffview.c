@@ -8,12 +8,15 @@
  *
  * Controls (window must be active):
  *   SPACE   play / pause          R   restart from the first frame
+ *   I       toggle a stats overlay (frame, size, codec, time) burned into the
+ *           image, so it shows in a screen recording
  *   Q / ESC quit                  close gadget quits
  * The title bar shows PLAYING / PAUSED and the frame count.
  */
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
+#include <proto/graphics.h>
 #include <proto/cybergraphics.h>
 #include <exec/io.h>
 #include <devices/timer.h>
@@ -39,6 +42,9 @@ static int g_w, g_h;             /* decoded frame size */
 static int g_dw, g_dh;           /* on-screen size (downscaled to fit the screen) */
 static struct Window *g_win;
 static long g_count;             /* frames shown so far */
+static BOOL g_showstats;         /* 'i' toggles a stats line burned into the frame */
+static const char *g_decname = "?";
+static int g_fps;                /* nominal stream fps (for the time readout) */
 
 static void msg(const char *s) { PutStr((CONST_STRPTR)s); }
 
@@ -130,6 +136,38 @@ static int yuv_to_rgb24(void)
     return 1;
 }
 
+static const char *udec(unsigned v, char *buf)
+{
+    char tmp[12]; int i = 0, j = 0;
+    do { tmp[i++] = (char)('0' + v % 10); v /= 10; } while (v);
+    while (i) buf[j++] = tmp[--i];
+    buf[j] = '\0'; return buf;
+}
+static char *apps(char *p, const char *q) { while (*q) *p++ = *q++; return p; }
+
+/* Burn a one-line stats overlay into the just-blitted frame: graphics.library
+   Text on the window rastport, so it is part of the on-screen image and shows up
+   in a screen recording. Toggled with 'i'. */
+static void draw_stats(void)
+{
+    struct RastPort *rp = g_win->RPort;
+    char s[160], num[16], *p = s;
+    int secs = g_fps > 0 ? (int)(g_count / g_fps) : 0;
+
+    p = apps(p, "frame "); p = apps(p, udec((unsigned)g_count, num));
+    p = apps(p, "  ");     p = apps(p, udec(g_w, num)); *p++ = 'x'; p = apps(p, udec(g_h, num));
+    p = apps(p, "  ");     p = apps(p, g_decname);
+    p = apps(p, "  ");     p = apps(p, udec((unsigned)secs, num)); *p++ = 's';
+    if (g_fps > 0) { p = apps(p, " @"); p = apps(p, udec((unsigned)g_fps, num)); p = apps(p, "fps"); }
+    *p = '\0';
+
+    SetDrMd(rp, JAM2);
+    SetBPen(rp, 1);                 /* background (dark UI pen) */
+    SetAPen(rp, 2);                 /* text (light UI pen) */
+    Move(rp, g_win->BorderLeft + 4, g_win->BorderTop + 9);
+    Text(rp, (CONST_STRPTR)s, (LONG)(p - s));
+}
+
 /* Convert g_frame to RGB24 and blit into the window's inner area. */
 static void blit(void)
 {
@@ -154,6 +192,7 @@ static void blit(void)
     WritePixelArray(g_rgbframe->data[0], 0, 0, g_rgbframe->linesize[0], g_win->RPort,
                     g_win->BorderLeft, g_win->BorderTop, g_dw, g_dh, RECTFMT_RGB);
     g_count++;
+    if (g_showstats) draw_stats();
 }
 
 static void set_title(BOOL playing, BOOL image)
@@ -188,6 +227,7 @@ int main(int argc, char **argv)
     g_ctx = avcodec_alloc_context3(dec);
     if (!g_ctx || avcodec_parameters_to_context(g_ctx, g_fmt->streams[g_vs]->codecpar) < 0
                || avcodec_open2(g_ctx, dec, NULL) < 0) { msg("FFView: codec open failed\n"); goto cleanup; }
+    g_decname = (dec && dec->name) ? dec->name : "?";
 
     /* frame pace from the stream's average rate */
     {
@@ -195,6 +235,7 @@ int main(int argc, char **argv)
         if (fr.num > 0 && fr.den > 0)
             frame_usec = (ULONG)((1000000.0 * fr.den) / fr.num);
     }
+    g_fps = frame_usec ? (int)(1000000 / frame_usec) : 0;
 
     g_pkt = av_packet_alloc();
     g_frame = av_frame_alloc();
@@ -274,6 +315,9 @@ int main(int argc, char **argv)
                 } else if (code == 'r' || code == 'R') {
                     seek_start();
                     if (decode_next()) blit();
+                } else if (code == 'i' || code == 'I') {
+                    g_showstats = !g_showstats;
+                    blit();                       /* re-render current frame with/without the overlay */
                 } else if (code == 'q' || code == 'Q' || code == 0x1B) {
                     quit = TRUE;
                 }
