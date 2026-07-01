@@ -1,0 +1,93 @@
+#!/bin/sh
+#
+# resize-smoke -- torture the intuition window-resize path and fail on a wedge.
+#
+# Why this exists: drag-resizing a window used to freeze the whole app within a
+# cycle or two (2026-07-01). Root cause was stale pre--ffixed-x18 objects in the
+# graphics stack: macOS zeroes x18 on any signal/kernel entry, the 50Hz SIGALRM
+# tick lands mid-redraw, and whatever the compiler parked in x18 (loop bound,
+# list pointer, function pointer) is corrupted -- the guest wedges silently (no
+# [KRN] trap) and the host app beachballs because NSEvents are only dequeued by
+# the guest's event pump. This smoke drives N grab-drag-release cycles on the
+# boot CLI window and probes guest liveness (does the pointer sprite still
+# repaint?) after each one.
+#
+# PASS: all cycles complete and the guest still repaints. FAIL: identical
+# frames after a cycle (wedged), a [KRN] trap in the log, or the process died.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "$HERE/.." >/dev/null 2>&1 && pwd)"
+CTL="$HERE/aros-ctl"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+CYCLES="${AROS_RESIZE_SMOKE_CYCLES:-10}"
+TMP="${TMPDIR:-/tmp}/resize-smoke.$$"
+mkdir -p "$TMP"
+
+cleanup() {
+    status=$?
+    trap - EXIT INT TERM
+    rm -rf "$TMP" >/dev/null 2>&1 || true
+    rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+    exit "$status"
+}
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+trap cleanup EXIT INT TERM
+
+"$CTL" kill >/dev/null 2>&1 || true
+sleep 1
+: > "$LOG" 2>/dev/null || true
+"$CTL" run >/dev/null 2>&1 || { echo "FAIL: aros-ctl run failed"; exit 1; }
+i=0
+while [ $i -lt 60 ]; do
+    grep -q "cm_open" "$LOG" 2>/dev/null && break
+    sleep 1; i=$((i + 1))
+done
+grep -q "cm_open" "$LOG" 2>/dev/null || { echo "FAIL: display never opened"; exit 1; }
+sleep 5
+
+# One grab-drag-release in, one back out, on the boot CLI window's size gadget.
+resize_cycle() {
+    "$CTL" mouse 795 595; "$CTL" button 0 1 795 595
+    for p in "700 500" "600 450" "500 400" "420 340"; do "$CTL" mouse $p; done
+    "$CTL" button 0 0 420 340
+    "$CTL" mouse 417 337; "$CTL" button 0 1 417 337
+    for p in "500 400" "650 500" "795 595"; do "$CTL" mouse $p; done
+    "$CTL" button 0 0 795 595
+}
+
+n=1
+while [ $n -le "$CYCLES" ]; do
+    resize_cycle >/dev/null 2>&1
+    sleep 1
+    # Liveness probe: move the pointer; a live guest repaints the sprite, a
+    # wedged one produces byte-identical frames.
+    "$CTL" shot "$TMP/a.png" >/dev/null 2>&1
+    "$CTL" mouse $((100 + n * 7)) $((100 + n * 5)) >/dev/null 2>&1
+    sleep 1
+    "$CTL" shot "$TMP/b.png" >/dev/null 2>&1
+    if cmp -s "$TMP/a.png" "$TMP/b.png"; then
+        echo "FAIL: guest wedged after resize cycle $n/$CYCLES (pointer no longer repaints)"
+        "$CTL" diag >/dev/null 2>&1 || true
+        exit 1
+    fi
+    if grep -qE "Trap signal|re-faulting|halting host" "$LOG" 2>/dev/null; then
+        echo "FAIL: [KRN] trap during resize cycle $n/$CYCLES"
+        grep -E "Trap signal|re-faulting|halting host" "$LOG" | head -3
+        exit 1
+    fi
+    echo "cycle $n/$CYCLES ok"
+    n=$((n + 1))
+done
+
+"$CTL" stop >/dev/null 2>&1 || true
+echo "RESIZE-SMOKE: PASS ($CYCLES cycles, guest stayed live)"

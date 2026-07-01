@@ -163,3 +163,41 @@ if [ -e "$AROS/Devs/Printers" ]; then
 else
     printf 'TODO %s  (printing/CUPS bridge not wired yet)\n' "$AROS/Devs/Printers"
 fi
+
+# x18 staleness guard. macOS clobbers x18 on any signal/kernel entry, so every
+# AROS module must be compiled -ffixed-x18 (make.cfg has it, but a make.cfg
+# change does NOT invalidate old .o files -- the 2026-07-01 resize-freeze was
+# exactly this). Rebuilt-clean modules disassemble to <=4 x18 references
+# (context save/stub residue); more means stale pre-flag objects inside.
+# Full sweep: deploy-check x18   (scans every module, slower).
+echo
+echo "x18 staleness (compiled without -ffixed-x18 => wedges under SIGALRM):"
+OBJDUMP="${OBJDUMP:-/opt/homebrew/opt/llvm/bin/llvm-objdump}"
+if [ -x "$OBJDUMP" ]; then
+    X18_LIMIT=4
+    x18_fail=0
+    if [ "${1:-}" = "x18" ]; then
+        X18_SET="$(find "$AROS/Libs" "$AROS/Devs" "$AROS/Classes" "$AROS/L" "$AROS/C" "$BOOTD" -type f 2>/dev/null)"
+    else
+        X18_SET="$AROS/Libs/graphics.library $AROS/Libs/intuition.library
+            $AROS/Libs/layers.library $AROS/Libs/cybergraphics.library
+            $AROS/Libs/muimaster.library $AROS/Libs/icon.library
+            $AROS/Libs/stdc.library $AROS/Libs/posixc.library
+            $AROS/Libs/dos.library $AROS/Libs/keymap.library
+            $AROS/Libs/locale.library $AROS/Devs/console.device
+            $AROS/Devs/input.device $AROS/L/con-handler $AROS/C/Decoration
+            $BOOTD/Libs/exec.library $BOOTD/kernel"
+    fi
+    for m in $X18_SET; do
+        [ -f "$m" ] || continue
+        head -c4 "$m" 2>/dev/null | grep -q "$(printf '\177ELF')" || continue
+        n="$("$OBJDUMP" -d "$m" 2>/dev/null | grep -cwE 'x18|w18')"
+        if [ "${n:-0}" -gt "$X18_LIMIT" ]; then
+            printf 'FAIL %-40s %s x18 refs (stale objects -- rebuild it)\n' "${m#$AROS/}" "$n"
+            x18_fail=1
+        fi
+    done
+    [ "$x18_fail" = 0 ] && echo "OK   all checked modules <= $X18_LIMIT x18 refs"
+else
+    echo "SKIP llvm-objdump not found (set OBJDUMP=)"
+fi

@@ -252,6 +252,7 @@ not, just leave it out.
 | `Display driver(s) failed… Entering emergency shell` | `icon.library` missing (no monitors load) **or** no `AROS.boot` signature | build the userland libs (§3b); stage `AROS.boot` (deploy doc) |
 | `Please insert volume "THEMES"` requester | AROSDefault theme not staged | `run-window.sh` stages it now; see deploy doc |
 | `ObtainSemaphore called in supervisor mode!!!` (intermittent) | VBlank `SIGALRM` delivered to a foreign host thread | SIGALRM guard in `core_IRQ` (§4) |
+| Random guest wedges/corruption under input load (e.g. window resize freezes the app; no `[KRN]` trap) | **stale pre-`-ffixed-x18` objects**: a `make.cfg` flag change does NOT invalidate `.o` files, so modules built before the flag keep allocating x18, which macOS zeroes on any signal/kernel entry | `find gen -name '*.o' -not -path '*tools*' -delete`, rebuild the full metatarget set; verify with `graft/deploy-check` (x18 section; clean modules have ≤4 x18 refs). Saving x18 in the context can't help — the host has already clobbered it before our handler runs (`hosted/x18probe`) |
 
 ## 7. After changing AROS source — refresh the snapshot
 
