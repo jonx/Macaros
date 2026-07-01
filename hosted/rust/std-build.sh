@@ -40,7 +40,7 @@ AUTOLIB=(-lmui -lamiga -larossupport -lamiga -lcodesets -lkeymap -lexpansion
          -lcommodities -ldiskfont -lasl -lmuimaster -ldatatypes -lcybergraphics
          -lworkbench -licon -lintuition -lgadtools -llayers -laros -lpartition
          -liffparse -lgraphics -llocale -ldos -lutility -loop -llibinit -lautoinit)
-STDLIBS=(-lposixc -lstdcio -lstdc -lexec)
+STDLIBS=(-lposixc -lstdcio -lstdc -lexec -lpthread)
 
 echo "[stage2] compile harness rs3_main.c + glues"
 "$CC" "${CFLAGS[@]}" -c "$DIR/rs3_main.c" -o "$OUT/rs3_main.o"
@@ -52,12 +52,16 @@ echo "[stage2] compile harness rs3_main.c + glues"
 "$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -c "$DIR/aros_fs_glue.c" -o "$OUT/aros_fs_glue.o"
 # the process glue (dos SystemTagList) needs no special include.
 "$CC" "${CFLAGS[@]}" -c "$DIR/aros_process_glue.c" -o "$OUT/aros_process_glue.o"
+# thread glue (pthread spawn/join, header-clean) + sync glue (pthread mutex/cond,
+# needs the posixc include for <pthread.h>).
+"$CC" "${CFLAGS[@]}" -c "$DIR/aros_thread_glue.c" -o "$OUT/aros_thread_glue.o"
+"$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -c "$DIR/aros_sync_glue.c" -o "$OUT/aros_sync_glue.o"
 
 echo "[stage2] link RustStd (collect-aros -> ET_REL AROS program)"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/RustStd" \
-    "$LIBDIR/startup.o" "$OUT/rs3_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" "$RSLIB" \
+    "$LIBDIR/startup.o" "$OUT/rs3_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" "$OUT/aros_thread_glue.o" "$OUT/aros_sync_glue.o" "$RSLIB" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[stage2] built: $OUT/RustStd ($(stat -f%z "$OUT/RustStd" 2>/dev/null) bytes)"
 

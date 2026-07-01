@@ -116,6 +116,28 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         Err(e) => println!("[RS3c] time: SystemTime err {e:?}"),
     }
 
+    // thread: 4 threads each increment a shared Mutex<u64> 1000x, join, expect 4000.
+    // Exercises thread::spawn/join (pthread), Mutex (pthread mutex + OnceBox), Arc,
+    // and pthread-key TLS (thread::current). All unblocked by the OS x18 rebuild.
+    {
+        use std::sync::{Arc, Mutex};
+        let counter = Arc::new(Mutex::new(0u64));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let c = Arc::clone(&counter);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..1000 {
+                    *c.lock().unwrap() += 1;
+                }
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+        let total = *counter.lock().unwrap();
+        println!("[RS3c] thread: 4x1000 shared Mutex -> counter={total} (expect 4000)");
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }
