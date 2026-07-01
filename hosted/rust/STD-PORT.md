@@ -73,8 +73,9 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `fs/aros.rs` | partial | `File` create/write/seek/close over `posixc` work; read-`open` EINVALs (upstream) |
 | `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
-| `thread_local` → `no_threads` | done | single-thread statics — switch to pthread keys for `std::thread` |
-| `thread`, `process`, `pipe`, … | **stubs** | fall through to `unsupported` — remaining work |
+| `thread_local` → `no_threads` | done | single-thread statics (pthread-key backend written + staged, see below) |
+| `thread` | **staged** | `sys/thread/aros.rs` + `key/aros.rs` complete (pthread spawn/join + TLS) but **not wired** — needs the sync core; see "Threads (staged)" |
+| `process`, `pipe`, … | **stubs** | fall through to `unsupported` — remaining work |
 
 ## Dev environment setup (fresh machine, or if the clone/symlink is gone)
 
@@ -223,12 +224,40 @@ Remaining pal pieces, roughly in order:
    bug; tried 2-arg and 3-arg variadic calls -- confirm with a C repro then report
    upstream). metadata/dirs/symlinks are stubs. O_* are Linux-style (O_CREAT=0x40,
    O_TRUNC=0x200, O_APPEND=0x400), off_t=i64, mode_t=u16.
-2. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`). The
-   `std::env` global lock also leans on the sync pal, so this unblocks env writes too.
+2. **`thread` (staged — foundation done, sync core remains).** See below.
 3. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
    private `extern "C"` decls, and upstreaming the target spec.
 
+### Threads (staged)
+
+AROS has a full `pthread.library` (the `-lpthread` linklib: `libpthread.a` is already
+in the build tree), so the **foundation is written and correct, but deliberately not
+wired**:
+
+- `sys/thread/aros.rs` — `Thread` spawn/join/yield/sleep via the `aros_thr_*` glue
+  (`hosted/rust/aros_thread_glue.c`), which owns the opaque `pthread_attr_t` so we can
+  set the stack size. `sleep` uses dos `Delay` (20ms granularity).
+- `sys/thread_local/key/aros.rs` — pthread-key TLS (`pthread_key_create`/`setspecific`/
+  `getspecific`/`key_delete`). The library reserves a slot for the main task at
+  `ADD2INIT`, so keys work on the main thread too.
+
+**Why it's not turned on:** `std::thread` can't be shipped half-done. The moment real
+threads exist, std's own internals (e.g. the `Stdout` lock) use `sys` `Mutex`/`Condvar`,
+which for AROS still fall through to the single-threaded `no_threads` stubs — two
+threads doing `println!` would race. Wiring threads therefore also requires a real
+**sync core**: `Mutex`+`Condvar` (buildable on AROS `pthread_mutex`/`pthread_cond`,
+whose structs are `SignalSemaphore`-based with all-zero const initializers + lazy init,
+so a zeroed buffer is a valid static lock), a `RwLock` (the portable `queue` impl), and
+a `Parker` (the portable `pthread` parker) — the last two need a `sys::pal::sync` for
+AROS, which the `unsupported` pal doesn't provide yet. On top of that, thread execution
+shares the OS-wide **x18 exposure** (same root cause as `time`), so threads aren't
+*solid* until the `-ffixed-x18` rebuild (TODO.md). To wire it up once the sync core
+lands: re-add `target_os = "aros"` arms in `sys/thread/mod.rs` and the `key`
+`cfg_select` (and drop aros from the `no_threads` TLS arm), then add `-lpthread` +
+`aros_thread_glue.o` to the std build scripts.
+
 ---
 
-*The 194-line port lives in the clone (tree 1). This repo holds the rig that builds
-and proves it. Nothing Rust-side is pushed until the maintainer decides.*
+*The pal lives in the clone (tree 1), under `library/std/src/sys/*/aros.rs`. This repo
+holds the rig that builds and proves it. Nothing Rust-side is pushed until the
+maintainer decides.*
