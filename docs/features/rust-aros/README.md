@@ -11,16 +11,26 @@ RUST-AROS: STD PASS
 ```
 
 That exercises `println!`, `Vec` + iterators, `HashMap` (drives the random pal + the
-allocator), and `format!`. **`[RS4]` networking** also works: a `std` Rust program
-does a TCP round-trip over the **bsdsocket bridge** (3/3 byte-exact + a clean
-connect-refused path). The target now reserves `x18` (`+reserve-x18`), so Rust code
-is immune to the platform-register clobber. `[RS0]`/`[RS1]` (no_std codegen + the
+allocator), and `format!`. The target reserves `x18` (`+reserve-x18`), so Rust code is
+immune to the platform-register clobber. `[RS0]`/`[RS1]` (no_std codegen + the
 `AllocVec` allocator) came first; **`[RS2]` (a no_std I/O shim) was skipped** — `std`
 doesn't reuse it.
-`std` is brought up the upstream way: a fresh `sys/pal/aros` calling `posixc`
-directly, developed in a **local rust clone** (`/Users/user/Source/rust-aros`, not
-pushed) so it is PR-able to rust-lang/rust later. See [The `std` port](#the-std-port-rs3).
-Remaining `std` surface (threads, real `time`, `net`, `fs`) is **scoping / UNVERIFIED**.
+
+**Verified live since (2026-07-01), all through real `std`:**
+
+- **`std::net`** — `TcpStream::connect` + `write_all`/`read_exact` round-trip over the
+  bsdsocket bridge, plus `local_addr`/`peer_addr`/`set_nodelay` (`C:RustStdNet`). IPv4.
+- **`fs`** — `File` create/write/**read**/seek round-trip on a real `MacRW:` host file.
+- **`env`** — `getenv` **and** `setenv` (`set_var` reads back) + `unsetenv`.
+- **`args`** — `std::env::args()` from the shell command line.
+
+Written-but-blocked: **`time`** (correct, but faults until the OS-wide `-ffixed-x18`
+rebuild). Staged: **`thread`** (pthread spawn/join + TLS complete, not wired pending a
+sync core). The authoritative per-module status + the build/run loop live in
+[hosted/rust/STD-PORT.md](../../../hosted/rust/STD-PORT.md); this page is the design/why.
+`std` is brought up the upstream way: a fresh `sys/*/aros.rs` per module calling
+`posixc`/`bsdsocket`/`pthread` directly, developed in a **local rust clone**
+(`/Users/user/Source/rust-aros`, not pushed) so it is PR-able to rust-lang/rust later.
 
 ## Goal
 
