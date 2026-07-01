@@ -29,6 +29,7 @@ PASTEBOARD="${AROS_CTL_PASTEBOARD_DYLIB:-$ROOT/build/libpasteboard.dylib}"
 COREAUDIO="${AROS_CTL_COREAUDIO_DYLIB:-$ROOT/build/libcoreaudio.dylib}"
 BSDSOCK="${AROS_CTL_BSDSOCK_DYLIB:-$ROOT/build/libbsdsockhost.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
+ICON="${AROS_CTL_ICON:-$ROOT/hosted/cocoametal/Macaros.icns}"
 ENT="${AROS_CTL_ENT:-$HERE/aros-host.entitlements.plist}"
 APP="${AROS_APP:-$ROOT/build/Daedalos.app}"
 
@@ -39,6 +40,7 @@ INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleDisplayName</key><string>Daedalos</string>
   <key>CFBundleIdentifier</key><string>org.aros.hosted</string>
   <key>CFBundleExecutable</key><string>Daedalos</string>
+  <key>CFBundleIconFile</key><string>Macaros</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -73,6 +75,7 @@ assemble() {   # assemble <bootd> <app>
     [ -f "$BSDSOCK" ] && cp "$BSDSOCK" "$_app/Contents/Frameworks/libbsdsockhost.dylib"
     cp "$SCHEMA" "$_app/Contents/Frameworks/settings.json"
     cp "$SCHEMA" "$_app/Contents/Resources/settings.json"
+    [ -f "$ICON" ] && cp "$ICON" "$_app/Contents/Resources/Macaros.icns"
     cp "$HERE/aros-host-conf.sh" "$_app/Contents/MacOS/aros-host-conf.sh"
     printf '%s' "$LAUNCHER"   > "$_app/Contents/MacOS/Daedalos"; chmod +x "$_app/Contents/MacOS/Daedalos"
     printf '%s' "$INFO_PLIST" > "$_app/Contents/Info.plist"
@@ -122,6 +125,10 @@ if [ "${1:-}" = "--check" ]; then
     fi
     [ -f "$A/Frameworks/settings.json" ];         ck $? "Frameworks/settings.json (dladdr-relative)"
     [ -f "$A/Resources/settings.json" ];          ck $? "Resources/settings.json (AROS_SETTINGS_SCHEMA)"
+    if [ -f "$ICON" ]; then
+        [ -f "$A/Resources/Macaros.icns" ];        ck $? "Resources/Macaros.icns present"
+        grep -q '<string>Macaros</string>' "$A/Info.plist"; ck $? "Info.plist CFBundleIconFile = Macaros"
+    fi
     [ -f "$A/MacOS/aros-host-conf.sh" ];          ck $? "MacOS/aros-host-conf.sh present"
     grep -q 'AROS_DARWIN_THREADED=1' "$A/MacOS/Daedalos";       ck $? "launcher sets AROS_DARWIN_THREADED"
     grep -q 'AROS_SETTINGS_SCHEMA' "$A/MacOS/Daedalos";         ck $? "launcher points the dylib at the bundled schema"

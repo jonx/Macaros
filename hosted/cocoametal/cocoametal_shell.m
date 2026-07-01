@@ -29,57 +29,20 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
 #include "cocoametal.h"
+#include "macaron_icon.h"
 
 /* Host-internal: inject a synthetic key transition into the event ring (defined in
  * cocoametal_control.m), so the Edit menu can hand the Amiga clipboard keys to AROS. */
 extern void cm__inject_key(int vk, int pressed, unsigned mods);
 
 /* ------------------------------------------------------------------ icon ----
- * Daedalos's wings: a white feather on a sky-gradient rounded rect. Drawn with
- * CoreGraphics (no window server needed) so it sets even on a headless/bare run. */
+ * App icon: the purple macaron, decoded from an embedded base64 PNG
+ * (macaron_icon.h) so it sets even on a headless/bare run with no external asset. */
 static NSImage *cmsh_make_icon(void) {
-    const int S = 256;
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef c = CGBitmapContextCreate(NULL, S, S, 8, 0, cs,
-                                           (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
-    if (!c) { CGColorSpaceRelease(cs); return nil; }
-    CGContextClearRect(c, CGRectMake(0, 0, S, S));
-
-    /* rounded-rect background, clipped, filled with a vertical sky gradient */
-    CGFloat inset = S * 0.06, r = S * 0.22;
-    CGPathRef bg = CGPathCreateWithRoundedRect(
-        CGRectMake(inset, inset, S - 2 * inset, S - 2 * inset), r, r, NULL);
-    CGContextSaveGState(c);
-    CGContextAddPath(c, bg); CGContextClip(c);
-    CGFloat locs[2] = {0.0, 1.0};
-    CGFloat cols[8] = { 0.09, 0.11, 0.30, 1.0,    /* deep indigo (bottom) */
-                        0.22, 0.46, 0.86, 1.0 };  /* sky blue    (top)    */
-    CGGradientRef grad = CGGradientCreateWithColorComponents(cs, cols, locs, 2);
-    CGContextDrawLinearGradient(c, grad, CGPointMake(0, inset), CGPointMake(0, S - inset), 0);
-    CGGradientRelease(grad);
-
-    /* white feather, centred and gently tilted */
-    CGContextTranslateCTM(c, S / 2.0, S / 2.0);
-    CGContextRotateCTM(c, -0.22);
-    CGFloat fh = S * 0.66, fw = S * 0.19;          /* feather length / half-width */
-    CGContextSetRGBFillColor(c, 1, 1, 1, 0.97);
-    CGContextBeginPath(c);
-    CGContextMoveToPoint(c, 0,  fh / 2);                          /* top tip   */
-    CGContextAddQuadCurveToPoint(c,  fw, 0, 0, -fh / 2);          /* right edge */
-    CGContextAddQuadCurveToPoint(c, -fw, 0, 0,  fh / 2);          /* left edge  */
-    CGContextClosePath(c); CGContextFillPath(c);
-    /* central shaft (rachis) in the sky colour for contrast */
-    CGContextSetRGBStrokeColor(c, 0.22, 0.46, 0.86, 0.95);
-    CGContextSetLineWidth(c, S * 0.016); CGContextSetLineCap(c, kCGLineCapRound);
-    CGContextMoveToPoint(c, 0, -fh / 2 * 0.88); CGContextAddLineToPoint(c, 0, fh / 2 * 0.84);
-    CGContextStrokePath(c);
-    CGContextRestoreGState(c);
-
-    CGImageRef img = CGBitmapContextCreateImage(c);
-    NSImage *ns = img ? [[NSImage alloc] initWithCGImage:img size:NSMakeSize(S, S)] : nil;
-    if (img) CGImageRelease(img);
-    CGPathRelease(bg); CGContextRelease(c); CGColorSpaceRelease(cs);
-    return ns;
+    NSString *b64 = [NSString stringWithUTF8String:macaron_icon_b64];
+    NSData *png = [[NSData alloc] initWithBase64EncodedString:b64
+                       options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    return png ? [[NSImage alloc] initWithData:png] : nil;
 }
 
 static void cmsh_show_about(void) {

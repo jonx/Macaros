@@ -241,10 +241,25 @@ is what spike [G1] settles before anything else is built.**
   and the entitlements (the J1 `allow-jit` path for the 68k JIT, and the
   hostlib `dlopen`). `run-window.sh` becomes a thin "build the bundle, then `open` it"
   wrapper (keeping a `--terminal` mode for the unattended serial channel).
-- **Custom icon.** An `.icns` (an Amiga-checkmark / AROS mark over a Mac-rounded-rect) in
-  `Contents/Resources`, referenced by `CFBundleIconFile`; also set at runtime via
-  `NSApp.applicationIconImage` so a bare-binary run (the test path) still shows it in the
-  Dock. Asset is a deliverable, not blocking.
+- **Custom icon — the macaron.** A purple (cassis) macaron on a violet squircle,
+  delivered two ways so every launch path shows it: `hosted/cocoametal/Macaros.icns` in
+  `Contents/Resources` (referenced by `CFBundleIconFile`) for the `.app`, and the same art
+  embedded as base64 in `hosted/cocoametal/macaron_icon.h`, decoded by `cmsh_make_icon()`
+  and set via `NSApp.applicationIconImage` so a bare-binary / headless run (the test path)
+  shows it too. **macOS does not auto-mask app icons** (unlike iOS), so the rounded shape
+  and margin are baked into the art, and it must follow the macOS 11+ (Big Sur) app-icon
+  grid or it renders oversized and overflows the Dock selection box:
+  - **canvas** 1024×1024; **tile** (rounded body) **824×824** (80.5%); **margin** 100px
+    transparent on all four sides; **corner radius** 185.4px (= 0.225 × 824), continuous
+    (squircle) corners. Our current icns uses a circular-arc approximation of that radius;
+    indistinguishable at Dock sizes.
+  - **Regenerate** all three assets from the raw art (`Macaros-source.png`) with
+    `hosted/cocoametal/make-macaron-icon.sh` (then `make cocoametal-dylib`). The script is
+    the canonical pipeline — white-background flood-fill, the 824-tile Apple mask, the icns,
+    and the base64 embed — and documents the two ImageMagick traps (a Gray-colorspace mask
+    collapses the result to grayscale; `-extent` chained after `-composite` drops the pixels).
+  - **Spec sources:** [Apple HIG — App icons](https://developer.apple.com/design/human-interface-guidelines/app-icons),
+    [Apple Developer Forums — 824 / 185.4](https://developer.apple.com/forums/thread/670578).
 - **About panel.** The standard AppKit panel — `[NSApp orderFrontStandardAboutPanel:]`
   pulls name/version/build/copyright from `Info.plist` for free; pass an
   `NSAboutPanelOptionCredits` attributed string (AROS license + this port's credits). No
