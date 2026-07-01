@@ -232,8 +232,33 @@ Remaining pal pieces, roughly in order:
    flags (`O_CREAT=0x40`, `O_TRUNC=0x200`, `O_APPEND=0x400`) do match. off_t=i64,
    mode_t=u16.
 2. **`thread` (staged — foundation done, sync core remains).** See below.
-3. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
-   private `extern "C"` decls, and upstreaming the target spec.
+3. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
+   AROS support, a real CSPRNG, and the `std::process` / full `vars()` gaps.
+
+### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
+
+What a first PR would contain, and where each piece stands:
+
+- **Target spec → built-in.** Today `aarch64-unknown-aros.json` + `-Zjson-target-spec`
+  drive the build. For upstream it becomes
+  `compiler/rustc_target/src/spec/targets/aarch64_unknown_aros.rs` (os `"aros"`,
+  `code-model: Large`, `features: "+v8a,+neon,+reserve-x18"`, `relocation-model` +
+  linker wiring to the collect-aros/crosstools flow). Mechanical; the JSON is the spec.
+- **pal modules (done, in the clone):** `alloc`, `stdio`, `io/error`, `env`
+  (read+write), `args`, `fs` (files), `net` (IPv4), plus the `random`/`thread_local`
+  stubs. These are the bulk of the PR and are verified live.
+- **`libc`-crate AROS support.** The pal currently declares its own `extern "C"`
+  posixc/bsdsocket/pthread signatures. A proper PR adds an `aros` module to the `libc`
+  crate (types + fn decls from `compiler/crt/posixc` + `arch/all-unix/bsdsocket` +
+  `compiler/pthread`), then the pal uses `libc::*`. This also unblocks the thread sync
+  core (the upstream `pthread` `Mutex`/`Condvar`/`Parker` modules are `libc`-based).
+- **CSPRNG.** Replace the weak `random/aros.rs` with the host `arc4random_buf` path
+  (see that file's header) or a native entropy device.
+- **Known gaps to disclose in the PR:** `time` compiles but faults until the OS-wide
+  `-ffixed-x18` rebuild; `std::thread` is staged pending the sync core; `std::process`
+  and `std::env::vars()` enumeration are unimplemented; `set_nonblocking`/socket
+  timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37). Tier-3 targets ship
+  with documented gaps like these, so none blocks an initial PR.
 
 ### Threads (staged)
 
