@@ -77,7 +77,8 @@ while [ $n -le "$CYCLES" ]; do
     "$CTL" shot "$TMP/b.png" >/dev/null 2>&1
     if cmp -s "$TMP/a.png" "$TMP/b.png"; then
         echo "FAIL: guest wedged after resize cycle $n/$CYCLES (pointer no longer repaints)"
-        "$CTL" diag >/dev/null 2>&1 || true
+        "$CTL" diag nokill >/dev/null 2>&1 || true
+        echo "wedged instance left running for autopsy: aros-ctl tasks / aros-ctl kill"
         exit 1
     fi
     if grep -qE "Trap signal|re-faulting|halting host" "$LOG" 2>/dev/null; then
