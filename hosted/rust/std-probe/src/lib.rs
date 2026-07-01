@@ -64,6 +64,18 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         println!("[RS3c] fs: FAILED: {e:?}");
     }
 
+    // fs metadata: stat the file just written (drives sys/fs/aros.rs FileAttr/stat)
+    match std::fs::metadata(fpath) {
+        Ok(m) => println!(
+            "[RS3c] fs: metadata len={} is_file={} is_dir={} readonly={}",
+            m.len(),
+            m.is_file(),
+            m.is_dir(),
+            m.permissions().readonly()
+        ),
+        Err(e) => println!("[RS3c] fs: metadata FAILED: {e:?}"),
+    }
+
     // args: std::env::args() reads argc/argv captured by the C harness
     let args: Vec<String> = std::env::args().collect();
     println!("[RS3c] args: {} -> {args:?}", args.len());

@@ -43,13 +43,14 @@ STDLIBS=(-lposixc -lstdcio -lstdc -lexec)
 
 echo "[net] compile glue + harness (-ffixed-x18)"
 "$CC" "${CFLAGS[@]}" -c "$DIR/aros_net_glue.c" -o "$OUT/aros_net_glue.o"
+"$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -c "$DIR/aros_fs_glue.c" -o "$OUT/aros_fs_glue.o"
 "$CC" "${CFLAGS[@]}" -c "$DIR/rs_net_main.c"   -o "$OUT/rs_net_main.o"
 
 echo "[net] link RustNet"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/RustNet" \
-    "$LIBDIR/startup.o" "$OUT/rs_net_main.o" "$OUT/aros_net_glue.o" "$RSLIB" \
+    "$LIBDIR/startup.o" "$OUT/rs_net_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$RSLIB" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[net] built: $OUT/RustNet ($(stat -f%z "$OUT/RustNet" 2>/dev/null) bytes)"
 cp -f "$OUT/RustNet" "$CDIR/RustNet"; chmod +x "$CDIR/RustNet"
