@@ -74,6 +74,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `fs/aros.rs` | done | files (create/write/read/seek/close), `metadata`/`stat`/`fstat`/`exists`, and `read_dir` (opendir/readdir) — all verified live; only symlinks/`set_perm`/times remain stubs |
 | `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
+| `process/aros.rs` | done (output/status) | `Command` → shell-quoted line run by dos `SystemTagList` (via `aros_process_glue.c`); `output()` captures via `MacRW:` temp files, `status()` runs synchronously — verified live. No live pipes / async child / per-command env+cwd yet |
 | `thread_local` → `no_threads` | done | single-thread statics (pthread-key backend written + staged, see below) |
 | `thread` | **staged** | `sys/thread/aros.rs` + `key/aros.rs` complete (pthread spawn/join + TLS) but **not wired** — needs the sync core; see "Threads (staged)" |
 | `process`, `pipe`, … | **stubs** | fall through to `unsupported` — remaining work |
@@ -222,10 +223,11 @@ has no POSIX `environ` array.
 Remaining pal pieces, roughly in order:
 
 1. **`thread` (staged — foundation done, sync core remains).** See below.
-2. **`std::process`** (spawn subprocesses via dos `System()`) and **`fs`** symlinks/
-   `set_perm`/times — the remaining medium pieces.
+2. **Small remaining stubs**: `fs` symlinks/`set_perm`/times; `std::process` live pipes
+   + async child + per-command env/cwd (the sync `output()`/`status()` path is done);
+   `std::env::vars()` enumeration.
 3. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
-   AROS support, a real CSPRNG, and the full `vars()` gap.
+   AROS support, a real CSPRNG.
 
 ### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
 

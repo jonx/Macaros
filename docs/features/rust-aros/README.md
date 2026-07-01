@@ -20,9 +20,12 @@ doesn't reuse it.
 
 - **`std::net`** — `TcpStream::connect` + `write_all`/`read_exact` round-trip over the
   bsdsocket bridge, plus `local_addr`/`peer_addr`/`set_nodelay` (`C:RustStdNet`). IPv4.
-- **`fs`** — `File` create/write/**read**/seek round-trip on a real `MacRW:` host file.
+- **`fs`** — `File` create/write/**read**/seek + `metadata` (size/type/perms) +
+  `read_dir` (listed 35 real entries) on the `MacRW:` host share.
 - **`env`** — `getenv` **and** `setenv` (`set_var` reads back) + `unsetenv`.
 - **`args`** — `std::env::args()` from the shell command line.
+- **`process`** — `Command::new("Echo").arg(..).output()` ran a real `C:` command,
+  captured its stdout, and returned exit code 0 (via dos `SystemTagList`).
 
 Written-but-blocked: **`time`** (correct, but faults until the OS-wide `-ffixed-x18`
 rebuild). Staged: **`thread`** (pthread spawn/join + TLS complete, not wired pending a
