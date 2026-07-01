@@ -92,6 +92,16 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
     let args: Vec<String> = std::env::args().collect();
     println!("[RS3c] args: {} -> {args:?}", args.len());
 
+    // process: run a C: command via dos System(), capture its stdout + exit code
+    match std::process::Command::new("Echo").arg("hi from rust proc").output() {
+        Ok(o) => println!(
+            "[RS3c] process: Echo -> code={:?} stdout={:?}",
+            o.status.code(),
+            String::from_utf8_lossy(&o.stdout).trim_end()
+        ),
+        Err(e) => println!("[RS3c] process: FAILED: {e:?}"),
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }

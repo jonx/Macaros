@@ -44,13 +44,14 @@ STDLIBS=(-lposixc -lstdcio -lstdc -lexec)
 echo "[stdnet] compile glue + harness (-ffixed-x18)"
 "$CC" "${CFLAGS[@]}" -c "$DIR/aros_net_glue.c"  -o "$OUT/aros_net_glue.o"
 "$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -c "$DIR/aros_fs_glue.c" -o "$OUT/aros_fs_glue.o"
+"$CC" "${CFLAGS[@]}" -c "$DIR/aros_process_glue.c" -o "$OUT/aros_process_glue.o"
 "$CC" "${CFLAGS[@]}" -c "$DIR/rs_stdnet_main.c" -o "$OUT/rs_stdnet_main.o"
 
 echo "[stdnet] link RustStdNet"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/RustStdNet" \
-    "$LIBDIR/startup.o" "$OUT/rs_stdnet_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$RSLIB" \
+    "$LIBDIR/startup.o" "$OUT/rs_stdnet_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" "$RSLIB" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[stdnet] built: $OUT/RustStdNet ($(stat -f%z "$OUT/RustStdNet" 2>/dev/null) bytes)"
 cp -f "$OUT/RustStdNet" "$CDIR/RustStdNet"; chmod +x "$CDIR/RustStdNet"
