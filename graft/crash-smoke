@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# crash-smoke -- run each CrashLab trigger on a fresh boot and record whether
+# the whole instance survived. This is the before/after evidence for the
+# crash-containment work: BEFORE the policy change every fault-class trigger
+# takes the instance down; AFTER, the recoverable ones should leave it running.
+#
+# For each trigger: boot desktop-less CLI, type "CrashLab <TRIGGER>", wait, then
+# probe liveness (is the process still up + does the log show the marker?).
+# Prints a PASS/DOWN table. Never asserts a verdict itself -- it just records
+# reality so you can diff before vs after.
+set -u
+
+SELF="$0"
+while [ -h "$SELF" ]; do
+    dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$dir/$SELF" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+CTL="$HERE/aros-ctl"
+LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
+PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
+LOCK_DIR="${AROS_HARNESS_LOCK_DIR:-/tmp/aros-harness.lock}"
+
+# BUSYLOOP/FORBIDLOOP never return and don't necessarily kill the process, so
+# they are handled specially (liveness = "does anything else still respond").
+TRIGGERS="${AROS_CRASH_SMOKE_TRIGGERS:-NULLREAD NULLWRITE NULLJUMP WILDWRITE ILLEGAL STACKSMASH DEADEND GURU CRASHTASK BUSYLOOP FORBIDLOOP}"
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "FAIL: another AROS harness smoke appears to be running ($LOCK_DIR)" >&2
+    exit 1
+fi
+cleanup() { trap - EXIT INT TERM; "$CTL" kill >/dev/null 2>&1; rmdir "$LOCK_DIR" >/dev/null 2>&1; }
+trap cleanup EXIT INT TERM
+
+printf '%-11s  %-8s  %s\n' "TRIGGER" "INSTANCE" "MARKER"
+printf '%-11s  %-8s  %s\n' "-------" "--------" "------"
+
+for T in $TRIGGERS; do
+    "$CTL" kill >/dev/null 2>&1; sleep 1
+    : > "$LOG" 2>/dev/null || true
+    "$CTL" run >/dev/null 2>&1
+    i=0
+    while [ $i -lt 60 ]; do grep -q cm_open "$LOG" 2>/dev/null && break; sleep 1; i=$((i+1)); done
+    grep -q cm_open "$LOG" 2>/dev/null || { printf '%-11s  %-8s  %s\n' "$T" "NOBOOT" "-"; continue; }
+    sleep 3
+
+    "$CTL" type "CrashLab $T" >/dev/null 2>&1
+    "$CTL" enter >/dev/null 2>&1
+    sleep 4
+
+    marker="no"
+    grep -q "\[CRASHLAB\] $T" "$LOG" 2>/dev/null && marker="yes"
+
+    # Liveness: is the guest still processing? Type a harmless echo and see if
+    # the console echoes it (works even when the process is technically 'up'
+    # but wedged).
+    pid="$(cat "$PIDF" 2>/dev/null || true)"
+    alive="down"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        "$CTL" shot /tmp/cs-a.png >/dev/null 2>&1
+        "$CTL" type "Echo alive" >/dev/null 2>&1; "$CTL" enter >/dev/null 2>&1
+        sleep 2
+        "$CTL" shot /tmp/cs-b.png >/dev/null 2>&1
+        if cmp -s /tmp/cs-a.png /tmp/cs-b.png; then alive="wedged"; else alive="LIVE"; fi
+    fi
+    printf '%-11s  %-8s  %s\n' "$T" "$alive" "$marker"
+done
+
+"$CTL" kill >/dev/null 2>&1
+echo
+echo "INSTANCE: LIVE = survived & responsive | wedged = up but frozen | down = process gone | NOBOOT = boot failed"
+echo "MARKER:   yes = CrashLab printed its trigger line before firing"
