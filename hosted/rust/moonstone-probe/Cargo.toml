@@ -1,0 +1,16 @@
+[package]
+name = "moonstone-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+# Path-deps into the Moonstone workspace (the actual game code, unmodified). This
+# crate is its own workspace root (empty [workspace]) so it doesn't join either tree.
+[dependencies]
+moonstone-formats = { path = "/Users/user/Source/MoonstoneCS/ports/rust/crates/moonstone-formats" }
+moonstone-render  = { path = "/Users/user/Source/MoonstoneCS/ports/rust/crates/moonstone-render" }
+
+[workspace]
