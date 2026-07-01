@@ -70,7 +70,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 |---|---|---|
 | `alloc/aros.rs` | done | `posixc` `malloc` / `posix_memalign` |
 | `stdio/aros.rs` | done | `posixc` `write`/`read` on fd 0/1/2 |
-| `random/aros.rs` | done (**weak**) | SplitMix64 from an ASLR seed — TODO real CSPRNG |
+| `random/aros.rs` | done | calls `posixc` `arc4random_buf` (host CSPRNG borrowed via hostlib on hosted; weak fallback on native). The entropy policy lives in AROS (`compiler/crt/posixc/arc4random.c`), not the pal |
 | `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
 | `env/aros.rs` | done (read+write) | `getenv`/`setenv`/`unsetenv` verified live; only `vars()` enumeration is empty (no POSIX `environ`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
@@ -229,7 +229,7 @@ Remaining pal pieces (small corners — the core is done):
    child + per-command env/cwd (the sync `output()`/`status()` path is done);
    `std::env::vars()` enumeration.
 2. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
-   AROS support, a real CSPRNG.
+   AROS support.
 
 ### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
 
@@ -243,14 +243,16 @@ What a first PR would contain, and where each piece stands:
 - **pal modules (done, in the clone):** `alloc`, `stdio`, `io/error`, `env`
   (read+write), `args`, `fs` (files + metadata + dirs), `net` (IPv4), `process`,
   `time`, **`thread` + the full sync core** (`Mutex`/`Condvar`/`RwLock`/`Parker`) +
-  pthread-key TLS, plus the weak `random`. All verified live. This is the bulk of the PR.
+  pthread-key TLS, and `random` (posixc `arc4random_buf`). All verified live. This is
+  the bulk of the PR.
 - **`libc`-crate AROS support.** The pal currently declares its own `extern "C"`
   posixc/bsdsocket/pthread signatures. A proper PR adds an `aros` module to the `libc`
   crate (types + fn decls from `compiler/crt/posixc` + `arch/all-unix/bsdsocket` +
   `compiler/pthread`), then the pal uses `libc::*`. It would also let the sync core use
   the upstream `pthread` pal `Mutex`/`Condvar` directly instead of the byte-buffer glue.
-- **CSPRNG.** Replace the weak `random/aros.rs` with the host `arc4random_buf` path
-  (see that file's header) or a native entropy device.
+- **CSPRNG: done, in AROS.** `posixc` now has `arc4random_buf` (borrows the host CSPRNG
+  on hosted via hostlib, weak fallback on native); the pal just calls it. A native
+  entropy source is the remaining AROS-side gap (asked upstream on Slack).
 - **Known gaps to disclose in the PR:** the `-ffixed-x18` OS build requirement (the
   hosted OS must be built with it, else `time`/threads SIGBUS); `std::process` has no
   live pipes / async child / per-command env+cwd (sync `output()`/`status()` only);

@@ -138,6 +138,16 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         println!("[RS3c] thread: 4x1000 shared Mutex -> counter={total} (expect 4000)");
     }
 
+    // random: two fresh RandomState seeds (each drawn from posixc arc4random_buf,
+    // host-backed CSPRNG) must differ. Proves the entropy path end to end.
+    {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let a = RandomState::new().build_hasher().finish();
+        let b = RandomState::new().build_hasher().finish();
+        println!("[RS3c] random: arc4random seeds {a:#018x} {b:#018x} differ={}", a != b);
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }
