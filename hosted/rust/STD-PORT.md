@@ -69,7 +69,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `stdio/aros.rs` | done | `posixc` `write`/`read` on fd 0/1/2 |
 | `random/aros.rs` | done (**weak**) | SplitMix64 from an ASLR seed — TODO real CSPRNG |
 | `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
-| `env/aros.rs` | reads done | `getenv` verified; `setenv` fails (AROS `SetVar`) — see blockers |
+| `env/aros.rs` | done (read+write) | `getenv`/`setenv`/`unsetenv` verified live; only `vars()` enumeration is empty (no POSIX `environ`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
 | `fs/aros.rs` | done (files) | `File` create/write/read/seek/close over `posixc` — full round-trip verified live; metadata/dirs/symlinks are stubs |
 | `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
@@ -201,7 +201,7 @@ blocking with a timer-poll park (`FIONBIO` is a no-op; we return `Unsupported` f
 requested timeout rather than lie). `try_clone`/`duplicate` return `Unsupported`.
 See UPSTREAM-NOTES #37.
 
-**Two AROS-side blockers found (not pal bugs — fix AROS, then the pal just works):**
+**One AROS-side blocker (not a pal bug — the pal is done, the OS needs a rebuild):**
 
 - **`time` faults from Rust (but `clock_gettime` works in C).** `sys/time/aros.rs`
   is written and the `timespec` layout is correct (a C `ClockTest` command confirmed
@@ -212,10 +212,12 @@ See UPSTREAM-NOTES #37.
   path). The pending OS-wide `-ffixed-x18` rebuild (TODO.md) should unblock it; the
   pal needs no change. (Separately, the hosted RTC isn't host-synced, so REALTIME is
   ~1978 — see UPSTREAM-NOTES #36.)
-- **`env` writes fail.** AROS `setenv` returns -1 (`SetVar(..., LV_VAR|GVF_LOCAL_ONLY)`
-  fails for a `C:` command's process), so `std::env::set_var` panics by design.
-  Reads work. Fix AROS `SetVar`/local-vars for loaded commands, or back writes with
-  a different mechanism.
+
+**`env` writes work** (earlier "setenv fails" was a boot-stall run misread): AROS
+`setenv` → `SetVar(..., LV_VAR|GVF_LOCAL_ONLY)` returns DOSTRUE for a loaded `C:`
+command, so `std::env::set_var` succeeds — verified live (`set_var RUST_WROTE` reads
+back `"yes-42"`). Only `std::env::vars` (full enumeration) is still empty, since AROS
+has no POSIX `environ` array.
 
 Remaining pal pieces, roughly in order:
 

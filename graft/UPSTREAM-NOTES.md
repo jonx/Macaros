@@ -326,13 +326,12 @@ did. New issues found (candidate patches / bug reports):
     the C standard types from AROS/the crosstools, not the macOS SDK (the `__arm64__`
     gating is incomplete here).
 
-35. **`setenv()` fails for a loaded `C:` command's process.** `setenv` →
-    `SetVar(name, value, -1, LV_VAR | GVF_LOCAL_ONLY)` returns failure (so `setenv`
-    returns -1) for a program loaded + run from the shell, so a libc that relies on it
-    (Rust `std::env::set_var`, which then panics by design) can't write env vars.
-    Reads (`getenv` → `GetVar`) work. *Likely cause:* the loaded command's `Process`
-    has no usable local-var list, or `GVF_LOCAL_ONLY` has nowhere to write. The
-    reads-work / writes-fail asymmetry is surprising and worth a look.
+35. ~~`setenv()` fails for a loaded `C:` command's process.~~ **Withdrawn — not a
+    bug.** Re-tested empirically: `std::env::set_var` (→ `setenv` → `SetVar(...,
+    LV_VAR | GVF_LOCAL_ONLY)`) **works** for a loaded command; `SetVar` returns
+    DOSTRUE on the LOCAL_ONLY path (`rom/dos/setvar.c:197`) and the value reads back.
+    The earlier "-1" was a boot-stall run misattributed to `setenv`. Left here so the
+    numbering is stable.
 
 36. **Hosted RTC isn't seeded from the host clock.** `clock_gettime(CLOCK_REALTIME)`
     returns `tv_sec` ≈ 252460808 (~1978), not the host wall-clock — the hosted AROS

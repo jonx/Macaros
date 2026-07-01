@@ -31,11 +31,17 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
     );
     // RS3c: isolate env / SystemTime / Instant, each with its own marker so a
     // single run shows exactly how far it got.
-    // env read (getenv) works; the startup sets RUST_GREET via SetEnv. (AROS
-    // `setenv`/SetVar fails at runtime so writes are unsupported; `time` is wired
-    // but AROS `clock_gettime` faults, so neither is exercised here yet.)
+    // env read (getenv) works; the startup sets RUST_GREET via SetEnv.
     let greet = std::env::var("RUST_GREET").unwrap_or_else(|_| "<unset>".into());
     println!("[RS3c] env: getenv RUST_GREET={greet}");
+
+    // env write: does std::env::set_var (posixc setenv -> dos SetVar LOCAL_ONLY)
+    // actually work for a loaded C: command? Set, then read it back.
+    unsafe { std::env::set_var("RUST_WROTE", "yes-42"); }
+    match std::env::var("RUST_WROTE") {
+        Ok(v) => println!("[RS3c] env: set_var RUST_WROTE -> read back {v:?}"),
+        Err(e) => println!("[RS3c] env: set_var readback FAILED: {e:?}"),
+    }
 
     // fs: create+write a MacRW: file, reopen, read via File::read (no file_attr),
     // to characterize posixc open/write/read cleanly.
