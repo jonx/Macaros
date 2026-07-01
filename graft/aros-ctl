@@ -13,7 +13,8 @@
 #   aros-ctl deploy         copy current host/AROS artifacts into the runnable image
 #   aros-ctl run            boot AROS windowed (background), log to $LOG
 #   aros-ctl status         report pid/fifo/log/crash state
-#   aros-ctl stop           request guest shutdown, then clean up
+#   aros-ctl stop           request guest shutdown, then clean up (reports kills)
+#   aros-ctl kill           force-kill every hosted-AROS process, then clean up
 #   aros-ctl type TEXT...   type text (lowercase/digits/space/punct; Up=shift)
 #   aros-ctl enter          press Return
 #   aros-ctl key VK P [MODS] raw key: macOS virtual keycode VK, pressed P (1/0)
@@ -92,22 +93,38 @@ stop_pid() {
     kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
 }
 
+# Stop the instance(s) bound to this boot tree. Reports each pid it actually
+# signalled and leaves the running tally in STOPPED_COUNT for the caller. The
+# pidfile target is killed first, so the boot-tree sweep then skips it (it is
+# already dead and stop_pid returns non-zero). The sweep is captured into a
+# variable, not piped into the loop, so STOPPED_COUNT survives (a `... | while`
+# would run the loop in a subshell and lose the count).
 stop_instances_for_bootd() {
     local bootd="$1"
-    local pid
+    local pid others
+    STOPPED_COUNT=0
 
     if [ -f "$PIDF" ]; then
         pid="$(cat "$PIDF" 2>/dev/null)"
-        stop_pid "$pid" || true
+        if stop_pid "$pid"; then
+            echo ">> stopped pid $pid (pidfile)"
+            STOPPED_COUNT=$((STOPPED_COUNT + 1))
+        fi
     fi
 
     if [ -n "$bootd" ]; then
-        ps -axo pid=,command= 2>/dev/null | while read -r pid command; do
-            case "$command" in
-                *"/Daedalos -c $bootd/AROSBootstrap.conf"|*"./Daedalos -c $bootd/AROSBootstrap.conf"|*"/AROSBootstrap -c $bootd/AROSBootstrap.conf"|*"./AROSBootstrap -c $bootd/AROSBootstrap.conf")
-                    stop_pid "$pid" || true
-                    ;;
-            esac
+        # Same matcher run-window.sh and `run`'s self-heal use (conf substring +
+        # a Daedalos/AROSBootstrap binary token). Done in awk, not a shell `case`
+        # inside $(...), because macOS bash 3.2 mis-parses that nesting at runtime.
+        others="$(ps -axo pid=,command= 2>/dev/null | awk -v conf="$bootd/AROSBootstrap.conf" '
+            index($0, conf) &&
+            (index($0,"/Daedalos ")||index($0,"./Daedalos ")||index($0," Daedalos ")||
+             index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
+        for pid in $others; do
+            if stop_pid "$pid"; then
+                echo ">> stopped pid $pid (boot tree)"
+                STOPPED_COUNT=$((STOPPED_COUNT + 1))
+            fi
         done
     fi
 
@@ -378,7 +395,7 @@ MacRW:$HOST_FOLDER;WRITE"
         printf 'memory %s\n' "$AROS_HOST_MEMORY" >> "$BOOTD/AROSBootstrap.conf.tmp"
         mv "$BOOTD/AROSBootstrap.conf.tmp" "$BOOTD/AROSBootstrap.conf"
     fi
-    for M in Devs/shell.resource Devs/task.resource \
+    for M in Devs/shell.resource Devs/task.resource Devs/entropy.resource \
         Devs/Drivers/hiddclass.hidd Devs/Drivers/gfx.hidd \
         Devs/Drivers/inputclass.hidd Devs/Drivers/keyboard.hidd Devs/Drivers/mouse.hidd \
         Devs/console.device Devs/input.device Devs/keyboard.device Devs/gameport.device \
@@ -503,9 +520,46 @@ run)
     ;;
 stop)
     BOOTD="$(find_bootd)"
-    request_guest_shutdown || true
+    graceful=0
+    if request_guest_shutdown; then
+        graceful=1
+        echo ">> guest powered down on request"
+    fi
     stop_instances_for_bootd "$BOOTD"
-    echo "stopped"
+    total=$((STOPPED_COUNT + graceful))
+    if [ "$total" -gt 0 ]; then
+        echo "stopped $total instance(s)"
+    else
+        echo "stopped (no running instance found for this boot tree)"
+    fi
+    ;;
+kill)
+    # Force teardown. Unlike `stop` it skips the graceful guest power-down and is
+    # NOT scoped to whichever boot tree find_bootd resolves right now: it signals
+    # every hosted-AROS process by name (Daedalos / AROSBootstrap), so a zombie
+    # left by a crashed app -- even one launched from a different or older build
+    # tree -- is cleaned up. Use it when `run` refuses to open a fresh window
+    # because a previous instance is wedged. This is machine-wide on purpose; it
+    # will also stop a parallel isolated instance, so use `stop` if you are
+    # running more than one on the same Mac.
+    n=0
+    pid="$(cat "$PIDF" 2>/dev/null || true)"
+    if [ -n "$pid" ] && stop_pid "$pid"; then
+        echo ">> killed pid $pid (pidfile)"
+        n=$((n + 1))
+    fi
+    for pid in $(pgrep -x Daedalos 2>/dev/null) $(pgrep -x AROSBootstrap 2>/dev/null); do
+        if stop_pid "$pid"; then
+            echo ">> killed pid $pid (Daedalos/AROSBootstrap)"
+            n=$((n + 1))
+        fi
+    done
+    rm -f "$PIDF" "$FIFO"
+    if [ "$n" -gt 0 ]; then
+        echo "killed $n instance(s); removed $FIFO and $PIDF"
+    else
+        echo "killed nothing running; cleared any stale $FIFO / $PIDF"
+    fi
     ;;
 status)
     rc=0
@@ -725,6 +779,6 @@ keymap)
     ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {deploy|run|status|stop|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|keymap|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|kill|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|keymap|wait}" >&2
     exit 1;;
 esac
