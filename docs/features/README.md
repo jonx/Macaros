@@ -59,6 +59,7 @@ the same way Phase 1/2 used `[M*]` / `[H*]`.
 | arexx-host-port | ARexx/REXX host-port message protocol; where the interpreter lives | [README](arexx-host-port/README.md) |
 | status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
 | rust-aros | Rust on aarch64 AROS: full `std` runs (net/fs/env/args/process/time/thread verified live) | [README](rust-aros/README.md) |
+| host-bridge | How hosted AROS taps the host (`hostlib.resource`) + the `HostBind` helper + sample | [README](host-bridge/README.md) |
 | ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
 | dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
 
