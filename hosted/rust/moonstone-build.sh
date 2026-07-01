@@ -56,12 +56,14 @@ echo "[moonstone] compile harness rs3_main.c + glues"
 # needs the posixc include for <pthread.h>).
 "$CC" "${CFLAGS[@]}" -c "$DIR/aros_thread_glue.c" -o "$OUT/aros_thread_glue.o"
 "$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -c "$DIR/aros_sync_glue.c" -o "$OUT/aros_sync_glue.o"
+# the Moonstone present+input shim (window + WritePixelArray blit + RAWKEY input)
+"$CC" "${CFLAGS[@]}" -c "$DIR/aros_moonstone_gfx.c" -o "$OUT/aros_moonstone_gfx.o"
 
 echo "[moonstone] link Moonstone (collect-aros -> ET_REL AROS program)"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/Moonstone" \
-    "$LIBDIR/startup.o" "$OUT/rs_moonstone_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" "$OUT/aros_thread_glue.o" "$OUT/aros_sync_glue.o" "$RSLIB" \
+    "$LIBDIR/startup.o" "$OUT/rs_moonstone_main.o" "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" "$OUT/aros_thread_glue.o" "$OUT/aros_sync_glue.o" "$OUT/aros_moonstone_gfx.o" "$RSLIB" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[moonstone] built: $OUT/Moonstone ($(stat -f%z "$OUT/Moonstone" 2>/dev/null) bytes)"
 

@@ -14,6 +14,15 @@ use std::path::Path;
 const IN_PIV: &str = "MacRW:moonstone/CH.PIV";
 const OUT_PNG: &str = "MacRW:moonstone-frame.png";
 
+// The AROS present+input shim (aros_moonstone_gfx.c).
+unsafe extern "C" {
+    fn aros_ms_open(w: i32, h: i32) -> i32;
+    fn aros_ms_blit(rgba: *const u8, w: i32, h: i32);
+    fn aros_ms_input() -> i32;
+    fn aros_ms_delay(ticks: i32);
+    fn aros_ms_close();
+}
+
 #[no_mangle]
 pub extern "C" fn aros_moonstone_render() -> u32 {
     println!("[moonstone] software renderer on AROS: loading {IN_PIV}");
@@ -45,4 +54,131 @@ pub extern "C" fn aros_moonstone_render() -> u32 {
             2
         }
     }
+}
+
+/// Stage 2a: the LIVE present+input shim. Opens an AROS window and, each frame,
+/// redraws the game's SoftwareCanvas (the PIV background + a cursor the player moves
+/// with the arrow keys) and blits it to the window. Proves the whole platform surface
+/// (window + WritePixelArray blit + RAWKEY input) end to end; Stage 2b swaps this
+/// simple driver for the real SceneStack loop.
+#[no_mangle]
+pub extern "C" fn aros_moonstone_play() -> u32 {
+    let bg = match std::fs::read(IN_PIV) {
+        Ok(b) => PivImage::load(&b),
+        Err(e) => {
+            println!("[moonstone] read {IN_PIV} FAILED: {e:?}");
+            return 1;
+        }
+    };
+
+    if unsafe { aros_ms_open(320, 200) } != 0 {
+        println!("[moonstone] could not open the AROS window");
+        return 2;
+    }
+    println!("[moonstone] live window open; arrows move, Esc/close quits");
+
+    let mut canvas = SoftwareCanvas::new();
+    let (mut px, mut py) = (156i32, 96i32);
+
+    loop {
+        let inp = unsafe { aros_ms_input() };
+        if inp & 32 != 0 {
+            break;
+        }
+        if inp & 1 != 0 { px -= 2; }
+        if inp & 2 != 0 { px += 2; }
+        if inp & 4 != 0 { py -= 2; }
+        if inp & 8 != 0 { py += 2; }
+        px = px.clamp(0, 311);
+        py = py.clamp(0, 191);
+
+        // redraw: the game background + a cursor block (yellow, red while firing)
+        canvas.draw_fullscreen(&bg);
+        let fire = inp & 16 != 0;
+        for dy in 0..8usize {
+            for dx in 0..8usize {
+                let x = px as usize + dx;
+                let y = py as usize + dy;
+                let o = (y * 320 + x) * 4;
+                canvas.rgba[o] = 255;
+                canvas.rgba[o + 1] = if fire { 0 } else { 255 };
+                canvas.rgba[o + 2] = 0;
+                canvas.rgba[o + 3] = 255;
+            }
+        }
+
+        unsafe {
+            aros_ms_blit(canvas.rgba.as_ptr(), 320, 200);
+            aros_ms_delay(1); // ~20ms/frame
+        }
+    }
+
+    unsafe { aros_ms_close() };
+    println!("MOONSTONE-AROS: LIVE PASS");
+    0x4D4F_4F4E
+}
+
+/// Stage 2b: the REAL game. Builds the scene stack and runs the game's own fixed-step
+/// loop live on an AROS window: read the keyboard into InputState, tick the scenes,
+/// render into the SoftwareCanvas, blit. Assets are resolved from the current dir, so
+/// run it from the packaged folder (`cd MacRW:Moonstone`), which holds
+/// `extracted/moonahdk/`.
+#[no_mangle]
+pub extern "C" fn aros_moonstone_game() -> u32 {
+    // The scene stack + rasterizer wants far more stack than the shell's default
+    // command stack (which faults in Exec_NewStackSwap), so run the game on a
+    // thread with a big stack. The thread inherits the launcher's current dir, so
+    // assets resolve against `cd MacRW:Moonstone`.
+    match std::thread::Builder::new().stack_size(1024 * 1024).spawn(game_loop) {
+        Ok(h) => h.join().unwrap_or(3),
+        Err(e) => {
+            println!("[moonstone] could not spawn the game thread: {e:?}");
+            3
+        }
+    }
+}
+
+fn game_loop() -> u32 {
+    use moonstone_core::input::InputState;
+    use moonstone_core::scene::SceneStack;
+    use moonstone_core::scenes::build_root;
+    use moonstone_core::session::Session;
+
+    println!("[moonstone] Moonstone on AROS: arrows move, Space fires, Esc quits");
+    let root = build_root();
+    if unsafe { aros_ms_open(320, 200) } != 0 {
+        println!("[moonstone] could not open the AROS window");
+        return 2;
+    }
+
+    let mut stack = SceneStack::new(root);
+    let mut session = Session::new_single(0x1234_5678);
+    let mut canvas = SoftwareCanvas::new();
+
+    loop {
+        let bits = unsafe { aros_ms_input() };
+        if bits & 32 != 0 {
+            break;
+        }
+        let input = InputState {
+            left: bits & 1 != 0,
+            right: bits & 2 != 0,
+            up: bits & 4 != 0,
+            down: bits & 8 != 0,
+            fire: bits & 16 != 0,
+            ..Default::default()
+        };
+
+        stack.tick(input, &mut session);
+        stack.render(&mut canvas, &session);
+
+        unsafe {
+            aros_ms_blit(canvas.rgba.as_ptr(), 320, 200);
+            aros_ms_delay(1);
+        }
+    }
+
+    unsafe { aros_ms_close() };
+    println!("MOONSTONE-AROS: GAME PASS");
+    0x4D4F_4F4E
 }
