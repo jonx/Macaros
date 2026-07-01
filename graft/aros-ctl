@@ -704,6 +704,25 @@ record)
     esac
     ;;
 log)    tail -n "${1:-40}" "$LOG" 2>/dev/null;;
+tasks)
+    # Out-of-band guest task dump: signal the AROS thread (SIGINFO, which the
+    # kernel's core_DiagHandler catches) and print the [KRN-DIAG] block it writes
+    # to the log. Works even when the guest input chain is deadlocked, since the
+    # shell is bypassed entirely. Needs a kernel built with the SIGINFO handler.
+    pid="$(cat "$PIDF" 2>/dev/null)"
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Macaros 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running Macaros" >&2; exit 1; }
+    mark="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+    kill -INFO "$pid" 2>/dev/null || { echo "could not signal pid $pid" >&2; exit 1; }
+    sleep 1
+    out="$(tail -n +"$((mark + 1))" "$LOG" 2>/dev/null | grep "KRN-DIAG")"
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+    else
+        echo "(no [KRN-DIAG] output -- kernel may predate the task-dump handler)" >&2
+        exit 2
+    fi
+    ;;
 crash)  grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" "$LOG" 2>/dev/null | head -40;;
 warn)   grep -nE "supervisor mode|WARN|WARNING" "$LOG" 2>/dev/null | head -40;;
 libs)
@@ -779,6 +798,6 @@ keymap)
     ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {deploy|run|status|stop|kill|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|keymap|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|kill|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|tasks|keymap|wait}" >&2
     exit 1;;
 esac
