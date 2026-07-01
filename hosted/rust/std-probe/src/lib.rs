@@ -6,6 +6,7 @@
 //! `restricted_std` and println writes through posixc to dos Output().
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 
 #[no_mangle]
 pub extern "C" fn aros_rust_std_hello() -> u32 {
@@ -35,6 +36,27 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
     // but AROS `clock_gettime` faults, so neither is exercised here yet.)
     let greet = std::env::var("RUST_GREET").unwrap_or_else(|_| "<unset>".into());
     println!("[RS3c] env: getenv RUST_GREET={greet}");
+
+    // fs: create+write a MacRW: file, reopen, read via File::read (no file_attr),
+    // to characterize posixc open/write/read cleanly.
+    let fpath = "MacRW:rust-fs.txt";
+    let r = (|| -> std::io::Result<usize> {
+        {
+            let mut f = std::fs::File::create(fpath)?;
+            println!("[RS3c] fs: create OK");
+            let w = f.write(b"rust fs on aros")?;
+            println!("[RS3c] fs: wrote {w} bytes");
+        }
+        let mut f = std::fs::File::open(fpath)?;
+        println!("[RS3c] fs: reopen OK");
+        let mut buf = [0u8; 64];
+        let n = f.read(&mut buf)?;
+        println!("[RS3c] fs: read {n} bytes = {:?}", core::str::from_utf8(&buf[..n]));
+        Ok(n)
+    })();
+    if let Err(e) = r {
+        println!("[RS3c] fs: FAILED: {e:?}");
+    }
 
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
