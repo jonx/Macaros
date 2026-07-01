@@ -76,6 +76,18 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         Err(e) => println!("[RS3c] fs: metadata FAILED: {e:?}"),
     }
 
+    // fs read_dir: list the MacRW: share root (drives sys/fs/aros.rs ReadDir/DirEntry)
+    match std::fs::read_dir("MacRW:") {
+        Ok(rd) => {
+            let mut names: Vec<String> =
+                rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            let head = &names[..names.len().min(4)];
+            println!("[RS3c] fs: read_dir MacRW: {} entries, first={head:?}", names.len());
+        }
+        Err(e) => println!("[RS3c] fs: read_dir FAILED: {e:?}"),
+    }
+
     // args: std::env::args() reads argc/argv captured by the C harness
     let args: Vec<String> = std::env::args().collect();
     println!("[RS3c] args: {} -> {args:?}", args.len());

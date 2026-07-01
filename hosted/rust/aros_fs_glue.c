@@ -10,6 +10,7 @@
  */
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <dirent.h>
 
 /* Fixed layout the Rust pal mirrors 1:1 (all naturally aligned, 8-byte alignment). */
 struct aros_fileattr {
@@ -55,4 +56,45 @@ int aros_fstat(int fd, struct aros_fileattr *out)
     if (!out || fstat(fd, &sb) != 0) return -1;
     fill(out, &sb);
     return 0;
+}
+
+/* --- directory listing (opendir/readdir/closedir) --------------------------- */
+
+void *aros_opendir(const char *path)
+{
+    return path ? (void *)opendir(path) : (void *)0;
+}
+
+/* Reads the next entry, skipping "." and "..". Copies the name into namebuf and the
+ * d_type into *type_out. Returns 1 (entry), 0 (end of directory), -1 (bad args). */
+int aros_readdir(void *dir, char *namebuf, unsigned long buflen, unsigned int *type_out)
+{
+    struct dirent *de;
+    unsigned long i;
+
+    if (!dir || !namebuf || buflen == 0)
+        return -1;
+
+    for (;;) {
+        de = readdir((DIR *)dir);
+        if (!de)
+            return 0;                         /* end of directory */
+        /* skip "." and ".." to match std::fs::read_dir */
+        if (de->d_name[0] == '.' &&
+            (de->d_name[1] == '\0' ||
+             (de->d_name[1] == '.' && de->d_name[2] == '\0')))
+            continue;
+        for (i = 0; de->d_name[i] && i < buflen - 1; i++)
+            namebuf[i] = de->d_name[i];
+        namebuf[i] = '\0';
+        if (type_out)
+            *type_out = (unsigned int)de->d_type;
+        return 1;
+    }
+}
+
+void aros_closedir(void *dir)
+{
+    if (dir)
+        closedir((DIR *)dir);
 }
