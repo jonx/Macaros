@@ -45,22 +45,97 @@ static NSImage *cmsh_make_icon(void) {
     return png ? [[NSImage alloc] initWithData:png] : nil;
 }
 
+/* Custom About panel. The stock NSAboutPanel ignores our runtime icon on a
+ * bare/unbundled run (it shows the generic app icon), and a custom window lets us
+ * brand it. Built like the settings window so it behaves under the hand-pumped run
+ * loop; a static-strong ref keeps it alive across open/close. */
+@interface CMAboutBG : NSView @end
+@implementation CMAboutBG
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    NSGradient *g = [[NSGradient alloc] initWithColorsAndLocations:
+        [NSColor colorWithSRGBRed:0.96 green:0.93 blue:0.99 alpha:1.0], 0.0,
+        [NSColor whiteColor], 0.62, nil];
+    [g drawInRect:self.bounds angle:270];
+}
+@end
+
+static NSTextField *cmsh_about_label(NSString *s, CGFloat sz, NSColor *col, NSFontWeight w) {
+    NSTextField *t = [NSTextField labelWithString:s];
+    t.font = [NSFont systemFontOfSize:sz weight:w];
+    t.textColor = col;
+    t.alignment = NSTextAlignmentCenter;
+    return t;
+}
+
+static NSWindow *gAboutWin = nil;
+
 static void cmsh_show_about(void) {
-    [NSApp orderFrontStandardAboutPanel:@{
-        NSAboutPanelOptionApplicationName:    @"Macaros",
-        NSAboutPanelOptionApplicationVersion: @"0.1",                 /* shown as “Version 0.1” */
-        NSAboutPanelOptionVersion:            @"hosted darwin-aarch64", /* the build, in ( ) */
-        NSAboutPanelOptionCredits:
-            [[NSAttributedString alloc] initWithString:
-                @"The macOS host that runs AROS on Apple Silicon.\n\n"
-                @"Macaros runs AROS, the open-source AmigaOS reimplementation, "
-                @"natively in a Cocoa/Metal window. AROS draws into a framebuffer it "
-                @"owns; Macaros presents it with Metal and bridges keyboard, mouse, "
-                @"display, clipboard and host folders.\n\n"
-                @"AROS is distributed under the AROS Public License.\n\n"
-                @"Macaros = a macaron: AROS on a Mac.\n"
-                @"Created by John Knipper."],
-    }];
+    if (gAboutWin) { [gAboutWin makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; return; }
+
+    NSWindow *win = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 380, 440)
+                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskFullSizeContentView)
+                    backing:NSBackingStoreBuffered defer:NO];
+    win.title = @"About Macaros";
+    win.titleVisibility = NSWindowTitleHidden;
+    win.titlebarAppearsTransparent = YES;
+    win.movableByWindowBackground = YES;
+    win.releasedWhenClosed = NO;
+    win.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];  /* keep the light card in dark mode */
+
+    CMAboutBG *bg = [[CMAboutBG alloc] initWithFrame:NSMakeRect(0, 0, 380, 440)];
+    win.contentView = bg;
+
+    NSColor *violet = [NSColor colorWithSRGBRed:0.52 green:0.28 blue:0.70 alpha:1.0];
+
+    NSImage *macaron = cmsh_make_icon();
+    NSImageView *iv = [NSImageView imageViewWithImage:(macaron ?: [NSImage imageNamed:NSImageNameApplicationIcon])];
+    iv.imageScaling = NSImageScaleProportionallyUpOrDown;
+    [iv.widthAnchor  constraintEqualToConstant:124].active = YES;
+    [iv.heightAnchor constraintEqualToConstant:124].active = YES;
+
+    NSTextField *name   = cmsh_about_label(@"Macaros", 28, [NSColor labelColor], NSFontWeightBold);
+    NSTextField *tag    = cmsh_about_label(@"a macaron: AROS on a Mac", 13, violet, NSFontWeightMedium);
+    NSTextField *ver    = cmsh_about_label(@"Version 0.1  ·  hosted darwin-aarch64", 11, [NSColor secondaryLabelColor], NSFontWeightRegular);
+
+    NSBox *sep = [[NSBox alloc] init];
+    sep.boxType = NSBoxSeparator;
+    [sep.widthAnchor constraintEqualToConstant:300].active = YES;
+
+    NSTextField *blurb = cmsh_about_label(
+        @"Macaros runs AROS, the open-source AmigaOS reimplementation, natively in a "
+        @"Cocoa/Metal window. It bridges keyboard, mouse, display, clipboard and host folders.",
+        11, [NSColor secondaryLabelColor], NSFontWeightRegular);
+    blurb.preferredMaxLayoutWidth = 300;
+    blurb.lineBreakMode = NSLineBreakByWordWrapping;
+    blurb.maximumNumberOfLines = 0;
+
+    NSTextField *lic    = cmsh_about_label(@"AROS is distributed under the AROS Public License.", 10, [NSColor tertiaryLabelColor], NSFontWeightRegular);
+    NSTextField *author = cmsh_about_label(@"Created by John Knipper", 12, [NSColor labelColor], NSFontWeightSemibold);
+    NSTextField *copyr  = cmsh_about_label(@"© 2026", 10, [NSColor tertiaryLabelColor], NSFontWeightRegular);
+
+    NSStackView *stack = [NSStackView stackViewWithViews:@[iv, name, tag, ver, sep, blurb, lic, author, copyr]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeCenterX;
+    stack.spacing = 7;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [stack setCustomSpacing:16 afterView:iv];
+    [stack setCustomSpacing:3  afterView:name];
+    [stack setCustomSpacing:12 afterView:ver];
+    [stack setCustomSpacing:14 afterView:sep];
+    [stack setCustomSpacing:16 afterView:lic];
+    [stack setCustomSpacing:5  afterView:author];
+
+    [bg addSubview:stack];
+    [stack.centerXAnchor constraintEqualToAnchor:bg.centerXAnchor].active = YES;
+    [stack.topAnchor constraintEqualToAnchor:bg.topAnchor constant:38].active = YES;
+    [stack.widthAnchor constraintLessThanOrEqualToConstant:320].active = YES;
+
+    [win center];
+    [win makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    gAboutWin = win;
 }
 
 /* --------------------------------------------------------------- controller -- */
