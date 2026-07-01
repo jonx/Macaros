@@ -11,7 +11,7 @@ done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 : "${AROS_HOST_CONF:=$HOME/Library/Application Support/AROS/aros-host.conf}"
-: "${AROS_APP:=$ROOT/build/Daedalos.app}"
+: "${AROS_APP:=$ROOT/build/Macaros.app}"
 
 find_bootd() {
     if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
@@ -90,8 +90,8 @@ echo
 echo "app bundle:"
 if [ -d "$AROS_APP" ]; then
     APPC="$AROS_APP/Contents"
-    line "Daedalos.app" "$APPC/Info.plist"
-    line "app launcher" "$APPC/MacOS/Daedalos"
+    line "Macaros.app" "$APPC/Info.plist"
+    line "app launcher" "$APPC/MacOS/Macaros"
     compare "app bootstrap" "$BOOTD/AROSBootstrap" "$APPC/MacOS/AROSBootstrap" || true
     compare "app conf" "$BOOTD/AROSBootstrap.conf" "$APPC/MacOS/AROSBootstrap.conf" || true
     compare "app cocoametal" "$ROOT/build/cocoametal.dylib" "$APPC/Frameworks/cocoametal.dylib" || true

@@ -434,7 +434,7 @@ screenshot a secondary confirmation. Markers unique per spike.
 - Add `make hostcpu-dylib` / `make hostcpu-abi` (host-side `[CP1]`–`[CP3]` through the
   dylib boundary, like `make coreaudio-abi`) to the `Makefile`; deploy the dylib to
   `~/lib` via `run-window.sh`/`aros-ctl`/`deploy-check` and bundle into
-  `Daedalos.app/Contents/Frameworks/` via `make-aros-app.sh` (the CoreAudio
+  `Macaros.app/Contents/Frameworks/` via `make-aros-app.sh` (the CoreAudio
   precedents). `[OURS]`.
 - AROS side: new files in `arch/all-darwin/processor/{getcpuinfo.c,
   processor_hostcpu.c,processor_hostlib.c,processor_arch_intern.h,mmakefile.src}`,

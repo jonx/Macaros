@@ -6,7 +6,7 @@
 # existing host bridge — this prep is developed in parallel and merged later (the
 # hosted/hostshell/build.sh convention). The dylib it produces (build/hostcpu/
 # hostcpu.dylib) is the artifact the AROS side dlopens via hostlib.resource, and is
-# the same module the Daedalos app can link/load directly (see README.md).
+# the same module the Macaros app can link/load directly (see README.md).
 #
 #   ./build.sh          build, then run [CP1]/[CP2] (probe) and [CP3] (dylib ABI)
 #   ./build.sh --build  build only

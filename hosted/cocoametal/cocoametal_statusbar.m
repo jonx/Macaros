@@ -155,7 +155,7 @@ NSView *cm__build_status_bar(CMContext *cx, int width, int height) {
     bar.state = NSVisualEffectStateActive;
     bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
 
-    NSTextField *brand = [NSTextField labelWithString:@"Daedalos — AROS on Apple Silicon"];
+    NSTextField *brand = [NSTextField labelWithString:@"Macaros: AROS on Apple Silicon"];
     brand.font = [NSFont systemFontOfSize:10];
     brand.textColor = [NSColor secondaryLabelColor];     /* semantic: themes itself */
     brand.frame = NSMakeRect(10, (height - 14) / 2.0, width - 150, 14);

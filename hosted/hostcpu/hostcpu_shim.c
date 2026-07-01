@@ -8,7 +8,7 @@
  *
  * Pulls NO AROS headers. The whole file is plain C over libSystem; it links into
  * libhostcpu.dylib (dlopen'd by the AROS side via hostlib.resource) and can be
- * compiled straight into the Daedalos app.
+ * compiled straight into the Macaros app.
  */
 #include "hostcpu_shim.h"
 

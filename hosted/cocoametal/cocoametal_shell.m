@@ -47,19 +47,19 @@ static NSImage *cmsh_make_icon(void) {
 
 static void cmsh_show_about(void) {
     [NSApp orderFrontStandardAboutPanel:@{
-        NSAboutPanelOptionApplicationName:    @"Daedalos",
+        NSAboutPanelOptionApplicationName:    @"Macaros",
         NSAboutPanelOptionApplicationVersion: @"0.1",                 /* shown as “Version 0.1” */
         NSAboutPanelOptionVersion:            @"hosted darwin-aarch64", /* the build, in ( ) */
         NSAboutPanelOptionCredits:
             [[NSAttributedString alloc] initWithString:
-                @"The macOS host that gives AROS its wings on Apple Silicon.\n\n"
-                @"Daedalos runs AROS — the open-source AmigaOS reimplementation — "
+                @"The macOS host that runs AROS on Apple Silicon.\n\n"
+                @"Macaros runs AROS, the open-source AmigaOS reimplementation, "
                 @"natively in a Cocoa/Metal window. AROS draws into a framebuffer it "
-                @"owns; Daedalos presents it with Metal and bridges keyboard, mouse, "
+                @"owns; Macaros presents it with Metal and bridges keyboard, mouse, "
                 @"display, clipboard and host folders.\n\n"
-                @"AROS is distributed under the AROS Public License.\n"
-                @"Named for Daedalos, the craftsman who built the wings and taught "
-                @"Icaros to fly."],
+                @"AROS is distributed under the AROS Public License.\n\n"
+                @"Macaros = a macaron: AROS on a Mac.\n"
+                @"Created by John Knipper."],
     }];
 }
 
@@ -224,8 +224,8 @@ static NSMenu *cmsh_submenu(NSMenu *bar, NSString *title) {
 static void cmsh_build_menu(CMShellController *c) {
     NSMenu *bar = [[NSMenu alloc] initWithTitle:@"MainMenu"];
 
-    NSMenu *app = cmsh_submenu(bar, @"Daedalos");
-    cmsh_add(app, @"About Daedalos", @selector(aboutAction:), c, @"", 0);
+    NSMenu *app = cmsh_submenu(bar, @"Macaros");
+    cmsh_add(app, @"About Macaros", @selector(aboutAction:), c, @"", 0);
     [app addItem:[NSMenuItem separatorItem]];
     cmsh_add(app, @"Settings…", @selector(settingsAction:), c, @",", NSEventModifierFlagCommand);
     [app addItem:[NSMenuItem separatorItem]];
@@ -233,12 +233,12 @@ static void cmsh_build_menu(CMShellController *c) {
     NSMenu *servicesMenu = [[NSMenu alloc] initWithTitle:@"Services"];
     services.submenu = servicesMenu; [app addItem:services]; [NSApp setServicesMenu:servicesMenu];
     [app addItem:[NSMenuItem separatorItem]];
-    cmsh_add(app, @"Hide Daedalos", @selector(hide:), nil, @"h", NSEventModifierFlagCommand);
+    cmsh_add(app, @"Hide Macaros", @selector(hide:), nil, @"h", NSEventModifierFlagCommand);
     cmsh_add(app, @"Hide Others", @selector(hideOtherApplications:), nil, @"h",
              NSEventModifierFlagCommand | NSEventModifierFlagOption);
     cmsh_add(app, @"Show All", @selector(unhideAllApplications:), nil, @"", 0);
     [app addItem:[NSMenuItem separatorItem]];
-    cmsh_add(app, @"Quit Daedalos", @selector(terminate:), nil, @"q", NSEventModifierFlagCommand);
+    cmsh_add(app, @"Quit Macaros", @selector(terminate:), nil, @"q", NSEventModifierFlagCommand);
 
     NSMenu *file = cmsh_submenu(bar, @"File");
     cmsh_add(file, @"Take Screenshot", @selector(shotAction:), c, @"3",

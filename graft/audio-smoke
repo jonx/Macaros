@@ -83,7 +83,7 @@ i=0
 while [ "$i" -lt "$WAIT_SECS" ]; do
     sleep 1
     i=$((i + 1))
-    pid_alive || fail "Daedalos exited during audio smoke"
+    pid_alive || fail "Macaros exited during audio smoke"
     log_has_failure && fail "failure markers appeared during audio smoke"
 done
 

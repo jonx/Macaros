@@ -73,7 +73,7 @@ that crossed over does not immediately bounce back as a new copy and ping-pong.
 
 **The payload is real Amiga IFF.** A clip written to AROS is a proper
 `FORM … FTXT … CHRS` chunk — exactly what every Amiga clipboard-aware app expects —
-built/parsed with `iffparse.library`. (Verified: a Mac clip of `DAEDALOS_CLIP_4242`
+built/parsed with `iffparse.library`. (Verified: a Mac clip of `MACAROS_CLIP_4242`
 lands in AROS as `464f524d…4654585443485253…` = `FORM…FTXT…CHRS` + the 18 bytes.)
 
 ## Text — accents and the charset boundary
@@ -233,7 +233,7 @@ shim, the bridge, or the clipboard write.
 
 > **The Amiga key:** on a Mac keyboard **either ⌘** (left or right) maps to
 > Right-Amiga, so ⌘C/⌘V *inside the AROS window* act as the Amiga clipboard keys
-> Right-Amiga+C/V — not macOS copy/paste. The Daedalos **Edit menu** Copy/Paste
+> Right-Amiga+C/V — not macOS copy/paste. The Macaros **Edit menu** Copy/Paste
 > items synthesize those same Right-Amiga+C/V chords into AROS.
 
 ### Requires up-to-date console binaries

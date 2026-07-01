@@ -394,7 +394,7 @@ solid-colour raster (assert non-blank, right dimensions).
   `libpasteboard.dylib`.
 - Deploy like the audio shim: `graft/aros-ctl run` / `run-window.sh` copy
   `build/libcups_shim.dylib` → `~/lib/`; `graft/deploy-check` hashes it;
-  `make-aros-app.sh` bundles it in `Daedalos.app/Contents/Frameworks/`.
+  `make-aros-app.sh` bundles it in `Macaros.app/Contents/Frameworks/`.
 - Spikes compile to Mach-O via the existing `Makefile` pattern (`make hosted-cups` →
   `build/host-cups`; `make cups-abi`); `harness/run-hosted.sh '[PR?] …'` greps the
   marker → uniform `result=(PASS|FAIL)`. `graft/printing-smoke` runs the booted-AROS

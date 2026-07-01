@@ -35,13 +35,13 @@
  * it does not see host-side failures at all. The two the AROS side misses are an
  * uncaught Obj-C exception (Cocoa/Metal) and an abort()/assert (SIGABRT). Left
  * alone they can tear down or wedge the process without the clean exit, leaving a
- * stale Daedalos that blocks the next boot. Catch them, log a clear line, and
+ * stale Macaros that blocks the next boot. Catch them, log a clear line, and
  * _exit cleanly. We deliberately do NOT install SIGSEGV/SIGBUS/SIGILL/SIGFPE: the
  * AROS kernel owns those (it installs its guru handler after this dylib loads). */
 static void cm__host_fatal_signal(int sig)
 {
     /* async-signal-safe: fixed write() + _exit() only */
-    static const char m[] = "[Daedalos] FATAL: host abort (SIGABRT) -- exiting cleanly\n";
+    static const char m[] = "[Macaros] FATAL: host abort (SIGABRT) -- exiting cleanly\n";
     (void)sig;
     write(2, m, sizeof(m) - 1);
     _exit(134);                         /* 128 + SIGABRT */
@@ -49,7 +49,7 @@ static void cm__host_fatal_signal(int sig)
 
 static void cm__uncaught_exception(NSException *e)
 {
-    NSLog(@"[Daedalos] FATAL: uncaught Obj-C exception %@: %@\n%@",
+    NSLog(@"[Macaros] FATAL: uncaught Obj-C exception %@: %@\n%@",
           e.name, e.reason, e.callStackSymbols);
     _exit(70);
 }

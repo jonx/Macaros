@@ -9,7 +9,7 @@
  *
  * Pulls NO AROS headers. Plain C over CoreFoundation/CoreGraphics/CoreText; links
  * into libpdfgen.dylib (dlopen'd by the AROS side via hostlib.resource) and can be
- * compiled straight into the Daedalos app.
+ * compiled straight into the Macaros app.
  */
 #include "pdfgen.h"
 

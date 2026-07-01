@@ -12,7 +12,7 @@
  *
  * This header is the ONLY contact surface between the AROS-side processor.resource
  * darwin backend (AROS crosstools) and this host shim (Apple clang). It is also the
- * surface the Daedalos app links/loads directly (see hosted/hostcpu/README.md):
+ * surface the Macaros app links/loads directly (see hosted/hostcpu/README.md):
  * the static-fact verbs are pure sysctl forwarders and the one stateful fact
  * (CPU load) lives behind hc_cpu_ticks as cumulative counters + a host timestamp,
  * so the consumer owns the delta.

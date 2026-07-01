@@ -5,7 +5,7 @@
 # Deliberately standalone: it does NOT touch the project Makefile, cocoametal, or any
 # existing host bridge (the hosted/hostshell/build.sh convention). The dylib it
 # produces (build/printing/libpdfgen.dylib) is the artifact the AROS side dlopens via
-# hostlib.resource, and is the same module the Daedalos app can link/load directly.
+# hostlib.resource, and is the same module the Macaros app can link/load directly.
 #
 #   ./build.sh          build, then run [PRPDF1]/[PRPDF2] (writes run/*.pdf, verifies)
 #   ./build.sh --build  build only

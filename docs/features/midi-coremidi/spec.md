@@ -450,7 +450,7 @@ clock byte (`0xF8`) interleaved. `[PUB]` MIDI 1.0.
   `build/libcoremidi.dylib` like `make coreaudio-abi`.
 - Deployment mirrors coreaudio: `graft/run-window.sh` / `graft/aros-ctl` copy
   `build/libcoremidi.dylib` to `~/lib/`; `graft/make-aros-app.sh` bundles it in
-  `Daedalos.app/Contents/Frameworks/` when present.
+  `Macaros.app/Contents/Frameworks/` when present.
 - The C ABI header is shared, hand-written, independent work. The shim must not link
   or include AROS headers; the AROS side must not include CoreMIDI headers.
 

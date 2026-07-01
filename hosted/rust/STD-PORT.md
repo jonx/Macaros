@@ -167,7 +167,7 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
   - the **trap backtrace** (free, always on) names the faulting `module function+offset`;
   - **MUNGWALL** (`AROS_HOST_ARGS=mungwall ./graft/aros-ctl run`) guards every
     `AllocMem`/pool alloc — the right tool for a suspected allocator/`std` memory bug;
-  - **host lldb** (`lldb -p "$(cat /tmp/aros-cm.pid)"`) — `Daedalos` is a darwin
+  - **host lldb** (`lldb -p "$(cat /tmp/aros-cm.pid)"`) — `Macaros` is a darwin
     process, so lldb catches the fault address before AROS's guru;
   - **`hosted/x18probe`** — the host-ABI probe that proved the `x18` clobber; rerun it
     to re-check the platform on a new macOS.

@@ -382,7 +382,7 @@ markers; a `graft/fonts-smoke` end-to-end script modelled on `graft/audio-smoke`
   `-arch arm64`, codesigned (ad-hoc fine for spikes — confirm vs. the existing signing
   path, **UNVERIFIED**), loaded via `hostlib.resource`. Peer of `build/libcoreaudio.dylib`;
   deployed to `~/lib/` by `graft/run-window.sh`/`aros-ctl` and bundled into
-  `Daedalos.app/Contents/Frameworks/` by `graft/make-aros-app.sh` (the coreaudio pattern).
+  `Macaros.app/Contents/Frameworks/` by `graft/make-aros-app.sh` (the coreaudio pattern).
 - Spikes compile to Mach-O via the existing `Makefile` pattern (`make hosted-fonts` →
   `build/host-fonts*`; `make fonts-abi` → dylib + ABI test; `harness/run-hosted.sh
   '[FN?] PASS'`) `[OURS]`.

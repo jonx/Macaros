@@ -393,7 +393,7 @@ numeric oracle is the truth.
   through the dylib boundary, like `make coreaudio-abi`) and `make sysmon-smoke` (the
   windowed `[SM4]` screenshot, like `make audio-smoke`) to the `Makefile`; deploy the
   dylib to `~/lib` via `run-window.sh`/`aros-ctl`/`deploy-check` and bundle into
-  `Daedalos.app/Contents/Frameworks/` via `make-aros-app.sh` (the CoreAudio
+  `Macaros.app/Contents/Frameworks/` via `make-aros-app.sh` (the CoreAudio
   precedents). `[OURS]`.
 - AROS side: new files `hoststats.c` (+ any `hoststats.h`) added to
   `workbench/system/SysMon/mmakefile.src` `FILES :=` (`:5`); the new MUI catalog

@@ -91,7 +91,7 @@ hashes for stale-build checks and now also checks:
 - `C:AHISmoke`
 
 `graft/make-aros-app.sh` bundles `libcoreaudio.dylib` in
-`Daedalos.app/Contents/Frameworks/` when the build artifact exists; its
+`Macaros.app/Contents/Frameworks/` when the build artifact exists; its
 `--check` mode verifies the bundled dylib and signature.
 
 ## App Shell Volume

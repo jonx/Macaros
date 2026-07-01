@@ -37,10 +37,10 @@ AROS boot image updates:
 - selected kickstart modules are appended to `AROSBootstrap.conf` if missing
 - optional memory setting updates the `memory` line in `AROSBootstrap.conf`
 
-The launchers also copy/sign `AROSBootstrap` as `Daedalos` so macOS presents the
+The launchers also copy/sign `AROSBootstrap` as `Macaros` so macOS presents the
 native app shell with the right process/menu name.
 
-`graft/make-aros-app.sh` creates `build/Daedalos.app`, which carries its own
+`graft/make-aros-app.sh` creates `build/Macaros.app`, which carries its own
 copies of the bootstrap, config, host dylibs, settings schema, and
 `aros-host-conf.sh`. Treat the bundle as another runnable deployment target; if
 it exists, `deploy-check` compares its embedded copies too.
@@ -86,7 +86,7 @@ The important lines:
 - `Cocoa deployed` should be `OK`
 - `effective AROS_HOST_VOLUME` should show the config-derived mount spec, or say
   the launcher default will be used
-- the app-bundle section should be `OK` when `build/Daedalos.app` exists; `SKIP`
+- the app-bundle section should be `OK` when `build/Macaros.app` exists; `SKIP`
   only means the bundle has not been built
 - key desktop files should be present: `Prefs/Zune`, `Prefs/Wanderer`,
   `System/About`, `Tools`, `Utilities`

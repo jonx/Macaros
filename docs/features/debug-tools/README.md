@@ -151,7 +151,7 @@ hashes/timestamps for the files that most often go stale:
 - `hosted/cocoametal/settings.json` vs `~/lib/settings.json`
 - the effective `AROS_HOST_VOLUME` generated from `aros-host.conf` by the same
   helper sourced by `run-window.sh`, `aros-ctl`, and the `.app`
-- `build/Daedalos.app` embedded bootstrap, config, host dylibs, settings schema,
+- `build/Macaros.app` embedded bootstrap, config, host dylibs, settings schema,
   and `aros-host-conf.sh` if the bundle exists
 - `Storage/Monitors/Cocoa` vs `Devs/Monitors/Cocoa`
 - bootstrap, `emul-handler`, key libraries, `TestLib`, `LoadMatrix`, Wanderer
@@ -496,7 +496,7 @@ bug reports:
   bitmap directly and writes a PPM. Always correct (reads AROS memory), no host TCC.
 - **`aros-ctl shot [PATH]`** — the harness wrapper: runs `GrabScreen`, converts to
   PNG via `sips`. See [control-harness](../control-harness/README.md).
-- **In-app "Take Screenshot" (⇧⌘3)** — the Daedalos menu; writes
+- **In-app "Take Screenshot" (⇧⌘3)** — the Macaros menu; writes
   `AROS-screenshot-*.png` under `$AROS_RUN_DIR` when launched by `aros-ctl` /
   `run-window.sh`, or `~/Desktop` when used as a standalone app. It uses the host
   `cm_capture_png` → `cm_readback` path. (Captures the Metal framebuffer as
@@ -519,7 +519,7 @@ mock. It opens the real shell, checks the menu tree, and invokes the actual menu
 actions for screenshot, Settings, full screen, scaling/filter, Retina, theme,
 clipboard sharing, reset/power, volume-add string relay, and movie capture.
 
-This catches stale or broken Daedalos menu wiring before manual Wanderer testing.
+This catches stale or broken Macaros menu wiring before manual Wanderer testing.
 
 ---
 
@@ -617,7 +617,7 @@ The host-side smoke scripts share one GUI/control-FIFO owner at a time. They tak
 `/tmp/aros-harness.lock` by default and fail immediately if another smoke is
 running. Override with `AROS_HARNESS_LOCK_DIR` only when you deliberately use a
 separate log/control/pid namespace too; otherwise parallel runs will race on
-`/tmp/aros-window.log`, `/tmp/aros-cm.ctl`, and the live Daedalos process.
+`/tmp/aros-window.log`, `/tmp/aros-cm.ctl`, and the live Macaros process.
 
 ---
 
@@ -667,7 +667,7 @@ right tool for a suspected out-of-bounds.
 
 ### 3. Host lldb — the GDB-equivalent (hosted only)
 
-Hosted AROS *is* a normal darwin process (`Daedalos`/`AROSBootstrap`), so it can
+Hosted AROS *is* a normal darwin process (`Macaros`/`AROSBootstrap`), so it can
 be debugged with the **host** debugger:
 
 ```sh

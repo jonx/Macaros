@@ -67,7 +67,7 @@ enough to preserve context for the next person picking up the tree.
    overwrite/default edge cases, and the optional live add/remove event path.
 5. **CoreAudio-backed AHI audio.** Done at the low-level playback layer.
    `build/libcoreaudio.dylib` builds, passes its dylib ABI proof, deploys to
-   `~/lib`, and bundles into `Daedalos.app`. The AROS-side `CoreAudio` AHI
+   `~/lib`, and bundles into `Macaros.app`. The AROS-side `CoreAudio` AHI
    sub-driver, `DEVS:AudioModes/COREAUDIO`, and `C:AHISmoke` are present.
    `make audio-smoke` boots the app, registers the mode, plays through
    `ahi.device`, captures a screenshot, and was audibly verified. Normal
@@ -85,7 +85,7 @@ enough to preserve context for the next person picking up the tree.
    volume-add relay, and movie capture.
 7. **Networking / `bsdsocket.library`.** Done at the core TCP/IP layer.
    `build/libbsdsockhost.dylib` builds, passes host pump / ABI / errno proofs,
-   deploys to `~/lib`, and bundles into `Daedalos.app`. The AROS-side
+   deploys to `~/lib`, and bundles into `Macaros.app`. The AROS-side
    `bsdsocket.library` loads through hostlib, uses non-blocking host sockets with
    a kqueue readiness pump plus timer-polled AROS handoff, and has live proof for
    localhost TCP round-trip, `WaitSelect`, outbound HTTP, and DNS. Remaining LVOs
@@ -434,7 +434,7 @@ What exists:
   immediately through `ca_set_global_volume()` and mirrors the setting event to
   the AROS Cocoa HIDD.
 - `graft/make-aros-app.sh` bundles and verifies `libcoreaudio.dylib` in
-  `Daedalos.app/Contents/Frameworks/` when the artifact exists.
+  `Macaros.app/Contents/Frameworks/` when the artifact exists.
 
 Still needed:
 
@@ -461,7 +461,7 @@ Already present:
   discovers the boot tree, deploys `cocoametal.dylib`, deploys
   `settings.json`, switches the Cocoa monitor into `Devs/Monitors`, writes the
   console/desktop startup sequence, maps host volumes, signs the launched
-  `Daedalos` binary, and prints artifact hashes.
+  `Macaros` binary, and prints artifact hashes.
 - `hosted/cocoametal/cocoametal_shell.m` installs the host menu bar, About
   panel, app icon, screenshot command, copy/paste commands, display controls,
   machine/power menu, and host-folder open action.
@@ -469,7 +469,7 @@ Already present:
   `hosted/cocoametal/settings.json` provide the schema-driven settings system.
   The panel persists to `NSUserDefaults` and `aros-host.conf`, and can apply
   live host options or enqueue AROS-facing option requests.
-- `graft/make-aros-app.sh` builds a structural `Daedalos.app` bundle with the
+- `graft/make-aros-app.sh` builds a structural `Macaros.app` bundle with the
   bootstrap, display dylib, optional host shims (`libpasteboard.dylib`,
   `libcoreaudio.dylib`, `libbsdsockhost.dylib`), settings schema, launcher, and
   `aros-host-conf.sh`.

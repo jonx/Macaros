@@ -167,7 +167,7 @@ i=0
 while [ "$i" -lt "$WAIT_SECS" ]; do
     sleep 1
     i=$((i + 1))
-    pid_alive || fail "Daedalos exited during startup"
+    pid_alive || fail "Macaros exited during startup"
     if log_has_failure; then
         fail "startup failure markers appeared in the log"
     fi
@@ -179,7 +179,7 @@ echo "== screenshot =="
 [ -s "$SHOT" ] || fail "screenshot was not created: $SHOT"
 screen_has_recoverable_alert "$SHOT" && fail "desktop screenshot shows a recoverable alert: $SHOT"
 desktop_looks_populated "$SHOT" || fail "desktop screenshot is blank/unpopulated: $SHOT"
-pid_alive || fail "Daedalos exited after screenshot capture"
+pid_alive || fail "Macaros exited after screenshot capture"
 
 if log_has_failure; then
     fail "failure markers appeared after screenshot"
@@ -190,10 +190,10 @@ if [ "$INTERACT" = 1 ]; then
     echo "== pointer/click interaction =="
     "$HERE/aros-ctl" mouse 420 280 || fail "mouse move failed"
     sleep 0.4
-    pid_alive || fail "Daedalos exited after mouse move"
+    pid_alive || fail "Macaros exited after mouse move"
     "$HERE/aros-ctl" click 0 42 33 || fail "left-click failed"
     sleep 0.8
-    pid_alive || fail "Daedalos exited after left-click"
+    pid_alive || fail "Macaros exited after left-click"
     "$HERE/aros-ctl" shot "$INTERACT_SHOT" || fail "interaction screenshot command failed"
     [ -s "$INTERACT_SHOT" ] || fail "interaction screenshot was not created: $INTERACT_SHOT"
     screen_has_recoverable_alert "$INTERACT_SHOT" && fail "interaction screenshot shows a recoverable alert: $INTERACT_SHOT"
@@ -217,7 +217,7 @@ if [ "$RESIZE" = 1 ]; then
         esac
         "$HERE/aros-ctl" resize "$rw" "$rh" || fail "resize to ${rw}x${rh} failed"
         sleep 0.35
-        pid_alive || fail "Daedalos exited after resize to ${rw}x${rh}"
+        pid_alive || fail "Macaros exited after resize to ${rw}x${rh}"
         if log_has_failure; then
             fail "failure markers appeared after resize to ${rw}x${rh}"
         fi
@@ -248,7 +248,7 @@ if [ "$STRESS" = 1 ]; then
             "$HERE/aros-ctl" click 0 "$sx" "$sy" || fail "stress click $i failed"
         fi
         sleep 0.08
-        pid_alive || fail "Daedalos exited during input stress at step $i"
+        pid_alive || fail "Macaros exited during input stress at step $i"
         if log_has_failure; then
             fail "failure markers appeared during input stress at step $i"
         fi
@@ -281,7 +281,7 @@ if [ "${AROS_DESKTOP_SMOKE_MENU:-0}" = 1 ]; then
             ;;
         esac
         sleep 1
-        pid_alive || fail "Daedalos exited after right-click"
+        pid_alive || fail "Macaros exited after right-click"
 
         if [ "$MENU_REPEAT" -gt 1 ]; then
             this_menu_shot="${MENU_SHOT_BASE%.png}-$i.png"
@@ -299,7 +299,7 @@ if [ "${AROS_DESKTOP_SMOKE_MENU:-0}" = 1 ]; then
         i=$((i + 1))
         [ "$i" -le "$MENU_REPEAT" ] && sleep 0.4
     done
-    pid_alive || fail "Daedalos exited after menu screenshot"
+    pid_alive || fail "Macaros exited after menu screenshot"
     if log_has_failure; then
         fail "failure markers appeared after menu screenshot"
     fi

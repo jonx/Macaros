@@ -5,7 +5,7 @@
  * AppKit objects directly (the same approach shell_test uses for the menu tree), so
  * the proof stays unattended (no screencapture / TCC):
  *   (1) cm_open built the status bar: an NSVisualEffectView holding a CMLEDView, plus
- *       the Daedalos brand label, under the AROS window's content view.
+ *       the Macaros brand label, under the AROS window's content view.
  *   (2) cm_set_option(CM_OPT_THEME, …) drives NSApp.appearance: Dark→DarkAqua,
  *       Light→Aqua, System→nil; an out-of-range value is rejected; get roundtrips.
  *   (3) the Activity LED lights when AROS presents frames and decays when it stops
@@ -87,7 +87,7 @@ int main(int argc, const char **argv) {
         NSView *leds = win ? find_class(win.contentView, @"CMLEDView") : nil;
         check(bar  != nil, "status bar uses a native NSVisualEffectView background");
         check(leds != nil, "status bar contains the CMLEDView (Power + Activity LEDs)");
-        check(win && view_has_label(win.contentView, @"Daedalos"), "brand label still present");
+        check(win && view_has_label(win.contentView, @"Macaros"), "brand label still present");
 
         /* (2) theme -> NSApp.appearance, and the window tracks it; bad value rejected */
         check(cm_set_(cx, CM_OPT_THEME, CM_THEME_DARK) == 0, "set theme Dark ok");

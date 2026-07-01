@@ -16,7 +16,7 @@
  * graphics-dump / gfx engine) or a text stream — into a PDF on disk, headlessly,
  * with no print dialog and no TCC prompt.
  *
- * This is also the module the Daedalos app can link/load directly: it is a single
+ * This is also the module the Macaros app can link/load directly: it is a single
  * .c + .h over CoreGraphics/CoreText with no AROS dependency, and it builds into
  * libpdfgen.dylib (dlopen'd by the AROS side via hostlib.resource).
  */

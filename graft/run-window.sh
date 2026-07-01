@@ -241,18 +241,18 @@ write_startup_sequence() {
 
 # Refuse to relaunch over the exact same boot tree while an older instance is
 # still alive. This script rewrites the conf, copies Storage/Monitors/Cocoa into
-# Devs/Monitors, and replaces/signs "$BOOTD/Daedalos"; doing that underneath a
+# Devs/Monitors, and replaces/signs "$BOOTD/Macaros"; doing that underneath a
 # running instance makes the next launch look randomly brittle.
 RUNNING_PIDS="$(ps -axo pid=,command= | awk -v conf="$BOOTD/AROSBootstrap.conf" '
     index($0, conf) &&
-    (index($0, "/Daedalos ") || index($0, "./Daedalos ") ||
-     index($0, " Daedalos ") || index($0, "/AROSBootstrap ") ||
+    (index($0, "/Macaros ") || index($0, "./Macaros ") ||
+     index($0, " Macaros ") || index($0, "/AROSBootstrap ") ||
      index($0, "./AROSBootstrap ") || index($0, " AROSBootstrap ")) {
         print $1
     }
 ')"
 if [ -n "$RUNNING_PIDS" ]; then
-    echo ">> stopping previous Daedalos instance(s) for this boot tree: $RUNNING_PIDS"
+    echo ">> stopping previous Macaros instance(s) for this boot tree: $RUNNING_PIDS"
     for pid in $RUNNING_PIDS; do
         kill "$pid" 2>/dev/null || true
     done
@@ -367,17 +367,17 @@ artifact_line "TestLib" "$AROS/C/TestLib"
 artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
 artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
 
-# Present in the macOS menu bar / Dock as "Daedalos" (the host app), not the
-# bootstrap binary's name: run a copy named Daedalos. macOS takes a non-bundled app's
-# menu-bar name from the executable's filename, so the file itself must be Daedalos.
-# (AROS is the OS it runs; Daedalos is the Mac app — the craftsman of Icaros's wings.)
-cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
+# Present in the macOS menu bar / Dock as "Macaros" (the host app), not the
+# bootstrap binary's name: run a copy named Macaros. macOS takes a non-bundled app's
+# menu-bar name from the executable's filename, so the file itself must be Macaros.
+# (AROS is the OS it runs; Macaros is the Mac app: a macaron, AROS on a Mac.)
+cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Macaros"
 
 # Sign with entitlements that allow DYLD_* env + loading the unsigned host shim.
-[ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Daedalos" 2>/dev/null \
-              || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
+[ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Macaros" 2>/dev/null \
+              || codesign -s - -f "$BOOTD/Macaros" 2>/dev/null
 
-echo ">> A 'Daedalos' window will open — click it for keyboard focus, then type."
+echo ">> A 'Macaros' window will open — click it for keyboard focus, then type."
 mkdir -p "$ROOT/run/darwin-aarch64"   # File > screenshot/Record Movie land here
 cd "$BOOTD"
 if [ -n "${AROS_CM_CONTROL:-}" ]; then
@@ -386,11 +386,11 @@ if [ -n "${AROS_CM_CONTROL:-}" ]; then
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
         AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Daedalos -c "$BOOTD/AROSBootstrap.conf"
+        ./Macaros -c "$BOOTD/AROSBootstrap.conf"
 else
     exec env AROS_DARWIN_THREADED=1 DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
         AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Daedalos -c "$BOOTD/AROSBootstrap.conf"
+        ./Macaros -c "$BOOTD/AROSBootstrap.conf"
 fi

@@ -61,7 +61,7 @@ while [ "$i" -le "$COUNT" ]; do
 
     AROS_CTL_STARTUP_MODE=desktop "$HERE/aros-ctl" run || fail "launch failed at iteration $i"
     sleep "$WAIT"
-    pid_alive || fail "Daedalos exited during iteration $i"
+    pid_alive || fail "Macaros exited during iteration $i"
 
     shot="$RUN_DIR/startup-loop-$STAMP-$i.png"
     log="$RUN_DIR/startup-loop-$STAMP-$i.log"
@@ -75,9 +75,9 @@ while [ "$i" -le "$COUNT" ]; do
 
     "$HERE/aros-ctl" stop >/dev/null 2>&1 || fail "stop failed at iteration $i"
     sleep 0.5
-    if pgrep -lf 'Daedalos .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >/dev/null 2>&1; then
-        pgrep -lf 'Daedalos .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >&2 || true
-        fail "orphaned Daedalos/AROSBootstrap after iteration $i"
+    if pgrep -lf 'Macaros .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >/dev/null 2>&1; then
+        pgrep -lf 'Macaros .*AROSBootstrap.conf|AROSBootstrap .*AROSBootstrap.conf' >&2 || true
+        fail "orphaned Macaros/AROSBootstrap after iteration $i"
     fi
     i=$((i + 1))
 done
