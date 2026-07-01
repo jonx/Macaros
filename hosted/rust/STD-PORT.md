@@ -23,11 +23,14 @@ for design/status see [docs/features/rust-aros](../../docs/features/rust-aros/RE
   bsdsocket bridge** on booted AROS (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`):
   3/3 byte-exact echoes plus a clean connect-refused error path, no crash. The bridge
   is x18-safe (glue + `bsdsocket.library` both `-ffixed-x18`).
-- **RS3c done:** real errno, `env` reads, `args`, **`fs`** (create/write/**read**
-  round-trip on a real host file, verified live), and **`std::net`** (TcpStream
-  connect/read/write/addr/nodelay round-trip, verified live over the bsdsocket
-  bridge). `time` is written but blocked on the OS x18 rebuild; `thread` is staged.
-  See [Resume map](#resume-map).
+- **The pal is functionally complete** and verified live on booted AROS: real errno,
+  `env` (read+write), `args`, **`fs`** (files + metadata + `read_dir`), **`std::net`**
+  (TcpStream over the bsdsocket bridge), **`std::process`** (`Command` output/status via
+  dos `SystemTagList`), **`time`** (`Instant`/`SystemTime`), and **`std::thread`**
+  (spawn/join + `Mutex`/`Condvar`/`RwLock` + pthread-key TLS — 4 threads sharing a
+  `Mutex` counter, verified solid). `time` + `thread` were unblocked by the OS-wide
+  `-ffixed-x18` rebuild. See the [pal table](#the-pal-what-std-needs-per-os) and
+  [Resume map](#resume-map).
 
 ## The mental model: three trees
 
@@ -72,12 +75,13 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `env/aros.rs` | done (read+write) | `getenv`/`setenv`/`unsetenv` verified live; only `vars()` enumeration is empty (no POSIX `environ`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
 | `fs/aros.rs` | done | files (create/write/read/seek/close), `metadata`/`stat`/`fstat`/`exists`, and `read_dir` (opendir/readdir) — all verified live; only symlinks/`set_perm`/times remain stubs |
-| `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
+| `time/aros.rs` | done | `Instant`/`SystemTime` over `clock_gettime` — verified live after the OS `-ffixed-x18` rebuild (was SIGBUS before). REALTIME reads ~1978 (un-host-synced RTC, UPSTREAM-NOTES #36) but no longer faults |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
 | `process/aros.rs` | done (output/status) | `Command` → shell-quoted line run by dos `SystemTagList` (via `aros_process_glue.c`); `output()` captures via `MacRW:` temp files, `status()` runs synchronously — verified live. No live pipes / async child / per-command env+cwd yet |
-| `thread_local` → `no_threads` | done | single-thread statics (pthread-key backend written + staged, see below) |
-| `thread` | **staged** | `sys/thread/aros.rs` + `key/aros.rs` complete (pthread spawn/join + TLS) but **not wired** — needs the sync core; see "Threads (staged)" |
-| `process`, `pipe`, … | **stubs** | fall through to `unsupported` — remaining work |
+| `thread/aros.rs` | done | `std::thread` spawn/join/sleep/yield over `pthread.library` (via `aros_thr_*` glue) — verified live (4 threads + shared Mutex) |
+| `thread_local/key/aros.rs` | done | pthread-key TLS (`pthread_key_*`), the `os` key-based backend |
+| `pal/unsupported/sync/*` | done | `Mutex`/`Condvar` over `pthread_mutex`/`pthread_cond` (zeroed pinned buffers, `aros_sync_glue.c`); `RwLock` = portable `queue`, `Parker` = shared `pthread` parker |
+| `process pipe`, … | **stubs** | a few leftover corners fall through to `unsupported` |
 
 ## Dev environment setup (fresh machine, or if the clone/symlink is gone)
 
@@ -202,17 +206,16 @@ blocking with a timer-poll park (`FIONBIO` is a no-op; we return `Unsupported` f
 requested timeout rather than lie). `try_clone`/`duplicate` return `Unsupported`.
 See UPSTREAM-NOTES #37.
 
-**One AROS-side blocker (not a pal bug — the pal is done, the OS needs a rebuild):**
-
-- **`time` faults from Rust (but `clock_gettime` works in C).** `sys/time/aros.rs`
-  is written and the `timespec` layout is correct (a C `ClockTest` command confirmed
-  `sizeof(timespec)=16`, `sizeof(long)=8`, and `clock_gettime` returns rc=0 with a
-  sane MONOTONIC uptime). So this is **not** an AROS `clock_gettime` bug; the Rust
-  path faulting (SIGBUS) is the **x18 clobber in the not-yet-`-ffixed-x18`
-  timer/posixc code** (intermittent in C, hit consistently from Rust's deeper call
-  path). The pending OS-wide `-ffixed-x18` rebuild (TODO.md) should unblock it; the
-  pal needs no change. (Separately, the hosted RTC isn't host-synced, so REALTIME is
-  ~1978 — see UPSTREAM-NOTES #36.)
+**The x18 blocker is fixed (2026-07-01).** `time` used to SIGBUS from Rust: the fault
+was the **x18 clobber in OS code not built with `-ffixed-x18`** (macOS zeroes x18 on
+signal delivery, AROS-hosted preempts via `SIGALRM`; `posixc` alone had 108 x18 uses).
+The flag was already in `config/make.cfg.in` but the deployed modules predated it, so
+the fix was to **force-recompile the Rust-runtime path** (`posixc`, `stdc`, `exec`,
+`kernel`, `timer`, `dos`, `emul-handler`) — each dropped to ~2 x18 uses (compiler-rt
+soft-float residual). After that, `Instant`/`SystemTime` and `std::thread` both work,
+verified live. See the build doc + NOTES.md for the x18 finding. (Separately, the
+hosted RTC still isn't host-synced, so REALTIME reads ~1978 — UPSTREAM-NOTES #36 — but
+it no longer faults.)
 
 **`env` writes work** (earlier "setenv fails" was a boot-stall run misread): AROS
 `setenv` → `SetVar(..., LV_VAR|GVF_LOCAL_ONLY)` returns DOSTRUE for a loaded `C:`
@@ -220,13 +223,12 @@ command, so `std::env::set_var` succeeds — verified live (`set_var RUST_WROTE`
 back `"yes-42"`). Only `std::env::vars` (full enumeration) is still empty, since AROS
 has no POSIX `environ` array.
 
-Remaining pal pieces, roughly in order:
+Remaining pal pieces (small corners — the core is done):
 
-1. **`thread` (staged — foundation done, sync core remains).** See below.
-2. **Small remaining stubs**: `fs` symlinks/`set_perm`/times; `std::process` live pipes
-   + async child + per-command env/cwd (the sync `output()`/`status()` path is done);
+1. **Small stubs**: `fs` symlinks/`set_perm`/times; `std::process` live pipes + async
+   child + per-command env/cwd (the sync `output()`/`status()` path is done);
    `std::env::vars()` enumeration.
-3. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
+2. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
    AROS support, a real CSPRNG.
 
 ### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
@@ -239,48 +241,46 @@ What a first PR would contain, and where each piece stands:
   `code-model: Large`, `features: "+v8a,+neon,+reserve-x18"`, `relocation-model` +
   linker wiring to the collect-aros/crosstools flow). Mechanical; the JSON is the spec.
 - **pal modules (done, in the clone):** `alloc`, `stdio`, `io/error`, `env`
-  (read+write), `args`, `fs` (files), `net` (IPv4), plus the `random`/`thread_local`
-  stubs. These are the bulk of the PR and are verified live.
+  (read+write), `args`, `fs` (files + metadata + dirs), `net` (IPv4), `process`,
+  `time`, **`thread` + the full sync core** (`Mutex`/`Condvar`/`RwLock`/`Parker`) +
+  pthread-key TLS, plus the weak `random`. All verified live. This is the bulk of the PR.
 - **`libc`-crate AROS support.** The pal currently declares its own `extern "C"`
   posixc/bsdsocket/pthread signatures. A proper PR adds an `aros` module to the `libc`
   crate (types + fn decls from `compiler/crt/posixc` + `arch/all-unix/bsdsocket` +
-  `compiler/pthread`), then the pal uses `libc::*`. This also unblocks the thread sync
-  core (the upstream `pthread` `Mutex`/`Condvar`/`Parker` modules are `libc`-based).
+  `compiler/pthread`), then the pal uses `libc::*`. It would also let the sync core use
+  the upstream `pthread` pal `Mutex`/`Condvar` directly instead of the byte-buffer glue.
 - **CSPRNG.** Replace the weak `random/aros.rs` with the host `arc4random_buf` path
   (see that file's header) or a native entropy device.
-- **Known gaps to disclose in the PR:** `time` compiles but faults until the OS-wide
-  `-ffixed-x18` rebuild; `std::thread` is staged pending the sync core; `std::process`
-  and `std::env::vars()` enumeration are unimplemented; `set_nonblocking`/socket
-  timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37). Tier-3 targets ship
-  with documented gaps like these, so none blocks an initial PR.
+- **Known gaps to disclose in the PR:** the `-ffixed-x18` OS build requirement (the
+  hosted OS must be built with it, else `time`/threads SIGBUS); `std::process` has no
+  live pipes / async child / per-command env+cwd (sync `output()`/`status()` only);
+  `std::env::vars()` enumeration is empty (no POSIX `environ`); `set_nonblocking`/socket
+  timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37); REALTIME reads ~1978
+  (un-host-synced RTC, #36). Tier-3 targets ship with documented gaps like these.
 
-### Threads (staged)
+### Threads (done)
 
-AROS has a full `pthread.library` (the `-lpthread` linklib: `libpthread.a` is already
-in the build tree), so the **foundation is written and correct, but deliberately not
-wired**:
+`std::thread` and the full sync core are wired and verified (4 threads incrementing a
+shared `Mutex` counter to exactly 4000, over 5 runs, no race/hang). AROS's
+`pthread.library` (the `-lpthread` linklib) backs all of it:
 
 - `sys/thread/aros.rs` — `Thread` spawn/join/yield/sleep via the `aros_thr_*` glue
-  (`hosted/rust/aros_thread_glue.c`), which owns the opaque `pthread_attr_t` so we can
-  set the stack size. `sleep` uses dos `Delay` (20ms granularity).
-- `sys/thread_local/key/aros.rs` — pthread-key TLS (`pthread_key_create`/`setspecific`/
-  `getspecific`/`key_delete`). The library reserves a slot for the main task at
-  `ADD2INIT`, so keys work on the main thread too.
+  (`hosted/rust/aros_thread_glue.c`), which owns the opaque `pthread_attr_t` for the
+  stack size. `sleep` uses dos `Delay` (20ms granularity).
+- `sys/thread_local/key/aros.rs` — pthread-key TLS (`pthread_key_*`); the library
+  reserves a main-task slot at `ADD2INIT`, so keys work on the main thread too.
+- **Sync core**: `sys/pal/unsupported/sync/{mutex,condvar}.rs` implement the pal
+  `Mutex`/`Condvar` as **zeroed, pinned byte buffers** over `pthread_mutex`/
+  `pthread_cond` (`aros_sync_glue.c`; `pthread_mutex_t` is 136 B, `pthread_cond_t`
+  152 B — a zeroed buffer is a valid `PTHREAD_*_INITIALIZER`). `pal/unsupported/mod.rs`
+  exposes `pub mod sync` for aros, so the shared **`pthread` `Mutex`/`Condvar`/`Parker`
+  wrappers** (with their `OnceBox` movability handling) and the portable **`queue`
+  `RwLock`** all resolve — aros is added to those `cfg_select` arms in `sys/sync/`.
 
-**Why it's not turned on:** `std::thread` can't be shipped half-done. The moment real
-threads exist, std's own internals (e.g. the `Stdout` lock) use `sys` `Mutex`/`Condvar`,
-which for AROS still fall through to the single-threaded `no_threads` stubs — two
-threads doing `println!` would race. Wiring threads therefore also requires a real
-**sync core**: `Mutex`+`Condvar` (buildable on AROS `pthread_mutex`/`pthread_cond`,
-whose structs are `SignalSemaphore`-based with all-zero const initializers + lazy init,
-so a zeroed buffer is a valid static lock), a `RwLock` (the portable `queue` impl), and
-a `Parker` (the portable `pthread` parker) — the last two need a `sys::pal::sync` for
-AROS, which the `unsupported` pal doesn't provide yet. On top of that, thread execution
-shares the OS-wide **x18 exposure** (same root cause as `time`), so threads aren't
-*solid* until the `-ffixed-x18` rebuild (TODO.md). To wire it up once the sync core
-lands: re-add `target_os = "aros"` arms in `sys/thread/mod.rs` and the `key`
-`cfg_select` (and drop aros from the `no_threads` TLS arm), then add `-lpthread` +
-`aros_thread_glue.o` to the std build scripts.
+Threads are only *solid* because of the OS-wide `-ffixed-x18` rebuild (thread execution
+runs through `exec`'s scheduler under `SIGALRM` preemption, same x18 exposure as
+`time`). All the std build scripts link `-lpthread` + `aros_thread_glue.o` +
+`aros_sync_glue.o`.
 
 ---
 

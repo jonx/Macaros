@@ -26,11 +26,15 @@ doesn't reuse it.
 - **`args`** — `std::env::args()` from the shell command line.
 - **`process`** — `Command::new("Echo").arg(..).output()` ran a real `C:` command,
   captured its stdout, and returned exit code 0 (via dos `SystemTagList`).
+- **`time`** — `Instant`/`SystemTime` via `clock_gettime` (unblocked by the OS
+  `-ffixed-x18` rebuild; used to SIGBUS).
+- **`std::thread`** — 4 threads incrementing a shared `Mutex<u64>` to exactly 4000,
+  joined, over 5 runs. Full sync core (`Mutex`/`Condvar`/`RwLock`/`Parker`) on
+  `pthread.library`, plus pthread-key TLS.
 
-Written-but-blocked: **`time`** (correct, but faults until the OS-wide `-ffixed-x18`
-rebuild). Staged: **`thread`** (pthread spawn/join + TLS complete, not wired pending a
-sync core). The authoritative per-module status + the build/run loop live in
-[hosted/rust/STD-PORT.md](../../../hosted/rust/STD-PORT.md); this page is the design/why.
+**The pal is functionally complete.** The authoritative per-module status + the
+build/run loop live in [hosted/rust/STD-PORT.md](../../../hosted/rust/STD-PORT.md);
+this page is the design/why.
 `std` is brought up the upstream way: a fresh `sys/*/aros.rs` per module calling
 `posixc`/`bsdsocket`/`pthread` directly, developed in a **local rust clone**
 (`/Users/user/Source/rust-aros`, not pushed) so it is PR-able to rust-lang/rust later.

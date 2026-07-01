@@ -58,7 +58,7 @@ the same way Phase 1/2 used `[M*]` / `[H*]`.
 | memory-protection | Memory protection, resource tracking & virtual memory | [README](memory-protection/README.md) |
 | arexx-host-port | ARexx/REXX host-port message protocol; where the interpreter lives | [README](arexx-host-port/README.md) |
 | status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
-| rust-aros | Rust on aarch64 AROS: real `std` runs (net/fs/env/args verified live) | [README](rust-aros/README.md) |
+| rust-aros | Rust on aarch64 AROS: full `std` runs (net/fs/env/args/process/time/thread verified live) | [README](rust-aros/README.md) |
 | ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
 | dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
 
@@ -149,7 +149,7 @@ once both exist.
 | Feature | One-line | Status |
 |---------|----------|--------|
 | [Native ffmpeg / libav*](ffmpeg-native/README.md) | `libav*` built natively for aarch64 AROS so AROS programs `-lavcodec`; **FFView** image/video viewer on top | **WORKING** · `[FF0]`–`[FF3]` + FFView play image/video with play/pause; right-way I/O = dos-backed custom `AVIOContext`; full decoder set builds (`build-full.sh`), viewer links a curated subset; manual YUV→RGB (libswscale yuv2rgb kernel faults). Remaining: sws fix, threading, NEON, audio/datatype |
-| [Rust on AROS](rust-aros/README.md) | Rust on aarch64 AROS — real `std` runs, brought up module-by-module on `posixc`/`bsdsocket` | **real `std` RUNS ON AROS**: `println!`/`Vec`/`HashMap` + **`std::net`** TCP round-trip, **`fs`** file read/write, **`env`** read/write, **`args`** — all verified live ([`hosted/rust/STD-PORT.md`](../../hosted/rust/STD-PORT.md)). `time` blocked on the x18 OS rebuild; `thread` staged. Developed in a local rust clone, PR-able to rust-lang |
+| [Rust on AROS](rust-aros/README.md) | Rust on aarch64 AROS — full `std` runs, brought up module-by-module on `posixc`/`bsdsocket`/`pthread` | **full `std` RUNS ON AROS**: `println!`/`Vec`/`HashMap` + **`std::net`** TCP, **`fs`** (files+metadata+dirs), **`env`** rw, **`args`**, **`process`**, **`time`**, and **`std::thread`** (4 threads + shared `Mutex`) — all verified live ([`hosted/rust/STD-PORT.md`](../../hosted/rust/STD-PORT.md)). Unblocked by the OS `-ffixed-x18` rebuild. Developed in a local rust clone, PR-able to rust-lang |
 | [Native .NET](dotnet-native/README.md) · [design](dotnet-native/design.md) | A .NET runtime ported to run managed code (eventually **PowerShell**) natively on aarch64 AROS | design · **runtime-port, not a PowerShell task**: recommend **Mono interpreter** (`MONO_AOT_MODE_INTERP`, modeled on `src/mono/wasi`) — not CoreCLR (two-PAL + JIT + W^X double-mapping), not NativeAOT (bans `Reflection.Emit` → can't host PS). The hard W^X part is **already proven** (`MAP_JIT` from the 68k JIT); the grind is shared `posixc` hardening + the SIGSEGV→managed-exception bridge. `[DN0]`–`[DN5]` foundation, `[DN6]` PowerShell = stretch |
 
 ## Driving & verifying it — the control harness (built)
