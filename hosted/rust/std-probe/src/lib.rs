@@ -102,6 +102,20 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         Err(e) => println!("[RS3c] process: FAILED: {e:?}"),
     }
 
+    // time: Instant (CLOCK_MONOTONIC) + SystemTime (CLOCK_REALTIME). Before the OS
+    // -ffixed-x18 rebuild these SIGBUS'd (x18 clobber in the timer/posixc path).
+    let t0 = std::time::Instant::now();
+    let mut acc = 0u64;
+    for i in 0..200_000u64 {
+        acc = acc.wrapping_add(i);
+    }
+    let dt = t0.elapsed();
+    println!("[RS3c] time: Instant elapsed={dt:?} (acc={acc})");
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => println!("[RS3c] time: SystemTime since epoch = {}s", d.as_secs()),
+        Err(e) => println!("[RS3c] time: SystemTime err {e:?}"),
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }
