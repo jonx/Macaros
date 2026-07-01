@@ -90,7 +90,7 @@ Invoke as `aros-ctl <cmd> [args]`.
 | `run` | Boot AROS windowed in the background with the control FIFO; log to `$LOG`, pid to `$PIDF`. Stages a known-good boot (see [design.md](design.md) → "What `run` sets up"). |
 | `status` | Report whether the app is running, which pid source was used, whether the control FIFO/log exist, and whether crash markers are already present. Exit 0 = running/clean, 1 = stopped, 2 = running but stale control/log or crash markers. |
 | `stop` | Ask the guest to power down (`CM_OPT_POWER`), then TERM/KILL the pidfile pid and any process bound to **this boot tree**, remove the FIFO + pidfile, and report how many instances it stopped. |
-| `kill` | Force teardown. Skips the graceful power-down and is **not** scoped to the current boot tree: it signals every hosted-AROS process by name (`Daedalos`/`AROSBootstrap`), reports each pid, and clears the FIFO + pidfile. Use it when a crashed app left an instance wedged and `run` will not open a fresh window. Machine-wide, so prefer `stop` if you run parallel isolated instances. |
+| `kill` | Force teardown. Skips the graceful power-down and is **not** scoped to the current boot tree: it signals every hosted-AROS process by name (`Macaros`/`AROSBootstrap`), reports each pid, and clears the FIFO + pidfile. Use it when a crashed app left an instance wedged and `run` will not open a fresh window. Machine-wide, so prefer `stop` if you run parallel isolated instances. |
 | `wait [SECS]` | `sleep` (default 1) — let AROS run/render between actions. |
 
 ### Input

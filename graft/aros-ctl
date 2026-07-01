@@ -114,11 +114,11 @@ stop_instances_for_bootd() {
 
     if [ -n "$bootd" ]; then
         # Same matcher run-window.sh and `run`'s self-heal use (conf substring +
-        # a Daedalos/AROSBootstrap binary token). Done in awk, not a shell `case`
+        # a Macaros/AROSBootstrap binary token). Done in awk, not a shell `case`
         # inside $(...), because macOS bash 3.2 mis-parses that nesting at runtime.
         others="$(ps -axo pid=,command= 2>/dev/null | awk -v conf="$bootd/AROSBootstrap.conf" '
             index($0, conf) &&
-            (index($0,"/Daedalos ")||index($0,"./Daedalos ")||index($0," Daedalos ")||
+            (index($0,"/Macaros ")||index($0,"./Macaros ")||index($0," Macaros ")||
              index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
         for pid in $others; do
             if stop_pid "$pid"; then
@@ -412,11 +412,11 @@ MacRW:$HOST_FOLDER;WRITE"
     done
     write_startup_sequence
 
-    # Present as "Daedalos" in the menu bar / Dock -- macOS names a non-bundled
-    # app by its executable filename, so run a signed copy named Daedalos.
-    cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Daedalos"
-    [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Daedalos" 2>/dev/null \
-                  || codesign -s - -f "$BOOTD/Daedalos" 2>/dev/null
+    # Present as "Macaros" in the menu bar / Dock -- macOS names a non-bundled
+    # app by its executable filename, so run a signed copy named Macaros.
+    cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Macaros"
+    [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$BOOTD/Macaros" 2>/dev/null \
+                  || codesign -s - -f "$BOOTD/Macaros" 2>/dev/null
 }
 
 # char -> "VK SHIFT"  (macOS virtual keycodes). SHIFT=1 means hold left-shift.
@@ -494,15 +494,15 @@ run)
     artifact_line "TestLib" "$AROS/C/TestLib"
     artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
-    # Kill any stale Daedalos/AROSBootstrap for THIS boot tree before launching.
+    # Kill any stale Macaros/AROSBootstrap for THIS boot tree before launching.
     # A clean window-close or a CPU-fault guru does _exit() the process, but a hang
     # or a crash that never reached that path leaves an instance holding the control
     # FIFO + the window, so the next boot collides ("why can't AROS start again?").
     # run-window.sh already does this; do it here too so every launch self-heals.
     STALE_PIDS="$(ps -axo pid=,command= | awk -v conf="$BOOTD/AROSBootstrap.conf" '
-        index($0, conf) && (index($0,"/Daedalos ")||index($0,"./Daedalos ")||index($0," Daedalos ")||index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
+        index($0, conf) && (index($0,"/Macaros ")||index($0,"./Macaros ")||index($0," Macaros ")||index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
     if [ -n "$STALE_PIDS" ]; then
-        echo ">> stopping previous Daedalos instance(s) for this boot tree: $STALE_PIDS"
+        echo ">> stopping previous Macaros instance(s) for this boot tree: $STALE_PIDS"
         for p in $STALE_PIDS; do kill "$p" 2>/dev/null || true; done
         sleep 0.4
         for p in $STALE_PIDS; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true; done
@@ -514,7 +514,7 @@ run)
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
         AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Daedalos -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
+        ./Macaros -c "$BOOTD/AROSBootstrap.conf" </dev/null >"$LOG" 2>&1 ) &
     echo $! > "$PIDF"
     echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
     ;;
@@ -536,7 +536,7 @@ stop)
 kill)
     # Force teardown. Unlike `stop` it skips the graceful guest power-down and is
     # NOT scoped to whichever boot tree find_bootd resolves right now: it signals
-    # every hosted-AROS process by name (Daedalos / AROSBootstrap), so a zombie
+    # every hosted-AROS process by name (Macaros / AROSBootstrap), so a zombie
     # left by a crashed app -- even one launched from a different or older build
     # tree -- is cleaned up. Use it when `run` refuses to open a fresh window
     # because a previous instance is wedged. This is machine-wide on purpose; it
@@ -548,9 +548,9 @@ kill)
         echo ">> killed pid $pid (pidfile)"
         n=$((n + 1))
     fi
-    for pid in $(pgrep -x Daedalos 2>/dev/null) $(pgrep -x AROSBootstrap 2>/dev/null); do
+    for pid in $(pgrep -x Macaros 2>/dev/null) $(pgrep -x AROSBootstrap 2>/dev/null); do
         if stop_pid "$pid"; then
-            echo ">> killed pid $pid (Daedalos/AROSBootstrap)"
+            echo ">> killed pid $pid (Macaros/AROSBootstrap)"
             n=$((n + 1))
         fi
     done
@@ -566,7 +566,7 @@ status)
     pid="$(cat "$PIDF" 2>/dev/null || true)"
     source="pidfile"
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-        pid="$(pgrep -n Daedalos 2>/dev/null || true)"
+        pid="$(pgrep -n Macaros 2>/dev/null || true)"
         source="pgrep"
     fi
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
@@ -714,9 +714,9 @@ libs)
     # For AROS-side libraries (graphics/intuition/… name+version), use the AROS
     # `LibList` C: command inside the shell instead (those aren't host dylibs).
     pid="$(cat "$PIDF" 2>/dev/null)"
-    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Daedalos 2>/dev/null)"
-    [ -n "$pid" ] || { echo "no running Daedalos (start it with: aros-ctl run)" >&2; exit 1; }
-    echo "# host dylibs mapped by Daedalos (pid $pid):"
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Macaros 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running Macaros (start it with: aros-ctl run)" >&2; exit 1; }
+    echo "# host dylibs mapped by Macaros (pid $pid):"
     vmmap "$pid" 2>/dev/null | grep -oE '/[^[:space:]]+\.dylib' | sort -u | while read -r dy; do
         # current version from the dylib's own load command (file-backed libs only;
         # shared-cache libs have no on-disk file, so just show the path).
@@ -731,8 +731,8 @@ diag)
     #   aros-ctl diag nokill   -> capture only, leave it running
     # `sample` works on a hung process and needs no sudo for a same-user process.
     pid="$(cat "$PIDF" 2>/dev/null)"
-    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Daedalos 2>/dev/null)"
-    [ -n "$pid" ] || { echo "no running Daedalos (nothing to diagnose)" >&2; exit 1; }
+    kill -0 "$pid" 2>/dev/null || pid="$(pgrep -n Macaros 2>/dev/null)"
+    [ -n "$pid" ] || { echo "no running Macaros (nothing to diagnose)" >&2; exit 1; }
     dokill=1; secs=2
     for a in "$@"; do case "$a" in nokill) dokill=0;; [0-9]*) secs="$a";; esac; done
     mkdir -p "$ROOT/run/darwin-aarch64"
@@ -752,7 +752,7 @@ diag)
     echo "==== where it is (sample, top frames) ===="
     sed -n '/Call graph/,/Total number/p' "$out" 2>/dev/null | head -28
     if [ "$dokill" = 1 ]; then
-        kill -9 "$pid" 2>/dev/null; pkill -9 -x Daedalos 2>/dev/null
+        kill -9 "$pid" 2>/dev/null; pkill -9 -x Macaros 2>/dev/null
         echo "killed pid $pid"
     else
         echo "(left running; omit 'nokill' to also kill)"
