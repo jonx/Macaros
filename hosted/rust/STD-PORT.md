@@ -23,10 +23,11 @@ for design/status see [docs/features/rust-aros](../../docs/features/rust-aros/RE
   bsdsocket bridge** on booted AROS (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`):
   3/3 byte-exact echoes plus a clean connect-refused error path, no crash. The bridge
   is x18-safe (glue + `bsdsocket.library` both `-ffixed-x18`).
-- **RS3c done:** real errno, `env` reads, `args`, and **`std::net`** (TcpStream
+- **RS3c done:** real errno, `env` reads, `args`, **`fs`** (create/write/**read**
+  round-trip on a real host file, verified live), and **`std::net`** (TcpStream
   connect/read/write/addr/nodelay round-trip, verified live over the bsdsocket
-  bridge); `fs` create/write and `time` written (each with one known blocker).
-  **Next:** `thread`. See [Resume map](#resume-map).
+  bridge). `time` is written but blocked on the OS x18 rebuild; `thread` is staged.
+  See [Resume map](#resume-map).
 
 ## The mental model: three trees
 
@@ -70,7 +71,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
 | `env/aros.rs` | reads done | `getenv` verified; `setenv` fails (AROS `SetVar`) — see blockers |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
-| `fs/aros.rs` | partial | `File` create/write/seek/close over `posixc` work; read-`open` EINVALs (upstream) |
+| `fs/aros.rs` | done (files) | `File` create/write/read/seek/close over `posixc` — full round-trip verified live; metadata/dirs/symlinks are stubs |
 | `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
 | `thread_local` → `no_threads` | done | single-thread statics (pthread-key backend written + staged, see below) |
@@ -218,12 +219,16 @@ See UPSTREAM-NOTES #37.
 
 Remaining pal pieces, roughly in order:
 
-1. **`fs`**: partly done -- `sys/fs/aros.rs` `File` create/write/seek/close over
-   posixc **work** (verified: Rust wrote a real `MacRW:` host file). `open(O_RDONLY)`
-   to reopen returns **EINVAL** consistently (a posixc/emul-handler open-for-read
-   bug; tried 2-arg and 3-arg variadic calls -- confirm with a C repro then report
-   upstream). metadata/dirs/symlinks are stubs. O_* are Linux-style (O_CREAT=0x40,
-   O_TRUNC=0x200, O_APPEND=0x400), off_t=i64, mode_t=u16.
+1. **`fs`**: `File` create/write/**read**/seek/close over posixc all work now
+   (verified live: Rust wrote **and read back** a real `MacRW:` host file). metadata/
+   dirs/symlinks are still stubs. **Gotcha that cost a while:** AROS's access-mode
+   flags are **not** the near-universal `O_RDONLY=0` -- they are `O_RDONLY=0x1`,
+   `O_WRONLY=0x2`, `O_RDWR=0x3` (`O_ACCMODE=0x3`, from
+   `compiler/crt/posixc/include/fcntl.h`). A read-only open with `flags=0` gives an
+   empty access mode, which AROS `open` rejects with EINVAL -- that was the
+   "read-open bug", a wrong constant in the pal, not a posixc bug. The create/misc
+   flags (`O_CREAT=0x40`, `O_TRUNC=0x200`, `O_APPEND=0x400`) do match. off_t=i64,
+   mode_t=u16.
 2. **`thread` (staged — foundation done, sync core remains).** See below.
 3. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
    private `extern "C"` decls, and upstreaming the target spec.
