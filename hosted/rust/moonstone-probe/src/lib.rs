@@ -118,6 +118,25 @@ pub extern "C" fn aros_moonstone_play() -> u32 {
     0x4D4F_4F4E
 }
 
+/// Log Rust panics (message + file:line) to both stdout and a persistent file
+/// before the process aborts. With `panic = abort` a panic still tears the
+/// instance down, but this leaves an exact record of what failed (e.g. an asset
+/// a scene could not load) instead of a bare SIGBUS.
+const CRASH_LOG: &str = "MacRW:moonstone-crash.log";
+fn install_panic_logger() {
+    std::panic::set_hook(Box::new(|info| {
+        use std::io::Write;
+        let text = format!("[moonstone] {info}\n");
+        print!("{text}");
+        let _ = std::io::stdout().flush();
+        if let Ok(mut f) =
+            std::fs::OpenOptions::new().create(true).append(true).open(CRASH_LOG)
+        {
+            let _ = f.write_all(text.as_bytes());
+        }
+    }));
+}
+
 /// Stage 2b: the REAL game. Builds the scene stack and runs the game's own fixed-step
 /// loop live on an AROS window: read the keyboard into InputState, tick the scenes,
 /// render into the SoftwareCanvas, blit. Assets are resolved from the current dir, so
@@ -125,11 +144,30 @@ pub extern "C" fn aros_moonstone_play() -> u32 {
 /// `extracted/moonahdk/`.
 #[no_mangle]
 pub extern "C" fn aros_moonstone_game() -> u32 {
-    // The scene stack + rasterizer wants far more stack than the shell's default
-    // command stack (which faults in Exec_NewStackSwap), so run the game on a
-    // thread with a big stack. The thread inherits the launcher's current dir, so
-    // assets resolve against `cd MacRW:Moonstone`.
-    match std::thread::Builder::new().stack_size(1024 * 1024).spawn(game_loop) {
+    use moonstone_core::scenes::build_root;
+    spawn_game(build_root)
+}
+
+/// Same game, but start the scene stack at the main menu (skip the intro
+/// cinematic). Handy for jumping straight to menu / knight selection.
+#[no_mangle]
+pub extern "C" fn aros_moonstone_game_skip() -> u32 {
+    use moonstone_core::scene::Scene;
+    use moonstone_core::scenes::MenuScene;
+    println!("[moonstone] --skip-intro: starting at the main menu");
+    spawn_game(|| Box::new(MenuScene::new()) as Box<dyn Scene>)
+}
+
+/// Run the game loop on a big-stack thread (the scene stack + rasterizer overflows
+/// the shell's default command stack, which faults in Exec_NewStackSwap). The thread
+/// inherits the launcher's current dir, so assets resolve against `cd MacRW:Moonstone`.
+/// `build` runs on the thread, so its asset loads see that current dir.
+fn spawn_game<F>(build: F) -> u32
+where
+    F: FnOnce() -> Box<dyn moonstone_core::scene::Scene> + Send + 'static,
+{
+    install_panic_logger();
+    match std::thread::Builder::new().stack_size(1024 * 1024).spawn(move || run_scene_stack(build())) {
         Ok(h) => h.join().unwrap_or(3),
         Err(e) => {
             println!("[moonstone] could not spawn the game thread: {e:?}");
@@ -138,14 +176,12 @@ pub extern "C" fn aros_moonstone_game() -> u32 {
     }
 }
 
-fn game_loop() -> u32 {
+fn run_scene_stack(root: Box<dyn moonstone_core::scene::Scene>) -> u32 {
     use moonstone_core::input::InputState;
     use moonstone_core::scene::SceneStack;
-    use moonstone_core::scenes::build_root;
     use moonstone_core::session::Session;
 
     println!("[moonstone] Moonstone on AROS: arrows move, Space fires, Esc quits");
-    let root = build_root();
     if unsafe { aros_ms_open(320, 200) } != 0 {
         println!("[moonstone] could not open the AROS window");
         return 2;
