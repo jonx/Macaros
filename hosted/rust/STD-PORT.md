@@ -71,7 +71,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
 | `env/aros.rs` | done (read+write) | `getenv`/`setenv`/`unsetenv` verified live; only `vars()` enumeration is empty (no POSIX `environ`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
-| `fs/aros.rs` | done (files) | `File` create/write/read/seek/close over `posixc` — full round-trip verified live; metadata/dirs/symlinks are stubs |
+| `fs/aros.rs` | done | files (create/write/read/seek/close), `metadata`/`stat`/`fstat`/`exists`, and `read_dir` (opendir/readdir) — all verified live; only symlinks/`set_perm`/times remain stubs |
 | `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
 | `thread_local` → `no_threads` | done | single-thread statics (pthread-key backend written + staged, see below) |
@@ -221,19 +221,11 @@ has no POSIX `environ` array.
 
 Remaining pal pieces, roughly in order:
 
-1. **`fs`**: `File` create/write/**read**/seek/close over posixc all work now
-   (verified live: Rust wrote **and read back** a real `MacRW:` host file). metadata/
-   dirs/symlinks are still stubs. **Gotcha that cost a while:** AROS's access-mode
-   flags are **not** the near-universal `O_RDONLY=0` -- they are `O_RDONLY=0x1`,
-   `O_WRONLY=0x2`, `O_RDWR=0x3` (`O_ACCMODE=0x3`, from
-   `compiler/crt/posixc/include/fcntl.h`). A read-only open with `flags=0` gives an
-   empty access mode, which AROS `open` rejects with EINVAL -- that was the
-   "read-open bug", a wrong constant in the pal, not a posixc bug. The create/misc
-   flags (`O_CREAT=0x40`, `O_TRUNC=0x200`, `O_APPEND=0x400`) do match. off_t=i64,
-   mode_t=u16.
-2. **`thread` (staged — foundation done, sync core remains).** See below.
+1. **`thread` (staged — foundation done, sync core remains).** See below.
+2. **`std::process`** (spawn subprocesses via dos `System()`) and **`fs`** symlinks/
+   `set_perm`/times — the remaining medium pieces.
 3. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
-   AROS support, a real CSPRNG, and the `std::process` / full `vars()` gaps.
+   AROS support, a real CSPRNG, and the full `vars()` gap.
 
 ### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
 
