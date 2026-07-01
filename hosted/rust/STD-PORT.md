@@ -199,8 +199,12 @@ Remaining pal pieces, roughly in order:
 
 1. **`args`**: program args from the AROS startup (needs the C `main`'s argc/argv
    threaded to Rust; `env` reads already work).
-2. **`fs`**: `sys/fs` over `posixc` `open`/`read`/`write`/`stat` (or `dos`) — read a
-   `MacRW:` file from Rust.
+2. **`fs`**: partly done -- `sys/fs/aros.rs` `File` create/write/seek/close over
+   posixc **work** (verified: Rust wrote a real `MacRW:` host file). `open(O_RDONLY)`
+   to reopen returns **EINVAL** consistently (a posixc/emul-handler open-for-read
+   bug; tried 2-arg and 3-arg variadic calls -- confirm with a C repro then report
+   upstream). metadata/dirs/symlinks are stubs. O_* are Linux-style (O_CREAT=0x40,
+   O_TRUNC=0x200, O_APPEND=0x400), off_t=i64, mode_t=u16.
 3. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`). The
    `std::env` global lock also leans on the sync pal, so this unblocks env writes too.
 4. **`std::net::TcpStream` proper**: wire `sys/net/aros.rs` onto the same bsdsocket
