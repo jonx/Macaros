@@ -343,3 +343,15 @@ did. New issues found (candidate patches / bug reports):
 > `sizeof(timespec)`=16, `sizeof(long)`=8). The *Rust* path faulting on it is the x18
 > clobber in the not-yet-`-ffixed-x18` timer/posixc code (the x18 finding in
 > [NOTES.md](../NOTES.md); the OS-wide rebuild covers it).
+
+37. **`bsdsocket.library` treats `FIONBIO`/non-blocking as a no-op, so socket
+    non-blocking and timeouts aren't honoured.** `arch/all-unix/bsdsocket` keeps the
+    host socket `O_NONBLOCK` and emulates blocking with an internal timer-poll park
+    (`bsdsocket_sockopt.c`: `IoctlSocket(FIONBIO)` returns success but does nothing).
+    So an app that sets `FIONBIO` (or `SO_RCVTIMEO`/`SO_SNDTIMEO`) still blocks. This
+    surfaced building Rust `std::net`: blocking TCP is solid, but `set_nonblocking`
+    can't take effect and read/write timeouts can't be enforced (the Rust pal returns
+    `Unsupported` for a requested timeout rather than silently ignore it). *Fix:* make
+    `IoctlSocket(FIONBIO)` actually switch the library's park behaviour per-socket
+    (return `EWOULDBLOCK` from `recv`/`send`/`accept`/`connect` when set), and honour
+    `SO_RCVTIMEO`/`SO_SNDTIMEO` in the park loop. Needed for mio/tokio later.

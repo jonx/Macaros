@@ -7,7 +7,14 @@
 
 extern unsigned int aros_rust_net_test(void);
 
-int main(void)
+/* std's args pal (sys/args/aros.rs) is now part of std and gets pulled into the
+ * link, so every std harness must supply these (see rs3_main.c). */
+int aros_argc = 0;
+char **aros_argv = 0;
+
+int main(int argc, char **argv)
 {
+    aros_argc = argc;
+    aros_argv = argv;
     return aros_rust_net_test() == AROS_RS7_MAGIC ? 0 : 20;
 }

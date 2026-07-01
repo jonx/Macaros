@@ -58,6 +58,10 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         println!("[RS3c] fs: FAILED: {e:?}");
     }
 
+    // args: std::env::args() reads argc/argv captured by the C harness
+    let args: Vec<String> = std::env::args().collect();
+    println!("[RS3c] args: {} -> {args:?}", args.len());
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }
@@ -121,6 +125,45 @@ pub extern "C" fn aros_rust_net_test() -> u32 {
             let got = if n < 0 { 0 } else { n as usize };
             println!("[NET] FAIL: recv()={} bytes={:?}", n, &buf[..got.min(buf.len())]);
             5
+        }
+    }
+}
+
+// --- RSN: the SAME round-trip, but through real `std::net::TcpStream` ----------
+// This drives sys/net/connection/aros.rs (the net pal), not the glue directly, so
+// it proves std::net itself works end-to-end. Needs the same host echo server as
+// RS4 on 127.0.0.1:12345.
+#[no_mangle]
+pub extern "C" fn aros_rust_stdnet_test() -> u32 {
+    use std::net::TcpStream;
+
+    let result = (|| -> std::io::Result<[u8; 6]> {
+        let mut s = TcpStream::connect("127.0.0.1:12345")?;
+        println!("[STDNET] connected {} -> {}", s.local_addr()?, s.peer_addr()?);
+        // exercise setsockopt/getsockopt passthrough (non-fatal: report, don't abort)
+        match s.set_nodelay(true).and_then(|_| s.nodelay()) {
+            Ok(v) => println!("[STDNET] set_nodelay -> nodelay()={v}"),
+            Err(e) => println!("[STDNET] nodelay (nonfatal): {e:?}"),
+        }
+        s.write_all(b"PING42")?;
+        let mut buf = [0u8; 6];
+        s.read_exact(&mut buf)?;
+        Ok(buf)
+    })();
+
+    match result {
+        Ok(buf) if &buf == b"PING42" => {
+            println!("[STDNET] PASS: std::net round-trip echoed {:?}", core::str::from_utf8(&buf));
+            println!("RUST-AROS: STDNET PASS");
+            0x5253_4e00 // "RSN "
+        }
+        Ok(buf) => {
+            println!("[STDNET] FAIL: unexpected echo {:?}", core::str::from_utf8(&buf));
+            5
+        }
+        Err(e) => {
+            println!("[STDNET] FAIL: {e:?}");
+            6
         }
     }
 }

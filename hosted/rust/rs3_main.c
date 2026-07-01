@@ -11,9 +11,16 @@
 
 extern unsigned int aros_rust_std_hello(void);
 
-int main(void)
+/* Read by sys/args/aros.rs so std::env::args() works (C owns main, not lang_start). */
+int aros_argc = 0;
+char **aros_argv = 0;
+
+int main(int argc, char **argv)
 {
-    unsigned int rs3 = aros_rust_std_hello();
+    unsigned int rs3;
+    aros_argc = argc;
+    aros_argv = argv;
+    rs3 = aros_rust_std_hello();
     if (rs3 == AROS_RS3_MAGIC) {
         PutStr("[RS3] rust std PASS (println! via posixc -> dos)\n");
         PutStr("RUST-AROS: STD PASS\n");

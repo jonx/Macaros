@@ -23,8 +23,10 @@ for design/status see [docs/features/rust-aros](../../docs/features/rust-aros/RE
   bsdsocket bridge** on booted AROS (`aros_net_glue.c` + `net-build.sh` → `C:RustNet`):
   3/3 byte-exact echoes plus a clean connect-refused error path, no crash. The bridge
   is x18-safe (glue + `bsdsocket.library` both `-ffixed-x18`).
-- **Next (RS3c):** the remaining pal modules — real errno, `time`, `env`/`args`,
-  `fs`, `thread`, then `std::net::TcpStream` proper. See [Resume map](#resume-map).
+- **RS3c done:** real errno, `env` reads, `args`, and **`std::net`** (TcpStream
+  connect/read/write/addr/nodelay round-trip, verified live over the bsdsocket
+  bridge); `fs` create/write and `time` written (each with one known blocker).
+  **Next:** `thread`. See [Resume map](#resume-map).
 
 ## The mental model: three trees
 
@@ -58,16 +60,21 @@ The port spans three source trees. The actual Rust port is small and lives in a
 
 ## What's done vs. what's left (the pal map)
 
-In the clone, `library/std/src/sys/`. We gave a real `aros` arm to **5** of ~23:
+In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 
 | Module | Status | How |
 |---|---|---|
 | `alloc/aros.rs` | done | `posixc` `malloc` / `posix_memalign` |
 | `stdio/aros.rs` | done | `posixc` `write`/`read` on fd 0/1/2 |
 | `random/aros.rs` | done (**weak**) | SplitMix64 from an ASLR seed — TODO real CSPRNG |
-| `io/error` → `generic` | done (**stub**) | errno=0 — TODO real `posixc` errno |
+| `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
+| `env/aros.rs` | reads done | `getenv` verified; `setenv` fails (AROS `SetVar`) — see blockers |
+| `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
+| `fs/aros.rs` | partial | `File` create/write/seek/close over `posixc` work; read-`open` EINVALs (upstream) |
+| `time/aros.rs` | written | correct `timespec` layout; Rust path faults on x18 until the OS `-ffixed-x18` rebuild |
+| `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
 | `thread_local` → `no_threads` | done | single-thread statics — switch to pthread keys for `std::thread` |
-| `time`, `thread`, `fs`, `net`, `process`, `env`, `args`, `os_str`, `pipe`, `fd`, … | **stubs** | fall through to `unsupported` — these are the remaining work |
+| `thread`, `process`, `pipe`, … | **stubs** | fall through to `unsupported` — remaining work |
 
 ## Dev environment setup (fresh machine, or if the clone/symlink is gone)
 
@@ -172,12 +179,25 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
 
 ## Resume map (do these next, roughly in order)
 
-**Done:** `reserve-x18`; **net** (a Rust TCP round-trip over the bsdsocket bridge,
-`aros_net_glue.c` + `net-build.sh` → `C:RustNet`; needs `bsdsocket.library` built via
-`make workbench-libs-bsdsocket` and a TCP server on the **host**, since the bridge is
-host-passthrough so AROS's `127.0.0.1` is the Mac's loopback); **real errno**
-(`sys/io/error/aros.rs`, NetBSD-numbered, matches the net errno 61); and **env reads**
-(`sys/env/aros.rs` getenv, verified).
+**Done:** `reserve-x18`; **`std::net`** (`sys/net/connection/aros.rs`:
+TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs via the
+`aros_np_*` glue — verified live, `C:RustStdNet` does a real `TcpStream::connect` +
+`write_all`/`read_exact` round-trip plus `local_addr`/`peer_addr`/`set_nodelay`;
+needs `bsdsocket.library` built via `make workbench-libs-bsdsocket` and a TCP server
+on the **host**, since the bridge is host-passthrough so AROS's `127.0.0.1` is the
+Mac's loopback); the earlier **glue round-trip** (`C:RustNet`) still exists as the
+lower-level RS4 proof; **real errno** (`sys/io/error/aros.rs`, NetBSD-numbered,
+matches the net errno 61); **env reads** (`sys/env/aros.rs` getenv, verified); and
+**args** (`sys/args/aros.rs` reads the C `main`'s argc/argv via two globals the
+harness sets — verified live: `RustStd alpha beta 42` → `std::env::args()` =
+`["RustStd","alpha","beta","42"]`).
+
+**`std::net` caveats (bsdsocket bridge limits, not pal bugs):** IPv4 only (IPv6
+requests return `Unsupported`); `set_nonblocking(true)` and socket timeouts are not
+yet effective because the AROS library keeps host sockets `O_NONBLOCK` and emulates
+blocking with a timer-poll park (`FIONBIO` is a no-op; we return `Unsupported` for a
+requested timeout rather than lie). `try_clone`/`duplicate` return `Unsupported`.
+See UPSTREAM-NOTES #37.
 
 **Two AROS-side blockers found (not pal bugs — fix AROS, then the pal just works):**
 
@@ -197,20 +217,15 @@ host-passthrough so AROS's `127.0.0.1` is the Mac's loopback); **real errno**
 
 Remaining pal pieces, roughly in order:
 
-1. **`args`**: program args from the AROS startup (needs the C `main`'s argc/argv
-   threaded to Rust; `env` reads already work).
-2. **`fs`**: partly done -- `sys/fs/aros.rs` `File` create/write/seek/close over
+1. **`fs`**: partly done -- `sys/fs/aros.rs` `File` create/write/seek/close over
    posixc **work** (verified: Rust wrote a real `MacRW:` host file). `open(O_RDONLY)`
    to reopen returns **EINVAL** consistently (a posixc/emul-handler open-for-read
    bug; tried 2-arg and 3-arg variadic calls -- confirm with a C repro then report
    upstream). metadata/dirs/symlinks are stubs. O_* are Linux-style (O_CREAT=0x40,
    O_TRUNC=0x200, O_APPEND=0x400), off_t=i64, mode_t=u16.
-3. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`). The
+2. **`thread`** + switch `thread_local` to pthread keys (`posixc` `pthread_*`). The
    `std::env` global lock also leans on the sync pal, so this unblocks env writes too.
-4. **`std::net::TcpStream` proper**: wire `sys/net/aros.rs` onto the same bsdsocket
-   calls the glue uses, so `std::net` works (the current test drives the bridge via
-   the glue, not `std::net` itself yet).
-7. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
+3. **Toward a real PR**: real CSPRNG, `libc`-crate AROS support so the pal drops its
    private `extern "C"` decls, and upstreaming the target spec.
 
 ---
