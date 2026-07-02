@@ -33,8 +33,8 @@ fi
 cleanup() { trap - EXIT INT TERM; "$CTL" kill >/dev/null 2>&1; rmdir "$LOCK_DIR" >/dev/null 2>&1; }
 trap cleanup EXIT INT TERM
 
-printf '%-11s  %-8s  %s\n' "TRIGGER" "INSTANCE" "MARKER"
-printf '%-11s  %-8s  %s\n' "-------" "--------" "------"
+printf '%-11s  %-8s  %-5s  %s\n' "TRIGGER" "INSTANCE" "SHELL" "MARKER"
+printf '%-11s  %-8s  %-5s  %s\n' "-------" "--------" "-----" "------"
 
 for T in $TRIGGERS; do
     "$CTL" kill >/dev/null 2>&1; sleep 1
@@ -52,22 +52,34 @@ for T in $TRIGGERS; do
     marker="no"
     grep -q "\[CRASHLAB\] $T" "$LOG" 2>/dev/null && marker="yes"
 
-    # Liveness: is the guest still processing? Type a harmless echo and see if
-    # the console echoes it (works even when the process is technically 'up'
-    # but wedged).
+    # INSTANCE liveness: does the pointer sprite still repaint? This works with
+    # a guru/alert requester on screen (containment leaves one up waiting for
+    # an ack) and does not depend on the console shell being alive.
     pid="$(cat "$PIDF" 2>/dev/null || true)"
-    alive="down"
+    alive="down"; shell="-"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        "$CTL" mouse 60 60 >/dev/null 2>&1; sleep 1
         "$CTL" shot /tmp/cs-a.png >/dev/null 2>&1
-        "$CTL" type "Echo alive" >/dev/null 2>&1; "$CTL" enter >/dev/null 2>&1
-        sleep 2
+        "$CTL" mouse 300 300 >/dev/null 2>&1; sleep 1
         "$CTL" shot /tmp/cs-b.png >/dev/null 2>&1
         if cmp -s /tmp/cs-a.png /tmp/cs-b.png; then alive="wedged"; else alive="LIVE"; fi
+
+        # SHELL liveness: does the boot shell still echo? Expected 'no' for a
+        # contained crash of a foreground command -- the shell process that
+        # hosted it was RemTask'd by design; the INSTANCE column is the verdict
+        # that matters for containment.
+        shell="no"
+        "$CTL" shot /tmp/cs-c.png >/dev/null 2>&1
+        "$CTL" type "Echo alive" >/dev/null 2>&1; "$CTL" enter >/dev/null 2>&1
+        sleep 2
+        "$CTL" shot /tmp/cs-d.png >/dev/null 2>&1
+        cmp -s /tmp/cs-c.png /tmp/cs-d.png || shell="yes"
     fi
-    printf '%-11s  %-8s  %s\n' "$T" "$alive" "$marker"
+    printf '%-11s  %-8s  %-5s  %s\n' "$T" "$alive" "$shell" "$marker"
 done
 
 "$CTL" kill >/dev/null 2>&1
 echo
-echo "INSTANCE: LIVE = survived & responsive | wedged = up but frozen | down = process gone | NOBOOT = boot failed"
-echo "MARKER:   yes = CrashLab printed its trigger line before firing"
+echo "INSTANCE: LIVE = pointer repaints (system alive) | wedged = up but frozen | down = process gone | NOBOOT = boot failed"
+echo "SHELL:    yes = boot shell still echoes | no = shell dead or blocked (expected 'no' after a contained foreground crash)"
+echo "MARKER:   yes = CrashLab's trigger line reached the host log (debug channel)"

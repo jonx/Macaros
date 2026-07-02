@@ -197,6 +197,42 @@ beachball the app nor hide:
   once per stall episode, so every future hang self-captures its autopsy in
   the log. Re-arms when pumping resumes.
 
+## Opt-in trap containment (Phase E, 2026-07-02)
+
+Boot with the kernel argument `containment` (harness:
+`AROS_KERNEL_ARGS=containment aros-ctl run`; or add it to the
+`arguments` line in AROSBootstrap.conf) and a CPU trap in a USER task no
+longer dead-ends the system. Instead:
+
+1. `Exec_TrapHandler` (rom/exec/traphandler.c) skips the forced `AT_DeadEnd`
+   when `EXECF_Containment` is set, the fault did not interrupt supervisor
+   context (`KrnIsSuper() <= 1` on hosted: the trap handler accounts for
+   exactly one level), the task has an ETask, and no crash is already in
+   progress (double-crash stays dead-end).
+2. The task is redirected to the crash handler as usual, which now shows a
+   **"Recoverable Alert!"** requester (More.../Continue) instead of the
+   dead-end one. Continue (or a headless fallback log) then `RemTask(NULL)`s
+   the offender: the task cannot resume (its context was abandoned at the
+   faulting instruction), but everything else keeps running.
+3. Supervisor/kernel faults and double-crashes keep today's dead-end path.
+   Default (no argument) is byte-for-byte the old behavior.
+
+Honest limit: no MMU isolation, so a fault that already corrupted shared
+state can still take the system down later. Containment is best-effort
+damage control, not protection.
+
+**Two pre-existing bugs found while wiring this** (fixed on crash-containment):
+- The hosted trap path subtracted 8 from SP after redirecting the PC (an
+  x86_64 calling-convention fixup). On aarch64 that misaligns SP, and the
+  hardware faults the first SP-relative access (SP-alignment SIGBUS, ESR EC
+  0x26), so `Exec_CrashHandler` died before it could display ANY guru; every
+  trap became a re-fault halt. The fixup is now x86_64-only; aarch64
+  re-aligns instead. This is why the BEFORE matrix showed every fault class
+  as instant instance death.
+- The trap-loop breaker keyed on (signal, pc) only; with containment, a
+  second run of the same crashing program can legitimately re-fault at the
+  same pc. The faulting task is now part of the key.
+
 ## Possible follow-ups
 
 - Offline symbolizer in `graft/` (dump + per-boot module map → `addr2line` /

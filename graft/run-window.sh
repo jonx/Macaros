@@ -386,11 +386,11 @@ if [ -n "${AROS_CM_CONTROL:-}" ]; then
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
         AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Macaros -c "$BOOTD/AROSBootstrap.conf"
+        ./Macaros -c "$BOOTD/AROSBootstrap.conf" ${AROS_KERNEL_ARGS:-}
 else
     exec env AROS_DARWIN_THREADED=1 DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
         AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Macaros -c "$BOOTD/AROSBootstrap.conf"
+        ./Macaros -c "$BOOTD/AROSBootstrap.conf" ${AROS_KERNEL_ARGS:-}
 fi
