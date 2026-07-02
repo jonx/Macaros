@@ -154,6 +154,10 @@ The real cycle (NOT the consoleTaskLock inversion guessed earlier):
   makes CDInputHandler wait for a console-task reply that never comes; the drag
   can never release. All input dead.
 
+**Upstreamed:** PR https://github.com/aros-development-team/AROS/pull/819
+(branch `fix/console-resize-deadlock` on the fork, cherry-picked onto master;
+the PR keeps master's handler priority 50, our 51 is port-local from b009c855).
+
 **Fix (commit ad65a609):** the CDIH -> console task handoff is now asynchronous:
 one cdihMessage allocated per event, PutMsg without waiting, console task frees
 it (order preserved by the port FIFO; on OOM the event is dropped). Principle
