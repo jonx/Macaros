@@ -18,6 +18,9 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "cocoametal.h"
 
@@ -54,6 +57,18 @@ void cm__set_close_pending(CMContext *cx);
 void cm__set_resize_pending(CMContext *cx);
 int  cm__take_close_pending(CMContext *cx);
 int  cm__take_resize_pending(CMContext *cx);
+
+/* Host hardening (Phase D): translated-NSEvent ring + guest-progress watchdog
+ * state, also implemented in cocoametal.m next to the struct. */
+void cm__evring_put(CMContext *cx, const CMEvent *e);
+int  cm__evring_take(CMContext *cx, CMEvent *e);
+double cm__secs_since_guest_pump(CMContext *cx);
+int  cm__wd_take_fire(CMContext *cx);
+void cm__set_host_timer(CMContext *cx, void *t);
+void *cm__take_host_timer(CMContext *cx);
+
+/* Defined later in this file (the input section); used by cm__host_tick. */
+void cm__drain_nsevents(CMContext *cx);
 
 /* The window status bar (native-material footer: brand + Power/Activity LEDs).
  * Implemented in cocoametal_statusbar.m; returns a view framed at (0,0,w,h). */
@@ -202,6 +217,44 @@ static CMContentView *cm__metal_view(NSWindow *win) {
 }
 @end
 
+/* ---- host tick: independent NSEvent drain + guest-progress watchdog -------
+ * Fired by a repeating main-thread NSTimer (created with the window below, in
+ * common run-loop modes so it keeps firing inside AppKit tracking loops). Two
+ * jobs, both host-side and fully independent of the guest:
+ *
+ * 1. Drain NSEvents into the host event ring. macOS marks an app unresponsive
+ *    (beachball) when its event queue stagnates; before this, the queue was
+ *    only drained when the GUEST called cm_pump_events, so a wedged guest
+ *    froze the host app too. Now the queue is always serviced and the window
+ *    keeps moving/closing even with the guest dead.
+ *
+ * 2. Watch guest progress. The guest's cm_pump_events call recency is the
+ *    liveness signal that matters: it is the first thing to stop on an input
+ *    wedge, even while the guest's 50Hz timer and scheduler keep running (the
+ *    resize deadlock proved a scheduler heartbeat would miss it). When the
+ *    pump goes stale past AROS_CM_WATCHDOG_SECS (default 5, 0 disables), log
+ *    it and fire the in-process SIGINFO task dump ONCE per stall episode; the
+ *    signal converges on the AROS thread (the host threads block it) and the
+ *    kernel's diag handler prints every task's backtrace to the log, so any
+ *    future hang self-captures its own autopsy. Re-arms when pumping resumes. */
+static double cm__watchdog_secs(void) {
+    const char *s = getenv("AROS_CM_WATCHDOG_SECS");
+    if (!s) return 5.0;
+    double v = atof(s);
+    return (v > 0) ? v : 0;                  /* 0 or garbage = disabled */
+}
+
+static void cm__host_tick(CMContext *cx) {
+    cm__drain_nsevents(cx);
+
+    double lim = cm__watchdog_secs();
+    double stale = cm__secs_since_guest_pump(cx);   /* <0 = guest never pumped */
+    if (lim > 0 && stale > lim && cm__wd_take_fire(cx)) {
+        NSLog(@"[cm-watchdog] guest input pump stale for %.1fs; firing SIGINFO task dump", stale);
+        kill(getpid(), SIGINFO);
+    }
+}
+
 void cm_try_window(CMContext *cx, const char *title) {
     if (!cx) return;
 
@@ -301,11 +354,28 @@ void cm_try_window(CMContext *cx, const char *title) {
         if (oscale < 1) oscale = 1;
         cm__set_window(cx, (__bridge_retained void *)win,
                        (__bridge void *)layer, oscale);
+
+        /* Host tick timer (drain + watchdog, see cm__host_tick). Common modes
+         * so it keeps firing inside AppKit modal/tracking run loops (window
+         * drag, menu tracking); the bootstrap's main loop pumps the default
+         * mode the rest of the time. 20ms keeps input latency negligible. */
+        NSTimer *tick = [NSTimer timerWithTimeInterval:0.02 repeats:YES
+                                                 block:^(NSTimer *t) {
+            (void)t;
+            cm__host_tick(cx);
+        }];
+        [[NSRunLoop mainRunLoop] addTimer:tick forMode:NSRunLoopCommonModes];
+        cm__set_host_timer(cx, (__bridge_retained void *)tick);
     }
 }
 
 void cm_destroy_window(CMContext *cx) {
     if (!cx) return;
+    void *t = cm__take_host_timer(cx);
+    if (t) {
+        NSTimer *tick = (__bridge_transfer NSTimer *)t;    /* balance the retain */
+        [tick invalidate];
+    }
     void *w = cm__get_window(cx);
     if (w) {
         NSWindow *win = (__bridge_transfer NSWindow *)w;   /* balance the retain */
@@ -520,27 +590,16 @@ static void cm__fill_mouse_xy(CMContext *cx, NSEvent *ev, CMEvent *out) {
     out->x = x; out->y = y;
 }
 
-int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
-    if (!cx || !out || maxEvents <= 0) return 0;
+/* Drain pending NSEvents into the host event ring, translating each to a
+ * CMEvent. Called from the guest pump below AND from the host timer
+ * (cm__host_tick), so the NSEvent queue is serviced even while the guest is
+ * wedged -- macOS never marks the app unresponsive. Main thread only. Bounded
+ * per call so an event flood cannot monopolize the run loop. */
+void cm__drain_nsevents(CMContext *cx) {
     NSApplication *app = NSApp;
-    if (!app) return 0;                      /* no NSApp -> no event source */
-
-    /* Injected (headless control-channel) events first, then live NSEvents. */
-    extern int cm__control_drain(CMEvent *out, int maxEvents);
-    int n = cm__control_drain(out, maxEvents);
+    if (!cx || !app) return;                 /* no NSApp -> no event source */
     @autoreleasepool {
-        /* Window-management transitions first (set by the delegate, not NSEvents):
-         * a pending live-resize, then a pending close. Edge-triggered / one-shot. */
-        if (n < maxEvents && cm__take_resize_pending(cx)) {
-            CMEvent *e = &out[n++];
-            e->type = CM_EV_RESIZE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
-        }
-        if (n < maxEvents && cm__take_close_pending(cx)) {
-            CMEvent *e = &out[n++];
-            e->type = CM_EV_CLOSE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
-        }
-
-        while (n < maxEvents) {
+        for (int i = 0; i < 256; i++) {
             /* Non-blocking: distantPast => return immediately if nothing queued. */
             NSEvent *ev = [app nextEventMatchingMask:NSEventMaskAny
                                            untilDate:[NSDate distantPast]
@@ -548,7 +607,7 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
                                              dequeue:YES];
             if (!ev) break;
 
-            CMEvent *e = &out[n];
+            CMEvent tmp, *e = &tmp;
             e->type = CM_EV_NONE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
             int emit = 0;             /* 1 => this event produced a CMEvent */
             int forward = 0;          /* 1 => forward to [NSApp sendEvent:] (untranslated) */
@@ -661,10 +720,36 @@ int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
             }
 
             if (forward) [app sendEvent:ev];
-            if (emit) n++;
+            if (emit) cm__evring_put(cx, e);
             /* If neither emit nor forward (shouldn't happen), the event is simply
              * dropped after dequeue — but every branch sets at least one. */
         }
     }
+}
+
+int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
+    if (!cx || !out || maxEvents <= 0) return 0;
+    if (!NSApp) return 0;                    /* no NSApp -> no event source */
+
+    /* Injected (headless control-channel) events first, then window-management
+     * transitions (set by the delegate, not NSEvents; edge-triggered), then the
+     * host event ring. */
+    extern int cm__control_drain(CMEvent *out, int maxEvents);
+    int n = cm__control_drain(out, maxEvents);
+
+    if (n < maxEvents && cm__take_resize_pending(cx)) {
+        CMEvent *e = &out[n++];
+        e->type = CM_EV_RESIZE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
+    }
+    if (n < maxEvents && cm__take_close_pending(cx)) {
+        CMEvent *e = &out[n++];
+        e->type = CM_EV_CLOSE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
+    }
+
+    /* Freshest input: drain the NSEvent queue into the ring now (the host
+     * timer also does this between guest pumps), then hand the ring over. */
+    cm__drain_nsevents(cx);
+    while (n < maxEvents && cm__evring_take(cx, &out[n]))
+        n++;
     return n;
 }

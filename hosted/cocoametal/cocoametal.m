@@ -215,6 +215,20 @@ struct CMContext {
      * CM_EV_CLOSE / CM_EV_RESIZE. Plain ints toggled on one (main) thread. */
     int                      closePending;
     int                      resizePending;
+
+    /* Host hardening: translated-NSEvent ring + guest-progress watchdog.
+     * A repeating main-thread timer (cocoametal_window.m, created with the
+     * window) drains NSEvents into this ring INDEPENDENTLY of the guest, so
+     * macOS always sees the event queue serviced (no beachball / "not
+     * responding" when the guest wedges). cm_pump_events reads from the ring.
+     * lastPumpTime records when the guest last pumped; the timer fires the
+     * SIGINFO task dump once when that goes stale (see cm__host_tick).
+     * All fields main-thread-only, like the rings above. */
+    CMEvent                  evRing[512];
+    int                      evHead, evTail;
+    double                   lastPumpTime;   /* CFAbsoluteTime of last guest pump; 0 = never */
+    int                      wdFired;        /* one-shot latch per stall episode */
+    void                    *hostTimer;      /* NSTimer*, owned via __bridge_retained */
 };
 
 /* Live-window helpers: weak default (headless) here, strong override in
@@ -1059,6 +1073,7 @@ __attribute__((weak)) void cm__resync_layer(CMContext *cx) {
  * (no AppKit) link-complete and returns 0 events. The drain is non-blocking and
  * runs on the single AROS/main thread (INTERFACE.md §3) — the only caller. */
 int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents);
+void cm__note_guest_pump(CMContext *cx);   /* defined with the accessors below */
 
 __attribute__((weak)) int cm__pump_events_appkit(CMContext *cx, CMEvent *out, int maxEvents) {
     (void)cx; (void)out; (void)maxEvents;
@@ -1074,6 +1089,9 @@ int cm_pump_events(CMContext *cx, CMEvent *out, int maxEvents) {
         cm__sync_main(^{ r = cm_pump_events(cx, out, maxEvents); });
         return r;
     }
+
+    /* The guest pumped: feed the progress watchdog (see cm__host_tick). */
+    cm__note_guest_pump(cx);
 
     /* Drain pending CM_EV_SETTING first (pull surface for AROS-facing options,
      * §9). These are produced by cm_set_option of an AROS-facing key (including
@@ -1138,6 +1156,56 @@ int  cm__take_close_pending(CMContext *cx) {
 int  cm__take_resize_pending(CMContext *cx) {
     if (!cx || !cx->resizePending) return 0;
     cx->resizePending = 0; return 1;
+}
+
+/* Translated-NSEvent ring (host hardening). Main-thread-only, like the rings
+ * above. put() coalesces a MOUSEMOVE arriving right after another MOUSEMOVE
+ * (overwrites it), so a wedged guest leaves the ring holding at most one stale
+ * move between the discrete events; when full, the new event is dropped. */
+#define CM_EVRING_N ((int)(sizeof(((CMContext *)0)->evRing) / sizeof(CMEvent)))
+void cm__evring_put(CMContext *cx, const CMEvent *e) {
+    if (!cx || !e) return;
+    if (e->type == CM_EV_MOUSEMOVE && cx->evTail != cx->evHead) {
+        int last = (cx->evTail + CM_EVRING_N - 1) % CM_EVRING_N;
+        if (cx->evRing[last].type == CM_EV_MOUSEMOVE) {
+            cx->evRing[last] = *e;
+            return;
+        }
+    }
+    int next = (cx->evTail + 1) % CM_EVRING_N;
+    if (next == cx->evHead) return;            /* full: drop the new event */
+    cx->evRing[cx->evTail] = *e;
+    cx->evTail = next;
+}
+int cm__evring_take(CMContext *cx, CMEvent *e) {
+    if (!cx || cx->evHead == cx->evTail) return 0;
+    if (e) *e = cx->evRing[cx->evHead];
+    cx->evHead = (cx->evHead + 1) % CM_EVRING_N;
+    return 1;
+}
+
+/* Guest-progress watchdog state. The guest "pumps" by calling cm_pump_events;
+ * that is the liveness signal that actually matters (the input chain), and it
+ * is the first thing to stop on an input wedge even while the guest's timer
+ * and scheduler keep running. */
+void cm__note_guest_pump(CMContext *cx) {
+    if (!cx) return;
+    cx->lastPumpTime = CFAbsoluteTimeGetCurrent();
+    cx->wdFired = 0;                            /* re-arm after recovery */
+}
+double cm__secs_since_guest_pump(CMContext *cx) {
+    if (!cx || cx->lastPumpTime == 0) return -1; /* guest never pumped (booting) */
+    return CFAbsoluteTimeGetCurrent() - cx->lastPumpTime;
+}
+int  cm__wd_take_fire(CMContext *cx) {
+    if (!cx || cx->wdFired) return 0;
+    cx->wdFired = 1; return 1;
+}
+void  cm__set_host_timer(CMContext *cx, void *t) { if (cx) cx->hostTimer = t; }
+void *cm__take_host_timer(CMContext *cx) {
+    void *t = cx ? cx->hostTimer : NULL;
+    if (cx) cx->hostTimer = NULL;
+    return t;
 }
 
 /* Internal diagnostic accessor for the D2t threading-model probe. NOT part of the
