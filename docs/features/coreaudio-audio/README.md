@@ -107,8 +107,24 @@ final output gain.
 
 The low-level playback path works. Remaining work is build and UX polish:
 
-- make the `ahi.device` localization/generated-file workaround first-class in
-  the source build instead of a manual build-dir rescue
+- make the `ahi.device` build workaround first-class in the source build.
+  The concrete rescue (performed 2026-07-02 into `/tmp/arosbuild`; repeat if
+  the gen dir is wiped): the missing pieces are (a) the translation catalogs,
+  which are UNINITIALIZED GIT SUBMODULES in `../aros-upstream`
+  (`git submodule update --init workbench/devs/AHI/AHI/translations
+  workbench/devs/AHI/Device/translations`), and (b) configure never
+  substituting the tool paths. Then, in
+  `$BUILD/bin/darwin-aarch64/gen/workbench/devs/AHI`, with
+  `T=$BUILD/bin/darwin-aarch64/tools` and `COMPILER_PATH=$T` exported, run
+  `make -C <Device|Drivers|AHI-Handler|AddAudioModes> SFDC=$T/sfdc
+  FLEXCAT=$T/flexcat`, adding to Device/AddAudioModes an LDFLAGS override
+  that appends `-Wl,--allow-multiple-definition`, and to Device a CFLAGS
+  override that appends `-ffixed-x18` (its config.status predates the flag).
+  Install: `Device/ahi.device` -> `Devs/`, `Drivers/CoreAudio/coreaudio.audio`
+  -> `Devs/AHI/`, `Drivers/CoreAudio/COREAUDIO` -> `Devs/AudioModes/`,
+  `AddAudioModes/AddAudioModes` -> `C:`, plus the AHI SDK headers
+  (`Include/C/devices/ahi.h` and the gen'd proto/clib/defines ahi.h) into
+  `Developer/include/`, then `make workbench-c-ahismoke`.
 - add default AHI preference wiring so the CoreAudio mode is selected by normal
   desktop configuration rather than only registered by startup
 - add mute and, if needed later, AHI-native mixer preference integration

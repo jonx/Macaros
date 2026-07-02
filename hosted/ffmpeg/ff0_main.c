@@ -15,7 +15,11 @@
 #include <libavutil/avutil.h>
 #include <libavutil/mem.h>
 
-static void put(const char *s) { PutStr((CONST_STRPTR)s); }
+/* PutStr + Flush: dos buffers a REDIRECTED (file) Output() handle, and a
+   buffered handle that is only closed by the shell can lose the data (seen
+   live: `C:FF0Smoke >>MacRW:x` captured nothing while the console showed all
+   lines). Flushing per line is what C:CrashLab does too. */
+static void put(const char *s) { PutStr((CONST_STRPTR)s); Flush(Output()); }
 
 /* unsigned -> decimal, libc-free, into buf (caller gives enough room); returns buf */
 static const char *udec(unsigned v, char *buf)

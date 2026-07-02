@@ -51,7 +51,14 @@ T="$(find_tree)"
 echo "[stage2] AROS tree: $T"
 
 GEN="$T/gen"; DEV="$T/AROS/Developer"; LIBDIR="$DEV/lib"
-XTBIN="$T/tools/crosstools/bin"; XTLIB="$T/tools/crosstools/lib/generic"
+# The crosstools install: prefer an in-tree copy, else the canonical stable
+# toolchain (/tmp/aros-crosstools). $T/tools holds the HOST tools (collect-aros
+# etc.), NOT the cross toolchain -- pointing XTLIB there silently loses
+# -lclang_rt.builtins-aarch64 the moment no scratchpad tree matches.
+XT="${AROS_CROSSTOOLS:-$T/tools/crosstools}"
+[ -x "$XT/bin/clang" ] || XT="/tmp/aros-crosstools"
+[ -x "$XT/bin/clang" ] || { echo "aros-build: no crosstools (set AROS_CROSSTOOLS)" >&2; exit 2; }
+XTBIN="$XT/bin"; XTLIB="$XT/lib/generic"
 CDIR="$T/AROS/C"; COLLECT="$T/tools/collect-aros"
 CC="${AROS_CC:-clang}"; CCTARGET="--target=aarch64-unknown-none-elf"
 OUT="$REPO/build/rust-aros"; mkdir -p "$OUT"
