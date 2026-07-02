@@ -191,7 +191,14 @@ if [ -x "$OBJDUMP" ]; then
     for m in $X18_SET; do
         [ -f "$m" ] || continue
         head -c4 "$m" 2>/dev/null | grep -q "$(printf '\177ELF')" || continue
-        n="$("$OBJDUMP" -d "$m" 2>/dev/null | grep -cwE 'x18|w18')"
+        # Count x18/w18 uses, EXCLUDING the benign save/restore-only pattern:
+        # exec's scheduling primitives (Forbid/Permit/Disable/Enable/Obtain-/
+        # ReleaseSemaphore) stp/ldp ALL caller-saved regs incl. x18 around an
+        # internal call. Writing x18 to the stack and back never computes with
+        # its (host-zeroed) value, so it cannot corrupt anything. Any other
+        # reference (load FROM [x18], mov, arithmetic) still counts.
+        n="$("$OBJDUMP" -d "$m" 2>/dev/null | grep -wE 'x18|w18' \
+             | grep -cvE '(stp|ldp)[[:space:]]+x18, x30, \[sp')"
         if [ "${n:-0}" -gt "$X18_LIMIT" ]; then
             printf 'FAIL %-40s %s x18 refs (stale objects -- rebuild it)\n' "${m#$AROS/}" "$n"
             x18_fail=1
