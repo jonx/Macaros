@@ -196,18 +196,29 @@ Verified: typing/resize-smoke 10/10 through the ring; CrashLab FORBIDLOOP
 produced exactly one watchdog fire + full auto-dump naming the spinning task.
 Doc: docs/features/crash-handling/design.md.
 
-## 10. RESUME HERE -- Phase E -- opt-in trap containment (guest, crash-containment branch)
+## 10. Phase E: DONE (2026-07-02) -- opt-in trap containment
 
-In `rom/exec` trap handling (`rom/exec/traphandler.c` and friends): today every
-CPU trap gets `AT_DeadEnd` -> ColdReboot. Add a boot-time flag (bootstrap
-`arguments containment`, default OFF = today's behavior). When ON:
-- a USER-task CPU trap becomes a recoverable guru + `RemTask` of the offender
-  (instead of AT_DeadEnd/ColdReboot),
-- SUPERVISOR / kernel faults stay dead-end (unsafe to continue).
-Verify with the CrashLab AFTER matrix (`graft/crash-smoke`): recoverable fault
-classes should leave the instance LIVE where the BEFORE matrix showed them down.
+Guest commits (crash-containment): f7fa964f (trap-path fixes), 03e5fdd6
+(containment), df3a315d (CrashLab debug-channel markers). Host: 5831e8f
+(harness + proofs).
 
-## 11. Phase F/G -- sweeps + full battery
+- Boot arg `containment` (harness: `AROS_KERNEL_ARGS=containment aros-ctl
+  run`): a USER-task CPU trap raises the RECOVERABLE guru (More.../Continue);
+  Continue RemTask()s the offender only, system keeps running. Supervisor
+  faults / double-crashes stay dead-end. Default = old behavior.
+- TWO pre-existing trap bugs found and fixed on the way:
+  (a) the hosted trap path misaligned SP when redirecting the crashed task
+  (x86_64-only fixup applied on aarch64), so the crash handler SIGBUSed
+  before ANY guru could display -- this alone was why every fault killed the
+  instance; (b) the trap loop breaker lacked the task in its key (false halt
+  when the same program crashes twice under containment).
+- AFTER matrix (proof: run/darwin-aarch64/proofs/crashlab-after-matrix-*.txt):
+  no CPU-fault class kills the process under either policy now; STACKSMASH
+  stays dead-end (handler needs the overflowed stack); BUSYLOOP/FORBIDLOOP
+  are hangs, covered by the Phase D watchdog auto-dump.
+- Doc: docs/features/crash-handling/design.md (containment section).
+
+## 11. RESUME HERE -- Phase F/G -- sweeps + full battery
 
 - x18 leftovers sweep: external ports libs (zstd/freetype/png/tiff/jfif/lzma),
   FFView binaries, identify/popupmenu/codesets/expat/gadgets/ilbm (not in the
