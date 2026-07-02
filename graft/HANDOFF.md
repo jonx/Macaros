@@ -181,20 +181,22 @@ code. Fix: a second internal handler at priority 0 forwards exactly those five
 generated classes (unit matched by ie_EventAddress window for the first three,
 active window for gadgets) through the same async port.
 
-## 9. RESUME HERE -- Phase D -- host hardening (in aros-aarch64)
+## 9. Phase D: DONE (2026-07-02, commit f11457f) -- host hardening
 
-Make the host beachball-proof and self-diagnosing. In
-`../aros-upstream/arch/all-unix/bootstrap/kickstart.c` (the `kick()` threaded
-path, and cocoametal under `hosted/cocoametal` in aros-aarch64):
-- Today NSEvents are only dequeued via the GUEST's `cm_pump_events`; a guest input
-  wedge stagnates the queue so macOS marks the app unresponsive. Add a host-side
-  independent NSEvent dequeue into a ring so the host never beachballs even when
-  the guest is wedged.
-- Add a guest-progress watchdog: a heartbeat counter incremented from `core_IRQ`
-  (the 50Hz timer); if it goes stale for N ticks, log it and auto-fire the SIGINFO
-  diag dump. This makes any future hang self-capture.
+Both pieces live in `hosted/cocoametal/` (no bootstrap/kernel ABI change):
+- **NSEvent ring:** a 20ms main-thread NSTimer (created with the window, common
+  run-loop modes) drains NSEvents into a host CMEvent ring independently of the
+  guest; `cm_pump_events` reads from the ring. No beachball with a dead guest.
+- **Guest-progress watchdog:** same tick, measures time since the guest last
+  pumped (pump recency, NOT a core_IRQ heartbeat: the scheduler stays alive
+  during input wedges, the pump does not). Stale past `AROS_CM_WATCHDOG_SECS`
+  (default 5, 0=off) => `[cm-watchdog]` log + SIGINFO task dump auto-fired once
+  per stall episode.
+Verified: typing/resize-smoke 10/10 through the ring; CrashLab FORBIDLOOP
+produced exactly one watchdog fire + full auto-dump naming the spinning task.
+Doc: docs/features/crash-handling/design.md.
 
-## 10. Phase E -- opt-in trap containment (guest, crash-containment branch)
+## 10. RESUME HERE -- Phase E -- opt-in trap containment (guest, crash-containment branch)
 
 In `rom/exec` trap handling (`rom/exec/traphandler.c` and friends): today every
 CPU trap gets `AT_DeadEnd` -> ColdReboot. Add a boot-time flag (bootstrap

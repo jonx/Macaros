@@ -158,6 +158,45 @@ OpenCatalogA + 0x330`. That OpenCatalogA path calling through a NULL pointer is
 the real bug to chase next; the loop breaker keeps it from drowning the log while
 we do.
 
+## The out-of-band task dump (`aros-ctl tasks`, 2026-07-02)
+
+Traps only cover faults; **hangs** need a tool that works when the guest
+scheduler is wedged. `aros-ctl tasks` sends SIGINFO to the host process; the
+kernel handler (`core_DiagHandler`, same `kernel.c`) rides the host signal
+path (it converges on the AROS thread because the host threads block it), so
+it runs no matter what the guest is doing. It walks current + TaskReady +
+TaskWait and prints, per task: name/state/pri/sigWait/sigRecvd and a
+symbolized backtrace from the saved context.
+
+**Semaphore forensics:** for each blocked task the dump also scans the saved
+callee-saved registers (x19-x28) *and the task's stack* (from the saved SP,
+bounded by `tc_SPUpper`, capped at 16 KB) for pointers to valid
+`NT_SIGNALSEM` nodes, printing each with its owner task and nest/queue
+counts. A task blocked in `InternalObtainSemaphore` keeps the semaphore
+pointer live in a register or spilled on its stack, so this names the other
+side of a deadlock directly. This is the tool that cracked the window-resize
+deadlock (see `graft/reports/resize-freeze-report.md`).
+
+## Host watchdog + event ring (Phase D, 2026-07-02)
+
+Host-side hardening in `hosted/cocoametal/` so a wedged guest can neither
+beachball the app nor hide:
+
+- **NSEvent ring:** a repeating 20 ms main-thread timer (created with the
+  window, common run-loop modes) drains NSEvents into a host CMEvent ring
+  independently of the guest; `cm_pump_events` reads from the ring. macOS
+  always sees the event queue serviced, so the app stays responsive
+  (move/close/menus) even with the guest dead. Consecutive mouse moves
+  coalesce in the ring.
+- **Guest-progress watchdog:** the same tick measures time since the guest
+  last called `cm_pump_events`. Pump recency is the right liveness signal:
+  it stops immediately on an input wedge even while the guest's 50 Hz timer
+  and scheduler keep running (a scheduler heartbeat would have missed the
+  resize deadlock). When stale past `AROS_CM_WATCHDOG_SECS` (default 5,
+  `0` disables), it logs `[cm-watchdog]` and fires the SIGINFO task dump
+  once per stall episode, so every future hang self-captures its autopsy in
+  the log. Re-arms when pumping resumes.
+
 ## Possible follow-ups
 
 - Offline symbolizer in `graft/` (dump + per-boot module map → `addr2line` /

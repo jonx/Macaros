@@ -123,6 +123,8 @@ Invoke as `aros-ctl <cmd> [args]`.
 | `record stop` | Finalize a manual recording. |
 | `log [N]` | Last `N` log lines (default 40) from `$LOG`. |
 | `crash` | Grep the log for crash/alert markers (`Trap signal`, `Alert`, `stack limits`, `Module`, `Function`, `supervisor mode`, `Privilege`). |
+| `tasks` | Out-of-band guest task dump: SIGINFO → kernel diag handler prints every task's state + symbolized backtrace (+ semaphore owners for blocked tasks) to `$LOG`. Works on a fully wedged guest. Details: [crash-handling design](../crash-handling/design.md). |
+| `diag [SECS] [nokill]` | Where is the (possibly frozen) host process stuck: `sample` the process + snapshot the log to `run/darwin-aarch64/diag-*.txt`, then kill it. `nokill` keeps it running (use with `tasks` for a guest-side autopsy). |
 | `libs` | List the **host** macOS dylibs mapped into the running `AROSBootstrap` (path + version, via `vmmap`/`otool`) — *which* host shim loaded and from where. (For AROS-side library versions use the `LibList` C: command inside the shell.) |
 
 ## Configuration & environment
