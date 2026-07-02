@@ -165,6 +165,18 @@ typing works, window redraws correctly after resize.
 Also: `graft/resize-smoke` FAIL path now uses `aros-ctl diag nokill` and leaves
 the wedged instance running so `aros-ctl tasks` can autopsy it.
 
+**Follow-up, also DONE (commit 05c401e1): stale redraw after resize.** Once the
+deadlock was gone, resizing revealed the console never repainted at the new
+size. Pre-existing upstream bug, NOT caused by the async change (verified by
+instrumentation: no SIZEWINDOW ever reached CDIH, and by source): intuition
+delivers window events for IDCMP-less windows by GENERATING input events from
+its deferred-action path, and generated events are only visible to input
+handlers BELOW priority 50; console.device's handler is at 51. The console
+task's whole SIZEWINDOW/REFRESHWINDOW/CLOSEWINDOW/GADGETDOWN/UP arm was dead
+code. Fix: a second internal handler at priority 0 forwards exactly those five
+generated classes (unit matched by ie_EventAddress window for the first three,
+active window for gadgets) through the same async port.
+
 ## 9. RESUME HERE -- Phase D -- host hardening (in aros-aarch64)
 
 Make the host beachball-proof and self-diagnosing. In
