@@ -28,15 +28,18 @@ separate crates:
   Feraille's `aros-port` branch redirects the zed git deps to this fork via
   `[patch]`.
 - **Renderer**: software rasterization (tiny-skia + the pure-Rust text stack
-  cosmic-text/swash/rustybuzz, reused unchanged), presented through the
-  [cocoametal shim](../cocoa-metal-display/design.md)
-  (`cm_upload_rect`/`cm_present`). Dirty-rect repaint is a day-one design
-  requirement, not an optimization. This software path is also the permanent
-  fallback on every platform.
+  cosmic-text/swash/rustybuzz, reused unchanged) into a BGRA buffer, blitted
+  into the Intuition window's RastPort via cybergraphics `WritePixelArray`;
+  the [cocoametal display driver](../cocoa-metal-display/design.md) presents
+  the screen as usual (the app never talks to the shim directly). Dirty-rect
+  repaint is a day-one design requirement, not an optimization. This software
+  path is also the permanent fallback on every platform.
 - **Native shell**: Intuition window + system gadgets, `SetMenuStrip`
   pulldowns, ASL requesters, [clipboard bridge](../clipboard-bridge/README.md),
-  `SetPointer`, input via `cm_pump_events`; background executor = std threads
-  (proven), foreground executor pumped from the event loop.
+  `SetPointer`, input from the window's IDCMP port; the AROS-API surface
+  lives in small C glue files (the `aros_*_glue.c` pattern the std pal uses),
+  Rust calls them `extern "C"`. Background executor = std threads (proven),
+  foreground executor pumped from the IDCMP event loop.
 - **GPU accel (later, explicit-first)**: a compute/blit section added inside
   the existing cocoametal shim sharing its one `MTLDevice`+queue, fronted by a
   new `gpufx.library` (native-modules + host-bridge pattern); first consumer
