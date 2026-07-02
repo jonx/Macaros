@@ -19,6 +19,7 @@
 #include "j5s_fpu_exc.h"  /* [J5s] the FP exception model: FPSR EXC/AEXC, FPCR enable/mode, vectors, BSUN */
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   /* getenv/strtoull for the JIT68K_STEP_CAP override */
 #include <math.h>     /* [J5o] fabs/sqrt for the independent double-precision FP oracle */
 #include <fenv.h>     /* [J5s] feclearexcept/fetestexcept/fesetround for the FP exception model */
 /* [J5s] we READ the FP exception flags + set the rounding mode at runtime, so the compiler must
@@ -26,7 +27,20 @@
  * across the read and corrupt the derived FPSR EXC byte). */
 #pragma STDC FENV_ACCESS ON
 
-#define STEP_CAP 2000000u
+/* Runaway guard, same contract as the JIT dispatcher's: default 2,000,000 steps,
+ * raised via the SAME JIT68K_STEP_CAP env var (decimal or 0x-hex) so a long run —
+ * a std-sized program boot, a benchmark — behaves identically under both engines. */
+static uint64_t interp_step_cap(void)
+{
+    static uint64_t cap = 0;
+    if (!cap) {
+        cap = 2000000u;
+        const char *e = getenv("JIT68K_STEP_CAP");
+        if (e && *e) { unsigned long long v = strtoull(e, (char **)0, 0); if (v) cap = (uint64_t)v; }
+    }
+    return cap;
+}
+#define STEP_CAP interp_step_cap()
 
 /* [J5n] DIAGNOSTICS step hook (optional, NULL by default). The diagnostics subsystem
  * (j5n_diag.c) registers a per-instruction callback so the oracle becomes the instruction-
@@ -380,6 +394,13 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                    j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
 {
 #define IFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s @pc=%08x", (msg), pc); return 1; } while (0)
+    /* Decode a control/data EA to an absolute sandbox address for the general ALU
+     * handler. `mode`/`reg` are the 68k EA fields; `ext` points at the first
+     * extension word and is advanced past whatever this mode consumes. `pcbase`
+     * is the address of `ext` (for PC-relative modes). Returns 0 and sets *addr on
+     * a supported memory mode; returns 1 for register/unsupported modes. Post-inc
+     * side effects are applied by the caller (it knows the size). */
+    /* (declared as a local lambda-style via a nested block below; see general ALU) */
     /* d/a left as seeded by the caller; A6 = library base, PC = entry. [J5f]: seed a7
      * to the top of the sandbox (the SAME initial SP the engine uses) and model the real
      * return stack — a top-level rts (back at the initial SP) is the program exit. */
@@ -429,6 +450,93 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             continue;
         }
         if (op == 0x4E71u) { pc += 2; continue; }                /* nop            */
+
+        /* ===================== [STD68K] general ALU with a memory-EA source =========
+         * The `<op>.<sz> <ea>,Dn` family (add/sub/and/or/cmp) with a MEMORY source EA.
+         * Covers the forms compiler-generated code uses that the hand-written reg-reg
+         * fast paths below don't: modes (An)=2, (An)+=3, -(An)=4, (d16,An)=5,
+         * (d8,An,Xn)=6, abs.l=7.1, (d16,PC)=7.2. Line + opmode select op/size:
+         *   1101 (D) add, 1001 (9) sub, 1100 (C) and, 1000 (8) or, 1011 (B) cmp;
+         *   opmode 000/001/010 = .b/.w/.l with <ea> as SOURCE into Dn.
+         * (opmode 1xx is the Dn->ea store direction / cmpa / cmpm, handled elsewhere.)
+         * Full CCR at the operand size; and/or force V=C=0, X kept; cmp leaves Dn. */
+        {
+            unsigned line = op & 0xF000u;
+            unsigned opmode = (op >> 6) & 7u;
+            unsigned mode = (op >> 3) & 7u, reg = op & 7u;
+            int is_alu = (line == 0xD000u || line == 0x9000u || line == 0xC000u ||
+                          line == 0x8000u || line == 0xB000u);
+            int is_ea_src = (opmode <= 2u);                 /* .b/.w/.l, <ea>->Dn   */
+            int mem_mode = (mode == 2u || mode == 3u || mode == 4u || mode == 5u ||
+                            mode == 6u || (mode == 7u && (reg == 1u || reg == 2u)));
+            if (is_alu && is_ea_src && mem_mode) {
+                unsigned dn = (op >> 9) & 7u;
+                unsigned bits = (opmode == 0u) ? 8u : (opmode == 1u) ? 16u : 32u;
+                unsigned step = bits / 8u;
+                const uint8_t *ext = ip + 2;
+                uint32_t addr = 0; int ok = 1;
+                switch (mode) {
+                    case 2: addr = st->a[reg]; break;
+                    case 3: addr = st->a[reg]; break;               /* (An)+ post below */
+                    case 4: addr = st->a[reg] - step; break;        /* -(An) pre        */
+                    case 5: { int16_t d16 = be16s(ext); ext += 2;
+                              addr = st->a[reg] + (uint32_t)(int32_t)d16; break; }
+                    case 6: { uint16_t br = be16(ext); ext += 2;
+                              int8_t d8 = (int8_t)(br & 0xFFu);
+                              unsigned ix = (br >> 12) & 7u;
+                              uint32_t idx = (br & 0x8000u) ? st->a[ix] : st->d[ix];
+                              if (!(br & 0x0800u)) idx = (uint32_t)(int32_t)(int16_t)idx;
+                              idx <<= (br >> 9) & 3u;
+                              addr = st->a[reg] + (uint32_t)(int32_t)d8 + idx; break; }
+                    case 7:
+                        if (reg == 1) { addr = be32(ext); ext += 4; }
+                        else { uint32_t pcb = pc + (uint32_t)(ext - ip);
+                               int16_t d16 = be16s(ext); ext += 2;
+                               addr = pcb + (uint32_t)(int32_t)d16; }
+                        break;
+                    default: ok = 0; break;
+                }
+                if (ok) {
+                    int oob = 0;
+                    uint32_t src = (bits == 8) ? mem_rd8(sb, addr, &oob)
+                                 : (bits == 16) ? mem_rd16(sb, addr, &oob)
+                                 : mem_rd32(sb, addr, &oob);
+                    if (oob) IFAIL("alu <ea>,Dn: address out of sandbox");
+                    if (mode == 3) st->a[reg] += step;              /* (An)+ */
+                    else if (mode == 4) st->a[reg] -= step;         /* -(An) */
+                    uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+                    uint32_t msb = 1u << (bits - 1);
+                    uint32_t a = st->d[dn] & mask, b = src & mask, res;
+                    uint32_t cc = st->ccr & J5D_CCR_X;
+                    if (line == 0xC000u || line == 0x8000u) {       /* and / or */
+                        res = ((line == 0xC000u) ? (a & b) : (a | b)) & mask;
+                        st->d[dn] = (st->d[dn] & ~mask) | res;
+                        cc = st->ccr & J5D_CCR_X;
+                        if (res == 0)  cc |= J5D_CCR_Z;
+                        if (res & msb) cc |= J5D_CCR_N;
+                    } else if (line == 0xD000u) {                   /* add */
+                        uint64_t s = (uint64_t)a + b; res = (uint32_t)s & mask;
+                        cc = 0;
+                        if (s & ((uint64_t)mask + 1u)) cc |= J5D_CCR_C | J5D_CCR_X;
+                        if (((a ^ res) & (b ^ res)) & msb) cc |= J5D_CCR_V;
+                        if (res == 0)  cc |= J5D_CCR_Z;
+                        if (res & msb) cc |= J5D_CCR_N;
+                        st->d[dn] = (st->d[dn] & ~mask) | res;
+                    } else {                                        /* sub or cmp */
+                        res = (a - b) & mask;
+                        cc = (line == 0x9000u) ? 0u : (st->ccr & J5D_CCR_X);
+                        if (b > a)                        cc |= J5D_CCR_C | (line == 0x9000u ? J5D_CCR_X : 0u);
+                        if (((a ^ b) & (a ^ res)) & msb)  cc |= J5D_CCR_V;
+                        if (res == 0)                     cc |= J5D_CCR_Z;
+                        if (res & msb)                    cc |= J5D_CCR_N;
+                        if (line == 0x9000u) st->d[dn] = (st->d[dn] & ~mask) | res; /* sub writes */
+                    }
+                    st->ccr = cc;
+                    pc += (uint32_t)(ext - ip); continue;
+                }
+            }
+        }
+
 
         /* ============================ [J5i] the exception causes + rte =============== */
         if (op == 0x4E73u) {                                     /* rte -> pop frame */
@@ -496,6 +604,110 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 4; continue;
         }
 
+        /* move.w %ccr,Dn : 42C0 | dn  (move from CCR to a data register; the fix
+         * emits this to preserve flags across a copy). Low word of Dn = CCR byte,
+         * upper byte of that word zero; CCR itself unchanged. */
+        if ((op & 0xFFF8u) == 0x42C0u) {
+            unsigned dn = op & 7u;
+            st->d[dn] = (st->d[dn] & 0xFFFF0000u) | (st->ccr & 0x1Fu);
+            pc += 2; continue;
+        }
+        /* move.w Dn,%ccr : 44C0 | dn  (move to CCR from a data register; restores
+         * the preserved flags). CCR = low byte & 0x1F. */
+        if ((op & 0xFFF8u) == 0x44C0u) {
+            unsigned dn = op & 7u;
+            st->ccr = st->d[dn] & 0x1Fu;
+            pc += 2; continue;
+        }
+        /* move.w %ccr,-(An) : 42E0 | an  (MOV16ec — the stack-spill fallback push).
+         * Store the CCR word (upper byte 0) to -(An), 2-byte word. CCR unchanged. */
+        if ((op & 0xFFF8u) == 0x42E0u) {
+            unsigned an = op & 7u;
+            uint32_t addr = st->a[an] - 2u;
+            int oob = 0;
+            mem_wr16(sb, addr, (uint16_t)(st->ccr & 0x1Fu), &oob);
+            if (oob) IFAIL("move.w ccr,-(An): address out of sandbox");
+            st->a[an] = addr;
+            pc += 2; continue;
+        }
+        /* move.w (An)+,%ccr : 44D8 | an  (MOV16co — the stack-spill fallback pop).
+         * CCR = word at (An) & 0x1F; An += 2. */
+        if ((op & 0xFFF8u) == 0x44D8u) {
+            unsigned an = op & 7u;
+            int oob = 0;
+            uint16_t v = mem_rd16(sb, st->a[an], &oob);
+            if (oob) IFAIL("move.w (An)+,ccr: address out of sandbox");
+            st->ccr = v & 0x1Fu;
+            st->a[an] += 2u;
+            pc += 2; continue;
+        }
+
+        /* addi.l/subi.l #imm32,(An) : 0690/0490 | an + imm32  (read-modify-write a
+         * sandbox longword; PRM ADDI/SUBI, EA mode 010). Full CCR on the longword. */
+        if ((op & 0xFFF8u) == 0x0690u || (op & 0xFFF8u) == 0x0490u) {
+            unsigned an = op & 7u;
+            int is_add = (op & 0x0F00u) == 0x0600u;
+            uint32_t b = be32(ip + 2);
+            uint32_t addr = st->a[an];
+            int oob = 0;
+            uint32_t a = mem_rd32(sb, addr, &oob);
+            if (oob) IFAIL("addi/subi.l (An): address out of sandbox");
+            uint64_t s = is_add ? (uint64_t)a + b : (uint64_t)a - b;
+            uint32_t res = (uint32_t)s;
+            uint32_t cc = 0;
+            if (is_add) {
+                if (s >> 32) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ res) & (b ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            } else {
+                if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ b) & (a ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            }
+            mem_wr32(sb, addr, res, &oob);
+            if (oob) IFAIL("addi/subi.l (An): store out of sandbox");
+            st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 6; continue;
+        }
+        /* cas.b/.w/.l Dc,Du,(An) : 0AD0/0CD0/0ED0 | an + extword (Du<<6 | Dc).
+         * PRM CAS, single-task semantics (load, compare, conditional store — the
+         * atomicity is free with one task). Ext word: bits 8-6 = Du, bits 2-0 = Dc.
+         * Compare (An) with Dc, set CCR like cmp; if equal store Du, else load into
+         * Dc. Only (An) mode (010) is emitted by LLVM; that is what we handle. */
+        if ((op & 0xFDF8u) == 0x0CD0u || (op & 0xFFF8u) == 0x0AD0u) {
+            unsigned an = op & 7u;
+            unsigned bits = ((op & 0xFF00u) == 0x0A00u) ? 8u
+                          : ((op & 0xFF00u) == 0x0C00u) ? 16u : 32u;
+            uint16_t ext = be16(ip + 2);
+            unsigned du = (ext >> 6) & 7u, dc = ext & 7u;
+            uint32_t addr = st->a[an];
+            int oob = 0;
+            uint32_t mem;
+            if (bits == 8)       mem = mem_rd8(sb, addr, &oob);
+            else if (bits == 16) mem = mem_rd16(sb, addr, &oob);
+            else                 mem = mem_rd32(sb, addr, &oob);
+            if (oob) IFAIL("cas: address out of sandbox");
+            uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+            uint32_t c = st->d[dc] & mask, m = mem & mask;
+            uint32_t res = (c - m) & mask;
+            uint32_t msb = 1u << (bits - 1);
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (m > c)                         cc |= J5D_CCR_C;
+            if (((c ^ m) & (c ^ res)) & msb)   cc |= J5D_CCR_V;
+            if (res == 0)                      cc |= J5D_CCR_Z;
+            if (res & msb)                     cc |= J5D_CCR_N;
+            st->ccr = cc;
+            if (res == 0) {                    /* equal: store Du */
+                uint32_t u = st->d[du] & mask;
+                if (bits == 8)       mem_wr8(sb, addr, (uint8_t)u, &oob);
+                else if (bits == 16) mem_wr16(sb, addr, (uint16_t)u, &oob);
+                else                 mem_wr32(sb, addr, u, &oob);
+                if (oob) IFAIL("cas: store out of sandbox");
+            } else {                           /* not equal: load into Dc */
+                st->d[dc] = (bits == 32) ? mem
+                          : (st->d[dc] & ~mask) | m;
+            }
+            pc += 4; continue;
+        }
+
         /* jsr abs.l (4EB9) -> push return + jump. */
         if (op == 0x4EB9u) {
             uint32_t target = be32(ip + 2);
@@ -522,6 +734,201 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         if (op == 0x4EF9u) { pc = be32(ip + 2); continue; }
         /* jmp (An) (4ED0|An) -> computed jump (no push). */
         if ((op & 0xFFF8u) == 0x4ED0u) { pc = st->a[op & 7u]; continue; }
+        /* jsr (d16,PC) (4EBA) -> push return + PC-relative jump (gcc near call).
+         * PRM: the base is the address OF the extension word (pc + 2). */
+        if (op == 0x4EBAu) {
+            int16_t d16 = be16s(ip + 2);
+            uint32_t target = pc + 2u + (uint32_t)(int32_t)d16;
+            uint32_t sp = st->a[7] - 4u;
+            if (sp < sb->origin || (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size)
+                IFAIL("jsr (d16,PC): a7 out of sandbox");
+            uint32_t ret = pc + 4;
+            uint8_t *p = sb->host_mem + (sp - sb->origin);
+            p[0]=ret>>24; p[1]=ret>>16; p[2]=ret>>8; p[3]=(uint8_t)ret;
+            st->a[7] = sp; pc = target; continue;
+        }
+        /* jmp (d16,PC) (4EFA) -> PC-relative jump (no push). */
+        if (op == 0x4EFAu) {
+            int16_t d16 = be16s(ip + 2);
+            pc = pc + 2u + (uint32_t)(int32_t)d16; continue;
+        }
+        /* link.w An,#d16 (4E50|An) : push An; An = SP(after push); SP += d16 (d16 is
+         * negative for a frame). PRM LINK; no CCR change. */
+        if ((op & 0xFFF8u) == 0x4E50u) {
+            unsigned an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            uint32_t sp = st->a[7] - 4u;
+            if (sp < sb->origin || (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size)
+                IFAIL("link: a7 out of sandbox");
+            uint32_t v = st->a[an];
+            uint8_t *p = sb->host_mem + (sp - sb->origin);
+            p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=(uint8_t)v;
+            st->a[an] = sp;
+            st->a[7] = sp + (uint32_t)(int32_t)d16;
+            pc += 4; continue;
+        }
+        /* unlk An (4E58|An) : SP = An; An = pop. PRM UNLK; no CCR change. */
+        if ((op & 0xFFF8u) == 0x4E58u) {
+            unsigned an = op & 7u;
+            uint32_t sp = st->a[an];
+            if (sp < sb->origin || (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size)
+                IFAIL("unlk: frame pointer out of sandbox");
+            uint8_t *p = sb->host_mem + (sp - sb->origin);
+            st->a[an] = ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+            st->a[7] = sp + 4u;
+            pc += 2; continue;
+        }
+        /* movea.w #imm16,An (307C|an<<9 + imm16) : the 16-bit immediate is SIGN-
+         * EXTENDED to 32 bits into An; MOVEA affects no flags (PRM MOVEA). */
+        if ((op & 0xF1FFu) == 0x307Cu && ((op >> 6) & 7u) == 1u) {
+            unsigned an = (op >> 9) & 7u;
+            st->a[an] = (uint32_t)(int32_t)be16s(ip + 2);
+            pc += 4; continue;
+        }
+        /* addi.b #imm,Dn (0600|dn) / subi.b #imm,Dn (0400|dn) : byte add/sub
+         * immediate on the low byte of Dn; full CCR on the byte (PRM ADDI/SUBI). */
+        if ((op & 0xFDF8u) == 0x0400u) {
+            /* bit 9 selects: 0x0600 = addi.b, 0x0400 = subi.b (size 00, EA = Dn) */
+            unsigned dn = op & 7u;
+            int is_add = (op & 0x0200u) != 0;
+            uint8_t a = (uint8_t)(st->d[dn] & 0xFFu), b = (uint8_t)be16s(ip + 2);
+            uint32_t s = is_add ? (uint32_t)a + b : (uint32_t)a - b;
+            uint8_t res = (uint8_t)s;
+            uint32_t cc = 0;
+            if (is_add) {
+                if (s & 0x100u) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ res) & (b ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            } else {
+                if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ b) & (a ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            }
+            if (res == 0)    cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* sub.b #imm,Dn (903C|dn<<9 + imm16 low byte) / add.b #imm,Dn (D03C|dn<<9):
+         * the immediate-EA byte forms (like the .l D0BC/90BC family above); full
+         * CCR on the byte, only the low byte of Dn changes. */
+        if ((op & 0xB1FFu) == 0x903Cu) {
+            unsigned dn = (op >> 9) & 7u;
+            int is_add = (op & 0x4000u) != 0;
+            uint8_t a = (uint8_t)(st->d[dn] & 0xFFu), b = (uint8_t)be16s(ip + 2);
+            uint32_t s = is_add ? (uint32_t)a + b : (uint32_t)a - b;
+            uint8_t res = (uint8_t)s;
+            uint32_t cc = 0;
+            if (is_add) {
+                if (s & 0x100u) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ res) & (b ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            } else {
+                if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ b) & (a ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            }
+            if (res == 0)    cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* eori.w #imm16,Dn (0A40|dn + imm16) : word XOR immediate; low word of Dn
+         * only; N/Z on the word, V=C=0, X kept (PRM EORI). */
+        if ((op & 0xFFF8u) == 0x0A40u) {
+            unsigned dn = op & 7u;
+            uint16_t res = (uint16_t)(st->d[dn] & 0xFFFFu) ^ (uint16_t)be16s(ip + 2);
+            st->d[dn] = (st->d[dn] & 0xFFFF0000u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)      cc |= J5D_CCR_Z;
+            if (res & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* eori.b #imm,Dn (0A00|dn + imm16 low byte) : byte XOR immediate; same rule. */
+        if ((op & 0xFFF8u) == 0x0A00u) {
+            unsigned dn = op & 7u;
+            uint8_t res = (uint8_t)(st->d[dn] & 0xFFu) ^ (uint8_t)be16s(ip + 2);
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)    cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* andi.w #imm16,Dn (0240|dn + imm16) : word AND immediate; low word of Dn
+         * only; N/Z on the word, V=C=0, X kept (PRM ANDI). */
+        if ((op & 0xFFF8u) == 0x0240u) {
+            unsigned dn = op & 7u;
+            uint16_t res = (uint16_t)(st->d[dn] & 0xFFFFu) & (uint16_t)be16s(ip + 2);
+            st->d[dn] = (st->d[dn] & 0xFFFF0000u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)      cc |= J5D_CCR_Z;
+            if (res & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* clr.l -(An) (42A0|an) : predecrement clear (gcc pushes a zero argument as
+         * clr.l -(sp)). An -= 4 first; PRM CLR: Z set, N/V/C clear, X kept. */
+        if ((op & 0xFFF8u) == 0x42A0u) {
+            unsigned an = op & 7u;
+            uint32_t ea = st->a[an] - 4u;
+            int oob = 0;
+            mem_wr32(sb, ea, 0, &oob);
+            if (oob) IFAIL("clr.l -(An): address out of sandbox");
+            st->a[an] = ea;
+            st->ccr = (st->ccr & J5D_CCR_X) | J5D_CCR_Z;
+            pc += 2; continue;
+        }
+        /* clr.l (An) (4290|an) : indirect clear; same CCR rule. */
+        if ((op & 0xFFF8u) == 0x4290u) {
+            unsigned an = op & 7u;
+            int oob = 0;
+            mem_wr32(sb, st->a[an], 0, &oob);
+            if (oob) IFAIL("clr.l (An): address out of sandbox");
+            st->ccr = (st->ccr & J5D_CCR_X) | J5D_CCR_Z;
+            pc += 2; continue;
+        }
+        /* clr.l (d16,An) (42A8|an + d16) : longword clear at a displacement (gcc
+         * frame slots). PRM CLR: Z set, N/V/C clear, X kept. */
+        if ((op & 0xFFF8u) == 0x42A8u) {
+            unsigned an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            mem_wr32(sb, st->a[an] + (uint32_t)(int32_t)d16, 0, &oob);
+            if (oob) IFAIL("clr.l (d16,An): address out of sandbox");
+            st->ccr = (st->ccr & J5D_CCR_X) | J5D_CCR_Z;
+            pc += 4; continue;
+        }
+        /* tst.l (d16,An) (4AA8|an + d16) : longword test at a displacement.
+         * PRM TST: N/Z per the value, V=C=0, X kept. */
+        if ((op & 0xFFF8u) == 0x4AA8u) {
+            unsigned an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            uint32_t v = mem_rd32(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("tst.l (d16,An): address out of sandbox");
+            st->ccr = nz32(v, st->ccr & J5D_CCR_X);
+            pc += 4; continue;
+        }
+        /* tst.l abs.l (4AB9 + addr32) : longword test at an absolute address.
+         * PRM TST: N/Z per the value, V=C=0, X kept. */
+        if (op == 0x4AB9u) {
+            uint32_t addr = be32(ip + 2);
+            int oob = 0;
+            uint32_t v = mem_rd32(sb, addr, &oob);
+            if (oob) IFAIL("tst.l abs.l: address out of sandbox");
+            st->ccr = nz32(v, st->ccr & J5D_CCR_X);
+            pc += 6; continue;
+        }
+        /* clr.l abs.l (42B9 + addr32) : longword clear at an absolute address.
+         * PRM CLR: Z set, N/V/C clear, X kept. */
+        if (op == 0x42B9u) {
+            uint32_t addr = be32(ip + 2);
+            int oob = 0;
+            mem_wr32(sb, addr, 0, &oob);
+            if (oob) IFAIL("clr.l abs.l: address out of sandbox");
+            st->ccr = (st->ccr & J5D_CCR_X) | J5D_CCR_Z;
+            pc += 6; continue;
+        }
 
         /* moveq #imm8,Dn (sign-extend) */
         if ((op & 0xF100u) == 0x7000u) {
@@ -670,6 +1077,19 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
             pc += 2; continue;
         }
+        /* add.l Am,Dn : D088 | dn<<9 | am  (address-register direct source, EA mode 001).
+         * PRM ADD: <ea> may be An for word/long sizes; sets CCR exactly like add.l Dm,Dn.
+         * Compiler-generated code (LLVM) uses An as a spare integer source freely. */
+        if ((op & 0xF1F8u) == 0xD088u) {
+            unsigned dn = (op >> 9) & 7u, am = op & 7u;
+            uint32_t a = st->d[dn], b = st->a[am];
+            uint64_t s = (uint64_t)a + b; uint32_t res = (uint32_t)s;
+            uint32_t cc = 0;
+            if (s >> 32) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ res) & (b ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 2; continue;
+        }
         /* add.l (An)+,Dn : D098 (post-increment longword load) */
         if ((op & 0xF1F8u) == 0xD098u) {
             unsigned dn = (op >> 9) & 7u, an = op & 7u;
@@ -720,6 +1140,33 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* add.b/.w and sub.b/.w  Dm,Dn (register-direct, sizes 00/01): the byte and
+         * word siblings of the .l reg-reg forms. 1101=add / 1001=sub, DDD dst, size
+         * in bits 7-6, SSS src (mode 000). Full CCR on the sized operand; only the
+         * low byte/word of Dn changes. */
+        if (((op & 0xF1F8u) == 0xD000u || (op & 0xF1F8u) == 0xD040u ||
+             (op & 0xF1F8u) == 0x9000u || (op & 0xF1F8u) == 0x9040u)) {
+            unsigned dn = (op >> 9) & 7u, dm = op & 7u;
+            int is_add = (op & 0xF000u) == 0xD000u;
+            unsigned bits = (((op >> 6) & 3u) == 0u) ? 8u : 16u;
+            uint32_t mask = (1u << bits) - 1u, msb = 1u << (bits - 1);
+            uint32_t a = st->d[dn] & mask, b = st->d[dm] & mask;
+            uint32_t s = is_add ? a + b : a - b;
+            uint32_t res = s & mask;
+            uint32_t cc = 0;
+            if (is_add) {
+                if (s & (mask + 1u)) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ res) & (b ^ res)) & msb) cc |= J5D_CCR_V;
+            } else {
+                if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+                if (((a ^ b) & (a ^ res)) & msb) cc |= J5D_CCR_V;
+            }
+            if (res == 0)  cc |= J5D_CCR_Z;
+            if (res & msb) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & ~mask) | res;
+            st->ccr = cc;
+            pc += 2; continue;
+        }
         /* sub.l Dm,Dn : 9080  (Dn = Dn - Dm) */
         if ((op & 0xF1F8u) == 0x9080u) {
             unsigned dn = (op >> 9) & 7u, dm = op & 7u;
@@ -731,6 +1178,195 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* sub.l (d16,An),Dn : 90A8 | dn<<9 | an + d16  (displacement longword load; PRM SUB
+         * <ea> mode 101). CCR exactly like sub.l Dm,Dn. Compiler-generated code subtracts
+         * stack slots (d16,A7) directly. */
+        if ((op & 0xF1F8u) == 0x90A8u) {
+            unsigned dn = (op >> 9) & 7u, an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            uint32_t b = mem_rd32(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("sub.l (d16,An): address out of sandbox");
+            uint32_t a = st->d[dn]; uint32_t res = a - b;
+            uint32_t cc = 0;
+            if (b > a) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ b) & (a ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 4; continue;
+        }
+        /* add.l (d16,An),Dn : D0A8 | dn<<9 | an + d16  (displacement longword load; PRM ADD
+         * <ea> mode 101). CCR exactly like add.l Dm,Dn. */
+        if ((op & 0xF1F8u) == 0xD0A8u) {
+            unsigned dn = (op >> 9) & 7u, an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            uint32_t b = mem_rd32(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("add.l (d16,An): address out of sandbox");
+            uint32_t a = st->d[dn]; uint64_t s = (uint64_t)a + b; uint32_t res = (uint32_t)s;
+            uint32_t cc = 0;
+            if (s >> 32) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ res) & (b ^ res)) & 0x80000000u) cc |= J5D_CCR_V;
+            st->d[dn] = res; st->ccr = nz32(res, cc) | (cc & (J5D_CCR_V|J5D_CCR_C|J5D_CCR_X));
+            pc += 4; continue;
+        }
+
+        /* Scc Dn : 50C0 | cc<<8 | dn  (set-on-condition, byte, register direct; PRM Scc).
+         * Low BYTE of Dn = 0xFF if the condition holds, else 0x00; upper 24 bits and the
+         * CCR are untouched. Same 4-bit condition table as Bcc (bcc_taken). Does not
+         * collide with DBcc (mode 001, 50C8) or ADDQ/SUBQ (size bits != 11). */
+        if ((op & 0xF0F8u) == 0x50C0u) {
+            unsigned cc4 = (op >> 8) & 0xFu, dn = op & 7u;
+            /* cc 0/1 = ST/SF (always/never) — bcc_taken leaves those to the caller. */
+            int t = (cc4 == 0) ? 1 : (cc4 == 1) ? 0 : bcc_taken(cc4, st->ccr);
+            uint32_t v = t ? 0xFFu : 0x00u;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | v;
+            pc += 2; continue;
+        }
+
+        /* and.l #imm,Dn : C0BC | dn<<9  (AND <ea>,Dn with EA = mode 7 reg 4 = immediate —
+         * the same immediate-EA family as the D0BC/90BC add/sub forms above, as opposed to
+         * the ANDI encoding). N/Z per result, V=C=0, X kept (PRM AND). */
+        if ((op & 0xF1FFu) == 0xC0BCu) {
+            unsigned dn = (op >> 9) & 7u;
+            uint32_t res = st->d[dn] & be32(ip + 2);
+            st->d[dn] = res; st->ccr = nz32(res, st->ccr & J5D_CCR_X);
+            pc += 6; continue;
+        }
+        /* cmpi.b #imm,Dn : 0C00 | dn  (byte compare immediate; PRM CMPI). Flags exactly
+         * like a byte subtract Dn.b - imm.b; Dn unmodified; X unchanged. */
+        if ((op & 0xFFF8u) == 0x0C00u) {
+            unsigned dn = op & 7u;
+            uint8_t a = (uint8_t)(st->d[dn] & 0xFFu), b = (uint8_t)be16s(ip + 2);
+            uint8_t res = (uint8_t)(a - b);
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a)                          cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x80u)  cc |= J5D_CCR_V;
+            if (res == 0)                       cc |= J5D_CCR_Z;
+            if (res & 0x80u)                    cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* cmpi.b/.w/.l #imm,<ea> for memory EA modes (An)=2, (An)+=3, (d8,An,Xn)=6,
+         * abs.l=7.1: 0C00|(size<<6)|(mode<<3)|reg + imm + optional EA ext. The
+         * immediate comes FIRST (sized), then the brief/abs extension (PRM CMPI).
+         * Compare mem - imm at the operand size; memory and X unchanged. */
+        if ((op & 0xFF00u) == 0x0C00u && ((op >> 6) & 3u) != 3u) {
+            unsigned mode = (op >> 3) & 7u, reg = op & 7u;
+            unsigned sz = (op >> 6) & 3u;
+            unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+            if (mode == 2 || mode == 3 || mode == 6 || (mode == 7 && reg == 1)) {
+                const uint8_t *ext = ip + 2;
+                uint32_t imm;
+                if (bits == 8)       { imm = (uint8_t)be16s(ext);  ext += 2; }
+                else if (bits == 16) { imm = (uint16_t)be16s(ext); ext += 2; }
+                else                 { imm = be32(ext);            ext += 4; }
+                uint32_t addr;
+                if (mode == 2 || mode == 3) addr = st->a[reg];
+                else if (mode == 6) {
+                    uint16_t brief = be16(ext); ext += 2;
+                    int8_t d8 = (int8_t)(brief & 0xFFu);
+                    unsigned ix = (brief >> 12) & 7u;
+                    uint32_t index = (brief & 0x8000u) ? st->a[ix] : st->d[ix];
+                    if (!(brief & 0x0800u)) index = (uint32_t)(int32_t)(int16_t)index;
+                    index <<= (brief >> 9) & 3u;
+                    addr = st->a[reg] + (uint32_t)(int32_t)d8 + index;
+                } else { addr = be32(ext); ext += 4; }
+                int oob = 0;
+                uint32_t a = (bits == 8) ? mem_rd8(sb, addr, &oob)
+                          : (bits == 16) ? mem_rd16(sb, addr, &oob)
+                          : mem_rd32(sb, addr, &oob);
+                if (oob) IFAIL("cmpi <ea>: address out of sandbox");
+                if (mode == 3) st->a[reg] += bits / 8u;
+                uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+                uint32_t msb = 1u << (bits - 1);
+                uint32_t b = imm & mask, av = a & mask, res = (av - b) & mask;
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                if (b > av)                       cc |= J5D_CCR_C;
+                if (((av ^ b) & (av ^ res)) & msb) cc |= J5D_CCR_V;
+                if (res == 0)                     cc |= J5D_CCR_Z;
+                if (res & msb)                    cc |= J5D_CCR_N;
+                st->ccr = cc;
+                pc += (uint32_t)(ext - ip); continue;
+            }
+        }
+        /* cmpi.w #imm16,Dn : 0C40 | dn  (word compare immediate; flags like a word
+         * subtract Dn.w - imm.w; Dn unmodified; X unchanged — PRM CMPI). */
+        if ((op & 0xFFF8u) == 0x0C40u) {
+            unsigned dn = op & 7u;
+            uint16_t a = (uint16_t)(st->d[dn] & 0xFFFFu), b = (uint16_t)be16s(ip + 2);
+            uint16_t res = (uint16_t)(a - b);
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a)                            cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x8000u)  cc |= J5D_CCR_V;
+            if (res == 0)                         cc |= J5D_CCR_Z;
+            if (res & 0x8000u)                    cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* and.w/or.w #imm16,Dn : C07C/807C | dn<<9  (word logical immediate, EA mode
+         * 7.4; low word only; N/Z on the word, V=C=0, X kept). */
+        if ((op & 0xF1FFu) == 0xC07Cu || (op & 0xF1FFu) == 0x807Cu) {
+            unsigned dn = (op >> 9) & 7u;
+            int is_and = (op & 0xF000u) == 0xC000u;
+            uint16_t imm = (uint16_t)be16s(ip + 2);
+            uint16_t res = is_and ? (uint16_t)(st->d[dn] & 0xFFFFu) & imm
+                                  : (uint16_t)(st->d[dn] & 0xFFFFu) | imm;
+            st->d[dn] = (st->d[dn] & 0xFFFF0000u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)      cc |= J5D_CCR_Z;
+            if (res & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* and.b #imm,Dn : C03C | dn<<9  (byte AND, immediate EA; low byte only; N/Z on the
+         * byte, V=C=0, X kept; upper 24 bits of Dn preserved — PRM AND, byte size). */
+        if ((op & 0xF1FFu) == 0xC03Cu) {
+            unsigned dn = (op >> 9) & 7u;
+            uint8_t res = (uint8_t)(st->d[dn] & 0xFFu) & (uint8_t)be16s(ip + 2);
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)    cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* or.b #imm,Dn : 803C | dn<<9  (byte OR, immediate EA; same CCR rule as and.b). */
+        if ((op & 0xF1FFu) == 0x803Cu) {
+            unsigned dn = (op >> 9) & 7u;
+            uint8_t res = (uint8_t)(st->d[dn] & 0xFFu) | (uint8_t)be16s(ip + 2);
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)    cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* or.l #imm,Dn : 80BC | dn<<9  (OR <ea>,Dn, immediate EA; same CCR rule). */
+        if ((op & 0xF1FFu) == 0x80BCu) {
+            unsigned dn = (op >> 9) & 7u;
+            uint32_t res = st->d[dn] | be32(ip + 2);
+            st->d[dn] = res; st->ccr = nz32(res, st->ccr & J5D_CCR_X);
+            pc += 6; continue;
+        }
+
+        /* and.b/.w and or.b/.w  Dm,Dn (register-direct, sizes 00/01): byte/word
+         * siblings of the .l logical reg-reg forms. 1100=and / 1000=or, DDD dst,
+         * size 7-6, SSS src (mode 000). N/Z on the sized result, V=C=0, X kept. */
+        if ((op & 0xF1F8u) == 0xC000u || (op & 0xF1F8u) == 0xC040u ||
+            (op & 0xF1F8u) == 0x8000u || (op & 0xF1F8u) == 0x8040u) {
+            unsigned dn = (op >> 9) & 7u, dm = op & 7u;
+            int is_and = (op & 0xF000u) == 0xC000u;
+            unsigned bits = (((op >> 6) & 3u) == 0u) ? 8u : 16u;
+            uint32_t mask = (1u << bits) - 1u, msb = 1u << (bits - 1);
+            uint32_t res = is_and ? (st->d[dn] & st->d[dm] & mask)
+                                  : ((st->d[dn] | st->d[dm]) & mask);
+            st->d[dn] = (st->d[dn] & ~mask) | res;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (res == 0)  cc |= J5D_CCR_Z;
+            if (res & msb) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 2; continue;
+        }
         /* and.l Dm,Dn : C080 */
         if ((op & 0xF1F8u) == 0xC080u) {
             unsigned dn = (op >> 9) & 7u, dm = op & 7u;
@@ -1275,6 +1911,70 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* ============================ [STD68K] register-count shifts/rotates =========
+         * op = 1110 ccc d ss 1 tt rrr : ccc = the register holding the count (mod 64),
+         * d = dir(1 left), ss = size(00 b,01 w,10 l), bit5=1 (register count),
+         * tt = 00 as / 01 ls / 11 ro (rox not exercised), rrr = Dn. CCR like the
+         * immediate forms; a zero count clears C and leaves the value (PRM). */
+        if ((op & 0xF000u) == 0xE000u && ((op >> 5) & 1u) == 1u && ((op >> 3) & 3u) != 2u) {
+            unsigned dn = op & 7u;
+            unsigned sz = (op >> 6) & 3u;
+            if (sz != 3u) {
+                unsigned bits = (sz == 0) ? 8u : (sz == 1) ? 16u : 32u;
+                uint32_t mask = (bits == 32) ? 0xFFFFFFFFu : ((1u << bits) - 1u);
+                uint32_t msb = 1u << (bits - 1);
+                unsigned dir = (op >> 8) & 1u;
+                unsigned type = (op >> 3) & 3u;    /* 0 as, 1 ls, 3 ro */
+                unsigned cnt = st->d[(op >> 9) & 7u] & 63u;
+                uint32_t a = st->d[dn] & mask, res = a;
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                int last_out = -1;
+                if (type == 3) {                   /* ROL/ROR (no X) */
+                    unsigned r = cnt % bits;
+                    if (cnt == 0) { res = a; }
+                    else if (dir) { res = ((a << r) | (a >> (bits - r))) & mask; last_out = res & 1u; }
+                    else          { res = ((a >> r) | (a << (bits - r))) & mask; last_out = (res >> (bits - 1)) & 1u; }
+                    cc = st->ccr & J5D_CCR_X;
+                    if (last_out == 1) cc |= J5D_CCR_C;
+                    if (res == 0)  cc |= J5D_CCR_Z;
+                    if (res & msb) cc |= J5D_CCR_N;
+                } else {                           /* ASL/ASR/LSL/LSR */
+                    if (cnt == 0) {
+                        cc = st->ccr & J5D_CCR_X;  /* C cleared, X kept, N/Z from value */
+                        if (a == 0)   cc |= J5D_CCR_Z;
+                        if (a & msb)  cc |= J5D_CCR_N;
+                    } else if (dir) {              /* left (ASL == LSL for the bits) */
+                        last_out = (cnt <= bits) ? ((a >> (bits - cnt)) & 1u) : 0u;
+                        res = (cnt >= bits) ? 0u : ((a << cnt) & mask);
+                        cc = 0;
+                        if (last_out == 1) cc |= J5D_CCR_C | J5D_CCR_X;
+                        if (type == 0) {           /* ASL: V if sign changed */
+                            uint32_t sm = (cnt >= bits) ? mask : (mask << (bits - 1 - cnt)) & mask;
+                            uint32_t top = a & sm;
+                            if (!(top == 0 || top == sm)) cc |= J5D_CCR_V;
+                        }
+                        if (res == 0)  cc |= J5D_CCR_Z;
+                        if (res & msb) cc |= J5D_CCR_N;
+                    } else {                       /* right */
+                        last_out = (cnt <= bits) ? ((a >> (cnt - 1)) & 1u) : ((a & msb) && type == 0 ? 1u : 0u);
+                        if (type == 0) {           /* ASR: sign-extend */
+                            uint32_t se = (a & msb) ? (mask & ~((cnt >= bits) ? 0u : (mask >> cnt))) : 0u;
+                            res = (cnt >= bits) ? ((a & msb) ? mask : 0u) : ((a >> cnt) | se) & mask;
+                        } else {                   /* LSR */
+                            res = (cnt >= bits) ? 0u : (a >> cnt);
+                        }
+                        cc = 0;
+                        if (last_out == 1) cc |= J5D_CCR_C | J5D_CCR_X;
+                        if (res == 0)  cc |= J5D_CCR_Z;
+                        if (res & msb) cc |= J5D_CCR_N;
+                    }
+                }
+                st->d[dn] = (st->d[dn] & ~mask) | (res & mask);
+                st->ccr = cc;
+                pc += 2; continue;
+            }
+        }
+
         /* ============================ [J5g] LINEE shifts/rotates ====================
          * Immediate-count register shifts/rotates, .L (size field = 10):
          *   op = 1110 ccc d ii s tt rrr  where ccc=count(1..8, 0=>8), d=dir(1=left),
@@ -1439,6 +2139,26 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 else if (bits == 16) { v = mem_rd16(sb, st->a[reg], &oob); if (!oob) st->a[reg] += 2u; }
                 else                 { v = mem_rd32(sb, st->a[reg], &oob); if (!oob) st->a[reg] += 4u; }
             }
+            else if (mode == 5 || mode == 6 || (mode == 7 && reg == 1)) {
+                /* (d16,An) / (d8,An,Xn) scaled / abs.l */
+                uint32_t ea;
+                if (mode == 5) {
+                    ea = st->a[reg] + (uint32_t)(int32_t)be16s(ip + 2); adv = 4;
+                } else if (mode == 6) {
+                    uint16_t brief = be16(ip + 2);
+                    int8_t d8 = (int8_t)(brief & 0xFFu);
+                    unsigned ix = (brief >> 12) & 7u;
+                    uint32_t index = (brief & 0x8000u) ? st->a[ix] : st->d[ix];
+                    if (!(brief & 0x0800u)) index = (uint32_t)(int32_t)(int16_t)index;
+                    index <<= (brief >> 9) & 3u;                /* 68020 scale */
+                    ea = st->a[reg] + (uint32_t)(int32_t)d8 + index; adv = 4;
+                } else {
+                    ea = be32(ip + 2); adv = 6;
+                }
+                if (bits == 8)       v = mem_rd8(sb, ea, &oob);
+                else if (bits == 16) v = mem_rd16(sb, ea, &oob);
+                else                 v = mem_rd32(sb, ea, &oob);
+            }
             else IFAIL("tst: unsupported EA in oracle");
             if (oob) IFAIL("tst: EA access out of sandbox");
             uint32_t masked = (bits == 32) ? v : (v & ((1u << bits) - 1u));
@@ -1462,6 +2182,15 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             else if (mode == 7 && reg == 2) {                   /* (d16,PC) */
                 uint32_t pcbase = pc + (uint32_t)(ext - ip);
                 int16_t d16 = be16s(ext); ext += 2; ea = pcbase + (uint32_t)(int32_t)d16;
+            }
+            else if (mode == 6) {                               /* (d8,An,Xn) scaled */
+                uint16_t brief = be16(ext); ext += 2;
+                int8_t d8 = (int8_t)(brief & 0xFFu);
+                unsigned ix = (brief >> 12) & 7u;
+                uint32_t index = (brief & 0x8000u) ? st->a[ix] : st->d[ix];
+                if (!(brief & 0x0800u)) index = (uint32_t)(int32_t)(int16_t)index;
+                index <<= (brief >> 9) & 3u;                    /* 68020 scale */
+                ea = st->a[reg] + (uint32_t)(int32_t)d8 + index;
             }
             else { handled = 0; ea = 0; }
             if (handled) {
@@ -1495,6 +2224,16 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 uint32_t addr = st->a[sr] + (uint32_t)(int32_t)d8 + index;
                 b = mem_rd32(sb, addr, &oob);
             }
+            else if (sm == 2) { b = mem_rd32(sb, st->a[sr], &oob); }          /* (An)   */
+            else if (sm == 3) {                                               /* (An)+  */
+                b = mem_rd32(sb, st->a[sr], &oob);
+                if (!oob) st->a[sr] += 4u;
+            }
+            else if (sm == 5) {                                               /* (d16,An) */
+                int16_t d16 = be16s(ext); ext += 2;
+                b = mem_rd32(sb, st->a[sr] + (uint32_t)(int32_t)d16, &oob);
+            }
+            else if (sm == 7 && sr == 1) { b = mem_rd32(sb, be32(ext), &oob); ext += 4; } /* abs.l */
             else { handled = 0; b = 0; }
             if (!handled) IFAIL("cmp.l: unsupported source EA in oracle");
             if (oob) IFAIL("cmp.l: EA access out of sandbox");
@@ -1522,6 +2261,146 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* cmpi.l #imm,(d16,An) : 0CA8 | an + imm32 + d16  (compare immediate with a memory
+         * longword; PRM CMPI — the immediate extension comes FIRST, then the EA extension).
+         * Flags like sub; memory and X unchanged. 8 bytes total. */
+        if ((op & 0xFFF8u) == 0x0CA8u) {
+            unsigned an = op & 7u;
+            uint32_t b = be32(ip + 2);
+            int16_t d16 = be16s(ip + 6);
+            int oob = 0;
+            uint32_t a = mem_rd32(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("cmpi.l (d16,An): address out of sandbox");
+            uint32_t res = a - b;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a)                                   cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x80000000u)     cc |= J5D_CCR_V;
+            if (res == 0)                                cc |= J5D_CCR_Z;
+            if (res & 0x80000000u)                       cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 8; continue;
+        }
+        /* cmpm.b/.w/.l (Ay)+,(Ax)+ : 1011 xxx 1 ss 001 yyy  (memory compare with
+         * post-increment on BOTH; PRM CMPM). Flags like cmp (dest - source); X kept. */
+        if ((op & 0xF138u) == 0xB108u && ((op >> 6) & 3u) != 3u) {
+            unsigned ax = (op >> 9) & 7u, ay = op & 7u;
+            unsigned szb = (op >> 6) & 3u;
+            unsigned bytes = (szb == 0) ? 1u : (szb == 1) ? 2u : 4u;
+            int oob = 0;
+            uint32_t s, dv;
+            if (bytes == 1)      { s = mem_rd8(sb, st->a[ay], &oob);  dv = oob ? 0 : mem_rd8(sb, st->a[ax], &oob); }
+            else if (bytes == 2) { s = mem_rd16(sb, st->a[ay], &oob); dv = oob ? 0 : mem_rd16(sb, st->a[ax], &oob); }
+            else                 { s = mem_rd32(sb, st->a[ay], &oob); dv = oob ? 0 : mem_rd32(sb, st->a[ax], &oob); }
+            if (oob) IFAIL("cmpm: address out of sandbox");
+            st->a[ay] += bytes;
+            st->a[ax] += bytes;
+            uint32_t bits = bytes * 8u, msb = 1u << (bits - 1);
+            uint32_t res = (dv - s) & (bits == 32 ? 0xFFFFFFFFu : ((1u << bits) - 1u));
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (s > dv)                       cc |= J5D_CCR_C;
+            if (((dv ^ s) & (dv ^ res)) & msb) cc |= J5D_CCR_V;
+            if (res == 0)                      cc |= J5D_CCR_Z;
+            if (res & msb)                     cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 2; continue;
+        }
+        /* cmpi.b #imm,(d16,An) : 0C28 | an + imm16(low byte) + d16  (byte compare
+         * immediate with a memory byte; PRM CMPI — immediate extension FIRST).
+         * Flags like a byte subtract; memory and X unchanged. 6 bytes. */
+        if ((op & 0xFFF8u) == 0x0C28u) {
+            unsigned an = op & 7u;
+            uint8_t b = (uint8_t)be16s(ip + 2);
+            int16_t d16 = be16s(ip + 4);
+            int oob = 0;
+            uint8_t a = mem_rd8(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("cmpi.b (d16,An): address out of sandbox");
+            uint8_t res = (uint8_t)(a - b);
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a)                          cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x80u)  cc |= J5D_CCR_V;
+            if (res == 0)                       cc |= J5D_CCR_Z;
+            if (res & 0x80u)                    cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 6; continue;
+        }
+        /* cmpi.l #imm,(An) : 0C90 | an + imm32  (compare immediate with the longword at
+         * (An); same CCR rule as cmpi.l (d16,An) above; 6 bytes). */
+        if ((op & 0xFFF8u) == 0x0C90u) {
+            unsigned an = op & 7u;
+            uint32_t b = be32(ip + 2);
+            int oob = 0;
+            uint32_t a = mem_rd32(sb, st->a[an], &oob);
+            if (oob) IFAIL("cmpi.l (An): address out of sandbox");
+            uint32_t res = a - b;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (b > a)                                   cc |= J5D_CCR_C;
+            if (((a ^ b) & (a ^ res)) & 0x80000000u)     cc |= J5D_CCR_V;
+            if (res == 0)                                cc |= J5D_CCR_Z;
+            if (res & 0x80000000u)                       cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 6; continue;
+        }
+        /* move.b (d16,An),Dn : 1028 | dn<<9 | an + d16  (byte load, displacement EA; PRM
+         * MOVE byte: only the LOW BYTE of Dn changes, N/Z on the byte, V=C=0, X kept). */
+        if ((op & 0xF1F8u) == 0x1028u) {
+            unsigned dn = (op >> 9) & 7u, an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            uint8_t v = mem_rd8(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("move.b (d16,An): address out of sandbox");
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | v;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (v == 0)    cc |= J5D_CCR_Z;
+            if (v & 0x80u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* move.w (d16,An),Dn : 3028 | dn<<9 | an + d16  (word load, displacement EA; PRM
+         * MOVE word: only the LOW WORD of Dn changes, N/Z on the word, V=C=0, X kept). */
+        if ((op & 0xF1F8u) == 0x3028u) {
+            unsigned dn = (op >> 9) & 7u, an = op & 7u;
+            int16_t d16 = be16s(ip + 2);
+            int oob = 0;
+            uint16_t v = mem_rd16(sb, st->a[an] + (uint32_t)(int32_t)d16, &oob);
+            if (oob) IFAIL("move.w (d16,An): address out of sandbox");
+            st->d[dn] = (st->d[dn] & 0xFFFF0000u) | v;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (v == 0)      cc |= J5D_CCR_Z;
+            if (v & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+        /* add.b (An),Dn : D010 | dn<<9 | an  (byte add from memory; PRM ADD byte size).
+         * Same CCR rule as add.b Dm,Dn; only the low byte of Dn changes. */
+        if ((op & 0xF1F8u) == 0xD010u) {
+            unsigned dn = (op >> 9) & 7u, an = op & 7u;
+            int oob = 0;
+            uint8_t b = mem_rd8(sb, st->a[an], &oob);
+            if (oob) IFAIL("add.b (An): address out of sandbox");
+            uint8_t a = (uint8_t)st->d[dn];
+            uint32_t s = (uint32_t)a + b; uint8_t res = (uint8_t)s; uint32_t cc = 0;
+            if (s & 0x100u) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ res) & (b ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            if (res == 0) cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res; st->ccr = cc;
+            pc += 2; continue;
+        }
+        /* move.w #imm,(An) : 34BC | an<<9  (word store of an immediate; MOVE sets N/Z per
+         * the moved word, V=C=0, X kept — PRM MOVE). */
+        if ((op & 0xF1FFu) == 0x30BCu && ((op >> 6) & 7u) == 2u) {
+            unsigned an = (op >> 9) & 7u;
+            uint16_t v = (uint16_t)be16s(ip + 2);
+            int oob = 0;
+            mem_wr16(sb, st->a[an], v, &oob);
+            if (oob) IFAIL("move.w #imm,(An): address out of sandbox");
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (v == 0)      cc |= J5D_CCR_Z;
+            if (v & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 4; continue;
+        }
+
         /* ============================ [J5m] 68020 MULU.L/MULS.L <ea>,Dl =============
          * opcode 0x4C00 | EA ; extension word: bit15=0, 14-12 Dl, bit11 signed, bit10 size
          * (0 => 32-bit low product into Dl; 1 => 64-bit Dh:Dl, not used here), 2-0 Dh.
@@ -1538,8 +2417,22 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             if (mode == 0)                  { src = st->d[reg]; adv = 4; }
             else if (mode == 7 && reg == 4) { src = be32(ip + 4); adv = 8; }
             else IFAIL("mul.l: unsupported source EA in oracle");
-            if (size64) IFAIL("mul.l: 64-bit product form not in subset");
             uint32_t a = st->d[dl];
+            if (size64) {
+                /* 64-bit product form: Dh:Dl = Dl * src (PRM MULU.L/MULS.L, 68020).
+                 * Dh = ext bits 2-0. N = bit 63, Z = the whole 64 bits zero, V=C=0. */
+                unsigned dh = ext & 7u;
+                uint64_t p = is_signed
+                    ? (uint64_t)((int64_t)(int32_t)a * (int64_t)(int32_t)src)
+                    : (uint64_t)a * (uint64_t)src;
+                st->d[dl] = (uint32_t)p;
+                st->d[dh] = (uint32_t)(p >> 32);
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                if (p == 0)                 cc |= J5D_CCR_Z;
+                if (p & 0x8000000000000000ull) cc |= J5D_CCR_N;
+                st->ccr = cc;
+                pc += adv; continue;
+            }
             uint32_t res;
             if (is_signed) res = (uint32_t)((int32_t)a * (int32_t)src);
             else           res = a * src;
@@ -2060,6 +2953,153 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 continue;                                 /* trap taken: pc = handler           */
             }
             pc = after_pc; continue;
+        }
+
+        /* ============================ [STD68K] general MOVE fallback =================
+         * MOVE is `00 ss DDD ddd sss rrr` (ss: 01=.b 11=.w 10=.l; ddd/DDD = dest
+         * mode/reg; sss/rrr = source mode/reg). The specific fast-path blocks above
+         * keep the corpus-proven forms; this fallback covers the REST of the mode
+         * matrix compiler-generated code uses (gcc emits combos like
+         * `move.b -(An),(d16,Am)`). Source is evaluated first, then the destination
+         * (PRM order, both with their side effects). CCR: N/Z per the moved value,
+         * V=C=0, X kept — except MOVEA (dest mode 001): no CCR, word sign-extends. */
+        if ((op & 0xC000u) == 0x0000u && (op & 0x3000u) != 0x0000u) {
+            unsigned szf = (op >> 12) & 3u;                 /* 1=.b 3=.w 2=.l */
+            unsigned bits = (szf == 1) ? 8u : (szf == 3) ? 16u : 32u;
+            unsigned step = bits / 8u;
+            unsigned sm = (op >> 3) & 7u, sr = op & 7u;
+            unsigned dm = (op >> 6) & 7u, dr = (op >> 9) & 7u;
+            const uint8_t *ext = ip + 2;
+            int oob = 0, handled = 1;
+            uint32_t v = 0;
+
+            /* -------- source -------- */
+            switch (sm) {
+                case 0: v = st->d[sr]; break;
+                case 1: v = st->a[sr]; break;               /* .w/.l only in practice */
+                case 2: case 3: case 4: {
+                    uint32_t addr = st->a[sr];
+                    /* -(An): byte on A7 keeps SP even (PRM); gcc never does that. */
+                    if (sm == 4) { addr -= step; }
+                    if (bits == 8)       v = mem_rd8(sb, addr, &oob);
+                    else if (bits == 16) v = mem_rd16(sb, addr, &oob);
+                    else                 v = mem_rd32(sb, addr, &oob);
+                    if (!oob) {
+                        if (sm == 3) st->a[sr] = addr + step;
+                        else if (sm == 4) st->a[sr] = addr;
+                    }
+                    break;
+                }
+                case 5: {
+                    int16_t d16 = be16s(ext); ext += 2;
+                    uint32_t addr = st->a[sr] + (uint32_t)(int32_t)d16;
+                    if (bits == 8)       v = mem_rd8(sb, addr, &oob);
+                    else if (bits == 16) v = mem_rd16(sb, addr, &oob);
+                    else                 v = mem_rd32(sb, addr, &oob);
+                    break;
+                }
+                case 6: {
+                    uint16_t brief = be16(ext); ext += 2;
+                    int8_t d8 = (int8_t)(brief & 0xFFu);
+                    unsigned ix = (brief >> 12) & 7u;
+                    uint32_t index = (brief & 0x8000u) ? st->a[ix] : st->d[ix];
+                    if (!(brief & 0x0800u)) index = (uint32_t)(int32_t)(int16_t)index;
+                    index <<= (brief >> 9) & 3u;
+                    uint32_t addr = st->a[sr] + (uint32_t)(int32_t)d8 + index;
+                    if (bits == 8)       v = mem_rd8(sb, addr, &oob);
+                    else if (bits == 16) v = mem_rd16(sb, addr, &oob);
+                    else                 v = mem_rd32(sb, addr, &oob);
+                    break;
+                }
+                case 7:
+                    if (sr == 0)      { uint32_t a2 = (uint32_t)(int32_t)be16s(ext); ext += 2;
+                                        if (bits == 8) v = mem_rd8(sb, a2, &oob);
+                                        else if (bits == 16) v = mem_rd16(sb, a2, &oob);
+                                        else v = mem_rd32(sb, a2, &oob); }
+                    else if (sr == 1) { uint32_t a2 = be32(ext); ext += 4;
+                                        if (bits == 8) v = mem_rd8(sb, a2, &oob);
+                                        else if (bits == 16) v = mem_rd16(sb, a2, &oob);
+                                        else v = mem_rd32(sb, a2, &oob); }
+                    else if (sr == 2) { uint32_t pcbase = pc + (uint32_t)(ext - ip);
+                                        int16_t d16 = be16s(ext); ext += 2;
+                                        uint32_t a2 = pcbase + (uint32_t)(int32_t)d16;
+                                        if (bits == 8) v = mem_rd8(sb, a2, &oob);
+                                        else if (bits == 16) v = mem_rd16(sb, a2, &oob);
+                                        else v = mem_rd32(sb, a2, &oob); }
+                    else if (sr == 4) { if (bits == 32) { v = be32(ext); ext += 4; }
+                                        else { v = (uint16_t)be16(ext); ext += 2;
+                                               if (bits == 8) v &= 0xFFu; } }
+                    else handled = 0;
+                    break;
+                default: handled = 0; break;
+            }
+            if (handled && oob) IFAIL("move: source out of sandbox");
+
+            /* -------- destination -------- */
+            if (handled) {
+                if (dm == 0) {                              /* Dn */
+                    if (bits == 8)       st->d[dr] = (st->d[dr] & 0xFFFFFF00u) | (v & 0xFFu);
+                    else if (bits == 16) st->d[dr] = (st->d[dr] & 0xFFFF0000u) | (v & 0xFFFFu);
+                    else                 st->d[dr] = v;
+                }
+                else if (dm == 1) {                         /* MOVEA: no CCR, sign-extend .w */
+                    st->a[dr] = (bits == 16) ? (uint32_t)(int32_t)(int16_t)v : v;
+                    pc += (uint32_t)(ext - ip); continue;
+                }
+                else if (dm == 2 || dm == 3 || dm == 4) {
+                    uint32_t addr = st->a[dr];
+                    if (dm == 4) addr -= step;
+                    if (bits == 8)       mem_wr8(sb, addr, (uint8_t)v, &oob);
+                    else if (bits == 16) mem_wr16(sb, addr, (uint16_t)v, &oob);
+                    else                 mem_wr32(sb, addr, v, &oob);
+                    if (!oob) {
+                        if (dm == 3) st->a[dr] = addr + step;
+                        else if (dm == 4) st->a[dr] = addr;
+                    }
+                }
+                else if (dm == 5) {
+                    int16_t d16 = be16s(ext); ext += 2;
+                    uint32_t addr = st->a[dr] + (uint32_t)(int32_t)d16;
+                    if (bits == 8)       mem_wr8(sb, addr, (uint8_t)v, &oob);
+                    else if (bits == 16) mem_wr16(sb, addr, (uint16_t)v, &oob);
+                    else                 mem_wr32(sb, addr, v, &oob);
+                }
+                else if (dm == 6) {
+                    uint16_t brief = be16(ext); ext += 2;
+                    int8_t d8 = (int8_t)(brief & 0xFFu);
+                    unsigned ix = (brief >> 12) & 7u;
+                    uint32_t index = (brief & 0x8000u) ? st->a[ix] : st->d[ix];
+                    if (!(brief & 0x0800u)) index = (uint32_t)(int32_t)(int16_t)index;
+                    index <<= (brief >> 9) & 3u;
+                    uint32_t addr = st->a[dr] + (uint32_t)(int32_t)d8 + index;
+                    if (bits == 8)       mem_wr8(sb, addr, (uint8_t)v, &oob);
+                    else if (bits == 16) mem_wr16(sb, addr, (uint16_t)v, &oob);
+                    else                 mem_wr32(sb, addr, v, &oob);
+                }
+                else if (dm == 7 && dr == 0) {
+                    uint32_t addr = (uint32_t)(int32_t)be16s(ext); ext += 2;
+                    if (bits == 8)       mem_wr8(sb, addr, (uint8_t)v, &oob);
+                    else if (bits == 16) mem_wr16(sb, addr, (uint16_t)v, &oob);
+                    else                 mem_wr32(sb, addr, v, &oob);
+                }
+                else if (dm == 7 && dr == 1) {
+                    uint32_t addr = be32(ext); ext += 4;
+                    if (bits == 8)       mem_wr8(sb, addr, (uint8_t)v, &oob);
+                    else if (bits == 16) mem_wr16(sb, addr, (uint16_t)v, &oob);
+                    else                 mem_wr32(sb, addr, v, &oob);
+                }
+                else handled = 0;
+            }
+            if (handled) {
+                if (oob) IFAIL("move: destination out of sandbox");
+                uint32_t masked = (bits == 32) ? v : (v & ((1u << bits) - 1u));
+                uint32_t msb = 1u << (bits - 1);
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                if (masked == 0)  cc |= J5D_CCR_Z;
+                if (masked & msb) cc |= J5D_CCR_N;
+                st->ccr = cc;
+                pc += (uint32_t)(ext - ip); continue;
+            }
         }
 
         IFAIL("interp: out-of-subset opcode");

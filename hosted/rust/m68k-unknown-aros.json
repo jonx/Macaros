@@ -1,0 +1,26 @@
+{
+  "arch": "m68k",
+  "os": "aros",
+  "vendor": "unknown",
+  "code-model": "large",
+  "cpu": "M68020",
+  "crt-objects-fallback": "false",
+  "data-layout": "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16",
+  "linker": "m68k-elf-ld",
+  "linker-flavor": "gnu-cc",
+  "llvm-target": "m68k",
+  "metadata": {
+    "description": "m68k AROS (run68k stub-DOS; hosted/rust/STD68K-PLAN.md)",
+    "host_tools": false,
+    "std": true,
+    "tier": 3
+  },
+  "panic-strategy": "abort",
+  "relocation-model": "static",
+  "singlethread": true,
+  "max-atomic-width": 32,
+  "dynamic-linking": false,
+  "has-thread-local": false,
+  "target-endian": "big",
+  "target-pointer-width": 32
+}

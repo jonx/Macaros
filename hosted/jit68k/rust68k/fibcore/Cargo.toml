@@ -1,0 +1,17 @@
+[package]
+name = "fibcore"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+# fib lives ALONE in this crate on purpose: with the upstream MOVE-clobbers-CCR bug
+# still open (see ../UPSTREAM-LLVM-CCR-BUG.md), whether a loop compiles correctly
+# depends on register-allocation luck, and that luck depends on the sibling functions
+# in the crate. This exact crate shape + profile is verified to schedule the loop
+# correctly on the pinned nightly; the two-engine regression re-checks the artifact.
+[profile.release]
+panic = "abort"
+opt-level = 1
+debug = false

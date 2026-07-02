@@ -172,18 +172,26 @@ int aros_np_accept(int s, unsigned int *addr_net, unsigned short *port_net)
     return ns;
 }
 
+/* The generated bsdsocket stubs pass the length as a 32-bit int (D1). Rust hands us
+ * usize buffer lengths; a >= 2 GiB buffer would go negative or wrap at the LVO
+ * boundary. std's contract is a SHORT read/write, so clamp instead of erroring. */
+static unsigned long np_clamp_len(unsigned long len)
+{
+    return len > 0x7FFFFFFFUL ? 0x7FFFFFFFUL : len;
+}
+
 long aros_np_send(int s, const void *buf, unsigned long len, int flags)
 {
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
-    return send(s, buf, len, flags);
+    return send(s, buf, np_clamp_len(len), flags);
 }
 
 long aros_np_recv(int s, void *buf, unsigned long len, int flags)
 {
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
-    return recv(s, buf, len, flags);
+    return recv(s, buf, np_clamp_len(len), flags);
 }
 
 long aros_np_sendto(int s, const void *buf, unsigned long len, int flags,
@@ -196,7 +204,7 @@ long aros_np_sendto(int s, const void *buf, unsigned long len, int flags,
     sa.sin_family      = AF_INET;
     sa.sin_port        = port_net;
     sa.sin_addr.s_addr = addr_net;
-    return sendto(s, buf, len, flags, (struct sockaddr *)&sa, sizeof sa);
+    return sendto(s, buf, np_clamp_len(len), flags, (struct sockaddr *)&sa, sizeof sa);
 }
 
 long aros_np_recvfrom(int s, void *buf, unsigned long len, int flags,
@@ -207,7 +215,7 @@ long aros_np_recvfrom(int s, void *buf, unsigned long len, int flags,
     long n;
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
-    n = recvfrom(s, buf, len, flags, (struct sockaddr *)&sa, &slen);
+    n = recvfrom(s, buf, np_clamp_len(len), flags, (struct sockaddr *)&sa, &slen);
     if (n >= 0) {
         if (addr_net) *addr_net = sa.sin_addr.s_addr;
         if (port_net) *port_net = sa.sin_port;

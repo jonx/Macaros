@@ -47,13 +47,29 @@
 #include <unistd.h>
 #include <errno.h>
 
-/* The sandbox layout — identical to the corpus harness so every committed program loads
- * and runs exactly as it does under the regression tests. */
+/* The sandbox layout. The fixed runtime blocks (LIBBASE / stub heap / args / the
+ * engine's J5I_VBR vector table at 0x240000) keep their historical addresses; the
+ * PROGRAM now loads ABOVE them at PROG_ORIGIN (hunks are relocated, so programs are
+ * address-agnostic), which frees the space std-sized binaries need:
+ *
+ *   0x00210000  sandbox origin (legacy low region, unused by the loader now)
+ *   0x00230000  LIBBASE — stub library vectors (grow downward)
+ *   0x00231000  stub AllocMem heap .. 0x238000
+ *   0x00238000  AmigaDOS args region .. 0x240000
+ *   0x00240000  J5I_VBR vector table (engine constant)
+ *   0x00250000  PROG_ORIGIN — code + data + bss, bump-allocated upward
+ *   0x00C00000  libc68k heap (the m68k C runtime's malloc region) .. 0x01100000
+ *   0x01100000  stack (grows down from the sandbox top; engine seeds SP there)
+ *   0x01210000  sandbox end (origin + 16 MiB)
+ *
+ * The libc68k heap/stack split is a CONVENTION shared with rust68k/libc68k (see
+ * hosted/rust/STD68K-PLAN.md); the loader itself only enforces the sandbox bounds. */
 #define SANDBOX_ORIGIN  0x00210000u
-#define SANDBOX_SIZE    0x00040000u     /* 256 KiB: code + data + lib table + heap */
+#define SANDBOX_SIZE    0x01000000u     /* 16 MiB: room for std-sized programs      */
 #define LIBBASE         0x00230000u     /* stub library base (vectors grow downward) */
 #define HEAP_BASE       0x00231000u     /* AllocMem heap                            */
 #define HEAP_END        0x00238000u
+#define PROG_ORIGIN     0x00250000u     /* programs load here, above the VBR        */
 
 /* ---- The AmigaDOS argument region (OURS). ----------------------------------------
  * The CLI argument string a CLI-launched AmigaOS program is entered with (A0 = the
@@ -69,7 +85,7 @@
 #define ARGS_REGION_END 0x00240000u     /* == J5I_VBR; one past the args region      */
 #define MAX_ARGSTR      4096u           /* cap on the joined "a b c\n" arg string    */
 
-#define MAX_PROG_BYTES  (1u << 20)      /* 1 MiB cap on a hunk file (generous)      */
+#define MAX_PROG_BYTES  (8u << 20)      /* 8 MiB cap on a hunk file (std-sized)     */
 
 /* ---- The library bridge: marshal 68k regs into the native stub via the [J3] thunk. ---- */
 struct bctx { stub_lib *lib; j4_sandbox *sb; };
@@ -90,6 +106,10 @@ static void usage(FILE *f, const char *argv0)
 "options:\n"
 "  -h, --help        show this help and exit\n"
 "  -v                verbose: print engine stats (blocks/insns/cache/FP) to stderr\n"
+"  --interp          run through the independent reference INTERPRETER instead of the\n"
+"                    JIT (same loader, stub OS, args and exit-code contract).  Running\n"
+"                    a program BOTH ways and comparing exits/output is the whole-program\n"
+"                    two-engine check the rust68k corpus regression uses.\n"
 "  --diff            request the [J5n] differential lockstep checker.  NOTE: the engine's\n"
 "                    whole-program lockstep driver reports block-boundary false positives on\n"
 "                    multi-block programs, so run68k prints a notice and runs normally.  The\n"
@@ -193,6 +213,7 @@ int main(int argc, char **argv)
     const char *crash_dir = NULL;
     int verbose = 0;
     int diff    = 0;
+    int interp  = 0;
 
     /* ---- argument parsing: options up to the program name; everything after it is the
      * program's own argv (accepted, documented as not-yet-passed). ---- */
@@ -203,6 +224,7 @@ int main(int argc, char **argv)
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(stdout, argv[0]); return 0; }
         else if (!strcmp(a, "-v")) verbose = 1;
         else if (!strcmp(a, "--diff")) diff = 1;
+        else if (!strcmp(a, "--interp")) interp = 1;
         else if (!strcmp(a, "--crash-dir")) {
             if (i + 1 >= argc) { fprintf(stderr, "run68k: --crash-dir needs a DIR argument\n"); return 2; }
             crash_dir = argv[++i];
@@ -225,6 +247,7 @@ int main(int argc, char **argv)
     if (!mem) { fprintf(stderr, "run68k: out of memory (sandbox)\n"); free(prog); return 1; }
     j4_sandbox sb; j4_seglist seg; char err[256] = {0};
     j4_sandbox_init(&sb, mem, SANDBOX_ORIGIN, SANDBOX_SIZE);
+    sb.next_alloc = PROG_ORIGIN;   /* load hunks above the fixed runtime blocks */
     if (j4_load_hunks(&sb, prog, prog_len, /*skip_reloc=*/0, &seg, err, sizeof err)) {
         fprintf(stderr, "run68k: cannot load '%s': %s\n", prog_path, err);
         free(mem); free(prog); return 1;
@@ -301,7 +324,11 @@ int main(int argc, char **argv)
     st.d[0] = args_d0;     /* D0 = its length in bytes, including the '\n'  */
 
     uint32_t d0 = 0;
-    int rc = j5d_run(&j5sb, seg.entry, LIBBASE, &st, &d0, bridge, &c, err, sizeof err);
+    /* --interp: the SAME contract (loader, stub OS, A0/D0 args, exit code) through the
+     * independent reference interpreter — the second engine of the two-engine check. */
+    int rc = interp
+        ? j5d_interp_run(&j5sb, seg.entry, LIBBASE, &st, &d0, bridge, &c, err, sizeof err)
+        : j5d_run(&j5sb, seg.entry, LIBBASE, &st, &d0, bridge, &c, err, sizeof err);
 
     /* ---- stream the program's captured output to STDOUT (clean / pipe-able). Even on a
      * fault we flush what was produced before the fault, so a partial render is visible. ---- */

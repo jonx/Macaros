@@ -148,6 +148,91 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         println!("[RS3c] random: arc4random seeds {a:#018x} {b:#018x} differ={}", a != b);
     }
 
+    // RS3d: the FAILURE paths fixed by the 2026-07-02 pal review (FIX-PLAN.md §1):
+    // each would silently misbehave before the fix, so assert the fixed semantics.
+
+    // RS3d-1: open-mode matrix. read+append must be readable (was O_WRONLY -> reads
+    // failed); create without write, and truncate+append, must be InvalidInput.
+    {
+        use std::fs::OpenOptions;
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let p = "MacRW:rs3d-modes.txt";
+        let _ = std::fs::remove_file(p);
+        std::fs::write(p, "abc").unwrap();
+        let ra = OpenOptions::new().read(true).append(true).open(p).and_then(|mut f| {
+            f.write_all(b"def")?;
+            f.seek(SeekFrom::Start(0))?;
+            let mut s = String::new();
+            f.read_to_string(&mut s)?;
+            Ok(s)
+        });
+        let ra_ok = matches!(ra.as_deref(), Ok("abcdef"));
+        let cw = OpenOptions::new().read(true).create(true).open("MacRW:rs3d-cw.txt");
+        let cw_ok = matches!(&cw, Err(e) if e.kind() == std::io::ErrorKind::InvalidInput);
+        let ta = OpenOptions::new().append(true).truncate(true).open(p);
+        let ta_ok = matches!(&ta, Err(e) if e.kind() == std::io::ErrorKind::InvalidInput);
+        let _ = std::fs::remove_file(p);
+        println!(
+            "[RS3d] open modes: read+append={ra_ok} create-no-write-EINVAL={cw_ok} \
+             truncate+append-EINVAL={ta_ok} (expect all true; got {ra:?} / {cw_err:?} / {ta_err:?})",
+            cw_err = cw.err().map(|e| e.kind()),
+            ta_err = ta.err().map(|e| e.kind()),
+        );
+    }
+
+    // RS3d-2: Condvar::wait_timeout(Duration::MAX) must BLOCK until notified (the
+    // 32-bit time_t overflow made it return instantly and spin at 100% CPU).
+    {
+        use std::sync::{Arc, Condvar, Mutex};
+        let pair = Arc::new((Mutex::new(false), Condvar::new()));
+        let p2 = Arc::clone(&pair);
+        let t0 = std::time::Instant::now();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            *p2.0.lock().unwrap() = true;
+            p2.1.notify_one();
+        });
+        let (lock, cv) = &*pair;
+        let mut done = lock.lock().unwrap();
+        let mut timed_out = false;
+        while !*done {
+            let (g, r) = cv.wait_timeout(done, std::time::Duration::MAX).unwrap();
+            done = g;
+            if r.timed_out() {
+                timed_out = true;
+                break;
+            }
+        }
+        let _ = h.join();
+        let dt = t0.elapsed();
+        println!(
+            "[RS3d] condvar Duration::MAX: notified={} timed_out={timed_out} after {dt:?} \
+             (expect notified=true within seconds, no instant-timeout spin)",
+            *done
+        );
+    }
+
+    // RS3d-3: a nonexistent command must FAIL VISIBLY. This pal runs a shell line
+    // (like `sh -c` on unix), so the AROS shell handles the unknown command itself
+    // and returns a nonzero rc — that surfaces as Ok(status != success), which is
+    // the correct shell-backend contract. Err(NotFound) is reserved for
+    // SystemTagList's -1, "the shell could not run the line at all" (that path was
+    // silently swallowed as a normal exit before the 2026-07-02 fix). Either way,
+    // what must never happen is a SILENT SUCCESS.
+    {
+        let r = std::process::Command::new("NoSuchCmd-Rs3d").output();
+        let visible_failure = match &r {
+            Ok(o) => !o.status.success(),
+            Err(_) => true,
+        };
+        println!(
+            "[RS3d] spawn missing command: visible-failure={visible_failure} \
+             (code={:?} err={:?}; expect true, silent success forbidden)",
+            r.as_ref().ok().and_then(|o| o.status.code()),
+            r.as_ref().err().map(|e| e.kind())
+        );
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }

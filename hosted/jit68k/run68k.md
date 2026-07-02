@@ -39,6 +39,7 @@ run68k [options] <program.exe> [program-args...]
 | ----------------- | ----------------------------------------------------------------------- |
 | `-h`, `--help`    | usage and exit                                                          |
 | `-v`              | verbose: print engine stats (blocks / insns / cache / FP / …) to stderr |
+| `--interp`        | run through the independent reference INTERPRETER instead of the JIT: same loader, stub OS, args and exit-code contract. Running a program both ways and comparing is the whole-program two-engine check (`make hosted-jit68k-rust` does exactly that) |
 | `--diff`          | request the `[J5n]` differential lockstep checker (see *Limitations*)   |
 | `--crash-dir DIR` | where crash bundles go (default `$JIT68K_CRASH_DIR` or `./crash`)        |
 

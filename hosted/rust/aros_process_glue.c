@@ -18,6 +18,9 @@
 #include <dos/dosextens.h>
 
 /* Returns the command's return code, or -1 if the shell couldn't run it.
+ * A requested capture redirection that cannot be set up is also -1: silently
+ * running the child with INHERITED streams would hand the caller an empty
+ * "captured" output indistinguishable from the child printing nothing.
  *
  * We suppress DOS requesters for the duration (pr_WindowPtr = -1), so a missing temp
  * volume/assign makes Open() fail immediately instead of popping a blocking
@@ -40,11 +43,13 @@ long aros_system(const char *cmdline, const char *out_path, const char *err_path
 
     if (out_path) {
         out = Open((CONST_STRPTR)out_path, MODE_NEWFILE);
-        if (out) { tags[nt].ti_Tag = SYS_Output; tags[nt].ti_Data = (IPTR)out; nt++; }
+        if (!out) goto capture_failed;
+        tags[nt].ti_Tag = SYS_Output; tags[nt].ti_Data = (IPTR)out; nt++;
     }
     if (err_path) {
         err = Open((CONST_STRPTR)err_path, MODE_NEWFILE);
-        if (err) { tags[nt].ti_Tag = SYS_Error; tags[nt].ti_Data = (IPTR)err; nt++; }
+        if (!err) goto capture_failed;
+        tags[nt].ti_Tag = SYS_Error; tags[nt].ti_Data = (IPTR)err; nt++;
     }
 
     me->pr_WindowPtr = oldwin;
@@ -58,4 +63,10 @@ long aros_system(const char *cmdline, const char *out_path, const char *err_path
     if (out) Close(out);
     if (err) Close(err);
     return rc;
+
+capture_failed:
+    me->pr_WindowPtr = oldwin;
+    if (out) Close(out);
+    if (err) Close(err);
+    return -1;
 }

@@ -46,8 +46,9 @@ __attribute__((weak)) void kprintf(const char *format, ...) { (void)format; }
 #define X_STATE 19  /* x19: holds the M68KState* across the call (callee-saved) */
 #define X_STUB  20  /* x20: holds the native stub address    (callee-saved) */
 
-/* A tiny pool of live regions so several thunks can coexist within the spike. */
-#define J3_MAX_THUNKS 8
+/* A pool of live regions so several thunks can coexist. Sized for the full
+ * stub-DOS LVO set (stublib.h) plus the spike harnesses' ad-hoc thunks. */
+#define J3_MAX_THUNKS 32
 static jit_region g_pool[J3_MAX_THUNKS];
 static int        g_pool_n = 0;
 

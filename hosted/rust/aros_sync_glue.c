@@ -52,6 +52,16 @@ int aros_cond_timedwait(void *c, void *m, unsigned int secs, unsigned int nsecs)
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
         return -1;
+    /* AROS time_t is a signed 32-bit int. Rust passes "forever" as u32::MAX seconds,
+     * which would wrap the deadline negative and make pthread_cond_timedwait return
+     * ETIMEDOUT immediately (the caller then spins at 100% CPU re-waiting). Clamp the
+     * deadline to time_t's range: a year-2038 deadline is a decade of waiting, which
+     * is "forever" for a condvar; the std wrapper re-loops if it ever fires early. */
+    {
+        long max_add = 0x7FFFFFFFL - 1 - (long)ts.tv_sec;
+        if (max_add < 0) max_add = 0;
+        if ((long)secs > max_add) secs = (unsigned int)max_add;
+    }
     ts.tv_sec += (time_t)secs;
     ts.tv_nsec += (long)nsecs;
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }

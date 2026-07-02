@@ -84,6 +84,12 @@ int aros_thr_sleep(unsigned int secs, unsigned int nsecs)
     unsigned long ticks = (unsigned long)secs * 50UL + (unsigned long)(nsecs / 20000000U);
     if (ticks == 0 && (secs || nsecs))
         ticks = 1;              /* round any nonzero sub-20ms request up to one tick */
+    /* Delay() takes a 32-bit ULONG; secs=u32::MAX (Rust's "sleep forever" chunk) is
+     * ~214e9 ticks, which would truncate mod 2^32 and wake years early. Chunk it. */
+    while (ticks > 0xFFFFFFFFUL) {
+        Delay(0xFFFFFFFFUL);
+        ticks -= 0xFFFFFFFFUL;
+    }
     if (ticks > 0)
         Delay(ticks);
     return 0;

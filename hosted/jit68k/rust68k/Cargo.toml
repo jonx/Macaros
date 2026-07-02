@@ -1,0 +1,19 @@
+[package]
+name = "rust68k-corpus"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+# The pinned working envelope for rustc's experimental M68k backend (see README.md):
+#  - opt-level 1: opt-level 3 miscompiles (MOVE-clobbers-CCR, see UPSTREAM-LLVM-CCR-BUG.md)
+#  - debug = false: debuginfo=2 SIGSEGVs rustc itself on this target
+#  - lto + one codegen unit: prunes the compiler_builtins staticlib roots so the linked
+#    hunk fits run68k's 256 KiB sandbox
+[profile.release]
+panic = "abort"
+opt-level = 1
+debug = false
+lto = true
+codegen-units = 1

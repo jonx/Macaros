@@ -1,0 +1,119 @@
+diff --git a/llvm/lib/Target/M68k/M68kInstrInfo.cpp b/llvm/lib/Target/M68k/M68kInstrInfo.cpp
+index 3a9f88269f..bc4f890aff 100644
+--- a/llvm/lib/Target/M68k/M68kInstrInfo.cpp
++++ b/llvm/lib/Target/M68k/M68kInstrInfo.cpp
+@@ -21,6 +21,7 @@
+ #include "llvm/ADT/STLExtras.h"
+ #include "llvm/ADT/ScopeExit.h"
+ #include "llvm/CodeGen/LivePhysRegs.h"
++#include "llvm/CodeGen/LiveRegUnits.h"
+ #include "llvm/CodeGen/LiveVariables.h"
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
+ #include "llvm/CodeGen/MachineOperand.h"
+@@ -693,6 +694,86 @@ void M68kInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
+   const auto &Subtarget = MBB.getParent()->getSubtarget<M68kSubtarget>();
+   unsigned Opc = 0;
+ 
++  // Minimal port of the llvm/llvm-project#152816 workaround (dansalvato's
++  // m68k-fix-ccr-kill): a register-to-register MOVE sets CCR, but LLVM inserts
++  // COPY instructions (e.g. during PHI elimination) between a compare and the
++  // branch consuming its flags. If CCR is live across this copy, save it to a
++  // free data register and restore it afterwards. Kept to the data-register
++  // save path only (no memory push/pop fallback): with eight data registers a
++  // free one is available in practice, and this snapshot's tablegen lacks the
++  // branch's MOV16es/ec/co memory forms.
++  auto EmitCopyPreservingCCR = [&](unsigned Opc) {
++    const MachineFunction &MF = *MBB.getParent();
++    LiveRegUnits UsedRegs(RI);
++    UsedRegs.addLiveOuts(MBB);
++    auto I = MBB.end();
++    while (I != MI)
++      UsedRegs.stepBackward(*--I);
++    if (UsedRegs.available(M68k::CCR)) {
++      BuildMI(MBB, MI, DL, get(Opc), DstReg)
++          .addReg(SrcReg, getKillRegState(KillSrc));
++      return;
++    }
++    unsigned PushOp =
++        Subtarget.atLeastM68010() ? M68k::MOV16dc : M68k::MOV16ds;
++    unsigned PushSrc = Subtarget.atLeastM68010() ? M68k::CCR : M68k::SR;
++    BitVector Allocatable =
++        RI.getAllocatableSet(MF, RI.getRegClass(M68k::DR16RegClassID));
++    for (Register Reg : Allocatable.set_bits()) {
++      if (!RI.regsOverlap(DstReg, Reg) && UsedRegs.available(Reg)) {
++        BuildMI(MBB, MI, DL, get(PushOp), Reg).addReg(PushSrc);
++        BuildMI(MBB, MI, DL, get(Opc), DstReg)
++            .addReg(SrcReg, getKillRegState(KillSrc));
++        BuildMI(MBB, MI, DL, get(M68k::MOV16cd), M68k::CCR).addReg(Reg);
++        return;
++      }
++    }
++    // No fully dead data register (it happens under pressure, e.g. in core at
++    // -O1). Borrow a LIVE one: park its value in a free address register
++    // (movea leaves CCR alone; MOV32rr with an An destination assembles to
++    // movea), read the CCR into the borrowed register, copy, restore both.
++    BitVector FreeA =
++        RI.getAllocatableSet(MF, RI.getRegClass(M68k::AR32RegClassID));
++    for (Register AReg : FreeA.set_bits()) {
++      if (RI.regsOverlap(DstReg, AReg) || RI.regsOverlap(SrcReg, AReg) ||
++          !UsedRegs.available(AReg))
++        continue;
++      for (Register DReg : Allocatable.set_bits()) {
++        if (RI.regsOverlap(DstReg, DReg) || RI.regsOverlap(SrcReg, DReg))
++          continue;
++        Register DReg32 = RI.getMatchingSuperReg(DReg, M68k::MxSubRegIndex16Lo,
++                                                 &M68k::XR32RegClass);
++        if (!DReg32)
++          continue;
++        BuildMI(MBB, MI, DL, get(M68k::MOV32rr), AReg).addReg(DReg32);
++        BuildMI(MBB, MI, DL, get(PushOp), DReg).addReg(PushSrc);
++        BuildMI(MBB, MI, DL, get(Opc), DstReg)
++            .addReg(SrcReg, getKillRegState(KillSrc));
++        BuildMI(MBB, MI, DL, get(M68k::MOV16cd), M68k::CCR).addReg(DReg);
++        BuildMI(MBB, MI, DL, get(M68k::MOV32rr), DReg32).addReg(AReg);
++        return;
++      }
++    }
++    // Every register is live (real under high pressure, e.g. core's IPv4
++    // parser). Spill CCR straight to the stack: move.w %ccr,-(%sp) / do the
++    // copy / move.w (%sp)+,%ccr. These memory CCR moves need 68010+, which our
++    // singlethread AROS target (68020) satisfies; a pure-68000 build would need
++    // the MOVE-from-SR variants instead. This is dansalvato's original last
++    // resort (llvm/llvm-project#152816).
++    if (Subtarget.atLeastM68010()) {
++      BuildMI(MBB, MI, DL, get(M68k::MOV16ec))
++          .addReg(RI.getStackRegister())
++          .addReg(M68k::CCR);
++      BuildMI(MBB, MI, DL, get(Opc), DstReg)
++          .addReg(SrcReg, getKillRegState(KillSrc));
++      BuildMI(MBB, MI, DL, get(M68k::MOV16co), M68k::CCR)
++          .addReg(RI.getStackRegister());
++      return;
++    }
++    report_fatal_error("M68k copyPhysReg: live CCR with no free register on "
++                       "pre-68010 (needs the MOVE-from-SR spill path)");
++  };
++
+   // First deal with the normal symmetric copies.
+   if (M68k::XR32RegClass.contains(DstReg, SrcReg))
+     Opc = M68k::MOV32rr;
+@@ -702,8 +783,7 @@ void M68kInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
+     Opc = M68k::MOV8dd;
+ 
+   if (Opc) {
+-    BuildMI(MBB, MI, DL, get(Opc), DstReg)
+-        .addReg(SrcReg, getKillRegState(KillSrc));
++    EmitCopyPreservingCCR(Opc);
+     return;
+   }
+ 
+@@ -724,8 +804,7 @@ void M68kInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
+     Opc = M68k::MOVXd32d16;
+ 
+   if (Opc) {
+-    BuildMI(MBB, MI, DL, get(Opc), DstReg)
+-        .addReg(SrcReg, getKillRegState(KillSrc));
++    EmitCopyPreservingCCR(Opc);
+     return;
+   }
+ 

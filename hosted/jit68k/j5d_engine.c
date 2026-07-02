@@ -257,7 +257,7 @@ static uint32_t *emit_counter_bump(uint32_t *p, uint64_t addr, uint8_t ra, uint8
  * `void block(struct j5d_m68k_state *st, uint64_t base_adjust)` entered at its OUTER
  * entry (offset 0). [J5k] adds a second entry point — the CHAIN ENTRY — that a chaining
  * predecessor branches to directly (see translate_block for the layout). */
-#define J5D_MAX_BLOCKS 256
+#define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
 #define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
 
@@ -323,6 +323,10 @@ static int is_terminator(uint16_t op)
     if (op == 0x4EAEu) return 1;                 /* jsr d16(A6)  (library vector)  */
     if (op == 0x4EB9u) return 1;                 /* jsr abs.l                      */
     if (op == 0x4EF9u) return 1;                 /* jmp abs.l                      */
+    if (op == 0x4EBAu) return 1;                 /* jsr (d16,PC) (gcc near call)   */
+    if (op == 0x4EFAu) return 1;                 /* jmp (d16,PC) (gcc near jump)   */
+    if ((op & 0xFFF8u) == 0x4EA8u) return 1;     /* jsr (d16,An) (computed / a6-frame call) */
+    if ((op & 0xFFF8u) == 0x4EE8u) return 1;     /* jmp (d16,An) (computed)        */
     if ((op & 0xFFF8u) == 0x4E90u) return 1;     /* jsr (An)   (computed)          */
     if ((op & 0xFFF8u) == 0x4ED0u) return 1;     /* jmp (An)   (computed)          */
     if ((op & 0xFFF0u) == 0x4E40u) return 1;     /* TRAP #n  ([J5i] vector 32+n)   */
@@ -1069,7 +1073,11 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
      * and memcpy'ing it after the prologue is sound. The fixed map means a register that
      * is read but never written keeps its prologue-loaded value through to the epilogue,
      * and the epilogue need not store it (not dirty). */
-    uint32_t body[8000];
+    /* LLVM unrolls Rust hot paths into very long straight-line basic blocks (e.g.
+     * SipHash finalization is ~360 m68k instructions with no branch), so the body
+     * buffer and the runaway guard must be generous. Each 68k insn emits at most a
+     * couple dozen AArch64 words; 64K words covers a multi-thousand-instruction block. */
+    static uint32_t body[65536];
     uint32_t *bp = body;
 
     /* Point the HOOK 2 fetch base at the sandbox host bytes for this block's PC. */
@@ -1081,7 +1089,7 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     int guard = 0;
 
     for (;;) {
-        if (++guard > 256) TFAIL("block decode guard tripped");
+        if (++guard > 4000) TFAIL("block decode guard tripped");
         if (cur_pc < sb->origin || (uint64_t)cur_pc + 2 > (uint64_t)sb->origin + sb->size)
             TFAIL("pc out of sandbox during translate");
         if ((size_t)(bp - body) > sizeof(body)/sizeof(body[0]) - 256) TFAIL("block body overflow");
@@ -1765,7 +1773,13 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         else if (top == 0x4E71u) {                   /* nop                          */
             pc = tpc + 2;
         }
-        else if (top == 0x4EAEu) {                   /* jsr d16(A6) -> [J3] bridge  */
+        else if (top == 0x4EAEu && st->a[6] == a6_libbase) {  /* jsr d16(A6) -> [J3] bridge
+             * ONLY when A6 actually holds the library base. Compiler-generated code
+             * (LLVM/gcc) uses A6 as a FRAME POINTER, so `jsr -N(a6)` is usually an
+             * indirect call through a frame slot, not a library vector; that case
+             * falls through to the computed-jsr handler below. Distinguished purely
+             * by A6's runtime value (the library base is a fixed sandbox address, a
+             * frame pointer is a stack address — they never collide). */
             int16_t d16 = be16s(thost + 2);
             uint32_t target = st->a[6] + (uint32_t)(int32_t)d16;
             int n = j3_vector_recognise(st->a[6], target);  /* negative-offset rule */
@@ -1783,12 +1797,42 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             g_stats.lib_calls++;
             pc = tpc + 4;                            /* jsr d16(A6) is 4 bytes      */
         }
+        else if ((top & 0xFFF8u) == 0x4EA8u) {       /* jsr (d16,An) -> computed push+jump
+             * (includes jsr (d16,a6) when a6 is a frame pointer, not the lib base). */
+            unsigned an = top & 7u;
+            int16_t d16 = be16s(thost + 2);
+            uint32_t target = st->a[an] + (uint32_t)(int32_t)d16;
+            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;  /* 4-byte insn */
+            g_stats.calls_pushed++;
+            g_stats.computed_jumps++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if ((top & 0xFFF8u) == 0x4EE8u) {       /* jmp (d16,An) -> computed jump */
+            unsigned an = top & 7u;
+            int16_t d16 = be16s(thost + 2);
+            g_stats.computed_jumps++;
+            pc = st->a[an] + (uint32_t)(int32_t)d16;
+        }
         else if (top == 0x4EB9u) {                   /* jsr abs.l -> push + jump    */
             uint32_t target = be32(thost + 2);
             if (sp_push(sb, st, tpc + 6, errbuf, errlen)) return 1;  /* ret = after the jsr */
             g_stats.calls_pushed++;
             if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
             pc = target;
+        }
+        else if (top == 0x4EBAu) {                   /* jsr (d16,PC) -> push + jump  */
+            /* PRM: the base is the address OF the extension word (tpc + 2). */
+            int16_t d16 = (int16_t)be16(thost + 2);
+            uint32_t target = tpc + 2u + (uint32_t)(int32_t)d16;
+            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;  /* 4-byte insn */
+            g_stats.calls_pushed++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if (top == 0x4EFAu) {                   /* jmp (d16,PC) -> jump         */
+            int16_t d16 = (int16_t)be16(thost + 2);
+            pc = tpc + 2u + (uint32_t)(int32_t)d16;
         }
         else if ((top & 0xFFF8u) == 0x4E90u) {       /* jsr (An) -> computed push+jump */
             unsigned an = top & 7u;

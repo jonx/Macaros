@@ -3,6 +3,9 @@
 How to get started on, or resume, the Rust **`std`** port for darwin-aarch64 AROS.
 For the no_std `[RS0]`/`[RS1]` work and the target spec see [README.md](README.md);
 for design/status see [docs/features/rust-aros](../../docs/features/rust-aros/README.md).
+**Known pal defects + the fix status** (2026-07-02 review: 7 fixed in-tree awaiting
+a rebuild, 7 planned) live in [FIX-PLAN.md](FIX-PLAN.md) — read it before touching
+the pal or trusting `env`/`errno`/`Command::output` semantics under threads.
 
 ## TL;DR — current state (2026-07-01)
 

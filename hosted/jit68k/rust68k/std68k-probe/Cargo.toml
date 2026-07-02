@@ -1,0 +1,16 @@
+[package]
+name = "std68k-probe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+# Same pinned envelope as the no_std corpus (README.md): the LLVM M68k CCR bug is
+# open, so opt-level=1 + two-engine verification; lto prunes std to sandbox size.
+[profile.release]
+panic = "abort"
+opt-level = 1
+debug = false
+lto = true
+codegen-units = 1

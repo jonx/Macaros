@@ -41,6 +41,44 @@
 #define STUB_LVO_ALLOCMEM  33     /* -198 : AllocMem(d0=size, d1=flags) -> d0    */
 #define STUB_LVO_FREEMEM   35     /* -210 : FreeMem(a1=block, d0=size)           */
 
+/* ---- the STUB-DOS LVO set (hosted/rust/STD68K-PLAN.md piece 2) ----------------
+ * Host-POSIX-backed calls so a 68k C runtime (rust68k/libc68k) can offer the
+ * POSIX-ish symbols the Rust std pal uses. OUR numbering (10..21; nothing to be
+ * ABI-compatible with — this is the stub library's own vector table). Conventions:
+ *   - args in d1/d2/d3 (d0 carries the return);
+ *   - returns: >= 0 result, or NEGATIVE errno (NetBSD numbering, which the darwin
+ *     host shares for the classic values the Rust pal decodes);
+ *   - pointers are 68k sandbox addresses, bounds-checked before host access;
+ *   - fds are host fds; 0 reads EOF, 1/2 write to the capture buffer (`out`),
+ *     close(<3) is a no-op — the single-task program cannot hurt the harness;
+ *   - Stat/FStat write a FIXED 20-byte big-endian record at d2:
+ *       u32 kind (0 file, 1 dir, 2 other), u32 size_hi, u32 size_lo,
+ *       u32 mtime_secs, u32 readonly;
+ *   - GetTime writes u32 secs + u32 nanos at d2 (d1: 0 monotonic, 1 realtime). */
+#define STUB_LVO_OPEN      10     /* -60  : Open(d1=path, d2=flags, d3=mode)     */
+#define STUB_LVO_CLOSE     11     /* -66  : Close(d1=fd)                         */
+#define STUB_LVO_READ      12     /* -72  : Read(d1=fd, d2=buf, d3=len)          */
+#define STUB_LVO_WRITE     13     /* -78  : Write(d1=fd, d2=buf, d3=len)         */
+#define STUB_LVO_LSEEK     14     /* -84  : LSeek(d1=fd, d2=off(i32), d3=whence) */
+#define STUB_LVO_DELETE    15     /* -90  : Delete(d1=path)  (unlink)            */
+#define STUB_LVO_MKDIR     16     /* -96  : MkDir(d1=path, d2=mode)              */
+#define STUB_LVO_RMDIR     17     /* -102 : RmDir(d1=path)                       */
+#define STUB_LVO_STAT      18     /* -108 : Stat(d1=path, d2=rec20)              */
+#define STUB_LVO_FSTAT     19     /* -114 : FStat(d1=fd, d2=rec20)               */
+#define STUB_LVO_GETTIME   20     /* -120 : GetTime(d1=which, d2=out8)           */
+#define STUB_LVO_ENTROPY   21     /* -126 : Entropy(d1=buf, d2=len)              */
+
+/* The open-flags wire values (libc68k passes these; the host stub translates to
+ * the host's O_*). Same values the AROS posixc fcntl.h uses, so the Rust pal's
+ * encodings pass through libc68k unchanged. */
+#define STUB_O_RDONLY   0x0001
+#define STUB_O_WRONLY   0x0002
+#define STUB_O_RDWR     0x0003
+#define STUB_O_CREAT    0x0040
+#define STUB_O_EXCL     0x0080
+#define STUB_O_TRUNC    0x0200
+#define STUB_O_APPEND   0x0400
+
 #define STUB_MEMF_CLEAR     1u    /* requirements flag the program passes        */
 
 /* The call log: every dispatched LVO call appends one record so the harness can
@@ -70,10 +108,10 @@ typedef struct {
     stub_call_rec  calls[STUB_MAX_CALLS];
     int            ncalls;
 
-    /* The "print" sink PutChar writes into (so a program's output is observable). Sized to
-     * hold a full screen of program output — the [J5j] Mandelbrot capstone emits 26 rows of
-     * 64 chars + newlines = 1690 bytes; 4096 leaves headroom for larger renders. */
-    char           out[4096];
+    /* The "print" sink PutChar AND stub-DOS Write(fd 1/2) append into (so a program's
+     * output is observable). 1 MiB: std-sized programs print freely; the [J5j]
+     * Mandelbrot's 1690 bytes was the old high-water mark. */
+    char           out[1 << 20];
     int            outlen;
 
     /* Bytes currently allocated (incremented by AllocMem, decremented by FreeMem)

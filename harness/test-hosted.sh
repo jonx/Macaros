@@ -47,6 +47,7 @@ ROWS=(
   "J5r FMOVEM + .x ext format   : hosted-jit68k-j5r"
   "J5s FP exception model       : hosted-jit68k-j5s"
   "apps68k real 68k programs  : hosted-jit68k-apps"
+  "rust68k Rust corpus 2-engine: hosted-jit68k-rust"
   "D1 cocoa/metal present     : hosted-cocoametal"
   "ABI cocoametal dylib seam  : cocoametal-abi"
   "HIDDSIM cocoametal D3 harness : cocoametal-hiddsim"

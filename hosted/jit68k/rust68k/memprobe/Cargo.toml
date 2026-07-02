@@ -1,0 +1,10 @@
+[package]
+name="memprobe"
+version="0.1.0"
+edition="2021"
+[lib]
+crate-type=["staticlib"]
+[profile.release]
+panic="abort"
+opt-level=1
+debug=false

@@ -83,14 +83,60 @@ sub ea_kind {
 #                    M68k_LINE4.c stays BYTE-VERBATIM; only the build-dir copy is patched.
 use strict; use warnings;
 my ($src, $out, @opts) = @ARGV;
-die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge] [--fpu-sandbox] [--libm-asm-fix] [--rmw-sandbox]\n" unless $src && $out;
+die "usage: $0 <src.c> <out.c> [--ea-sandbox] [--movem-sandbox] [--move-no-merge] [--fpu-sandbox] [--libm-asm-fix] [--rmw-sandbox] [--cas-sandbox]\n" unless $src && $out;
 my $ea_sandbox    = grep { $_ eq '--ea-sandbox' } @opts;
 my $movem_sandbox = grep { $_ eq '--movem-sandbox' } @opts;
 my $move_no_merge = grep { $_ eq '--move-no-merge' } @opts;
 my $fpu_sandbox   = grep { $_ eq '--fpu-sandbox' } @opts;     # [J5o] M68k_LINEF.c
 my $libm_asm_fix  = grep { $_ eq '--libm-asm-fix' } @opts;    # [J5o] math/libm.h
 my $rmw_sandbox   = grep { $_ eq '--rmw-sandbox' } @opts;     # [J5u] LINE8/9/B/C/D RMW-to-mem
+my $cas_sandbox   = grep { $_ eq '--cas-sandbox' } @opts;     # [STD68K] EMIT_CAS (M68k_LINE0.c)
 local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close $fh;
+
+# ===================== [STD68K] EMIT_CAS SANDBOX + BYTESWAP =======================
+# Applied to M68k_LINE0.c (--cas-sandbox). Emu68's EMIT_CAS treats the effective
+# address `ea` as a HOST pointer and does raw exclusive loads/stores with no
+# byteswap — both wrong for the little-endian hosted sandbox (whose memory is 68k
+# big-endian and whose data registers hold architectural values). We:
+#   (1) allocate a byteswap scratch `swp` and a host-pointer reg `eah`;
+#   (2) rebase `ea` (a 68k address, and for mode (An) the LIVE mapped An which must
+#       NOT be clobbered) into `eah = base_adjust(x12) + zext32(ea)` right before the
+#       size dispatch — leaving `ea` intact for the alignment checks;
+#   (3) route the CAS macros' memory accesses through `eah`, and REV the .w/.l
+#       loaded value (after) and stored value (into swp, before). Byte is swap-free.
+# Pure call/operand substitution on the quarantined source; disclosed in emu68/NOTICE.
+if ($cas_sandbox) {
+    my $cn = 0;
+    # (1) declare swp + eah next to tmp (the CAS else-branch alloc)
+    $cn += ($code =~ s{(uint8_t tmp = RA_AllocARMRegister\(&ptr\);\n)(\s*/\* Load effective address \*/)}
+        {$1        uint8_t swp = RA_AllocARMRegister(&ptr);   /* [STD68K] byteswap scratch */\n        uint8_t eah = RA_AllocARMRegister(&ptr);   /* [STD68K] host pointer (ea rebased) */\n$2}s);
+    # (2) rebase into eah just before the size dispatch
+    $cn += ($code =~ s{(\n)(        if \(size == 1\)\n        \{\n            CAS_ATOMIC\(\);)}
+        {$1        /* [STD68K] rebase the 68k EA to a host pointer in a SEPARATE reg */\n        *ptr++ = add64_reg_ext(eah, 12, ea, UXTW, 0);\n\n$2}s);
+    # (3a) byteswap the loaded value after the .w/.l exclusive+plain loads
+    $code =~ s{(\*ptr\+\+ = ldxrh\(ea, tmp\);\\\n)}{$1                *ptr++ = rev16(tmp, tmp);\\\n}g and $cn++;
+    $code =~ s{(\*ptr\+\+ = ldxr\(ea, tmp\);\\\n)}{$1                *ptr++ = rev(tmp, tmp);\\\n}g and $cn++;
+    $code =~ s{(\*ptr\+\+ = ldrh_offset\(ea, tmp, 0\);\\\n)}{$1                *ptr++ = rev16(tmp, tmp);\\\n}g and $cn++;
+    $code =~ s{(\*ptr\+\+ = ldr_offset\(ea, tmp, 0\);\\\n)}{$1                *ptr++ = rev(tmp, tmp);\\\n}g and $cn++;
+    # (3b) byteswap the stored value into swp for .w/.l (byte stores unchanged)
+    $code =~ s{\*ptr\+\+ = stlxrh\(ea, du, status\);}{*ptr++ = rev16(swp, du);\\\n                *ptr++ = stlxrh(eah, swp, status);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = stlxr\(ea, du, status\);}{*ptr++ = rev(swp, du);\\\n                *ptr++ = stlxr(eah, swp, status);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = strh_offset\(ea, du, 0\);}{*ptr++ = rev16(swp, du);\\\n                *ptr++ = strh_offset(eah, swp, 0);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = str_offset\(ea, du, 0\);}{*ptr++ = rev(swp, du);\\\n                *ptr++ = str_offset(eah, swp, 0);}g and $cn++;
+    # (3c) route the remaining (byte) accesses + the already-rewritten loads through eah
+    $code =~ s{\*ptr\+\+ = ldxrb\(ea, tmp\);}{*ptr++ = ldxrb(eah, tmp);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = ldxrh\(ea, tmp\);}{*ptr++ = ldxrh(eah, tmp);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = ldxr\(ea, tmp\);}{*ptr++ = ldxr(eah, tmp);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = stlxrb\(ea, du, status\);}{*ptr++ = stlxrb(eah, du, status);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = ldrb_offset\(ea, tmp, 0\);}{*ptr++ = ldrb_offset(eah, tmp, 0);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = ldrh_offset\(ea, tmp, 0\);}{*ptr++ = ldrh_offset(eah, tmp, 0);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = ldr_offset\(ea, tmp, 0\);}{*ptr++ = ldr_offset(eah, tmp, 0);}g and $cn++;
+    $code =~ s{\*ptr\+\+ = strb_offset\(ea, du, 0\);}{*ptr++ = strb_offset(eah, du, 0);}g and $cn++;
+    # (4) free the two new regs alongside the existing CAS frees
+    $cn += ($code =~ s{(        RA_FreeARMRegister\(&ptr, ea\);\n        RA_FreeARMRegister\(&ptr, status\);\n        RA_FreeARMRegister\(&ptr, tmp\);\n)}
+        {$1        RA_FreeARMRegister(&ptr, swp);\n        RA_FreeARMRegister(&ptr, eah);\n}s);
+    warn "darwinize: --cas-sandbox applied $cn edits\n";
+}
 
 # ===================== [J5o] LIBM.H CLANG ASM-CONSTRAINT FIX =====================
 # Applied to math/libm.h only (--libm-asm-fix). Emu68's libm.h provides two tiny inline
@@ -385,9 +431,7 @@ if ($movem_sandbox) {
     # 68k a7 (`sp`) — same bypass as movem, never reached by the hand-written corpus but
     # emitted by the C COMPILER (vbcc): `pea label` (push a string-literal address), and
     # `link`/`unlk` stack frames. These use `sp` + operand names `ea`/`reg`, which are UNIQUE
-    # to EMIT_PEA / EMIT_LINK16/32 / EMIT_UNLK; the control-flow sp sites (RTS/JSR/RTE/RTD/RTR)
-    # push/pop `REG_PC`/`tmp2` and are owned by OUR dispatcher (decoded as terminators, never
-    # emitted here), so they are deliberately NOT matched. Route through the SAME sandbox-aware
+    # to EMIT_PEA / EMIT_LINK16/32 / EMIT_UNLK. Route through the SAME sandbox-aware
     # movem helpers (base-adjust + REV + pre/post index).
     $code =~ s{\*ptr\+\+\s*=\s*str_offset_preindex\(\s*sp\s*,\s*ea\s*,\s*-(\w+)\s*\)\s*;}
               {$mv++; "ptr = j5d_movem_str_pre(ptr, sp, ea, $1); /* [J5m] PEA push: was str_offset_preindex */"}gex;
@@ -395,6 +439,16 @@ if ($movem_sandbox) {
               {$mv++; "ptr = j5d_movem_str_pre(ptr, sp, reg, $1); /* [J5m] LINK push: was str_offset_preindex */"}gex;
     $code =~ s{\*ptr\+\+\s*=\s*ldr_offset_postindex\(\s*sp\s*,\s*reg\s*,\s*(\w+)\s*\)\s*;}
               {$mv++; "ptr = j5d_movem_ldr_post(ptr, sp, reg, $1); /* [J5m] UNLK pop: was ldr_offset_postindex */"}gex;
+
+    # [STD68K] EMIT_JSR's return-address push (`str_offset_preindex(sp, REG_PC, -4)`).
+    # The old assumption "control-flow sp sites are owned by the dispatcher, never
+    # emitted" broke the day gcc emitted `jsr (d16,PC)`: is_terminator() did not know
+    # that form, the block compiler inlined EMIT_JSR, and the raw push wrote to the
+    # RAW 68k a7 as a host address (host SIGSEGV at the 68k stack address). The
+    # dispatcher now DOES decode jsr/jmp (d16,PC) as terminators, but the raw push
+    # stays sandboxed anyway so no future jsr EA form can silently corrupt memory.
+    $code =~ s{\*ptr\+\+\s*=\s*str_offset_preindex\(\s*sp\s*,\s*REG_PC\s*,\s*-4\s*\)\s*;}
+              {$mv++; "ptr = j5d_movem_str_pre(ptr, sp, REG_PC, 4); /* [STD68K] JSR push: was str_offset_preindex */"}gex;
 
     if ($mv) {
         my $decl = "\n/* [J5l] darwinize: movem sandbox-memory helpers (OURS, j5d_ea_helpers.c) */\n"

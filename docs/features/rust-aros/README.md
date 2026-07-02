@@ -163,8 +163,14 @@ support so the pal can drop its private `extern "C"` declarations.
    float bug is the prototype) — shared work, do it once.
 4. **Unwinding/TLS** over AROS — `panic=abort` and FFI sidestep both early; verify
    libunwind + `pthread_key` wiring before relying on them.
-5. **68k Amiga is out of scope** — LLVM's M68k backend is experimental and `m68k`
-   Rust is bleeding-edge no_std only. This targets aarch64 (and trivially x86_64).
+5. **68k: no_std WORKS, std stays out of scope.** Rust `core`+`alloc` compiled for
+   `m68k-unknown-none-elf` runs as hunk executables through the 68k JIT, two-engine
+   verified — the corpus, pipeline, and the open LLVM M68k CCR miscompile it
+   canaries live in [`hosted/jit68k/rust68k/`](../../../hosted/jit68k/rust68k/README.md)
+   (`make hosted-jit68k-rust`). `std` for m68k stays out of scope until there is a
+   real m68k AROS library world to call (see the plan in
+   [`hosted/rust/FIX-PLAN.md`](../../../hosted/rust/FIX-PLAN.md)). This port targets
+   aarch64 (and trivially x86_64).
 
 ## What it unlocks
 
