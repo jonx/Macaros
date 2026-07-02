@@ -1,0 +1,21 @@
+# aarch64-unknown-aros has no getrandom backend upstream; select the "custom"
+# backend and provide __getrandom_v03_custom (see src/getrandom_aros.rs) over
+# posixc arc4random_buf. Applies only to the AROS target, host builds unaffected.
+[target.aarch64-unknown-aros]
+rustflags = ['--cfg', 'getrandom_backend="custom"']
+
+# C code built by cc-rs (blake3 NEON, later SQLite) must follow the AROS C
+# recipe from hosted/rust/std-build.sh: host clang, ELF target triple, large
+# code model, x18 reserved (this code runs inside AROS processes), AROS SDK
+# headers from the canonical /tmp/arosbuild tree (stdc dir for <assert.h> etc.).
+[env]
+CC_aarch64_unknown_aros = "clang"
+# Apple ar silently produces empty archives from ELF objects; use llvm-ar.
+AR_aarch64_unknown_aros = "/tmp/aros-crosstools/bin/llvm-ar"
+# posixc before stdc: POSIX programs resolve <time.h>/<unistd.h> to posixc
+# (which layers over stdc) — that is where localtime_r etc. live.
+# NO_AMIGA_LINKAGE_TYPES: stop exec/types.h defining GLOBAL/IMPORT/STATIC,
+# which collide with SQLite's own GLOBAL(t,v) macro.
+# SQLite on AROS: no mmap (sys/mman.h absent), no WAL (needs shm; feraille-meta
+# falls back to the DELETE journal by design), no load_extension (no dlopen).
+CFLAGS_aarch64_unknown_aros = "--target=aarch64-unknown-none-elf -fno-pic -mcmodel=large -ffixed-x18 -D__arm64__ -DNO_AMIGA_LINKAGE_TYPES -DSQLITE_OMIT_WAL -DSQLITE_MAX_MMAP_SIZE=0 -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION=1 -O2 -I/tmp/arosbuild/bin/darwin-aarch64/gen/include -I/tmp/arosbuild/bin/darwin-aarch64/gen/include/aros/posixc -I/tmp/arosbuild/bin/darwin-aarch64/gen/include/aros/stdc -I/tmp/arosbuild/bin/darwin-aarch64/AROS/Developer/include"

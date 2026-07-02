@@ -1,0 +1,22 @@
+# Track A probe: do Feraille's UI-free crates cross-compile and run on AROS?
+# Stage 1 pulls the pure-logic crates (core + disk-usage); fs-native and meta
+# (rusqlite) join in later stages. Built exactly like ../rust/std-probe.
+[package]
+name = "feraille-core-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+feraille-core = { path = "/Users/user/Source/Feraille/crates/feraille-core" }
+feraille-disk-usage = { path = "/Users/user/Source/Feraille/crates/feraille-disk-usage" }
+feraille-fs-native = { path = "/Users/user/Source/Feraille/crates/feraille-fs-native" }
+feraille-meta = { path = "/Users/user/Source/Feraille/crates/feraille-meta" }
+# Only to name getrandom::Error in the custom-backend hook (getrandom_aros.rs).
+getrandom = "0.4"
+
+[profile.release]
+panic = "abort"
