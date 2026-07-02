@@ -218,7 +218,32 @@ Guest commits (crash-containment): f7fa964f (trap-path fixes), 03e5fdd6
   are hangs, covered by the Phase D watchdog auto-dump.
 - Doc: docs/features/crash-handling/design.md (containment section).
 
-## 11. RESUME HERE -- Phase F/G -- sweeps + full battery
+## 11. Phase F/G: DONE (2026-07-02) -- sweeps + full battery
+
+- **x18: the FULL sweep is clean** (`deploy-check x18`: every module <= 4 refs).
+  16 stale modules rebuilt; compiler-rt long-double builtins fixed surgically
+  (7 objects recompiled from llvmorg-20.1.0 sources with -ffixed-x18 and
+  replaced in /tmp/aros-crosstools/lib/generic/libclang_rt.builtins-aarch64.a;
+  backup = same path + .pre-x18-backup); stdc/cybergraphics/png/tiff relinked;
+  the whole FFView fleet rebuilt from clean ffmpeg sysroots; deploy-check now
+  ignores the benign stp/ldp x18 save/restore pattern (exec baseline).
+- **Battery green:** desktop, resize, clipboard, audio, hostvol, loadmatrix,
+  rust, ffmpeg + the crash matrices. Two harness landmines fixed on the way
+  (rust crosstools path, FF0 flush) -- both were scratchpad-tree relics.
+- **Audio stack restored into /tmp/arosbuild** (it only ever existed in a GC'd
+  scratchpad): recipe now concrete in docs/features/coreaudio-audio/README.md
+  (AHI translations are git submodules; sfdc/flexcat/COMPILER_PATH overrides).
+- **upstream-patches snapshot refreshed** from crash-containment (84 commits).
+
+### Open bugs found (next work)
+- **dos redirected-handle close loses buffered output** (regression, window =
+  the 2026-07-01 upstream merge): `C:FF0Smoke >>MacRW:x` captured nothing
+  while console output was fine; programs that Flush() are unaffected.
+  Repro startup + analysis: see cf7ed6e commit message. Investigate
+  rom/dos buffered IO / Close() flush behavior vs the merge.
+- AHI subsystem build not first-class (recipe is manual, doc'd).
+
+## OLD Phase F/G notes (superseded)
 
 - x18 leftovers sweep: external ports libs (zstd/freetype/png/tiff/jfif/lzma),
   FFView binaries, identify/popupmenu/codesets/expat/gadgets/ilbm (not in the
