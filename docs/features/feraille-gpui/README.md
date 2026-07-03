@@ -48,6 +48,33 @@ separate crates:
   proven. MUI/Zune is not used for the app interior; Zune/theme is only a
   late theming source (system font/pens into `feraille-design` tokens).
 
+## gpui-core dependency port (the real Track-B gate)
+
+Getting `cargo check -p gpui` green for `aarch64-unknown-aros` is the gate before
+the backend crate can compile. Key finding (2026-07-04): **gpui core itself is
+clean** — its only async dependency is `async-task` (pure Rust, no reactor), and
+it builds on our `PlatformDispatcher`, not on `async-io`/`smol`. So **no
+rustix/polling/libc port is needed.** The POSIX reactor/syscall stack enters only
+through two sibling workspace crates:
+
+- `util` → `smol` → `async-io` → `polling`/`rustix`/`errno` (reactor); also
+  `which` (exe discovery) and `dirs`/`dirs_sys` (home dir).
+- `http_client` → `github_download` → `async-tar` → `filetime`/`libc`.
+
+Strategy = **trim, don't port**: gate these off for `target_os = "aros"` (a file
+manager needs no network reactor / tar / exe-PATH search), plus tiny leaf shims
+for the crates gpui pulls directly:
+
+- `stacker` ← `stacksafe` ← gpui (direct; mmap stack growth) — needs a small
+  aros arm/patch.
+- `getrandom` — custom backend cfg (per-version).
+- `dirs_sys` — env-based paths for aros.
+
+Gated so far (fork-local, commented, `cfg(not(target_os="aros"))`): `which`
+(util), `async-tar`+`github_download` (http_client). Remaining: the `smol` gate
+in util + the leaf shims. This is mechanical crate-trimming, ~1-2 days, not the
+multi-week ecosystem port the raw error list first suggested.
+
 ## Cross-build facts (hard-won, reuse them)
 
 All encoded in `hosted/feraille/core-probe/.cargo/config.toml` and
