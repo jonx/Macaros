@@ -60,8 +60,8 @@ not declare in the default include mode: `fdopen`, `mkstemp`, `tempnam`,
 `posix_memalign` behind `_GNU_SOURCE` or `_POSIX_C_SOURCE >= 200112`). `--target-os=none`
 left those macros off, so nothing was visible. The fix is one flag:
 `--extra-cflags=-D_GNU_SOURCE` (it turns the others on, per `aros/features.h`), and the
-build re-runs `configure` with it so its `HAVE_*` matches. Credit to Nick Andrews
-(kalamatee) for the feature-flag diagnosis. One link dep remains: libavutil takes a
+build re-runs `configure` with it so its `HAVE_*` matches. Credit to kalamatee
+for the feature-flag diagnosis. One link dep remains: libavutil takes a
 global mutex, so the smoke links `-lpthread` (AROS `libpthread.a`).
 
 ## Files
