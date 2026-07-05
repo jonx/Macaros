@@ -11,10 +11,12 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-feraille-core = { path = "/Users/user/Source/Feraille/crates/feraille-core" }
-feraille-disk-usage = { path = "/Users/user/Source/Feraille/crates/feraille-disk-usage" }
-feraille-fs-native = { path = "/Users/user/Source/Feraille/crates/feraille-fs-native" }
-feraille-meta = { path = "/Users/user/Source/Feraille/crates/feraille-meta" }
+# Path-deps into a sibling Feraille checkout (../../../../Feraille from this dir).
+# Adjust if your Feraille clone lives elsewhere.
+feraille-core = { path = "../../../../Feraille/crates/feraille-core" }
+feraille-disk-usage = { path = "../../../../Feraille/crates/feraille-disk-usage" }
+feraille-fs-native = { path = "../../../../Feraille/crates/feraille-fs-native" }
+feraille-meta = { path = "../../../../Feraille/crates/feraille-meta" }
 # Only to name getrandom::Error in the custom-backend hook (getrandom_aros.rs).
 getrandom = "0.4"
 

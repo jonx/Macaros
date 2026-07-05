@@ -44,6 +44,14 @@
 
 #include "coreaudio_shim.h"
 
+/* Lifecycle log gate: quiet by default (a clean stderr for release), opt in with
+ * COREAUDIO_DEBUG=1 for start/stop/first-push/volume diagnostics. */
+static int ca_dbg(void) {
+    static int v = -1;
+    if (v < 0) v = (getenv("COREAUDIO_DEBUG") != NULL);
+    return v;
+}
+
 /* ---- ring geometry -------------------------------------------------------- */
 /* One frame = stereo int16 = 2 shorts = 4 bytes. The ring holds `cap` frames in
  * a power-of-two slot array of `cap` frames; head/tail are free-running 32-bit
@@ -278,8 +286,9 @@ int ca_start(CAContext *c) {
     }
 
     c->started = 1;
-    fprintf(stderr, "[CoreAudio] ca_start live=%d rate=%u cap=%u\n",
-            c->liveOutput, c->rateHz, c->cap);
+    if (ca_dbg())
+        fprintf(stderr, "[CoreAudio] ca_start live=%d rate=%u cap=%u\n",
+                c->liveOutput, c->rateHz, c->cap);
 
     pthread_sigmask(SIG_SETMASK, &saved, NULL);
     return 0;
@@ -289,7 +298,8 @@ void ca_stop(CAContext *c) {
     if (!c) return;
     if (c->started && c->liveOutput && c->liveUnit)
         AudioOutputUnitStop(c->liveUnit);
-    fprintf(stderr,
+    if (ca_dbg())
+        fprintf(stderr,
             "[CoreAudio] ca_stop pushed=%lu consumed=%lu underruns=%lu rtAROSCalls=%lu\n",
             atomic_load_explicit(&c->pushed, memory_order_relaxed),
             atomic_load_explicit(&c->consumed, memory_order_relaxed),
@@ -352,8 +362,9 @@ int ca_ring_push(CAContext *c, const short *src, int frames) {
     atomic_fetch_add_explicit(&c->pushed, (unsigned long)n, memory_order_relaxed);
     if (!c->loggedFirstPush && n > 0) {
         c->loggedFirstPush = 1;
-        fprintf(stderr, "[CoreAudio] first ring push frames=%u free_before=%u\n",
-                n, free_frames);
+        if (ca_dbg())
+            fprintf(stderr, "[CoreAudio] first ring push frames=%u free_before=%u\n",
+                    n, free_frames);
     }
     return (int)n;
 }
@@ -372,7 +383,8 @@ void ca_set_global_volume(int percent) {
     if (percent > 100)
         percent = 100;
     atomic_store_explicit(&g_masterVolumePercent, percent, memory_order_relaxed);
-    fprintf(stderr, "[CoreAudio] global volume=%d%%\n", percent);
+    if (ca_dbg())
+        fprintf(stderr, "[CoreAudio] global volume=%d%%\n", percent);
 }
 
 int ca_get_global_volume(void) {

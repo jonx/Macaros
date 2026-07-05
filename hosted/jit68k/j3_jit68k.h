@@ -14,7 +14,7 @@
  *                  macros, builds per-LVO descriptors, and value-asserts args+return.
  *
  * =========================== GROUNDING (the real AROS contracts) ===============
- * Paths below are in the upstream AROS tree /Users/user/Source/aros-upstream (this
+ * Paths below are in the upstream AROS tree ../aros-upstream (this
  * project's source-of-truth for AROS headers; the aros-aarch64 workspace carries
  * the spikes + docs, the full tree lives upstream). All [AROS] facts are cited.
  *

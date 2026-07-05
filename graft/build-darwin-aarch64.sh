@@ -1,54 +1,87 @@
 #!/usr/bin/env bash
-# Reproducible recipe: build AROS for the (new) darwin-aarch64 hosted target on
-# Apple Silicon, as far as the trail has been blazed. Run from anywhere; edit the
-# paths at the top. This is the live-grounded companion to GRAFT.md — every step
-# here was actually run on an M-series Mac (macOS 26, Xcode/clang 21).
+# Build hosted AROS for the darwin-aarch64 target on Apple Silicon.
 #
-# Status reached: configure succeeds, all host tools build, a native-LLVM
-# aarch64-ELF cross-toolchain works, the compiler test passes, and the build
-# COMPILES real AROS source (compiler/alib) for darwin-aarch64 — until it needs
-# AROS's *patched* clang for spec-flags like -noposixc (see GRAFT.md "current wall").
+# This is the real, working recipe (it boots to a Workbench desktop). It is the
+# runnable companion to docs/features/build/README.md — read that doc for the
+# full rationale, the desktop-userland set, and the symptom->cause table.
+#
+# The four rules that save you days (all baked in below):
+#   1. build in a STABLE dir (not a session scratchpad that gets GC'd mid-build)
+#   2. REUSE the cross-toolchain — never rebuild the ~1-2h LLVM from scratch
+#   3. never a bare `make` (it tries to rebuild LLVM and breaks on darwin modules)
+#   4. build module METATARGETS, not the `kernel`/`workbench-libs` aggregates
+#
+# Usage:
+#   graft/build-darwin-aarch64.sh                 # configure + build the boot set
+#   AROS_SRC=../aros-upstream graft/build-darwin-aarch64.sh
+#   PRESERVE_TOOLCHAIN=1 graft/build-darwin-aarch64.sh   # copy crosstools aside after first build
 set -euo pipefail
 
-AROS_SRC="${AROS_SRC:-/Users/user/Source/aros-upstream}"   # checkout w/ the aarch64-darwin-graft branch
-BUILD="${BUILD:-/tmp/arosbuild}"
-XTOOLS="${XTOOLS:-/tmp/aros-xtools}"                       # thin LLVM crosstools
+# --- Paths (override via env) ------------------------------------------------
+AROS_SRC="${AROS_SRC:-../aros-upstream}"   # checkout on branch aarch64-darwin-graft
+BUILD="${BUILD:-/tmp/arosbuild}"           # STABLE build dir (rule 1)
+XT="${XT:-/tmp/aros-crosstools}"           # preserved, reusable crosstools (rule 2)
 LLVM="${LLVM:-/opt/homebrew/opt/llvm/bin}"
-SHIM="${SHIM:-/tmp/graft-tools}"                          # objcopy shim dir
+SHIM="${SHIM:-/tmp/graft-tools}"           # objcopy shim dir
 
-# 1) Host build prerequisites (the chain configure walks, found one error at a time)
-brew install gawk automake autoconf bison flex netpbm libpng gnu-sed >/dev/null || true
+AROS_SRC="$(cd "$AROS_SRC" && pwd)"        # absolutise (configure is picky about relative)
+
+# --- 1) Host prerequisites ---------------------------------------------------
+# One-time; harmless to re-run. `mako` is the genmodule template engine.
+brew install llvm cmake zstd gawk automake autoconf bison flex netpbm libpng gnu-sed >/dev/null || true
 python3 -m pip install mako --break-system-packages -q || true
-mkdir -p "$SHIM"; ln -sf "$LLVM/llvm-objcopy" "$SHIM/objcopy"   # macOS lacks objcopy
 
-# 2) A thin "crosstools": native LLVM, but clang/clang++ retargeted to aarch64 ELF
-#    (not Mach-O) and forced to use lld (Apple ld can't link ELF). The other tools
-#    are arch-agnostic, so symlink them. AROS wants them under <install>/bin with
-#    plain names (target_tool_prefix is empty for the llvm toolchain).
-rm -rf "$XTOOLS"; mkdir -p "$XTOOLS/bin"
-printf '#!/bin/sh\nexec %s/clang --target=aarch64-unknown-none-elf -fuse-ld=lld "$@"\n'   "$LLVM" > "$XTOOLS/bin/clang"
-printf '#!/bin/sh\nexec %s/clang++ --target=aarch64-unknown-none-elf -fuse-ld=lld "$@"\n' "$LLVM" > "$XTOOLS/bin/clang++"
-printf '#!/bin/sh\nexec %s/clang-cpp --target=aarch64-unknown-none-elf "$@"\n'            "$LLVM" > "$XTOOLS/bin/clang-cpp"
-chmod +x "$XTOOLS"/bin/clang "$XTOOLS"/bin/clang++ "$XTOOLS"/bin/clang-cpp
-for t in ld.lld llvm-as llvm-ar llvm-ranlib llvm-nm llvm-strip llvm-objcopy llvm-objdump llvm-mc; do
-    ln -sf "$LLVM/$t" "$XTOOLS/bin/$t"
-done
-
+# macOS has no objcopy; AROS needs one. Expose llvm-objcopy under that name.
+mkdir -p "$SHIM"; ln -sf "$LLVM/llvm-objcopy" "$SHIM/objcopy"
 export PATH="$SHIM:/opt/homebrew/bin:$PATH"
 
-# 3) Configure. NOTE the AROS-style target order is <arch>-<cpu> => darwin-aarch64
-#    (NOT aarch64-darwin — that parses as arch=aarch64, which is rejected).
+# --- 2) Configure ------------------------------------------------------------
+# If a preserved toolchain exists, REUSE it (skips the ~1-2h LLVM build).
+# Otherwise configure builds the AROS-patched clang 20.1.0 from source the first
+# time. --without-x: the display is Cocoa, not X11.
+REUSE_ARGS=()
+if [ -x "$XT/bin/clang" ]; then
+    echo "### reusing preserved crosstools at $XT (no LLVM rebuild)"
+    REUSE_ARGS=(--with-aros-toolchain=yes --with-aros-toolchain-install="$XT")
+else
+    echo "### no preserved crosstools at $XT — the first build compiles clang 20.1.0 (~1-2h, one time)"
+fi
+
 rm -rf "$BUILD"; mkdir -p "$BUILD"; cd "$BUILD"
+# NOTE the AROS target order is <arch>-<cpu> => darwin-aarch64 (NOT aarch64-darwin).
 "$AROS_SRC/configure" \
     --target=darwin-aarch64 \
     --with-toolchain=llvm \
-    --with-aros-toolchain-install="$XTOOLS"
+    --without-x \
+    "${REUSE_ARGS[@]}"
 
-# 4) Build a core metatarget (kernel-exec = exec.library). The default 'make'
-#    target tries to download+build LLVM 11, libcxx, compiler-rt and ACPICA from
-#    source; we don't need that (we supplied a toolchain), and the branch already
-#    drops the ACPICA dependency that otherwise gates everything.
-make kernel-exec
-# (Currently stops at compiler/alib with `clang: error: unknown argument
-#  '-noposixc'` — see GRAFT.md. Next step: AROS's patched-clang crosstools, or
-#  replicate the AROS specs in the clang wrapper.)
+# Preserve the freshly-built toolchain for next time (rule 2).
+if [ "${PRESERVE_TOOLCHAIN:-0}" = 1 ] && [ ! -x "$XT/bin/clang" ]; then
+    TOOLS="$BUILD/bin/darwin-aarch64/tools/crosstools"
+    if [ -x "$TOOLS/bin/clang" ]; then
+        echo "### preserving crosstools -> $XT"
+        cp -a "$TOOLS" "$XT"
+    fi
+fi
+
+# --- 3) Build the boot module set (rules 3 + 4) ------------------------------
+# Explicit metatargets, ONE PER `make` CALL (a mid-run mmake rebuild otherwise
+# staleness the metatarget DB -> "Nothing known about project kernel-kernel").
+# This set boots to a CLI. The full Wanderer desktop needs more userland — see
+# docs/features/build/README.md section 3b.
+TARGETS=(
+    kernel-exec kernel-kernel kernel-dos kernel-dosboot kernel-utility
+    kernel-intuition kernel-graphics kernel-layers kernel-keymap
+    kernel-console kernel-input kernel-keyboard kernel-clipboard
+    kernel-hidd kernel-hidd-cocoa kernel-bootstrap-hosted
+    workbench-libs-stdc workbench-libs-cybergraphics
+)
+for t in "${TARGETS[@]}"; do
+    echo "### make $t"
+    make "$t"
+done
+
+echo
+echo "### done. Boot it from the repo:"
+echo "###   make cocoametal-dylib pasteboard-dylib coreaudio-dylib bsdsock-dylib"
+echo "###   graft/aros-ctl deploy && AROS_CTL_STARTUP_MODE=desktop graft/run-window.sh"

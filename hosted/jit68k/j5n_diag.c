@@ -585,7 +585,7 @@ static void loud_banner(const char *archive_abs, j5n_fault_kind kind)
 {
     const char *bar = "============================================================================";
     fprintf(stderr, "\n%s\n", bar);
-    fprintf(stderr, "  !!  AROS 68k JIT FAULT (%s)  —  a crash bundle was written.\n",
+    fprintf(stderr, "  !!  AROS 68k JIT FAULT (%s)  --  a crash bundle was written.\n",
             j5n_fault_kind_name(kind));
     fprintf(stderr, "  !!  %s\n", archive_abs);
     fprintf(stderr, "  !!  SEND THIS FILE to the developer.\n");

@@ -7,11 +7,12 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
-# Path-deps into the Moonstone workspace (the actual game code, unmodified). This
+# Path-deps into a sibling MoonstoneCS checkout (the actual game code, unmodified),
+# ../../../../MoonstoneCS from this dir. Adjust if your clone lives elsewhere. This
 # crate is its own workspace root (empty [workspace]) so it doesn't join either tree.
 [dependencies]
-moonstone-formats = { path = "/Users/user/Source/MoonstoneCS/ports/rust/crates/moonstone-formats" }
-moonstone-render  = { path = "/Users/user/Source/MoonstoneCS/ports/rust/crates/moonstone-render" }
-moonstone-core    = { path = "/Users/user/Source/MoonstoneCS/ports/rust/crates/moonstone-core" }
+moonstone-formats = { path = "../../../../MoonstoneCS/ports/rust/crates/moonstone-formats" }
+moonstone-render  = { path = "../../../../MoonstoneCS/ports/rust/crates/moonstone-render" }
+moonstone-core    = { path = "../../../../MoonstoneCS/ports/rust/crates/moonstone-core" }
 
 [workspace]

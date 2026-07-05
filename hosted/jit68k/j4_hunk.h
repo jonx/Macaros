@@ -17,7 +17,7 @@
  *                  the executed d0.
  *
  * =========================== GROUNDING (the real AROS contracts) ===============
- * Paths below are in the upstream AROS tree /Users/user/Source/aros-upstream.
+ * Paths below are in the upstream AROS tree ../aros-upstream.
  *
  * (A) Hunk types — compiler/include/dos/doshunks.h:
  *       HUNK_HEADER  1011  (line 28)   HUNK_CODE   1001 (line 15)
