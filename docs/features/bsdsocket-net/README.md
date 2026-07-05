@@ -24,9 +24,8 @@ Proven live, on booted AROS, through this library:
 [DNS] PASS: resolved one.one.one.one -> 1.1.1.1, fetched 'HTTP/1.1 301 ...'
 ```
 
-Screenshots: [roundtrip-proof.png](roundtrip-proof.png) ·
-[waitselect-internet-proof.png](waitselect-internet-proof.png) ·
-[dns-proof.png](dns-proof.png) · [library-load-proof.png](library-load-proof.png).
+Screenshots of each verdict are regenerated locally by the smoke run
+(`aros-ctl shot`; kept out of the repo).
 
 ## Quick start
 

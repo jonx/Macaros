@@ -253,7 +253,8 @@ is what spike [G1] settles before anything else is built.**
     transparent on all four sides; **corner radius** 185.4px (= 0.225 × 824), continuous
     (squircle) corners. Our current icns uses a circular-arc approximation of that radius;
     indistinguishable at Dock sizes.
-  - **Regenerate** all three assets from the raw art (`Macaros-source.png`) with
+  - **Regenerate** all three assets from the raw art (`Macaros-source.png`,
+    kept out of the repo; pass any source image as `$1`) with
     `hosted/cocoametal/make-macaron-icon.sh` (then `make cocoametal-dylib`). The script is
     the canonical pipeline — white-background flood-fill, the 824-tile Apple mask, the icns,
     and the base64 embed — and documents the two ImageMagick traps (a Gray-colorspace mask

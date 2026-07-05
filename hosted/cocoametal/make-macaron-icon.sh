@@ -1,7 +1,8 @@
 #!/bin/sh
 # make-macaron-icon.sh — build the Macaros app-icon assets from the source image.
 #
-# Input : Macaros-source.png  (the raw AI-generated macaron, opaque white background)
+# Input : Macaros-source.png  (the raw macaron artwork, opaque white background;
+#         kept out of the repo — the derived 1024 master + icns are committed)
 # Output: (written next to this script, in hosted/cocoametal/)
 #   Macaros-1024.png   macOS-spec master (transparent squircle)
 #   Macaros.icns       multi-resolution icon for the .app (CFBundleIconFile)
