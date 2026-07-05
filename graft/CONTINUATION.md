@@ -1,7 +1,9 @@
-# CONTINUATION — darwin-aarch64 AROS (state as of 2026-06-25)
+# CONTINUATION — darwin-aarch64 AROS bring-up record (2026-06-25)
 
-Precise hand-off so the next session resumes without re-deriving anything.
-Read `graft/WORKFLOW.md` and `graft/UPSTREAM-NOTES.md` for the broader map.
+A point-in-time record of how the port reached an interactive Shell, kept for
+its diagnostic detail (later docs cite it by commit). The current build recipe
+is `docs/features/build/README.md`; the broader map is `graft/WORKFLOW.md` and
+`graft/UPSTREAM-NOTES.md`.
 
 ## Headline
 
@@ -157,11 +159,14 @@ its own). The `expect` pty harness shows an immediate-EOF teardown quirk on the
 controlling tty (a raw `openpty` slave polls not-ready correctly), so a live
 Terminal.app session is best confirmed by hand; the mechanism is proven via pipe.
 
-## Build / run environment (ephemeral!)
+## Build / run environment
 
-- Build dir: `/private/tmp/claude-501/-Users-user-Source-aros-aarch64/<session>/scratchpad/arosbuild`
-  (under `/private/tmp`, may be cleared on reboot). If gone, the AROS branch +
-  these notes are the source of truth; rebuild crosstools + configured build dir.
+> Historical note: at the time this was written the build lived in an
+> ephemeral scratch dir that could vanish between sessions. The build has
+> since moved to the stable `/tmp/arosbuild` (crosstools in
+> `/tmp/aros-crosstools`); see `docs/features/build/README.md`. If a build
+> tree is gone, the AROS branch + these notes are the source of truth;
+> rebuild crosstools + the configured build dir.
 - Boot dir: `…/AROS/boot/darwin`. Confs there: `AROSBootstrap.conf` (plain) and
   `AROSBootstrap.sysdbg.conf` (+ `arguments sysdebug=…`). Both now list
   `…/Devs/Drivers/unixio.hidd`.

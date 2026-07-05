@@ -20,9 +20,9 @@ gray screen. The crash bugs are all fixed (window opens, mouse + keyboard reach
 the OS with no crashes, file-I/O fixed, close→quit). This doc is the one
 remaining issue: **getting what AROS actually renders to appear in the window.**
 
-You cracked the keyboard fault line fast last time — this is the same flavor of
-problem (a contract mismatch between the hosted driver and the AROS core), so I'm
-handing it over with the exact evidence rather than more of my guesses.
+This is the same flavor of problem as the earlier keyboard fault line (a
+contract mismatch between the hosted driver and the AROS core), so this doc
+records the exact evidence rather than guesses.
 
 ---
 

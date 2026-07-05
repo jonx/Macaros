@@ -2,7 +2,7 @@
 
 A map of the whole process of porting AROS (the open-source AmigaOS) to a
 **hosted `darwin-aarch64`** target — i.e. AROS running as a normal process on a
-modern Apple-Silicon Mac. It's meant for the next person (or the next session):
+modern Apple-Silicon Mac. It's meant for the next person picking this up:
 follow the arrows top-to-bottom, and the **green** boxes are already done.
 
 > **Status: AROS boots to a Wanderer desktop on Apple Silicon.** The native `AROSBootstrap`
