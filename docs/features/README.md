@@ -61,8 +61,8 @@ one-look summary. Verified against the code, not just the docs.)
 ## Quick index — every folder, one line
 
 <!-- MAINTENANCE: keep this table in sync with the docs/features/ folders, same
-     turn you add/remove/rename one. One row per folder: name · one-line · entry
-     file (README.md, else design.md). See the repo-root CLAUDE.md. -->
+     change you add/remove/rename one. One row per folder: name · one-line · entry
+     file (README.md, else design.md). A folder missing from this index is a bug. -->
 
 > **Before you build or run anything**, read [build](build/README.md) (never a
 > bare `make` — build module metatargets in a stable dir) and
