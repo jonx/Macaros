@@ -8,7 +8,7 @@
 
 ## 1. Fixes ALREADY APPLIED (in-tree, need a rebuild + test pass to verify)
 
-Applied to the working trees (this repo + `/Users/user/Source/rust-aros`), not yet
+Applied to the working trees (this repo + `../rust-aros`), not yet
 compiled: verify with `./x check library/std --target aarch64-unknown-aros` in
 rust-aros, then rebuild std and rerun the RS harnesses on the booted AROS.
 Reminder for any rebuild: the OS/world is built `-ffixed-x18` and the target JSON

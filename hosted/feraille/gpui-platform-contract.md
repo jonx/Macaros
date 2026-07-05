@@ -1,6 +1,6 @@
 # GPUI platform backend contract (rev 1d217ee) — recon for gpui_aros
 
-Verified against /Users/user/Source/zed-aros (branch aros-platform). Summary of
+Verified against ~/Source/zed-aros (branch aros-platform). Summary of
 what a new backend must implement; the authoritative source is the code.
 
 Key findings:

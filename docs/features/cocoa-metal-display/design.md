@@ -1,6 +1,6 @@
 # Cocoa/Metal display HIDD — a live macOS window for AROS
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - the live Cocoa/Metal window is the AROS display; ~15 cocoametal-* targets + cocoametal-dylib. · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > **Decision (confirmed):** Apple-native — AppKit + Metal, CoreGraphics for readback.
 > **No** SDL / OpenGL / MoltenVK. Implementation spec: [spec.md](spec.md).
 > **Frozen AROS↔host contract (build against this): [INTERFACE.md](INTERFACE.md)** —
@@ -32,7 +32,7 @@ window. See "The unattended-verification tension".
 
 ## Does it already exist?
 
-No. Verified by search over `/Users/user/Source/aros-upstream`:
+No. Verified by search over `../aros-upstream`:
 
 - `grep -rliE "cocoa|cametallayer|nswindow|mtkview|metalkit"` returns **only**
   `arch/all-ios/hidd/uikit/uikit_hiddclass.c` and `.../eventtask.c` — the **iOS
@@ -44,8 +44,8 @@ No. Verified by search over `/Users/user/Source/aros-upstream`:
   hidd) and two WirelessManager host drivers (`driver_osx.m`,
   `driver_iphone.m`) — none is a display HIDD for hosted macOS.
 - The hosted display HIDDs present are exactly two:
-  `/Users/user/Source/aros-upstream/arch/all-hosted/hidd/sdl/` and
-  `/Users/user/Source/aros-upstream/arch/all-hosted/hidd/x11/`. Confirmed by
+  `../aros-upstream/arch/all-hosted/hidd/sdl/` and
+  `../aros-upstream/arch/all-hosted/hidd/x11/`. Confirmed by
   `ls arch/all-hosted/hidd/` → `{sdl, x11}`.
 
 So a native Cocoa/AppKit + Metal display HIDD is genuinely new. (The iOS UIKit
@@ -92,11 +92,11 @@ exists in the tree — and the only Apple-family HIDD shape to mine is iOS UIKit
 A display driver is an OOP subclass tree registered with graphics.library. The
 authoritative interface definition — every method ID, attribute tag, interface-ID
 string and stub macro — is one file:
-**`/Users/user/Source/aros-upstream/rom/hidds/gfx/gfx.conf`** (genmodule generates
+**`../aros-upstream/rom/hidds/gfx/gfx.conf`** (genmodule generates
 the `<interface/Hidd_*.h>` headers from it; the public umbrella is
-`/Users/user/Source/aros-upstream/rom/hidds/gfx/include/gfx.h` = `<hidd/gfx.h>`).
+`../aros-upstream/rom/hidds/gfx/include/gfx.h` = `<hidd/gfx.h>`).
 Base-class implementations:
-`/Users/user/Source/aros-upstream/rom/hidds/gfx/gfx_hiddclass.c` (graphics class)
+`../aros-upstream/rom/hidds/gfx/gfx_hiddclass.c` (graphics class)
 and `.../gfx_bitmapclass.c` (bitmap class).
 
 **Two classes to subclass:**
@@ -168,7 +168,7 @@ init-only tag lists and passes them to the superclass:
   (`gfx.conf:343–345`).
 
 The SDL driver is the cleanest worked example of building these:
-`/Users/user/Source/aros-upstream/arch/all-hosted/hidd/sdl/sdlgfx_hiddclass.c`
+`../aros-upstream/arch/all-hosted/hidd/sdl/sdlgfx_hiddclass.c`
 (`SDLGfx__Root__New`, lines ~88–284) maps the host's reported format to a
 `vHidd_StdPixFmt_*` and emits the pixfmt + per-mode sync taglists.
 
@@ -461,7 +461,7 @@ In-project:
 - `graft/WORKFLOW.md`, `graft/UPSTREAM-NOTES.md`, `graft/bootrun.sh` — the
   boot/run harness this driver plugs into.
 
-AROS upstream (`/Users/user/Source/aros-upstream/`):
+AROS upstream (`../aros-upstream/`):
 - `rom/hidds/gfx/gfx.conf` — authoritative HIDD interface (methods, attrs, IIDs,
   stub macros).
 - `rom/hidds/gfx/include/gfx.h` — `<hidd/gfx.h>`: `CLID_*`/`IID_*` aliases,

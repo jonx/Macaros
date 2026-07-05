@@ -1,6 +1,6 @@
 # Printing — host-backed output for AROS (printer.device / PRT: via CUPS)
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the print-to-PDF host engine (hosted/printing/, [PRPDF]) is built and green (real text+raster PDFs); the AROS printer.device driver is blocked at [PR0] (printertag.h #errors on aarch64). · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 ## What & why
 
@@ -39,7 +39,7 @@ doc — are two:
 ## Does it already exist?
 
 **On the AROS side: almost entirely — the stack is there, only the macOS backend is
-missing.** Evidence (all `/Users/user/Source/aros-upstream`):
+missing.** Evidence (all `../aros-upstream`):
 
 - **The generic spooler.** `workbench/devs/printer/` builds `printer.device`
   (`mmakefile.src` `files = printer driver prefs gfx text`,
@@ -87,7 +87,7 @@ missing.** Evidence (all `/Users/user/Source/aros-upstream`):
   unattended exercisers.
 
 **On the macOS side: nothing exists in this repo.**
-`grep -rniE 'cups|cupsfilter|libcups|printer' /Users/user/Source/aros-aarch64/hosted`
+`grep -rniE 'cups|cupsfilter|libcups|printer' hosted`
 returns nothing; there is no `libcups_shim.dylib`, no `cups.device`, no STATUS gadget.
 The host shims that exist (`hosted/coreaudio/`, `hosted/clipboard/`,
 `hosted/bsdsocket/`, `hosted/cocoametal/`) are the pattern to mirror, not printing.
@@ -500,7 +500,7 @@ dimensions) — the print analogue of audio's known sine.
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - Spooler: `workbench/devs/printer/printer.c` (system device, no-op commands
   :109–113), `driver.c` (`Printer_Unit` LoadSeg+magic :740–757, `pd_DriverTask`
   :526–667, `pd_PWrite`→`CMD_WRITE` :218–242, `pd_Init` opens `<PrtDevName>.device`
@@ -534,7 +534,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
 - Host-symbol mechanism: `arch/all-unix/bootstrap/hostlib.h`
   (`Host_HostLib_Open`/`GetPointer`), `arch/all-hosted/hostlib/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - `hosted/coreaudio/{coreaudio_shim.c,.h,coreaudio.exports}` + `Makefile`
   (`coreaudio-dylib`/`coreaudio-abi`) — the dylib-shim pattern to mirror;
   `hosted/cocoametal/abi_test.c:13–21` (the `hostlib.resource` load path);

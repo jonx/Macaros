@@ -330,9 +330,9 @@ spec.md Risks "Endianness / 32-bit sandbox".
   the bridge (§3), replacing the stub `exec`.
 - The sandbox-backed allocator + the return-pointer-outside-sandbox case (§5).
 - The host-signal→`j5d_raise_exception` wiring (§4) in the integrated runtime.
-- A **real Amiga app** (vs the corpus) — gated on the boot reaching `dos.library`
-  (NOTES.md: the boot halts at a cold-start trap, no `dos.library` in the minimal
-  3-module kickstart).
+- A **real Amiga app** (vs the corpus) — the boot now reaches `dos.library` (hosted
+  AROS boots to a Wanderer desktop; root README, `graft/WORKFLOW.md`), so this is no
+  longer gated on bring-up; it remains to be exercised through the integrated runtime.
 
 **Honest engine scope (beyond this seam):** the engine is integer-user-mode, single-
 region-flat-PC-plus-return-stack, single-thread (R-JIT-THREAD). Still deferred:

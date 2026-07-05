@@ -47,9 +47,9 @@ crossing that boundary safely.
 **Partly — the *outbound* skeleton exists; CoreMIDI and the *inbound* path do not.**
 
 - This repo: `grep -rniE 'coremidi|camd|MIDIClient|MIDIReceived|MIDIPacket'` over
-  `/Users/user/Source/aros-aarch64` returns nothing. No CoreMIDI shim, no MIDI work.
+  `.` returns nothing. No CoreMIDI shim, no MIDI work.
 - Upstream: `grep -rniE 'coremidi|MIDIClientCreate|MIDIReceived'` over
-  `/Users/user/Source/aros-upstream` returns nothing — AROS has never had a macOS
+  `../aros-upstream` returns nothing — AROS has never had a macOS
   MIDI backend.
 - Upstream **does** ship every piece we mirror or reuse:
   - the whole router: `workbench/libs/camd/` (clusters, links, the inbound parser
@@ -491,7 +491,7 @@ PASS/FAIL covers "right bytes, right order, right framing, no drops".
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - Driver contract: `compiler/include/midi/camddevices.h` (`MidiDeviceData`,
   `MidiPortData`, `MDD_Magic` :62), `compiler/include/midi/camd.h`
   (`MidiMsg`/`MidiNode`/`MidiCluster`/`MidiLink`, `CMEF_*`),
@@ -519,7 +519,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
 - Host-symbol mechanism: `arch/all-unix/bootstrap/hostlib.h`
   (`Host_HostLib_Open`/`GetPointer`), `arch/all-hosted/hostlib/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - Sibling feature: `docs/features/coreaudio-audio/{design.md,spec.md,README.md}`
   (the host-thread-callback boundary precedent, the SPSC R-RT/R-RING rules, the
   shim shape), `hosted/coreaudio/{coreaudio_shim.c,coreaudio_shim.h}`.

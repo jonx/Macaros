@@ -37,9 +37,9 @@ No CoreAudio/AudioToolbox backend exists, in this repo or upstream. Evidence:
 - This repo: the hosted spikes are `hosted/*.c` (H1–H12: foundation, ABI shim,
   scheduler, memory, display, library, signal, msgport, device, execboot). None
   touch audio. `grep -rniE 'coreaudio|audiotoolbox|audiounit|audioqueue|AHIsub|ahi'`
-  over `/Users/user/Source/aros-aarch64` returns nothing.
+  over `.` returns nothing.
 - Upstream: `grep -rIn -i 'coreaudio|audiotoolbox|audiounit|audioqueue|auhal'` over
-  `/Users/user/Source/aros-upstream` returns **only** unrelated USB-audio-class hits
+  `../aros-upstream` returns **only** unrelated USB-audio-class hits
   — `struct NepAudioUnit` in `rom/usb/classes/audio/usbaudio.h` (a USB descriptor
   type, nothing to do with Apple's AudioUnit). So AROS has never had a macOS audio
   backend.
@@ -459,7 +459,7 @@ rate, right channels, no dropouts".
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - AHI sub-driver interface: `workbench/devs/AHI/Include/SFD/ahi_sub_lib.sfd`,
   `workbench/devs/AHI/Include/C/libraries/ahi_sub.h` (`struct AHIAudioCtrlDrv`,
   `AHISF_*`, `ahiac_MixerFunc`/`PlayerFunc`/`BuffSamples`/`BuffSize`/`MixFreq`).
@@ -482,7 +482,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
 - Host-symbol mechanism: `arch/all-unix/bootstrap/hostlib.h`
   (`Host_HostLib_Open`/`GetPointer`), `arch/all-hosted/hostlib/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - `NOTES.md` — H3 (Apple variadic ABI / `hosted/abishim.S`), H4/H6 (scheduler,
   single-thread `Forbid` barrier), H7 (render-to-PNG unattended-verify stance),
   H9/H10 (Wait/Signal, message ports), H11 (`hosted/device.c` — IORequest → device

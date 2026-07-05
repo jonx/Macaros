@@ -1,6 +1,6 @@
 # processor.resource (darwin/AArch64) — host-sourced CPU identity, features, topology & load
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the host CPU shim (hosted/hostcpu/) is built, green and tested (cp_abi_test); the AROS-side processor.resource arch backend is the remaining graft step. · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 ## What & why
 
@@ -74,7 +74,7 @@ same number:
 
 **No darwin/AArch64 `processor.resource` backend exists** — in this repo or upstream.
 
-In-tree arch backends (`/Users/user/Source/aros-upstream/arch/*/processor/`):
+In-tree arch backends (`../aros-upstream/arch/*/processor/`):
 
 - `arch/all-pc/processor/` — the **full-replacement** pattern: its own
   `getcpuinfo.c` (a complete `GetCPUInfo` LVO reading a CPUID-derived
@@ -488,7 +488,7 @@ Markers are unique per spike so a regression localises (the `[M*]`/`[H*]`/`[A*]`
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - Generic resource: `rom/processor/{getcpuinfo.c (GetCPUInfo LVO :23, stub model
   :160 / load :195 / speed :192, feature-range :146), init.c (cpucount :21),
   processor_intern.h (struct ProcessorBase + Private1 :20-26), defaults.h
@@ -514,7 +514,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   arm64` :~10905). Host-symbol mechanism: `arch/all-unix/bootstrap/hostlib.h`,
   `arch/all-hosted/hostlib/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - The host-call memory ("Calling host libc from AROS: hostlib.resource →
   HostLib_Open('libSystem.dylib') → sysctlbyname"); `hosted/abishim.S` (variadic
   shim — *not* needed for non-variadic `sysctlbyname`); the flat-C-ABI dylib pattern

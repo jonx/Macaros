@@ -37,7 +37,7 @@ build/run loop live in [hosted/rust/STD-PORT.md](../../../hosted/rust/STD-PORT.m
 this page is the design/why.
 `std` is brought up the upstream way: a fresh `sys/*/aros.rs` per module calling
 `posixc`/`bsdsocket`/`pthread` directly, developed in a **local rust clone**
-(`/Users/user/Source/rust-aros`, not pushed) so it is PR-able to rust-lang/rust later.
+(`../rust-aros`, not pushed) so it is PR-able to rust-lang/rust later.
 
 ## Goal
 
@@ -125,7 +125,7 @@ of Rust's platform layer, but every piece it needs already exists in some form.
 `std` is brought up the **upstream way** so it can become a rust-lang/rust PR: a
 fresh `sys/pal/aros` that calls `posixc` directly (no `libc`-crate AROS support
 needed yet), developed in a **local clone of the Rust std source**
-(`/Users/user/Source/rust-aros` — the toolchain's `rust-src` for
+(`../rust-aros` — the toolchain's `rust-src` for
 `nightly-2026-06-27`, git-tracked, symlinked into the toolchain so `-Zbuild-std`
 builds from it). **Not pushed**, kept local until ready.
 

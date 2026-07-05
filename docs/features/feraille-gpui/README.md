@@ -10,7 +10,7 @@ roundtrip). Probe + link recipe: [`hosted/feraille/`](../../../hosted/feraille/)
 ## Goal
 
 Run [Feraille](https://github.com/jonx/Feraille) (the GPUI file manager,
-local checkout `/Users/user/Source/Feraille`, branch `aros-port`) natively on
+local checkout `~/Source/Feraille`, branch `aros-port`) natively on
 darwin-aarch64 AROS, with the native AROS look. **Nothing is pushed to any
 upstream** (zed, Feraille, rust) until the port is presentable; all work is
 local.
@@ -23,7 +23,7 @@ use at Feraille's pinned zed rev (`1d217ee`), where platform backends are
 separate crates:
 
 - **`gpui_aros`** — new crate in the local zed fork
-  (`/Users/user/Source/zed-aros`, branch `aros-platform`), plus one
+  (`~/Source/zed-aros`, branch `aros-platform`), plus one
   `cfg(target_os = "aros")` arm in `gpui_platform::current_platform()`.
   Feraille's `aros-port` branch redirects the zed git deps to this fork via
   `[patch]`.
@@ -100,9 +100,9 @@ All encoded in `hosted/feraille/core-probe/.cargo/config.toml` and
 | Piece | Where |
 |---|---|
 | Stage-1 probe (crates + harness + build) | `hosted/feraille/` |
-| GPUI fork (gpui_aros) | `/Users/user/Source/zed-aros` @ `aros-platform` |
-| Feraille app branch | `/Users/user/Source/Feraille` @ `aros-port` |
-| Rust std pal | `/Users/user/Source/rust-aros` ([rust-aros](../rust-aros/README.md)) |
+| GPUI fork (gpui_aros) | `~/Source/zed-aros` @ `aros-platform` |
+| Feraille app branch | `~/Source/Feraille` @ `aros-port` |
+| Rust std pal | `../rust-aros` ([rust-aros](../rust-aros/README.md)) |
 
 ## Milestones
 

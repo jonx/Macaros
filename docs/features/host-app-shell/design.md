@@ -1,6 +1,6 @@
 # Host app shell — making the AROS window a first-class Mac app
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-26
+> Status: built - the Macaros first-class Mac app (menu bar, About, icon, schema-driven Settings) ships; packaged by graft/make-aros-app.sh, Settings built into the cocoametal dylib. · Target: aarch64-darwin hosted · Drafted 2026-06-26
 > Scope: the **macOS application frontend** around the existing Cocoa/Metal window —
 > *not* the AmigaDOS Shell. Implementation spec: [spec.md](spec.md).
 > Builds directly on [../cocoa-metal-display/](../cocoa-metal-display/design.md) and is

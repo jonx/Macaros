@@ -1,6 +1,6 @@
 # Native modules — disk-loadable AArch64 AROS code under W^X
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the native W^X LoadSeg path is largely landed in the AROS tree (commit 71f75760); darwin verify-and-reconcile pending · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 ## What & why
 

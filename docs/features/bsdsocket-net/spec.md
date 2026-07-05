@@ -536,12 +536,12 @@ rather than a Windows event object `[AROS]`/`[OURS]`.
 - **Host-call crossing.** Every libc socket call and every pump libc call crosses the H3
   shim (`hosted/abishim.S`, `hosted/host.c`); resolve libc symbols via `hostlib.resource`
   (`arch/all-hosted/hostlib/`).
-- **Where it slots in the boot.** Today's boot is a minimal 3-module kickstart that halts at
-  a cold-start trap before `dos.library` (`graft/WORKFLOW.md`). `bsdsocket.library` is a
-  normal (non-resident) disk-based library — it loads **after** the `dos.library` bring-up
-  (WORKFLOW item F2/23), not before. The feature is designed/grounded now; it lands after the
-  cold-start walk. Spike-phase ([N1]–[N4]) runs against the standalone `hosted/` scaffold
-  (no kickstart dependency), exactly as `hosted/device.c` does for H11.
+- **Where it slots in the boot.** Hosted AROS now boots the full module set and `dos.library`
+  to a Wanderer desktop (`graft/WORKFLOW.md`, root README), so this no longer gates on
+  bring-up. `bsdsocket.library` is a normal (non-resident) disk-based library — it loads
+  **after** the `dos.library` bring-up (WORKFLOW item F2/23). The feature is designed/grounded;
+  it lands on top of the booted OS. Spike-phase ([N1]–[N4]) runs against the standalone `hosted/`
+  scaffold (no kickstart dependency), exactly as `hosted/device.c` does for H11.
 - The AROS side pulls **no** macOS socket headers (it uses AROS's `sys/socket.h` etc.); the
   host calls are reached only as opaque libc function pointers through hostlib + the H3 shim.
 

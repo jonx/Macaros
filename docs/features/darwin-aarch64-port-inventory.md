@@ -345,8 +345,8 @@ Source areas:
 
 - `docs/features/bsdsocket-net/`
 - `hosted/bsdsocket/` in this repository
-- `/Users/user/Source/aros-upstream/arch/all-unix/bsdsocket/`
-- `/Users/user/Source/aros-upstream/workbench/network/`
+- `../aros-upstream/arch/all-unix/bsdsocket/`
+- `../aros-upstream/workbench/network/`
 - `arch/all-unix/devs/networks/` for the separate SANA-II / native-stack path.
 
 What exists:
@@ -406,7 +406,7 @@ What exists:
 - Linux/PulseAudio/ALSA-style hosted bridge patterns exist.
 - The Mac-side CoreAudio shim exists in `hosted/coreaudio/`.
 - The AROS-side `CoreAudio` AHI sub-driver exists under
-  `/Users/user/Source/aros-upstream/workbench/devs/AHI/Drivers/CoreAudio/`.
+  `../aros-upstream/workbench/devs/AHI/Drivers/CoreAudio/`.
 - `DEVS:AudioModes/COREAUDIO` registers the `coreaudio` mode.
 - `C:AHISmoke` opens `ahi.device`, allocates mode `0x00450002`, and plays a
   generated tone through CoreAudio.

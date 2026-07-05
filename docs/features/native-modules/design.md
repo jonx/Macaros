@@ -1,6 +1,6 @@
 # Native modules — disk-loadable AArch64 AROS code under W^X executable memory
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the native W^X LoadSeg path is largely landed in the AROS tree (commit 71f75760); darwin verify-and-reconcile pending · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 > **The W^X executable-memory layer is a SHARED foundation with the 68k JIT.** Its
 > host primitives + the per-thread toggle discipline are owned by `[J1]` in
@@ -44,7 +44,7 @@ policy" / "MAP_JIT/W^X allocation layer" as the deferred item LoadSeg needs.
 stated honestly:** a substantial native-LoadSeg W^X path is *already implemented in this
 project's `aros-upstream` checkout* (the work-tree, not stock AROS), and the design
 below is largely about *verifying* and *reconciling* it, not building it from nothing.
-Concretely, all `/Users/user/Source/aros-upstream` and attributed to this project's
+Concretely, all `../aros-upstream` and attributed to this project's
 commits `71f75760` / the all-unix kernel additions:
 
 - **The native ELF loader already requests executable memory.**
@@ -517,7 +517,7 @@ Honest debt — and most of the *mechanism* is already in-tree, so the risk is c
 
 ## References
 
-Every cited path is under `/Users/user/Source/aros-upstream` unless noted.
+Every cited path is under `../aros-upstream` unless noted.
 
 - `rom/dos/internalloadseg.c` — loader dispatch by magic (`0x7f454c46` ELF /
   `0x000003f3` AOS), `:85-115`.
@@ -562,7 +562,7 @@ Every cited path is under `/Users/user/Source/aros-upstream` unless noted.
 - `workbench/libs/camd/openmididevice.c` — camd's `LoadSeg` + seglist-scan driver
   discovery (the MIDI dependent-feature gate, `:70-155`).
 
-Working-repo references (`/Users/user/Source/aros-aarch64`):
+Working-repo references (`.`):
 - `hosted/jit68k/jit_region.{h,c}` — the `[J1]` `MAP_JIT` W^X layer (the SHARED
   foundation): `mmap MAP_JIT` (`jit_region.c:37-40`), `pthread_jit_write_protect_np`
   toggle (`:58-68`), `sys_icache_invalidate` (`:76`).

@@ -83,7 +83,7 @@ low-level port done (kernel/exec/host), the **upper layers are pure recompiles**
 
 ## The "solve memory once and for all" work — DONE & committed
 
-Branch `aarch64-darwin-graft` of `/Users/user/Source/aros-upstream` (LOCAL ONLY).
+Branch `aarch64-darwin-graft` of `../aros-upstream` (the jonx/AROS fork).
 
 - `4911e214` **real KrnAllocPages/KrnFreePages for hosted ports.** The hosted
   `KrnAllocPages` resolved to generic `rom/kernel/allocpages.c` (MMU page DB that

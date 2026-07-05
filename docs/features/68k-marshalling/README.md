@@ -235,7 +235,7 @@ data and rules the engine already declared it needs:
 
 ## References
 
-Grounded in the upstream tree (`/Users/user/Source/aros-upstream`) unless noted.
+Grounded in the upstream tree (`../aros-upstream`) unless noted.
 
 - [rom/exec/exec.conf:106](../../../../aros-upstream/rom/exec/exec.conf) — the
   source-of-truth line: `APTR AllocMem(IPTR byteSize, ULONG requirements) (D0, D1)`

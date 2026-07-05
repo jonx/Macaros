@@ -85,7 +85,7 @@ CoreAudio. No third-party implementation is consulted; resemblance is coincident
 
 AHI exposes **three** distinct "volume" notions. Only one is the right master control
 point; the other two are wrong for a global desktop slider. All paths verified in
-`/Users/user/Source/aros-upstream`.
+`../aros-upstream`.
 
 ### (a) Per-channel `AHI_SetVol` — NOT the control point
 
@@ -422,7 +422,7 @@ numeric oracles, both reused:
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - AHI public API: `workbench/devs/AHI/Include/SFD/ahi_lib.sfd`
   (`AHI_SetEffect` :31, `AHI_SetVol` :26, `AHI_AllocAudioA` :14, `AHI_Play` :56).
 - Master-volume effect struct + effect codes:
@@ -450,7 +450,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   `workbench/tools/commodities/Exchange.c` (the broker-list app precedent),
   `compiler/include/workbench/workbench.h:294` (`AddAppIconA` tags — the rejected option).
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - The CoreAudio shim to extend: `hosted/coreaudio/coreaudio_shim.{c,h}`
   (`ca_make_output_unit(kAudioUnitSubType_DefaultOutput,…)` :228, `ca_enable_live_output`
   :245, the `ca_*` ABI), `hosted/coreaudio/coreaudio.exports` (add the two new symbols).

@@ -1,6 +1,6 @@
 # Implementation spec — CUPS-backed AROS printing (printer.device → macOS)
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - print-to-PDF host engine built and green ([PRPDF]); AROS printer.device driver blocked at [PR0] · Target: aarch64-darwin hosted · Drafted 2026-06-28
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 ## Provenance banner

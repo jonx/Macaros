@@ -1,6 +1,6 @@
 # Clipboard bridge — NSPasteboard ↔ AROS clipboard.device
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - two-way NSPasteboard <-> clipboard.device, verified end-to-end. · Target: aarch64-darwin hosted · Drafted 2026-06-24
 
 ## What & why
 
@@ -26,12 +26,12 @@ No. Evidence:
 
 - No host clipboard glue in this repo. `grep -rniE
   'NSPasteboard|pbpaste|pbcopy|generalPasteboard|clipboard'` over
-  `/Users/user/Source/aros-aarch64` (excluding `.git`) returns **nothing**. The
+  `.` (excluding `.git`) returns **nothing**. The
   hosted spikes H1–H12 (`hosted/*.c`) cover scheduler, ports, and a file-backed
   device, but no clipboard.
 - No NSPasteboard anywhere in upstream either: `grep -rniE
   'NSPasteboard|pbpaste|pbcopy|generalPasteboard'`
-  over `/Users/user/Source/aros-upstream` returns **nothing** — AROS has never had
+  over `../aros-upstream` returns **nothing** — AROS has never had
   a macOS host backend at all.
 - Upstream *does* ship the pieces we mirror: the device itself
   (`workbench/devs/clipboard/`), and the one existing **host** clipboard bridge —
@@ -366,7 +366,7 @@ approval dialog. The loop, in the established H1–H12 style:
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - `workbench/devs/clipboard/clipboard.c` — device logic: command dispatch
   (`beginio`, `:334`), `readCb`/`writeCb`/`updateCb` (`:610/:725/:870`),
   clip-dir/file (`:149-190`, `:232`), hooks (`:367`, `:895`), POST (`:501`).
@@ -386,7 +386,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   `.../private.h:735` — `ID_FTXT`/`ID_CHRS`/`ID_FORM` definitions + a real FTXT
   writer.
 
-This project (`/Users/user/Source/aros-aarch64`):
+This project (`.`):
 - `hosted/device.c` — H11 file-backed device (`IORequest → device task → real
   syscall → reply`); the dispatcher we widen for `IOClipReq`.
 - `hosted/msgport.c` — H10 message ports (`PutMsg`/`GetMsg`/`ReplyMsg` +

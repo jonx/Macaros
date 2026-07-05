@@ -24,7 +24,7 @@ export PATH="/tmp/graft-tools:/opt/homebrew/bin:$PATH"
 
 # 2. Configure — REUSE the toolchain (skip the ~1-2h LLVM build), no X11
 rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
-/Users/user/Source/aros-upstream/configure \
+../aros-upstream/configure \
     --target=darwin-aarch64 --with-toolchain=llvm \
     --with-aros-toolchain=yes --with-aros-toolchain-install="$XT" \
     --without-x
@@ -63,8 +63,8 @@ There are two toolchain stories; only one works:
 
 | Approach | Result |
 |---|---|
-| Thin wrapper around Homebrew clang (`graft/build-darwin-aarch64.sh` default) | **Dies at `-noposixc`** — Homebrew clang isn't the AROS-patched clang. Don't use for a real build. |
-| AROS's own from-source patched **clang 20.1.0** (`--with-toolchain=llvm`) | Works — but building it from source is the ~1–2 h step you want to avoid. |
+| Thin wrapper around Homebrew clang (retarget system clang to aarch64 ELF) | **Dies at `-noposixc`** — Homebrew clang isn't the AROS-patched clang. A dead end; do not try it. |
+| AROS's own from-source patched **clang 20.1.0** (`--with-toolchain=llvm`) | Works — but building it from source is the ~1–2 h step you want to avoid. This is what `graft/build-darwin-aarch64.sh` and the recipe below do. |
 
 The working toolchain is self-contained and **relocatable** (only depends on
 system libs + Homebrew `zstd`). Preserve and reuse it instead of rebuilding:

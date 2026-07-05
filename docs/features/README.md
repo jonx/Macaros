@@ -2,7 +2,7 @@
 
 Grounded design/plan docs for things that would be **genuinely useful and don't exist
 yet** for the `aarch64-darwin` hosted port. Each was checked against the upstream tree
-(`/Users/user/Source/aros-upstream`) *and* the web before writing — every AROS contract
+(`../aros-upstream`) *and* the web before writing — every AROS contract
 cited points at a real file, every external project at a real repo, and anything that
 couldn't be confirmed is marked **UNVERIFIED**.
 
@@ -11,6 +11,52 @@ drivers; AROS reaches them via standard exec I/O.* And all must verify in the
 **unattended loop** — build → run → observe → one PASS/FAIL — with no macOS TCC /
 Screen-Recording manual step. Each carries its own spike plan with greppable markers,
 the same way Phase 1/2 used `[M*]` / `[H*]`.
+
+## Maturity at a glance
+
+Where each feature actually stands — **built**, **started**, or **just an idea**.
+(The `Quick index` and per-feature tables below carry the detail; this is the
+one-look summary. Verified against the code, not just the docs.)
+
+**🟢 Integrated — built and working** (Makefile target and/or shipped dylib, verified in use):
+[cocoa-metal-display](cocoa-metal-display/design.md) ·
+[host-app-shell (Macaros)](host-app-shell/design.md) ·
+[clipboard-bridge](clipboard-bridge/README.md) ·
+[control-harness](control-harness/README.md) ·
+[host-volume](host-volume/README.md) ·
+[68k-jit (`run68k`)](68k-jit/design.md) ·
+[coreaudio-audio](coreaudio-audio/README.md) ·
+[bsdsocket-net](bsdsocket-net/README.md) ·
+[ffmpeg-native](ffmpeg-native/README.md) ·
+[rust-aros](rust-aros/README.md) ·
+[status-led-theme](status-led-theme/README.md) ·
+[host-bridge](host-bridge/README.md) ·
+[benchmarks](benchmarks/README.md) ·
+[debug-tools](debug-tools/README.md) ·
+[crash-handling](crash-handling/design.md) ·
+[build](build/README.md) · [deployment](deployment/README.md).
+
+**🟡 Started — real code exists, not yet complete:**
+[processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
+[native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
+[printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
+[feraille-gpui](feraille-gpui/README.md) (stage-1 probe passes; `gpui_aros` backend underway).
+
+**⚪ Idea — design/spec only, no implementation yet:**
+[serial-bridge](serial-bridge/README.md) ·
+[midi-coremidi](midi-coremidi/README.md) ·
+[usb-iokit](usb-iokit/README.md) ·
+[fonts-coretext](fonts-coretext/README.md) ·
+[system-monitor](system-monitor/README.md) ·
+[volume-mixer](volume-mixer/README.md) ·
+[memory-protection](memory-protection/README.md) ·
+[arexx-host-port](arexx-host-port/README.md) ·
+[dotnet-native](dotnet-native/README.md) ·
+[68k-marshalling](68k-marshalling/README.md) (design; the boundary itself is realized inside the JIT).
+
+> Provenance note: everything above is independent clean-room work **except** the
+> [68k-jit](68k-jit/design.md), which adopts **Emu68** (MPL-2.0) as vendored files —
+> see [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md).
 
 ## Quick index — every folder, one line
 
@@ -218,14 +264,19 @@ still needs to be created, and what is deferred until after port completion.
 
 ## Provenance & licensing
 
-These are independent work: no third-party implementation source — emulator, agent,
-driver, or otherwise — was read, searched, or consulted in producing them, and any
-resemblance to existing implementations is coincidental. Each `spec.md` is written
-from public APIs, published standards, the AROS tree, and this project's own spikes,
-under the **[independent-work process](CLEANROOM.md)**; the implementer works solely
-from those footings, never from third-party implementation source. (**Emu68** is
-MPL-2.0 — adoptable as isolated files with attribution, a different path; see the
-68k-jit design.)
+With **one exception** (the 68k JIT, below), these are independent work: no
+third-party implementation source — emulator, agent, driver, or otherwise — was
+read, searched, or consulted in producing them, and any resemblance to existing
+implementations is coincidental. Each `spec.md` is written from public APIs,
+published standards, the AROS tree, and this project's own spikes, under the
+**[independent-work process](CLEANROOM.md)**; the implementer works solely from
+those footings, never from third-party implementation source.
+
+The exception: the **68k JIT** deliberately *adopts* **Emu68** (MPL-2.0) as
+vendored, isolated files — a different, disclosed path (file-level copyleft, not
+clean-room). See the [68k-jit design](68k-jit/design.md) `[J0]`, the
+[license map](CLEANROOM.md), and the repo-root
+[THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md).
 
 ## Shared foundations (build once, several features lean on them)
 
@@ -250,9 +301,9 @@ MPL-2.0 — adoptable as isolated files with attribution, a different path; see 
 1. **Unblock real software**: the executable-memory layer. Native `LoadSeg` is
    **largely landed** (commit `71f75760`; [native modules](native-modules/design.md)) —
    verify it and close the I-cache gap; `[J1]`'s `MAP_JIT` still gates the JIT.
-2. **Finish the boot first** where needed: most features can't *run* until `dos.library`
-   + the boot module set exist (kickstart still halts at cold-start — `graft/WORKFLOW.md`).
-   [Host volume](host-volume/design.md)'s code is largely already there — cheapest win once DOS is up.
+2. **Boot is up**: the boot module set and `dos.library` now boot to a Wanderer desktop
+   (`graft/WORKFLOW.md`, root README), so features that need DOS can run.
+   [Host volume](host-volume/design.md)'s code is largely already there — cheapest win now DOS is up.
 3. **Visible wins**: [clipboard](clipboard-bridge/design.md) and the
    [display window](cocoa-metal-display/design.md).
 4. **Reach the world**: [sockets](bsdsocket-net/design.md), then

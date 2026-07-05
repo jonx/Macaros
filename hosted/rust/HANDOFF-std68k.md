@@ -60,7 +60,7 @@ The target spec is `hosted/rust/m68k-unknown-aros.json` (`os=aros`, `singlethrea
 
 ## 3. Build + run + test (reproduction)
 
-From the repo root `/Users/user/Source/aros-aarch64`:
+From the repo root `.`:
 
 ```sh
 # The JIT/interpreter tool (rebuild after any engine change):
@@ -96,7 +96,7 @@ Useful env vars on `run68k`:
 There is no m68k AROS userland to link against, so the OS surface is **ours**:
 
 ```
-Rust std  --calls-->  aros pal (library/std/src/sys/**/aros.rs, in /Users/user/Source/rust-aros)
+Rust std  --calls-->  aros pal (library/std/src/sys/**/aros.rs, in ../rust-aros)
           --which calls C symbols-->  libc68k (hosted/jit68k/rust68k/libc68k/, gcc-compiled)
           --which calls-->  stub-DOS LVOs (hosted/jit68k/apps68k/stublib.c, host-POSIX-backed)
           --run by-->  run68k JIT / interpreter (hosted/jit68k/)
@@ -227,7 +227,7 @@ hosted/rust/
   STD68K-PLAN.md            architecture, decisions, full status
   HANDOFF-std68k.md         this file
   FIX-PLAN.md / STD-PORT.md aarch64 pal review / aarch64 std port
-/Users/user/Source/rust-aros   the Rust clone with the aros pal (NOT pushed);
+../rust-aros   the Rust clone with the aros pal (NOT pushed);
                               m68k routing edits in library/std/src/sys/**/mod.rs
 /tmp/rust-m68k                the patched-LLVM + stage1 rustc build (the toolchain)
 ```

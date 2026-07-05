@@ -1,6 +1,6 @@
 # Implementation spec — processor.resource darwin/AArch64 backend (host-sourced CPU facts)
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the host CPU shim (hosted/hostcpu/) is built, green and tested (cp_abi_test); the AROS-side processor.resource arch backend is the remaining graft step. · Target: aarch64-darwin hosted · Drafted 2026-06-28
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 ## Provenance banner

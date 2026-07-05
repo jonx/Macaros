@@ -369,7 +369,7 @@ This is the design.md "main-thread crux", pinned so D2 proves the *real* model.
 
 **Keycode → AROS rawkey:** my kbd hardware-driver class needs the
 macOS-VK→AROS-rawkey map. Source to adapt:
-`/Users/user/Source/aros-upstream/arch/all-hosted/hidd/x11/mac-x11-keycode2rawkey.table`.
+`../aros-upstream/arch/all-hosted/hidd/x11/mac-x11-keycode2rawkey.table`.
 **Action (John):** drop an adapted copy as
 `docs/features/cocoa-metal-display/keycode2rawkey.table` so my input class includes
 one agreed table. Mouse deltas/buttons map directly to

@@ -1,6 +1,6 @@
 # Implementation spec — Host app shell (macOS app frontend for hosted AROS)
 
-> Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-26
+> Status: built - the Macaros first-class Mac app (menu bar, About, icon, schema-driven Settings) ships; packaged by graft/make-aros-app.sh, Settings built into the cocoametal dylib. · Target: aarch64-darwin hosted · Drafted 2026-06-26
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 ## Provenance banner

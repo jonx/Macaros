@@ -45,7 +45,7 @@ No equivalent existed; this is original to the project.
   display HIDD. The X11/SDL hosted drivers consume real host events from a live
   server connection; none expose a "inject a synthetic key, read back the
   framebuffer" channel for an attended-free agent. Verified by search over
-  `/Users/user/Source/aros-upstream` (no control-FIFO / synthetic-event path in the
+  `../aros-upstream` (no control-FIFO / synthetic-event path in the
   hosted HIDDs).
 - **GPL Amiga emulators** have scripting/automation (serial/debugger scripting,
   config-driven input, GUI hooks) — but they are GPL and, more to

@@ -353,8 +353,9 @@ path; the **master** fd is the independent oracle.
   add a `TAG_PARITY` shell change (a possible shell follow-on, out of this spec).
 - `SERF_SHARED` multi-opener over one host fd — faithful to the shell, untested on a
   host tty; note, defer.
-- The crosstools graft for [SR5]–[SR7] depends on `dos.library` + the boot set
-  (kickstart still halts at cold-start, `graft/WORKFLOW.md`).
+- The crosstools graft for [SR5]–[SR7] builds the device modules on top of `dos.library`
+  + the boot set, which are already up (hosted AROS boots to a Wanderer desktop,
+  `graft/WORKFLOW.md`).
 
 ## Provenance summary
 

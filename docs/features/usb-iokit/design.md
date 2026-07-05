@@ -79,7 +79,7 @@ device — **exists in the tree today**. The work is not "invent an HCD"; it is:
    that the device transfer paths need hardware/permissions (attended).
 
 **What is absent.** `grep -rilE 'iokit|IOUSBHost|IOServiceMatching|kIOUSB'` over both
-`/Users/user/Source/aros-upstream` and `/Users/user/Source/aros-aarch64` returns nothing:
+`../aros-upstream` and `.` returns nothing:
 there is **no IOKit/IOUSBHost code anywhere**, and `libusb` is referenced only by the
 four `vusbhc` files. There is no darwin-aarch64 USB host shim in this repo (no
 `hosted/usb*`, no `build/libusbhost.dylib`). So `vusbhc`'s libusb dependency is currently
@@ -454,7 +454,7 @@ smokes a user runs with hardware. Do **not** block the loop on anything past [UB
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - HCD contract: `compiler/include/devices/usbhardware.h` (`struct IOUsbHWReq` :80,
   fields :27–62, `UHCMD_*` :116, `UHA_*`/`UHCF_*` capability tags :187/:207,
   `UHIOERR_*` :131), `compiler/include/devices/usb.h` (`UsbStdDevDesc` :118 with
@@ -484,7 +484,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   `HostLib_Close` :15, `HostLib_GetPointer` :16, `HostLib_GetInterface` :18),
   `arch/all-unix/bootstrap/hostlib.h`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - `hosted/abishim.S` (H3 variadic ABI), `hosted/device.c` (H11 IORequest→task→host
   syscall→reply — the shape a `usbhardware.device` follows), `hosted/coreaudio/` +
   `hosted/bsdsocket/` (host shim + `hostlib.resource` + deploy-to-`~/lib` pattern this

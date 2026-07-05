@@ -13,7 +13,7 @@ Implemented pieces:
   `hosted/coreaudio/coreaudio_shim.h`, `hosted/coreaudio/coreaudio.exports`,
   `build/libcoreaudio.dylib`
 - AROS AHI sub-driver:
-  `/Users/user/Source/aros-upstream/workbench/devs/AHI/Drivers/CoreAudio/`
+  `../aros-upstream/workbench/devs/AHI/Drivers/CoreAudio/`
 - AHI mode file: `DEVS:AudioModes/COREAUDIO`
 - AROS playback smoke command: `C:AHISmoke`
 - host harness: `graft/audio-smoke` / `make audio-smoke`

@@ -98,7 +98,7 @@ JIT-compiling it* — the W^X-safe path, and the only one that runs PowerShell.
 ## What a .NET runtime needs vs. what this AROS port already has
 
 The load-bearing table — every "have" is a real file, every gap is named. (Facility audit
-against `/Users/user/Source/aros-upstream`, 2026-06-29.)
+against `../aros-upstream`, 2026-06-29.)
 
 | Runtime needs (PAL/shim seam) | AROS status | Where |
 |---|---|---|
@@ -240,7 +240,7 @@ implementation is consulted — the runtime being ported is itself the licensed 
 
 ## References
 
-AROS tree (`/Users/user/Source/aros-upstream`) and this repo, confirmed 2026-06-29.
+AROS tree (`../aros-upstream`) and this repo, confirmed 2026-06-29.
 
 Project substrate this leans on:
 - [hosted/jit68k/jit_region.{h,c}](../../../hosted/jit68k/) — the `MAP_JIT` +

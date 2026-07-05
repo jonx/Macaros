@@ -37,7 +37,7 @@ the host-call boundary the same way every other hosted feature already does.
 **The monitor exists; the three pages and a working data source do not.**
 
 What SysMon shows today, grounded in the source
-(`/Users/user/Source/aros-upstream/workbench/system/SysMon/`):
+(`../aros-upstream/workbench/system/SysMon/`):
 
 - **Three tabs**, built from `smdata->tabs[]` = `{Tasks, CPU, System, NULL}`
   (`main.c:94–97`), with `SYSMON_TABCOUNT 3` (`sysmon_intern.h:24`). The tab
@@ -374,7 +374,7 @@ discipline).
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - SysMon app: `workbench/system/SysMon/` — `main.c` (tabs `:94–97`,
   `RegisterGroup` `:168`, page children `:169–267`, active-page switch `:422–437`,
   modules array `:387`, timer re-arm `:408,441`), `sysmon_intern.h` (`SYSMON_TABCOUNT`
@@ -405,7 +405,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   (`Host_HostLib_Open`/`GetPointer`), `arch/all-hosted/hostlib/`
   (`open.c:13`, `getinterface.c:15`, `getpointer.c:17`).
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - `hosted/coreaudio/` (`coreaudio_shim.h`/`.c`, `coreaudio.exports`,
   `build/libcoreaudio.dylib`, `make coreaudio-abi`/`audio-smoke`) — the
   `hostlib`-loaded flat-C-ABI `.dylib` pattern this shim copies.

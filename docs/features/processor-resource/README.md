@@ -1,6 +1,6 @@
 # processor.resource (darwin/AArch64) — host-sourced CPU facts
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - host CPU shim (hosted/hostcpu/) built, green, tested; AROS-side processor.resource backend pending · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 ## What & why
 

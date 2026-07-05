@@ -1,6 +1,6 @@
 # 68k JIT — run classic Amiga 68k software at native AArch64 speed
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - run68k ships and runs real 68k binaries (integer + 68881/68882 FP), byte-exact verified; ~40 hosted-jit68k-* targets green. See [hosted/jit68k/run68k.md](../../../hosted/jit68k/run68k.md). · Target: aarch64-darwin hosted · Drafted 2026-06-24
 
 > **The JIT↔AROS seam is frozen in [INTERFACE.md](INTERFACE.md)** — the LoadSeg/
 > RunCommand hook + seglist tagging, the `jit_region`→`hostlib.resource` routing,
@@ -37,7 +37,7 @@ upstream tree, and there is no JIT at all in this checkout.
 - **Petunia does not exist here.** Petunia is AROS's historical x86 68k JIT (the
   "emulation"-flavour `emul.handler` / `m68k.library` path used by the
   i386/x86_64 hosted ports to run Amiga binaries). It is **absent** from
-  `/Users/user/Source/aros-upstream`:
+  `../aros-upstream`:
 
   ```
   $ grep -rli petunia --include='*.c' --include='*.h' --include='*.conf' .   # → (no output)
@@ -374,7 +374,7 @@ Honest debt — none of this is free:
 
 ## References
 
-Every cited path is under `/Users/user/Source/aros-upstream` unless noted.
+Every cited path is under `../aros-upstream` unless noted.
 
 - `arch/.unmaintained/m68k-emul/machine.h` — proves m68k-emul is AROS-compiled-to-m68k
   on a Linux/m68k host, not a translator ("machine.h include file for Linux/m68k").
@@ -399,7 +399,7 @@ Every cited path is under `/Users/user/Source/aros-upstream` unless noted.
 - `compiler/arossupport/include/asmcall.h` — `AROS_UFH*` / `AROS_UFHA(type,name,reg)`
   (e.g. `AROS_UFHA(struct Hook *, h, A0)`) register-arg hook/user functions.
 
-Working-repo references (`/Users/user/Source/aros-aarch64`):
+Working-repo references (`.`):
 - `NOTES.md` — H3 host-call ABI shim; H5 allocator; H7 render-to-PNG display; H8
   64-bit vectors are data pointers; the boot push's W^X / MAP_JIT note ("executing code
   loaded into the pool (LoadSeg) needs the W^X-aware path later").

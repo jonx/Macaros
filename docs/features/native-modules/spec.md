@@ -1,6 +1,6 @@
 # Implementation spec — Native modules (disk-loadable AArch64 code under W^X)
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - the native W^X LoadSeg path is largely landed in the AROS tree (commit 71f75760); darwin verify-and-reconcile pending · Target: aarch64-darwin hosted · Drafted 2026-06-28
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 > Shared foundation: [../68k-jit/INTERFACE.md](../68k-jit/INTERFACE.md) §2 (`[J1]`).
 
@@ -25,7 +25,7 @@ any implementation's expression.
 ## Scope
 
 **This feature is in progress, not greenfield.** A substantial native-LoadSeg W^X path
-**already exists in the work-tree** (`/Users/user/Source/aros-upstream`, this project's
+**already exists in the work-tree** (`../aros-upstream`, this project's
 commit `71f75760` + the all-unix kernel additions): the ELF loader requests executable
 memory, `LoadSeg`'s `AllocFunc` routes it to `KrnAllocPages`, the kernel backs that with
 host `mmap`, relocations are applied, and `KrnSetProtection` flips the pages R/X. So the

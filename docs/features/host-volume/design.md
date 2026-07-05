@@ -28,7 +28,7 @@ Yes — mostly. `emul-handler` splits cleanly into a **portable core** and a thi
 **per-host overlay**, and only the overlay is host-specific.
 
 **Portable core (host-independent, reused verbatim):**
-`/Users/user/Source/aros-upstream/arch/all-hosted/filesys/emul_handler/`
+`../aros-upstream/arch/all-hosted/filesys/emul_handler/`
 - `emul_handler.c` — the DOS-packet dispatcher (`handlePacket`), the volume/lock
   machinery, `new_volume()`, `EmulHandlerMain` process. ~1240 lines, no syscalls.
 - `emul_init.c` — `startup()`: creates the `EMU` BootNode via `expansion.library`,
@@ -77,10 +77,11 @@ Yes — mostly. `emul-handler` splits cleanly into a **portable core** and a thi
    pointer (`uio_ErrnoPtr`). **UNVERIFIED** whether `unixio.hidd` is built/working
    for this target.
 3. The runtime path: `emul-handler` is a `.resource` started as a DOS process; it
-   needs `dos.library` + `expansion.library` + a mount entry. The current kickstart
-   is a minimal 3-module set (exec/kernel/hostlib) that halts at cold-start
-   (`graft/WORKFLOW.md` F1), so **the handler cannot run yet** — `dos.library` and
-   the boot module set (WORKFLOW F2) are the prerequisite.
+   needs `dos.library` + `expansion.library` + a mount entry. The boot now brings up
+   the full module set including `dos.library` and `expansion.library`
+   (`graft/WORKFLOW.md`, root README), so **the handler's OS prerequisites are in
+   place** — what remains is building the handler for this target and adding its
+   mount entry.
 4. The macOS niceties (FSEvents, comment/resource-fork mapping, normalization) — all
    new.
 
@@ -142,7 +143,7 @@ interface**, not the FSA_/IOFileSys model (confirmed: `handlePacket` switches on
 public headers).
 
 **The packet** —
-`/Users/user/Source/aros-upstream/compiler/include/dos/dosextens.h`:
+`../aros-upstream/compiler/include/dos/dosextens.h`:
 ```c
 struct DosPacket {
     struct Message *dp_Link;   struct MsgPort *dp_Port;
@@ -422,21 +423,21 @@ link map (overlay object linked, dummy not).
 ## References
 
 - Portable handler core:
-  `/Users/user/Source/aros-upstream/arch/all-hosted/filesys/emul_handler/{emul_handler.c,emul_init.c,filenames.c,emul_intern.h,emul.conf,mmakefile.src}`
+  `../aros-upstream/arch/all-hosted/filesys/emul_handler/{emul_handler.c,emul_init.c,filenames.c,emul_intern.h,emul.conf,mmakefile.src}`
 - POSIX host overlay (the template):
-  `/Users/user/Source/aros-upstream/arch/all-unix/filesys/emul_handler/{emul_host.c,emul_host_unix.c,emul_unix.h,emul_host.h,unix_hints.h,emul_dir.c}`
+  `../aros-upstream/arch/all-unix/filesys/emul_handler/{emul_host.c,emul_host_unix.c,emul_unix.h,emul_host.h,unix_hints.h,emul_dir.c}`
 - Darwin precedent (host file/disk over `libSystem.dylib`):
-  `/Users/user/Source/aros-upstream/arch/all-darwin/hostdisk/{geometry.c}`,
-  `/Users/user/Source/aros-upstream/arch/all-unix/devs/hostdisk/{hostdisk_host.c,hostdisk_host.h}`
+  `../aros-upstream/arch/all-darwin/hostdisk/{geometry.c}`,
+  `../aros-upstream/arch/all-unix/devs/hostdisk/{hostdisk_host.c,hostdisk_host.h}`
 - DOS contract:
-  `/Users/user/Source/aros-upstream/compiler/include/dos/{dosextens.h,dos.h,exall.h,filehandler.h}`
+  `../aros-upstream/compiler/include/dos/{dosextens.h,dos.h,exall.h,filehandler.h}`
   (`DosPacket`, `ACTION_*`, `FileLock`, `FileInfoBlock`, `ExAllData`, `DosList`,
   `DeviceNode`, `DosEnvec`, `DE_*`, `ST_*`)
-- DOSList ops: `/Users/user/Source/aros-upstream/rom/dos/{makedosentry.c,adddosentry.c,runhandler.c}`
-- Mount template: `/Users/user/Source/aros-upstream/workbench/devs/Mountlist` (`HOME:`, `USR:`)
-- Host-call mechanism: `/Users/user/Source/aros-upstream/arch/all-hosted/hostlib/`
+- DOSList ops: `../aros-upstream/rom/dos/{makedosentry.c,adddosentry.c,runhandler.c}`
+- Mount template: `../aros-upstream/workbench/devs/Mountlist` (`HOME:`, `USR:`)
+- Host-call mechanism: `../aros-upstream/arch/all-hosted/hostlib/`
   (`HostLib_Open/GetInterface/Lock/Unlock`); bootstrap `dlopen/dlsym` in
-  `/Users/user/Source/aros-upstream/arch/all-unix/bootstrap/`
+  `../aros-upstream/arch/all-unix/bootstrap/`
 - This project's grounding: `NOTES.md` (H10 message ports, H11 device-on-a-file —
   the switched-task host-syscall pattern), `graft/WORKFLOW.md` (boot status, F1/F2),
   `hosted/device.c` (the IORequest→task→`pread/pwrite`→reply spike),

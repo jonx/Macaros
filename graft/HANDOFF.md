@@ -36,15 +36,15 @@ End state: everything eventually PRs to upstream AROS EXCEPT the Mac host
 
 ## 2. Repos and branches
 
-- `/Users/user/Source/aros-aarch64` = host/graft layer (this repo, github
+- `.` = host/graft layer (this repo, github
   jonx/AROS-AArch64). Current branch `graft/aros-ctl-diag-keymap-boot`. Has many
   unrelated uncommitted changes from other threads (jit68k, rust); leave those
   alone, they are not ours.
-- `/Users/user/Source/aros-upstream` = the AROS OS source (kernel, modules, libs).
+- `../aros-upstream` = the AROS OS source (kernel, modules, libs).
   **This is where guest-side code changes go.** Currently on branch
   `crash-containment` (the correct branch for all this work). Remotes:
   `origin` = aros-development-team (fetch only), `fork` = jonx/AROS.
-- `/Users/user/Source/aros-upstream-master` = 2nd git worktree of the same repo,
+- `../aros-upstream-master` = 2nd git worktree of the same repo,
   pristine upstream snapshot for diffing. Do not build here.
 - Build tree: `/tmp/arosbuild` (stable SDK). Crosstools: `/tmp/aros-crosstools`.
   Both survive across sessions. Session scratchpads get GC'd half-deleted, so
@@ -264,7 +264,7 @@ Guest (`../aros-upstream`, branch crash-containment):
 - `developer/debug/test/crash/crashlab.c` -- CrashLab
 - console.device consoletask.c (consoleTaskLock at :189), graphics locklayerrom.c
 
-Host (`/Users/user/Source/aros-aarch64`):
+Host (`.`):
 - `graft/aros-ctl` -- control harness (has `tasks`)
 - `graft/resize-smoke` -- deadlock repro (Phase C gate)
 - `graft/crash-smoke` -- crash survival matrix (Phase E gate)

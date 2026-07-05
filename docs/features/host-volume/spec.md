@@ -457,9 +457,9 @@ The new code above lives in the overlay; these are the wiring tasks that make it
   AROS_HOST_VOLUME="Work:~/Amiga;WRITE"  # read/write
   ```
 - **Prerequisite (gating).** The handler is a `.resource` started as a DOS process; it
-  needs `dos.library` + `expansion.library` + the boot module set. The current kickstart
-  halts at cold-start (WORKFLOW F1); `dos.library` + the F2 boot set are the prerequisite
-  for any in-AROS spike ([V4]+). The bare-process spikes ([V1]–[V3]) do **not** need it.
+  needs `dos.library` + `expansion.library` + the boot module set. These are now up
+  (hosted AROS boots to a Wanderer desktop, `graft/WORKFLOW.md` / root README), so the
+  in-AROS spikes ([V4]+) are unblocked. The bare-process spikes ([V1]–[V3]) do **not** need it.
 
 ## Unattended verification (no TCC — `[OURS]` H7/H11 discipline)
 

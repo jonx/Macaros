@@ -36,9 +36,9 @@ Both verify the same unattended way: enumerate, open, rasterize a known glyph, a
 - This repo: **no font code at all** beyond a single boot line
   (`graft/run-window.sh:126` writes `If EXISTS "SYS:Fonts" / Assign "FONTS:" "SYS:Fonts"`
   into the Startup-Sequence). `grep -ri 'coretext|diskfont|bullet|freetype|OpenFont|
-  AvailFonts|FONTS:'` over `/Users/user/Source/aros-aarch64` returns only that line. So
+  AvailFonts|FONTS:'` over `.` returns only that line. So
   there is **no CoreText shim, no host font enumeration, no engine bridge** today.
-- Upstream `/Users/user/Source/aros-upstream` ships **every AROS-side piece we reuse**:
+- Upstream `../aros-upstream` ships **every AROS-side piece we reuse**:
   - `graphics.library` — the consumer API (`OpenFont`/`AskFont`/`Text`,
     `rom/graphics/`).
   - `diskfont.library` (`workbench/libs/diskfont/`, basename **Diskfont** v50.3) —
@@ -468,7 +468,7 @@ existing bash watchdog; markers are unique per spike so a regression localizes.
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - Consumer API: `compiler/include/graphics/text.h` (`TextFont` :22, `TextAttr` :72,
   `TTextAttr` :80, `FPF_*` :107, `FSF_*` :92), `compiler/include/graphics/gfxbase.h:53`
   (`TextFonts` list); `rom/graphics/openfont.c:19`, `rom/graphics/text.c` (render :76,
@@ -495,7 +495,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
 - Host-symbol mechanism: `arch/all-unix/bootstrap/hostlib.h` (`Host_HostLib_Open`/
   `GetPointer`), `arch/all-hosted/hostlib/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - Shim ABI precedents: `hosted/coreaudio/{coreaudio_shim.h,coreaudio.exports,abi_test.c}`,
   `hosted/bsdsocket/`, `hosted/clipboard/` (flat C ABI + `.exports` + `dlopen` via
   `hostlib.resource`); `hosted/abishim.S` (variadic shim — *not* needed here).

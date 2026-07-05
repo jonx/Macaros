@@ -16,7 +16,7 @@ below, via `bench-run`, measuring the M5/AROS) and the **68k→AArch64 JIT**
 ## What it is
 
 AROS ships micro-benchmarks under
-`/Users/user/Source/aros-upstream/developer/debug/test/benchmarks/` in four groups
+`../aros-upstream/developer/debug/test/benchmarks/` in four groups
 (`exec`, `clib`, `boopsi`, `graphics`). `exec` and `clib` are headless (they
 `printf` to stdout) and so run unattended; `graphics` needs the display and
 `boopsi` needs BOOPSI. We build and run the headless groups.
@@ -31,7 +31,7 @@ Implemented pieces:
 - mmake targets (built from the AROS build dir): `test-benchmarks-exec-quick`,
   `test-benchmarks-clib-quick`
 - the `printf` float fix in
-  `/Users/user/Source/aros-upstream/compiler/crt/stdc/__vcformat.c`
+  `../aros-upstream/compiler/crt/stdc/__vcformat.c`
   (see [Float printf fix](#float-printf-fix) and `graft/UPSTREAM-NOTES.md` item 34)
 
 ## Build

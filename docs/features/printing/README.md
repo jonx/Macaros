@@ -1,6 +1,6 @@
 # Printing — AROS printer.device bridged to macOS
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-28
+> Status: started (partial) - print-to-PDF host engine (hosted/printing/, [PRPDF]) built and green; AROS printer.device driver blocked at [PR0] (printertag.h #errors on aarch64) · Target: aarch64-darwin hosted · Drafted 2026-06-28
 
 Give the hosted AROS real printing on the Mac. AROS already ships the whole
 generic printing stack — `printer.device` + the `PRT:` text spooler, the graphics

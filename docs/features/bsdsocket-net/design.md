@@ -1,6 +1,6 @@
 # Host BSD sockets — real networking via bsdsocket.library
 
-> Status: planned (not started) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - working TCP/IP (sockets + WaitSelect + DNS) proven live; bsdsock-dylib/-abi/-errno targets. · Target: aarch64-darwin hosted · Drafted 2026-06-24
 
 ## What & why
 
@@ -470,13 +470,12 @@ bounded follow-on, not claimed here.
   and network-byte-order `sin_port`, so the copy is near-verbatim — but
   `sa_family` is one byte in AROS's `sockaddr` (`sa_len; sa_family`) and must line
   up with macOS's `sa_family_t`; verify width at port time.
-- **Where it slots in the kickstart.** Today's boot is a minimal 3-module kickstart
-  that halts at a cold-start trap before any `dos.library`
-  (`graft/WORKFLOW.md`). `bsdsocket.library` is a normal (non-resident) library —
-  it can be added to the disk-based module set once the boot reaches a point where
+- **Where it slots in the boot.** Hosted AROS now boots the full module set and
+  `dos.library` to a Wanderer desktop (`graft/WORKFLOW.md`, root README), so this no
+  longer gates on bring-up. `bsdsocket.library` is a normal (non-resident) library —
+  it can be added to the disk-based module set now that the boot reaches a point where
   libraries load, *after* the `dos.library` bring-up (`graft/WORKFLOW.md` item
-  F2/23). This feature is designed and grounded now; it lands after the cold-start
-  walk, not before.
+  F2/23). This feature is designed and grounded; it lands on top of the booted OS.
 - **Listening/server sockets in AROS.** The plan focuses on client flows
   (`connect`/`send`/`recv`), which the unattended echo test exercises fully.
   `accept`/`listen` readiness is the same kqueue `EVFILT_READ`-on-listen-fd
@@ -486,7 +485,7 @@ bounded follow-on, not claimed here.
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - `arch/all-mingw32/bsdsocket/` — the host-passthrough template (Windows): `bsdsocket.conf` (LVO functionlist + regs), `bsdsocket_init.c` (hostlib interface build), `bsdsocket_open.c` + `bsdsocket_intern.h` (per-task `TaskBase`/`SocketBase`), `socket.c` (non-blocking create, `Forbid`/errno), `host_socket.c` (ResolverThread/IRQ — the part darwin replaces), `waitselect.c`/`recv.c`/`connect.c` (the `#warning TODO` stubs).
 - `workbench/network/stacks/AROSTCP/bsdsocket/` — the native AmiTCP stack (not used): `api/amiga_api.h` (`struct SocketBase`), `api/amiga_api.c` (per-task open), `autodoc/auto_socket.c` (WaitSelect/select semantics).
 - `workbench/network/common/include/` — the public contract: `defines/bsdsocket.h` (LVO map), `clib/bsdsocket_protos.h` (signatures), `proto/bsdsocket.h`, `libraries/bsdsocket.h` + `bsdsocket/socketbasetags.h` (`SBTC_*` tags), `sys/socket.h`/`netinet/in.h` (`sockaddr`/`sockaddr_in`), `sys/net_types.h` (`fd_set`/`FD_SETSIZE=64`), `sys/errno.h` (AmiTCP errno values).

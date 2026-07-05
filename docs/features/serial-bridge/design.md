@@ -33,7 +33,7 @@ heavily stubbed). The job is bring-up + fill-in for darwin-aarch64, not greenfie
 ### The three layers (grounded)
 
 1. **`serial.device` — the portable shell** (reused verbatim).
-   `/Users/user/Source/aros-upstream/workbench/devs/serial/` (`serial_init.c`,
+   `../aros-upstream/workbench/devs/serial/` (`serial_init.c`,
    `serial_support.c`, `serial_interrupthandlers.c`, `serial_intern.h`, `serial.conf`).
    It speaks the classic exec **IORequest** interface (`AROS_LH1 beginio`/`abortio`,
    `serial_init.c:307,871`), owns the per-unit input ring buffer, the read/write queues
@@ -54,7 +54,7 @@ heavily stubbed). The job is bring-up + fill-in for darwin-aarch64, not greenfie
    `CLID_Hidd_Serial`. The parallel equivalent is `workbench/hidds/parallel/`.
 
 3. **the hosted/unix serial backend — ALREADY EXISTS** (the file to finish).
-   `/Users/user/Source/aros-upstream/arch/all-unix/hidd/serial/` —
+   `../aros-upstream/arch/all-unix/hidd/serial/` —
    `SerialClass.c` (the `NewUnit`/`DisposeUnit` factory, complete) and
    `SerialUnitClass.c` (the per-unit class). `SerialUnitClass.c` **opens a host
    character device over libc** and routes bytes through it:
@@ -428,13 +428,14 @@ bytes it saw), exactly as bsdsocket's echo server is for sockets.
   (`serial_init.c:204`) over one host fd are faithful to the device shell but untested
   on a host tty (two AROS openers, one `/dev/cu.*`); note it, defer.
 - **The graft, not a spike.** [SR5]–[SR7] depend on the crosstools + `mmake` producing
-  `serial.device`/`parallel.device`/`unixio.hidd` and on `dos.library` + the boot set
-  (the kickstart still halts at cold-start, `graft/WORKFLOW.md`). [SR1]–[SR4] are
+  `serial.device`/`parallel.device`/`unixio.hidd`. `dos.library` and the boot set are
+  already up (hosted AROS boots to a Wanderer desktop, `graft/WORKFLOW.md`), so what
+  remains for these is building and wiring the device modules. [SR1]–[SR4] are
   session-sized and stand alone.
 
 ## References
 
-AROS upstream (`/Users/user/Source/aros-upstream`):
+AROS upstream (`../aros-upstream`):
 - Device shell: `workbench/devs/serial/` (`serial_init.c` beginio/abortio :307/:871,
   Open/HIDD wire :77/:91/:170, SETPARAMS→HIDD :712–818; `serial_interrupthandlers.c`
   `RBF_InterruptHandler` :22; `serial_intern.h`, `serial.conf`),
@@ -457,7 +458,7 @@ AROS upstream (`/Users/user/Source/aros-upstream`):
   :828, `WaitIntHandler` :158, libc_symbols :1107).
 - Host-symbol mechanism: `arch/all-hosted/hostlib/`, `arch/all-unix/bootstrap/`.
 
-This repo (`/Users/user/Source/aros-aarch64`):
+This repo (`.`):
 - `docs/features/host-wake-pattern.md` (DARWIN-AARCH64 CAVEAT — host-context `Signal`
   unsafe; poll `timer.device`), `docs/features/bsdsocket-net/{design.md,spec.md}`
   (§R-DARWIN-WAKE — the same finding, proven live), `docs/features/host-volume/`

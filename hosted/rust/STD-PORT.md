@@ -42,14 +42,14 @@ The port spans three source trees. The actual Rust port is small and lives in a
 
 | Tree | Path | What it is |
 |---|---|---|
-| **1. The `std` port** | `/Users/user/Source/rust-aros` | A git clone of the Rust std source. The whole port is **9 files / ~194 lines** here = the eventual rust-lang/rust PR. **Not pushed.** |
+| **1. The `std` port** | `../rust-aros` | A git clone of the Rust std source. The whole port is **9 files / ~194 lines** here = the eventual rust-lang/rust PR. **Not pushed.** |
 | **2. Host glue** (this repo) | `hosted/rust/` | The test crate + link recipe that build/run the port on AROS. |
-| **3. The AROS OS** | `/Users/user/Source/aros-upstream` (`aarch64-darwin-graft`) | `exec`/`kernel`/`posixc` — provides `malloc`/`write`/… that `std` links against. |
+| **3. The AROS OS** | `../aros-upstream` (`aarch64-darwin-graft`) | `exec`/`kernel`/`posixc` — provides `malloc`/`write`/… that `std` links against. |
 
 **The connection:** the toolchain's `rust-src` is a **symlink** to tree 1, so
 `-Zbuild-std` compiles `std` (including our `aros` pal) straight from the clone:
 ```
-~/.rustup/toolchains/nightly-2026-06-27-*/lib/rustlib/src/rust  ->  /Users/user/Source/rust-aros
+~/.rustup/toolchains/nightly-2026-06-27-*/lib/rustlib/src/rust  ->  ../rust-aros
 ```
 
 ## Why this is tractable (the two low-level layers)
@@ -95,12 +95,12 @@ rustup component add rust-src --toolchain nightly-2026-06-27-aarch64-apple-darwi
 # 2. recreate the local clone from the exact-version rust-src, git-track it
 SYSROOT=$(rustc +nightly-2026-06-27 --print sysroot)
 SRC="$SYSROOT/lib/rustlib/src/rust"
-cp -R "$SRC" /Users/user/Source/rust-aros
-( cd /Users/user/Source/rust-aros && git init -q && git add -A && git commit -qm "vendor rust-src baseline" )
+cp -R "$SRC" ../rust-aros
+( cd ../rust-aros && git init -q && git add -A && git commit -qm "vendor rust-src baseline" )
 
 # 3. point -Zbuild-std at the clone (so edits there take effect)
 mv "$SRC" "$SRC.orig"
-ln -s /Users/user/Source/rust-aros "$SRC"
+ln -s ../rust-aros "$SRC"
 ```
 If a toolchain reinstall ever replaces the symlink with a real dir, just redo step 3.
 (For a real upstream PR later, the same diffs apply to a rust-lang/rust fork at the

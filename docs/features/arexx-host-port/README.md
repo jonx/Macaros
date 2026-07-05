@@ -148,7 +148,7 @@ must stay green without an interpreter. `[BR*]` is a capability add-on.
 
 ## References
 
-Grounded in the upstream tree (`/Users/user/Source/aros-upstream`) and the AROS GitHub
+Grounded in the upstream tree (`../aros-upstream`) and the AROS GitHub
 repos. Confirmed 2026-06-29.
 
 Main OS repo (local `aros-upstream`) — the message/port layer that **is** here:

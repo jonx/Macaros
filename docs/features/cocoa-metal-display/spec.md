@@ -1,6 +1,6 @@
 # Implementation spec — Cocoa/Metal display HIDD (Apple-native)
 
-> Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - the live Cocoa/Metal window is the AROS display; ~15 cocoametal-* targets + cocoametal-dylib. · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 ## Provenance banner

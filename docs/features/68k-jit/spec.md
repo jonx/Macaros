@@ -1,6 +1,6 @@
 # Implementation spec — 68k→AArch64 JIT (adapt Emu68 core, hosted under macOS)
 
-> Status: drafting (Role A) · Target: aarch64-darwin hosted · Drafted 2026-06-24
+> Status: built - run68k ships (integer + 68881/68882 FP, byte-exact verified); ~40 hosted-jit68k-* targets green. See [hosted/jit68k/run68k.md](../../../hosted/jit68k/run68k.md). · Target: aarch64-darwin hosted · Drafted 2026-06-24
 > Companion to [design.md](design.md). Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 ## Licence banner — this is an ADAPTATION spec, not clean-room

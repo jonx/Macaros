@@ -5,13 +5,14 @@ A map of the whole process of porting AROS (the open-source AmigaOS) to a
 modern Apple-Silicon Mac. It's meant for the next person (or the next session):
 follow the arrows top-to-bottom, and the **green** boxes are already done.
 
-> **Status (2026-06-24): AROS BOOTS on Apple Silicon.** The native `AROSBootstrap`
+> **Status: AROS boots to a Wanderer desktop on Apple Silicon.** The native `AROSBootstrap`
 > loader maps memory, relocates and runs the kickstart; `exec.library`,
 > `kernel.resource` and `hostlib.resource` initialise (valid `SysBase`/`KernelBase`);
 > the host-signal→AROS-trap path works (a SIGSEGV is caught and AROS prints its
-> AArch64 register dump) and AROS's native Guru-Meditation alert renders. It then
-> halts at a cold-start trap — where a 3-module kickstart runs out of OS to boot
-> into. Run it: `~/aros-darwin/run.sh`.
+> AArch64 register dump) and AROS's native Guru-Meditation alert renders. Boot now
+> proceeds through the full boot module set and `dos.library`, mounts SYS:, runs the
+> AmigaDOS Shell with the standard C: command set, and renders a full Wanderer desktop
+> in a live Cocoa/Metal window (see the root README). Run it: `~/aros-darwin/run.sh`.
 
 > **Legend** — 🟢 done · 🟡 in progress · ⚪ pending
 > (Mermaid renders on GitHub; a plain-text table follows for terminal readers.)
