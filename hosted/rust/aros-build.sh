@@ -33,7 +33,7 @@ find_tree() {
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
         "$REPO/build/AROS"/.. \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
+        /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
         /tmp/*/bin/darwin-aarch64 ; do
         [ -x "$d/tools/collect-aros" ] && [ -d "$d/gen/include" ] || continue
         t="$(stat -f %m "$d/tools/collect-aros" 2>/dev/null || echo 0)"

@@ -6,7 +6,7 @@
 # Two pieces, which on this machine live in DIFFERENT places:
 #   * the SDK tree  ($T = .../bin/darwin-aarch64): AROS/Developer/{include,lib} +
 #     tools/collect-aros. Must be COMPLETE (see find_tree). The canonical one is
-#     /tmp/arosbuild; stale claude-session scratchpad copies under /private/tmp get
+#     /tmp/arosbuild; stale session-scratchpad copies under /private/tmp get
 #     garbage-collected and go half-empty, so we require posixc/stdio.h + libmui.a.
 #   * the crosstools ($CT): the AROS-patched clang + ld.lld + clang_rt. Read from the
 #     tree's config/make.cfg CROSSTOOLSDIR, else $AROS_CROSSTOOLS, else /tmp/aros-crosstools.
@@ -28,7 +28,7 @@ find_tree() {
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
+        /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
             && [ -e "$d/AROS/Developer/lib/libmui.a" ] \
             && [ -x "$d/tools/collect-aros" ] || continue

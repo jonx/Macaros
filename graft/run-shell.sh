@@ -37,7 +37,7 @@ find_bootd() {
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
         "$ROOT/build/AROS/boot/darwin" \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
+        /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
         /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do
         [ -x "$d/AROSBootstrap" ] || continue
         t="$(stat -f %m "$d/AROSBootstrap" 2>/dev/null || echo 0)"

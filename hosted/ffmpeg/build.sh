@@ -33,7 +33,7 @@ find_tree() {
     for d in \
         "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 \
-        /private/tmp/claude-*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
+        /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
             && [ -e "$d/AROS/Developer/lib/libmui.a" ] \
             && [ -x "$d/tools/collect-aros" ] || continue

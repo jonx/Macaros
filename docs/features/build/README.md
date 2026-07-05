@@ -45,7 +45,7 @@ metatargets, not the `kernel`/`workbench-libs` aggregates.
 ## 1. Build in a STABLE directory
 
 The single biggest time sink: building inside an **ephemeral session scratchpad**
-(`/private/tmp/claude-*/<session>/scratchpad/arosbuild`). When the session ends
+(a `/private/tmp/.../scratchpad/arosbuild` tree). When the session ends
 that tree is garbage-collected — and the GC is *partial*: it removes `Makefile`,
 `mmake.config`, `config.status`, the root `gen/`, and even **strips the clang
 resource headers** (`stdarg.h`, `stddef.h`, …) out of the toolchain. The leftover
@@ -54,7 +54,7 @@ and produces a Frankenstein kickstart → `can't open dos.library v36` → `dosb
 guru. *This is the "I keep having to redo it" loop.*
 
 Use a stable location: **`/tmp/arosbuild`** (which `run-window.sh` already
-searches) or `~/aros-build`. `/tmp` survives the session; the claude scratchpad
+searches) or `~/aros-build`. `/tmp` survives the session; a scratchpad
 does not.
 
 ## 2. The cross-toolchain — do NOT rebuild it (~1–2 h)

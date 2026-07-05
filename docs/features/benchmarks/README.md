@@ -45,7 +45,7 @@ make -C "$BUILD" test-benchmarks-clib-quick
 ```
 
 `$BUILD` is the (ephemeral) mmake tree — find it with
-`find /private/tmp/claude-* -maxdepth 6 -type d -name arosbuild`. The `-quick`
+`find /private/tmp -maxdepth 7 -type d -name arosbuild 2>/dev/null`. The `-quick`
 variants skip the includes/linklib/fetch chain (see the `aros-c-commands-quick-build`
 project note). `clib/stdio` also needs `stdcio.library` built
 (`make -C "$BUILD" compiler-stdcio-quick`).
