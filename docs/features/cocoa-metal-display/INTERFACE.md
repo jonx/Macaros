@@ -315,11 +315,17 @@ This is the design.md "main-thread crux", pinned so D2 proves the *real* model.
 
 `CMEvent` (from `cocoametal.h`): `{ type, x, y, code, pressed, mods }`.
 
-- `type` ∈ `CM_EV_{NONE,MOUSEMOVE,MOUSEBTN,KEY,CLOSE,RESIZE,SETTING}`.
+- `type` ∈ `CM_EV_{NONE,MOUSEMOVE,MOUSEBTN,KEY,CLOSE,RESIZE,SETTING,WHEEL}`.
   `CM_EV_SETTING` is appended at v2 (after `CM_EV_RESIZE`, append-only) — a
   user-changed AROS-facing option, surfaced for pull. Packing in §9.
+  `CM_EV_WHEEL` is appended after `CM_EV_SETTING` (append-only, ABI stays 2 —
+  an older driver ignores the unknown type): scroll-wheel motion quantized to
+  whole line steps.
 - `x, y` — **logical** pixel coords, top-left origin. (For `CM_EV_SETTING`,
-  `x`/`y` instead carry the option value(s) — see §9.)
+  `x`/`y` instead carry the option value(s) — see §9. For `CM_EV_WHEEL`,
+  `x`/`y` carry the step counts: `x` > 0 = wheel right, `y` > 0 = wheel down —
+  the AROS NewMouse/gameport sign convention; the pointer position travels on
+  the surrounding `CM_EV_MOUSEMOVE` stream instead.)
 - `code` — for `CM_EV_KEY`: the **macOS virtual keycode**; for `CM_EV_MOUSEBTN`:
   button index.
 - `pressed` — 1=down, 0=up.
@@ -341,6 +347,13 @@ This is the design.md "main-thread crux", pinned so D2 proves the *real* model.
 >   **bottom-left** origin ⇒ `x = locationInWindow.x`, `y = contentHeightPoints −
 >   locationInWindow.y` (content height in points == logical H — the `contentsScale` lives
 >   below the layer, so **no `/scale`**), then clamp to `[0,w)×[0,h)`.
+> - `ScrollWheel` → `CM_EV_WHEEL`. The shim accumulates `scrollingDeltaX/Y` and emits one
+>   step per whole line (precise/trackpad deltas are pixels, ÷10 per line; classic wheel
+>   deltas are already lines; sub-line remainders persist across events). Sign negated
+>   into the AROS convention (`y` > 0 = wheel down, `x` > 0 = wheel right). The AROS side
+>   (`cocoa_input.c`) turns each step into a NewMouse `IECLASS_RAWKEY` press
+>   (`RAWKEY_NM_WHEEL_UP/DOWN/LEFT/RIGHT` = `0x7A..0x7D`) plus one release per burst,
+>   mirroring the in-tree USB HID class — so apps see `IDCMP_RAWKEY 0x7A..0x7D`.
 > - `KeyDown`/`KeyUp` → `CM_EV_KEY`, `code = keyCode` (macOS VK), `pressed` 1/0, `mods`.
 > - `FlagsChanged` → `CM_EV_KEY` for the modifier transition: `code = keyCode`, `pressed`
 >   from whether that modifier's flag is set in `modifierFlags`.

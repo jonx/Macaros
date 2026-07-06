@@ -648,6 +648,34 @@ void cm__drain_nsevents(CMContext *cx) {
                 emit = 1; forward = 1;
                 break;
 
+            case NSEventTypeScrollWheel: {
+                /* Line-step quantization: accumulate the host deltas and emit one
+                 * CM_EV_WHEEL step per whole line. Precise deltas (trackpad,
+                 * momentum) are in PIXELS — ~10 px per line; classic wheel deltas
+                 * are already in lines. Sign: NSEvent deltaY > 0 = scroll up and
+                 * deltaX > 0 = scroll left, while CM_EV_WHEEL packs y > 0 = wheel
+                 * DOWN and x > 0 = wheel RIGHT (the AROS NewMouse/gameport
+                 * convention) — so both axes negate. Sub-line remainders persist
+                 * in the accumulators, so slow trackpad scrolling still adds up. */
+                static CGFloat s_wheelAccX, s_wheelAccY;
+                CGFloat unit = ev.hasPreciseScrollingDeltas ? 10.0 : 1.0;
+                s_wheelAccX += ev.scrollingDeltaX / unit;
+                s_wheelAccY += ev.scrollingDeltaY / unit;
+                int sx = (int)s_wheelAccX;      /* whole steps, trunc toward 0 */
+                int sy = (int)s_wheelAccY;
+                s_wheelAccX -= sx;
+                s_wheelAccY -= sy;
+                if (sx || sy) {
+                    e->type = CM_EV_WHEEL;
+                    e->x = -sx;                  /* + = wheel right */
+                    e->y = -sy;                  /* + = wheel down  */
+                    e->mods = cm__map_mods(ev.modifierFlags);
+                    emit = 1;
+                }
+                forward = 1;   /* harmless; keeps AppKit tracking consistent */
+                break;
+            }
+
             case NSEventTypeKeyDown:
             case NSEventTypeKeyUp:
                 if (ev.type == NSEventTypeKeyDown && ev.isARepeat) {
@@ -714,7 +742,8 @@ void cm__drain_nsevents(CMContext *cx) {
             /* Host app shell: a mouse event over a DIFFERENT window (the Settings panel
              * on top) must NOT move the AROS pointer — only the AROS window's mouse
              * events translate. Still forward so that window handles it. */
-            if (emit && (e->type == CM_EV_MOUSEMOVE || e->type == CM_EV_MOUSEBTN)) {
+            if (emit && (e->type == CM_EV_MOUSEMOVE || e->type == CM_EV_MOUSEBTN ||
+                         e->type == CM_EV_WHEEL)) {
                 void *aw = cm__get_window(cx);
                 if (aw && ev.window != (__bridge NSWindow *)aw) emit = 0;
             }

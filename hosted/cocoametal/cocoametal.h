@@ -48,7 +48,17 @@ typedef enum {
      *   pressed = 0 (unused);  mods = 0 (unused)
      * Host-owned keys (effect/scale/fullscreen/filter) are acted on directly and do
      * NOT produce a CM_EV_SETTING. */
-    CM_EV_SETTING
+    CM_EV_SETTING,
+    /* APPEND-ONLY (INTERFACE.md §1a/§5): scroll-wheel motion, quantized to whole
+     * line steps by the shim. Packing:
+     *   x       = horizontal steps (positive = wheel RIGHT)
+     *   y       = vertical steps   (positive = wheel DOWN)
+     * — the AROS NewMouse/gameport sign convention, NOT a pointer position.
+     *   code    = 0 (unused);  pressed = 0 (unused);  mods = CM_MOD_* held.
+     * Emitted from real NSEventTypeScrollWheel events and from the control
+     * FIFO's "W <dy> [dx]" command. An older AROS driver that predates this
+     * kind simply ignores it (unknown-type default), so CM_ABI_VERSION stays 2. */
+    CM_EV_WHEEL
 } CMEventType;
 
 /* Modifier bitmask (CM_MOD_*) — neutral names, filled from NSEvent.modifierFlags

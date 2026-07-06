@@ -17,6 +17,8 @@
  *   K <vk> <pressed>     key event   (vk = macOS virtual keycode, pressed 1/0)
  *   M <x> <y>            mouse move  (logical, top-left)
  *   B <button> <pressed> mouse button(0=left 1=right 2=middle)
+ *   W <dy> [dx]          scroll wheel: whole line steps, +dy = wheel down,
+ *                        +dx = wheel right (CM_EV_WHEEL packing)
  *   R <w> <h>            resize host window content area (logical points)
  *   G <key> <value> [y]  AROS-facing setting event (CM_EV_SETTING)
  *   S <path>             screenshot the framebuffer to <path> (binary PPM)
@@ -144,6 +146,14 @@ static void cm__control_exec(CMContext *cx, char *line) {
                 g_mouseX = x; g_mouseY = y;
             }
             e.x = g_mouseX; e.y = g_mouseY;
+            cm__inj_push(&e);
+        }
+        break;
+    }
+    case 'W': {   /* wheel: steps, +dy = wheel down, +dx = wheel right */
+        int dy, dx = 0;
+        if (sscanf(line + 1, "%d %d", &dy, &dx) >= 1) {
+            e.type = CM_EV_WHEEL; e.x = dx; e.y = dy;
             cm__inj_push(&e);
         }
         break;
