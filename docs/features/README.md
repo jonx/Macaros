@@ -105,7 +105,8 @@ one-look summary. Verified against the code, not just the docs.)
 | arexx-host-port | ARexx/REXX host-port message protocol; where the interpreter lives | [README](arexx-host-port/README.md) |
 | status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
 | rust-aros | Rust on aarch64 AROS: full `std` runs (net/fs/env/args/process/time/thread verified live) | [README](rust-aros/README.md) |
-| feraille-gpui | Feraille (GPUI file manager) ported to AROS: core crates PASS live; gpui_aros backend underway | [README](feraille-gpui/README.md) |
+| feraille-gpui | Feraille (GPUI file manager) ported to AROS: runs live via the `gpui_aros` CPU backend | [README](feraille-gpui/README.md) |
+| gpufx | GPU-accelerated 2D (scale/blit/convert) via a compute section in the cocoametal shim + a `gpufx.library` front door (design) | [README](gpufx/README.md) |
 | host-bridge | How hosted AROS taps the host (`hostlib.resource`) + the `HostBind` helper + sample | [README](host-bridge/README.md) |
 | ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
 | dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
