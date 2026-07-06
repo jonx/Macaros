@@ -363,6 +363,12 @@ CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title) {
     cx->queue = [dev newCommandQueue];
     if (!cx->queue) { cm_close(cx); return NULL; }
 
+    /* The display's device+queue become the process-shared GPU pair for the
+     * compute section (cm_gpu_*, cocoametal_gpu.m) — one GPU context for
+     * window and library, never two competing devices. */
+    extern void cm__gpu_adopt(id<MTLDevice> device, id<MTLCommandQueue> queue);
+    cm__gpu_adopt(cx->device, cx->queue);
+
     /* Build the render pipeline from the PRECOMPILED shader library. Loading a
      * prebuilt .metallib needs no runtime shader compiler, so it works in a
      * fork()ed child where MTLCompilerService (XPC) is unreachable. Fall back to

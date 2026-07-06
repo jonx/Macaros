@@ -298,6 +298,34 @@ int        cm_capture_png(CMContext *, const char *path);
 int        cm_record_start(CMContext *, const char *path, int fps, int codec);
 int        cm_record_stop(CMContext *);
 
+/* ---- GPU compute section (docs/features/gpufx, cocoametal_gpu.m) --------
+ *
+ * Explicit GPU 2D ops on caller-owned CPU buffers, exported for the
+ * AROS-side gpufx.library (which dlsym's ONLY these cm_gpu_* names — they
+ * are NOT part of the frozen display CMIFace, so CM_ABI_VERSION is
+ * untouched; CM_GPU_ABI versions this section on its own, append-only).
+ * The section shares the display's MTLDevice+queue when a window exists
+ * (one GPU context for the process); headless callers get a lazy pair.
+ * Any-thread callable; every call returns -1 when the GPU is unavailable
+ * so callers keep a CPU fallback. Pixel formats are byte-order-agnostic
+ * 4 bpp for scale; convert writes RGBA in memory order. */
+#define CM_GPU_ABI 1
+
+int        cm_gpu_open(void);  /* idempotent; 0 = compute section ready */
+int        cm_gpu_abi(void);   /* CM_GPU_ABI compiled into this dylib */
+/* Point/bilinear scale (filter: 0 = nearest, 1 = bilinear); strides in
+ * bytes; src and dst are tightly-rowed-or-wider 4 bpp buffers. */
+int        cm_gpu_scale(const void *src, int srcStride, int sw, int sh,
+                        void *dst, int dstStride, int dw, int dh,
+                        int filter);
+/* Planar YUV 4:2:0 -> RGBA8888. BT.601; fullRange 0 = limited (video)
+ * range, 1 = full range. */
+int        cm_gpu_convert_yuv420(const void *y, int yStride,
+                                 const void *u, int uStride,
+                                 const void *v, int vStride,
+                                 int w, int h,
+                                 void *rgba, int dstStride, int fullRange);
+
 #ifdef __cplusplus
 }
 #endif

@@ -26,3 +26,10 @@ _cm_get_option_str
 _cm_capture_png
 _cm_record_start
 _cm_record_stop
+# GPU compute section (cocoametal_gpu.m). Its own dlsym contract for
+# gpufx.library — NOT in the frozen display CMIFace; versioned by
+# cm_gpu_abi (CM_GPU_ABI), append-only like everything here.
+_cm_gpu_open
+_cm_gpu_abi
+_cm_gpu_scale
+_cm_gpu_convert_yuv420
