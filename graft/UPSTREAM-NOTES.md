@@ -290,13 +290,22 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     `developer/debug/test/benchmarks` (exec + clib) — `allocvec`/`allocpooled`/
     `memset` now print real rates instead of `%f`.
 
-35. **[OPEN] `clib/stdio` benchmark overflows the emul-handler task stack.**
-    `developer/debug/test/benchmarks/clib/stdio` (heavy formatted output to a
-    host-mapped volume) trips `[KRN] Task EMU went out of stack limits` followed by
-    an unrecoverable trap in the emul-handler; the other exec/clib benchmarks run
-    clean. Likely the emul-handler process-task stack is undersized for the volume
-    of the stdio write path on Darwin (or a deep host-write recursion). Not yet
-    diagnosed — excluded from the benchmark run for now.
+35. **[FIXED] The emul-handler process stack was 16 KB — it overflowed under
+    host-call load.** First seen as `[KRN] Task EMU went out of stack limits` +
+    an unrecoverable trap on the `clib/stdio` benchmark; later reproduced as the
+    DoExamineNext bus-fault under Feraille's concurrent metadata walkers.
+    Root cause: `emul_init.c` hardcoded `dn_StackSize = 16384` (under half the
+    aarch64 `AROS_STACKSIZE` of 40960) while one ExamineNext packet stacks
+    several KB of locals (`DoExamineNext` `ep[1024]`, `NameToAros`/`hv_to_nfc`
+    ~2 KB, `MetaRead` `path[1024]+buf[1024]`) plus darwin libc frames — and
+    hosted interrupt delivery (SIGALRM tick → `core_IRQ` → scheduler) runs on
+    the interrupted task's stack (no sigaltstack anywhere). Sustained walkers
+    keep the handler current for nearly every tick, so the signal frame lands
+    on the deepest frames and SP crosses `tc_SPLower`: `core_Switch` suspends
+    the task and the below-stack spill corrupts neighboring memory (the "wild
+    NULL-offset faults"). Fix: `EMUL_HANDLER_STACKSIZE` (64 KB) for both the
+    EMU boot node and `AROS_HOST_VOLUME` mounts. Stress test:
+    `hosted/exwalk` (C:ExWalk, N concurrent ExNext/ExAll walker processes).
 
 ---
 
