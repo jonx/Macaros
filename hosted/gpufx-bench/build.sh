@@ -34,7 +34,8 @@ XTBIN="$OUT/toolshim"; mkdir -p "$XTBIN"
 ln -sf "$XTOOLS/bin/ld.lld" "$XTBIN/ld"
 
 CFLAGS=(--target=aarch64-unknown-none-elf -mcmodel=large -ffixed-x18 -D__arm64__
-        -O2 -Wall -Wno-pointer-sign -I"$GEN/include" -I"$DEV/include")
+        -O2 -Wall -Wno-pointer-sign -I"$GEN/include" -I"$DEV/include"
+        -I"$REPO/hosted/cocoametal") # cocoametal.h: CmGpu*Req structs
 
 echo "[gpufx-bench] compile harness + hostbind glue"
 "$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -I"$GEN/include/aros/stdc" \

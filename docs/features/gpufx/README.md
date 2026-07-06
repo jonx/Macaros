@@ -75,13 +75,20 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
   `CM_ABI_VERSION` are untouched.
   - **On-device measured** ([`hosted/gpufx-bench`](../../../hosted/gpufx-bench/README.md),
     `C:GpuFxBench`, a Rust software-vs-shim video benchmark): YUV420→RGBA is
-    **5.48× faster on the GPU at 720p, 6.72× at 1080p**. Two findings there: the
-    AROS hosted `CLOCK_MONOTONIC` is too coarse to time a frame (the benchmark
-    uses the host ns clock via `HostBind_LibcSym`), and **the shim's `fullRange`
-    argument is not honored across the AROS→host call** (the trailing stack arg
-    on AArch64) — the GPU always computes full-range. Host-direct calls
-    (`gpu_test.c`) honor it, so it is an AROS→host marshalling bug to fix before
-    the video consumer relies on range selection.
+    **~5× faster on the GPU at 720p, ~6× at 1080p**, output verified byte-equal
+    (diff 0) to the software reference.
+  - **ABI 2 — struct-by-pointer, and why** (fixed here): ABI 1 passed the ops as
+    long argument lists (11 for convert, 9 for scale). Through the AROS→host
+    bridge the trailing scalar arg was misread — the benchmark caught the GPU
+    computing full-range when limited was requested — because an AROS→host call
+    passes arguments 9+ on the stack and the **AArch64-ELF (AROS) and Apple-arm64
+    (host dylib) stack-argument layouts differ**. Host-direct calls
+    (`make cocoametal-gpu`) honored it, so it was purely a marshalling bug. The
+    fix: every op takes a single request **struct by pointer** (`CmGpuScaleReq`,
+    `CmGpuYuvReq`), so all fields ride in one register. **Port-wide lesson: a
+    host-facing shim call with >8 register-class args is unsafe on this bridge —
+    prefer a struct pointer.** Verified: `fullRange` now honored (benchmark diff
+    0), `[GPU] PASS all` host-side.
 - **[GFX1]** `gpufx.library` skeleton (native module) forwarding one call
   (`gpufx_scale`) to the shim via host-bridge; a `C:` test program drives it.
 - **[GFX2]** ffmpeg `libswscale` YUV→RGB routed through `gpufx`; output

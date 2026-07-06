@@ -14,6 +14,8 @@
 
 #include <stddef.h>
 
+#include "cocoametal.h" /* CmGpuYuvReq / CmGpuScaleReq (gpufx ABI 2) */
+
 #define GFXB_MAGIC 0x47465842u /* "GFXB" */
 
 extern unsigned int gpufx_bench_main(void);
@@ -23,14 +25,13 @@ int aros_argc = 0;
 char **aros_argv = 0;
 
 /* The cm_gpu_* subset of the shim ABI (docs/features/gpufx). Field order MUST
- * match gpufx_syms below (HostBind_Interface binds positionally). */
+ * match gpufx_syms below (HostBind_Interface binds positionally). ABI 2 takes
+ * a request struct by pointer (see cocoametal.h: a scalar arg past the 8th
+ * register slot is misread across the AROS->host stack-arg boundary). */
 struct GpuFxIFace {
     int (*cm_gpu_open)(void);
     int (*cm_gpu_abi)(void);
-    int (*cm_gpu_convert_yuv420)(const void *y, int yStride, const void *u,
-                                 int uStride, const void *v, int vStride,
-                                 int w, int h, void *rgba, int dstStride,
-                                 int fullRange);
+    int (*cm_gpu_convert_yuv420)(const CmGpuYuvReq *req);
 };
 
 static const char *gpufx_libs[] = { "cocoametal.dylib", (const char *)0 };
@@ -95,8 +96,9 @@ int gfxbench_gpu_convert_yuv420(const void *y, int yStride, const void *u,
     struct GpuFxIFace *g = gpufx_bind();
     if (!g || !g->cm_gpu_convert_yuv420)
         return -1;
-    return g->cm_gpu_convert_yuv420(y, yStride, u, uStride, v, vStride, w, h,
-                                    rgba, dstStride, fullRange);
+    CmGpuYuvReq req = { y, u, v, rgba, yStride, uStride, vStride,
+                        w, h, dstStride, fullRange };
+    return g->cm_gpu_convert_yuv420(&req);
 }
 
 int main(int argc, char **argv)

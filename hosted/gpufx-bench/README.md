@@ -12,18 +12,20 @@ It builds a deterministic 1280x720 and 1920x1080 frame, times both paths, and
 reports frames/s, megapixels/s, MB/s, the GPU speedup, and a correctness check
 that the two paths agree.
 
-## Results (Apple M-series, 2026-07-06, booted hosted AROS)
+## Results (Apple M-series, 2026-07-06, booted hosted AROS, gpufx ABI 2)
 
 ```
 [1280x720]  (0.92 MP/frame)
-  software (Rust -O3)       4.217 ms/frame    237.2 fps    218.6 MP/s     874 MB/s
-  GPU (3D shim)             0.769 ms/frame   1300.0 fps   1198.1 MP/s    4792 MB/s
-  => GPU speedup 5.48x vs software
+  software (Rust -O3)       4.240 ms/frame    235.9 fps    217.4 MP/s     869 MB/s
+  GPU (3D shim)             0.868 ms/frame   1152.3 fps   1062.0 MP/s    4248 MB/s
+  => GPU speedup 4.89x vs software
+     correctness: OK (matches software limited-range, diff 0)
 
 [1920x1080]  (2.07 MP/frame)
-  software (Rust -O3)      10.051 ms/frame     99.5 fps    206.3 MP/s     825 MB/s
-  GPU (3D shim)             1.495 ms/frame    668.9 fps   1387.0 MP/s    5548 MB/s
-  => GPU speedup 6.72x vs software
+  software (Rust -O3)      10.019 ms/frame     99.8 fps    207.0 MP/s     828 MB/s
+  GPU (3D shim)             1.582 ms/frame    632.0 fps   1310.5 MP/s    5242 MB/s
+  => GPU speedup 6.33x vs software
+     correctness: OK (matches software limited-range, diff 0)
 ```
 
 The GPU is **5-7x faster**, and the margin grows with resolution: the per-call
@@ -44,15 +46,17 @@ headroom.
    (A long pure-compute Rust loop that never yields to AROS also faults under
    SIGALRM preemption, so short bounded loops are required regardless.)
 
-2. **The shim's `fullRange` argument is not honored across the hosted call.**
-   `cm_gpu_convert_yuv420`'s 11th argument (stack-passed on AArch64) reaches the
-   GPU as nonzero even when 0 is passed, so the GPU always computes full-range
-   (the benchmark's correctness check reports the GPU output matching the
-   software *full-range* reference, diff 1). Called host-directly
-   (`make cocoametal-gpu`) both ranges are correct, so the discrepancy is in the
-   AROS->host argument marshalling for the trailing stack argument — a real bug
-   to fix before the ffmpeg/video consumer relies on range selection. Timing is
-   range-independent, so the performance result above is unaffected.
+2. **A trailing argument was misread across the AROS->host call (found, fixed).**
+   With gpufx ABI 1, `cm_gpu_convert_yuv420`'s 11th argument (`fullRange`,
+   stack-passed on AArch64) reached the GPU as garbage-nonzero even when 0 was
+   passed, so the GPU always computed full-range. Root cause: an AROS->host call
+   passes arguments 9+ on the stack, and the AArch64-ELF (AROS caller) and
+   Apple-arm64 (host dylib) stack-argument layouts differ; host-direct calls
+   (`make cocoametal-gpu`) were correct, so it was purely a marshalling bug. Fixed
+   in gpufx ABI 2 by passing a request **struct by pointer** (one register arg,
+   no stack args) — the benchmark now reports `correctness: OK ... diff 0`. The
+   general rule for this port: **a host-facing shim call with more than 8
+   register-class arguments is unsafe; use a struct pointer.**
 
 ## Build & run
 
