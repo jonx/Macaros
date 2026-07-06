@@ -307,6 +307,25 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     EMU boot node and `AROS_HOST_VOLUME` mounts. Stress test:
     `hosted/exwalk` (C:ExWalk, N concurrent ExNext/ExAll walker processes).
 
+36. **[OPEN] A SECOND emul-handler fault in `DoExamineNext` — a hardware
+    bus/address error (0x80000002), not a stack overflow.** Surfaced
+    2026-07-06 after item 35's stack fix shipped: `C:ExWalk 8x25 EXALL` over
+    `SYS:C` PASSes clean (24600 entries, 0 errors), but booting `C:Feraille`
+    with its recursive `SYS:` folder-size walker re-enabled throws a
+    containment requester — `Error 0x80000002 Hardware bus fault/address
+    error, Module emul-handler Segment 1 .text Offset 0x37A8, Function
+    DoExamineNext`. So it is a *distinct* bug from the stack overflow: an
+    unaligned or bad-pointer access on a path ExWalk's flat `SYS:C` walk does
+    not exercise but Feraille's concurrent recursive walk (ExAll with
+    size/comment over the whole boot volume, including nested drawers and the
+    darwin sidecar `.info`/meta reads) does. Feraille's folder-size walker is
+    re-gated off on AROS (Feraille `aros-port` 144433c) until this is fixed;
+    everything else in Feraille runs clean. To reproduce without Feraille,
+    extend `hosted/exwalk` to recurse into subdirectories and read
+    `ED_COMMENT`/`ED_SIZE` on a deep tree (the current ExWalk is flat). Prime
+    suspects: `hv_to_nfc`/`NameToAros` buffer handling or a misaligned struct
+    field in the ExAll control block on aarch64.
+
 ---
 
 *Status — **AROS boots through exec init; building the BASE kickstart toward a CLI***.
