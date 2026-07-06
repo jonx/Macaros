@@ -22,6 +22,7 @@
 #   aros-ctl cmdv           press Command-V
 #   aros-ctl mouse X Y      move pointer to logical X,Y
 #   aros-ctl resize W H     resize native host window content area
+#   aros-ctl wheel DY [DX]  scroll wheel: DY line steps (+ = down), DX (+ = right)
 #   aros-ctl click [BTN] [X Y] click (0=left default,1=right,2=middle)
 #   aros-ctl button BTN P [X Y] raw mouse button BTN pressed P
 #   aros-ctl menu [X Y]     open focused app menu (right-button hold+nudge)
@@ -615,6 +616,7 @@ button)
     fi
     ;;
 mouse)  ctl "M ${1:-0} ${2:-0}";;
+wheel)  ctl "W ${1:-1} ${2:-0}";;
 resize) ctl "R ${1:-800} ${2:-600}";;
 click)
     b="${1:-0}"
@@ -800,6 +802,6 @@ keymap)
     ;;
 wait)   sleep "${1:-1}";;
 *)
-    echo "usage: aros-ctl {deploy|run|status|stop|kill|type|enter|key|cmdc|cmdv|mouse|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|tasks|keymap|wait}" >&2
+    echo "usage: aros-ctl {deploy|run|status|stop|kill|type|enter|key|cmdc|cmdv|mouse|wheel|resize|click|button|menu|menuup|setting|clipboard|shot|record|log|crash|warn|libs|diag|tasks|keymap|wait}" >&2
     exit 1;;
 esac

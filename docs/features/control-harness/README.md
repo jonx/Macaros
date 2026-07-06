@@ -102,6 +102,7 @@ Invoke as `aros-ctl <cmd> [args]`.
 | `cmdc` | Command-C (arrives as Right-Amiga-C inside AROS) — copy via the clipboard bridge. |
 | `cmdv` | Command-V (Right-Amiga-V) — paste. |
 | `mouse X Y` | Move pointer to logical `X,Y`. |
+| `wheel DY [DX]` | Scroll wheel: `DY` whole line steps (positive = wheel down), optional `DX` horizontal steps (positive = wheel right). Injects a `CM_EV_WHEEL`; inside AROS it arrives as NewMouse `IDCMP_RAWKEY` `0x7A`/`0x7B` (vertical) and `0x7C`/`0x7D` (horizontal) press+release pairs, one press per step. |
 | `resize W H` | Resize the native host window content area to `W,H` points and enqueue a resize event. AROS' logical framebuffer mode is unchanged. |
 | `click [BTN] [X Y]` | Press+release a button (default 0=left, 1=right, 2=middle), optionally at `X,Y`. |
 | `button BTN P [X Y]` | Raw button: `BTN` pressed `P` (for press-hold-drag-release), optionally at `X,Y`. |

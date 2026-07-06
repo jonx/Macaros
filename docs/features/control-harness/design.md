@@ -157,9 +157,10 @@ The staging, in order (details in [spec.md](spec.md), and it tracks the sibling
   $AROS_CM_CONTROL  (a FIFO, default /tmp/aros-cm.ctl)   (2) one command per line
         │
         ▼  cm__control_init: dispatch_source on MAIN queue reads lines
-  cocoametal_control.m  ──► cm__control_exec()              (3) parse K/M/B/S
-        │   K/M/B  → cm__inj_push() onto a 256-slot ring
-        │   S      → cm__control_shot() immediately (readback → PPM)
+  cocoametal_control.m  ──► cm__control_exec()              (3) parse K/M/B/W/S
+        │   K/M/B/W → cm__inj_push() onto a 256-slot ring
+        │            (W = wheel steps: CM_EV_WHEEL, +dy down / +dx right)
+        │   S       → cm__control_shot() immediately (readback → PPM)
         ▼
   injection ring  ──► cm__control_drain()                  (4) drained FIRST,
         │                                                      before live NSEvents,
