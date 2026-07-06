@@ -13,7 +13,7 @@ find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     local best="" bt=0 d t
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 ; do
         [ -x "$d/tools/collect-aros" ] && [ -d "$d/gen/include" ] || continue
         t="$(stat -f %m "$d/tools/collect-aros" 2>/dev/null || echo 0)"

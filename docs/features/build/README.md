@@ -15,30 +15,50 @@ deploy stages and runs them.
 
 ## TL;DR — the reliable recipe
 
-```sh
-# 1. Stable build dir (NOT a session scratchpad) + reuse the prebuilt toolchain
-BUILD=/tmp/arosbuild ; XT=/tmp/aros-crosstools
-mkdir -p /tmp/graft-tools
-ln -sf /opt/homebrew/opt/llvm/bin/llvm-objcopy /tmp/graft-tools/objcopy   # macOS lacks objcopy
-export PATH="/tmp/graft-tools:/opt/homebrew/bin:$PATH"
+**One command** rebuilds the whole boot + desktop set into the stable tree,
+reusing the preserved toolchain (this is also the recovery tool after the macOS
+`/tmp` cleaner or a disk-full purge eats a tree):
 
-# 2. Configure — REUSE the toolchain (skip the ~1-2h LLVM build), no X11
-rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
+```sh
+graft/rebuild-aros.sh            # boot module set + desktop userland -> ~/aros-build
+# TARGETS="kernel-dos kernel-intuition" graft/rebuild-aros.sh   # a subset
+```
+
+It builds each metatarget in its own `make` call (avoids the mmake stale-DB
+failure), logs per target under `~/aros-build/rebuild-logs/`, continues past
+individual failures with a summary, writes the `AROS.boot` signature, and sets
+up the `objcopy` shim + PATH. It never runs a bare `make` and never rebuilds
+LLVM. If `~/aros-build` isn't configured yet, it prints the one-time configure
+line to run first.
+
+<details><summary>What that automates (the manual recipe)</summary>
+
+```sh
+# 1. Stable locations (NOT a session scratchpad, NOT /tmp) + reuse the toolchain
+BUILD=~/aros-build ; XT=~/aros-crosstools
+ln -sf "$XT/bin/llvm-objcopy" "$XT/bin/objcopy"        # macOS lacks objcopy; stable shim
+export PATH="$XT/bin:/opt/homebrew/bin:$PATH"
+
+# 2. Configure ONCE — REUSE the toolchain (skip the ~1-2h LLVM build), no X11
+cd "$BUILD"    # (rm -rf "$BUILD" first only for a truly clean reconfigure)
 ../aros-upstream/configure \
     --target=darwin-aarch64 --with-toolchain=llvm \
     --with-aros-toolchain=yes --with-aros-toolchain-install="$XT" \
     --without-x
 #   -> must print "checking whether to build crosstools... no"
 
-# 3. Build the BOOT MODULE SET via explicit metatargets (NOT a bare `make`)
+# 3. Build the BOOT MODULE SET + desktop via explicit metatargets (NOT a bare `make`)
 make kernel-exec kernel-kernel kernel-dos kernel-dosboot kernel-utility \
      kernel-intuition kernel-graphics kernel-layers ... \
-     workbench-libs-muimaster ... kernel-hidd-cocoa kernel-bootstrap-hosted
+     workbench-libs-muimaster ... kernel-hidd-cocoa kernel-bootstrap-hosted \
+     workbench-c workbench-system-wanderer workbench-classes-zune ...
 ```
+</details>
 
 The four rules that save you days are: **(1)** build in a stable directory,
 **(2)** reuse the toolchain, **(3)** never run a bare `make`, **(4)** build module
-metatargets, not the `kernel`/`workbench-libs` aggregates.
+metatargets, not the `kernel`/`workbench-libs` aggregates. `rebuild-aros.sh`
+encodes all four.
 
 ---
 
@@ -53,9 +73,16 @@ binaries still look present, so the next `make` runs against a half-deleted tree
 and produces a Frankenstein kickstart → `can't open dos.library v36` → `dosboot`
 guru. *This is the "I keep having to redo it" loop.*
 
-Use a stable location: **`/tmp/arosbuild`** (which `run-window.sh` already
-searches) or `~/aros-build`. `/tmp` survives the session; a scratchpad
-does not.
+**`/tmp` is not stable either.** The macOS periodic maintenance job deletes
+`/tmp` files untouched for ~3 days; over a multi-day gap it gutted
+`/tmp/arosbuild` and left the same half-deleted-tree symptoms (2026-07-04:
+`Libs/` down to 3 libraries, `C:` empty, kickstart reduced to `exec.library` +
+`kernel.resource`). The same fate awaits `/tmp/aros-crosstools`.
+
+Use a home location: **`~/aros-build`** for the build and **`~/aros-crosstools`**
+for the preserved toolchain (both are the defaults of
+`graft/build-darwin-aarch64.sh`, and `run-window.sh`/`aros-ctl` search
+`~/aros-build` first; `/tmp/arosbuild` remains a legacy fallback).
 
 ## 2. The cross-toolchain — do NOT rebuild it (~1–2 h)
 
@@ -70,13 +97,14 @@ The working toolchain is self-contained and **relocatable** (only depends on
 system libs + Homebrew `zstd`). Preserve and reuse it instead of rebuilding:
 
 ```sh
-cp -a <build>/bin/darwin-aarch64/tools/crosstools /tmp/aros-crosstools
-/tmp/aros-crosstools/bin/clang --version   # -> clang 20.1.0, Target: aarch64-unknown-aros
+cp -a <build>/bin/darwin-aarch64/tools/crosstools ~/aros-crosstools
+~/aros-crosstools/bin/clang --version   # -> clang 20.1.0, Target: aarch64-unknown-aros
 ```
 
 Then point `configure` at it with `--with-aros-toolchain=yes
---with-aros-toolchain-install=/tmp/aros-crosstools`. Confirm configure prints
-**`checking whether to build crosstools... no`**.
+--with-aros-toolchain-install=$HOME/aros-crosstools`. Confirm configure prints
+**`checking whether to build crosstools... no`**. Keep the copy in `$HOME`,
+not `/tmp` — the tmp purge (§1) eats it too.
 
 **Guard:** a bare `make` (default target) will still try to *build* the toolchain
 from source. The crosstools mmakefile now **refuses** unless you opt in:
@@ -102,14 +130,14 @@ useful diagnostic. Restore the **matching clang-20.1.0** freestanding headers:
 ```sh
 # the two that actually differ and bite: __stdarg_va_arg.h (the va_start macro)
 # and float.h. The rest of the freestanding set is version-stable.
-XT=/tmp/aros-crosstools/lib/clang/20/include
+XT=~/aros-crosstools/lib/clang/20/include
 for h in __stdarg_va_arg.h float.h stdarg.h stddef.h ; do
   curl -fsSL "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.0/clang/lib/Headers/$h" -o "$XT/$h"
 done
 ```
 
 The robust fix is to **preserve the toolchain** (copy `crosstools` to
-`/tmp/aros-crosstools`, §2 top) so the headers never get stripped in the first
+`~/aros-crosstools`, §2 top) so the headers never get stripped in the first
 place — then you never reach for Homebrew's mismatched set.
 
 ## 3. Build module metatargets — never a bare `make`
@@ -249,6 +277,8 @@ not, just leave it out.
 | SIGSEGV in `kernel.resource` startup, **before** `[KRN]` (fault `0xfffffffffffff480`) | hosted kickstart `memset`/`memcpy` bound to the weak `-lstdc` StdCBase stub (NULL StdCBase early) — `-lstdc.static` missing from the general `LDFLAGS` | `-lstdc.static` in `config/make.cfg.in` `LDFLAGS` (NOT just `KERNEL_LDFLAGS` — hosted kickstart is compiler=target). Verify `llvm-nm kernel.resource \| grep -w memset` is `T`, not `W`/`__memset_StdCBase_wrapper` |
 | Builds clean but the boot faults with no diagnostic | clang‑22 `va_start` header compiled by the clang‑20 binary | restore clang‑20.1.0 freestanding headers (§2) |
 | `[MMAKE] Nothing known about project kernel-kernel` | mmake rebuilt itself mid-run; stale metatarget DB | one target per `make` call (§3) |
+| `make <target>` "succeeds" instantly but installs nothing | **typo'd metatarget: mmake exits 0 on an unknown target** (`[MMAKE][0] Nothing known about target X` is not an error). Cost a full debug cycle: `kernel-clipboard`/`workbench-libs-stdc`/`workbench-libs-cybergraphics` were silent no-ops (real names `workbench-devs-clipboard`, `compiler-stdc`, `workbench-libs-cgfx`) | grep the make output for `Nothing known about target` after adding any new target name; resolve names via `grep -rhoE 'mmake=[a-z0-9-]+' <srcdir>/mmakefile.src` |
+| Wanderer requester `Could not open … "muimaster.library"` (deps all on disk) | one of Wanderer's hard deps is truly absent — commonly `cybergraphics.library` (target is `workbench-libs-cgfx`, NOT `-cybergraphics`) or `stdcio.library` (`compiler-stdcio`; without it every C: command is also silently mute) | `version <lib>.library` from the boot shell bisects it: "object not found" = missing lib |
 | `Display driver(s) failed… Entering emergency shell` | `icon.library` missing (no monitors load) **or** no `AROS.boot` signature | build the userland libs (§3b); stage `AROS.boot` (deploy doc) |
 | `Please insert volume "THEMES"` requester | AROSDefault theme not staged | `run-window.sh` stages it now; see deploy doc |
 | `ObtainSemaphore called in supervisor mode!!!` (intermittent) | VBlank `SIGALRM` delivered to a foreign host thread | SIGALRM guard in `core_IRQ` (§4) |

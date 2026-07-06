@@ -18,9 +18,12 @@
 set -euo pipefail
 
 # --- Paths (override via env) ------------------------------------------------
+# NOTE: /tmp is NOT stable across multi-day gaps — the macOS periodic cleaner
+# removes /tmp files untouched for ~3 days (it gutted $HOME/aros-build on
+# 2026-07-04). Both the build dir and the preserved crosstools live in $HOME.
 AROS_SRC="${AROS_SRC:-../aros-upstream}"   # checkout on branch aarch64-darwin-graft
-BUILD="${BUILD:-/tmp/arosbuild}"           # STABLE build dir (rule 1)
-XT="${XT:-/tmp/aros-crosstools}"           # preserved, reusable crosstools (rule 2)
+BUILD="${BUILD:-$HOME/aros-build}"         # STABLE build dir (rule 1)
+XT="${XT:-$HOME/aros-crosstools}"          # preserved, reusable crosstools (rule 2)
 LLVM="${LLVM:-/opt/homebrew/opt/llvm/bin}"
 SHIM="${SHIM:-/tmp/graft-tools}"           # objcopy shim dir
 
@@ -39,6 +42,12 @@ export PATH="$SHIM:/opt/homebrew/bin:$PATH"
 # If a preserved toolchain exists, REUSE it (skips the ~1-2h LLVM build).
 # Otherwise configure builds the AROS-patched clang 20.1.0 from source the first
 # time. --without-x: the display is Cocoa, not X11.
+# Migrate a legacy /tmp crosstools copy into $HOME before the cleaner eats it.
+if [ ! -x "$XT/bin/clang" ] && [ -x $HOME/aros-crosstools/bin/clang ]; then
+    echo "### migrating legacy crosstools $HOME/aros-crosstools -> $XT"
+    cp -a $HOME/aros-crosstools "$XT"
+fi
+
 REUSE_ARGS=()
 if [ -x "$XT/bin/clang" ]; then
     echo "### reusing preserved crosstools at $XT (no LLVM rebuild)"
@@ -69,12 +78,20 @@ fi
 # staleness the metatarget DB -> "Nothing known about project kernel-kernel").
 # This set boots to a CLI. The full Wanderer desktop needs more userland — see
 # docs/features/build/README.md section 3b.
+# CAREFUL: mmake exits 0 on an UNKNOWN target ("Nothing known about target X"
+# is not an error), so a typo here silently builds nothing. After adding a
+# target, check the output does not say "Nothing known about target".
+# (kernel-clipboard / workbench-libs-stdc / workbench-libs-cybergraphics were
+# such silent no-ops for a while: the real names are workbench-devs-clipboard,
+# compiler-stdc and workbench-libs-cgfx.)
 TARGETS=(
     kernel-exec kernel-kernel kernel-dos kernel-dosboot kernel-utility
     kernel-intuition kernel-graphics kernel-layers kernel-keymap
-    kernel-console kernel-input kernel-keyboard kernel-clipboard
+    kernel-console kernel-input kernel-keyboard
+    kernel-filesystem kernel-lddemon kernel-fs-con kernel-fs-ram
     kernel-hidd kernel-hidd-cocoa kernel-bootstrap-hosted
-    workbench-libs-stdc workbench-libs-cybergraphics
+    compiler-stdc compiler-stdcio workbench-devs-clipboard
+    workbench-libs-cgfx
 )
 for t in "${TARGETS[@]}"; do
     echo "### make $t"

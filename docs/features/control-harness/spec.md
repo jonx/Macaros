@@ -160,7 +160,7 @@ else yields empty and is skipped (use `key`).
 
 **`run` staging** (the load-bearing part; mirrors [run-window.sh](../../../graft/run-window.sh)):
 
-1. Resolve `BOOTD` via `find_bootd` (override `AROS_CTL_BOOTD` → `${BUILD:-/tmp/arosbuild}/…`
+1. Resolve `BOOTD` via `find_bootd` (override `AROS_CTL_BOOTD` → `${BUILD:-~/aros-build}/… → legacy /tmp/arosbuild/…`
    → in-repo `build/AROS/boot/darwin` → newest scratchpad build); error with a hint if none.
 2. Copy `cocoametal.dylib` (and `libpasteboard.dylib` if present) → `~/lib`.
 3. Install `Devs/Monitors/Cocoa`, remove `Devs/Monitors/headless`; `mkdir SYS:clips`.

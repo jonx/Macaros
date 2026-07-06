@@ -20,7 +20,7 @@ mkdir -p "$OUT"
 
 find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
-    for d in "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64"; do
+    for d in "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64"; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
             && [ -x "$d/tools/collect-aros" ] && { printf '%s\n' "$d"; return; }
     done

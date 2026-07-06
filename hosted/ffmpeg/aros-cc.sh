@@ -6,10 +6,10 @@
 # Two pieces, which on this machine live in DIFFERENT places:
 #   * the SDK tree  ($T = .../bin/darwin-aarch64): AROS/Developer/{include,lib} +
 #     tools/collect-aros. Must be COMPLETE (see find_tree). The canonical one is
-#     /tmp/arosbuild; stale session-scratchpad copies under /private/tmp get
+#     $HOME/aros-build; stale session-scratchpad copies under /private/tmp get
 #     garbage-collected and go half-empty, so we require posixc/stdio.h + libmui.a.
 #   * the crosstools ($CT): the AROS-patched clang + ld.lld + clang_rt. Read from the
-#     tree's config/make.cfg CROSSTOOLSDIR, else $AROS_CROSSTOOLS, else /tmp/aros-crosstools.
+#     tree's config/make.cfg CROSSTOOLSDIR, else $AROS_CROSSTOOLS, else $HOME/aros-crosstools.
 #
 # The patched clang gives the AROS predefines (__AROS__) with --target=aarch64-unknown-aros,
 # but its built-in spec bakes a (possibly stale) build dir for the includes/startfiles/
@@ -26,7 +26,7 @@ find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     local best="" bt=0 d t
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
@@ -44,7 +44,7 @@ T="$(find_tree)"
 BUILDROOT="$(cd "$T/../.." && pwd)"
 CT="${AROS_CROSSTOOLS:-}"
 [ -z "$CT" ] && CT="$(sed -n 's/^CROSSTOOLSDIR[[:space:]]*:=[[:space:]]*//p' "$BUILDROOT/config/make.cfg" 2>/dev/null | head -1)"
-[ -n "$CT" ] && [ -x "$CT/bin/clang" ] || CT=/tmp/aros-crosstools
+[ -n "$CT" ] && [ -x "$CT/bin/clang" ] || CT=$HOME/aros-crosstools
 CLANG="$CT/bin/clang"
 [ -x "$CLANG" ] || { echo "aros-cc: AROS clang not found ($CLANG); set AROS_CROSSTOOLS" >&2; exit 1; }
 

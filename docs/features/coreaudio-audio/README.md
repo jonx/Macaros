@@ -108,7 +108,7 @@ final output gain.
 The low-level playback path works. Remaining work is build and UX polish:
 
 - make the `ahi.device` build workaround first-class in the source build.
-  The concrete rescue (performed 2026-07-02 into `/tmp/arosbuild`; repeat if
+  The concrete rescue (performed 2026-07-02; repeat into the build dir (now `~/aros-build`) if
   the gen dir is wiped): the missing pieces are (a) the translation catalogs,
   which are UNINITIALIZED GIT SUBMODULES in `../aros-upstream`
   (`git submodule update --init workbench/devs/AHI/AHI/translations

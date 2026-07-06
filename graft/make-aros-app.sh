@@ -87,7 +87,8 @@ find_bootd() {
     if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
     _best=""; _bt=0
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/boot/darwin" \
+        $HOME/aros-build/bin/darwin-aarch64/AROS/boot/darwin \
         "$ROOT/build/AROS/boot/darwin" \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin ; do
         [ -x "$d/AROSBootstrap" ] || continue

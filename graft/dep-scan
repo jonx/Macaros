@@ -21,7 +21,7 @@ find_bootd() {
     local d t best="" bt=0
     local restore; restore="$(shopt -p nullglob)"; shopt -s nullglob
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/boot/darwin" \
         "$ROOT/build/AROS/boot/darwin" \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
         /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do

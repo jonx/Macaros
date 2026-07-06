@@ -55,13 +55,16 @@ ENT="${AROS_CTL_ENT:-$HERE/aros-host.entitlements.plist}"
 
 # The AROS boot dir (AROSBootstrap + .conf) is a BUILD OUTPUT outside the repo, so
 # discover it: $AROS_CTL_BOOTD wins, else the canonical build dir ($BUILD, default
-# /tmp/arosbuild — see build-darwin-aarch64.sh), else an in-repo staging dir, else
-# the newest matching scratchpad build (newest AROSBootstrap by mtime breaks ties).
+# ~/aros-build — see build-darwin-aarch64.sh; $HOME/aros-build is legacy, the macOS
+# periodic /tmp cleaner eats it across multi-day gaps), else an in-repo staging
+# dir, else the newest matching scratchpad build (newest AROSBootstrap by mtime
+# breaks ties).
 find_bootd() {
     if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
     best=""; bt=0
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/boot/darwin" \
+        $HOME/aros-build/bin/darwin-aarch64/AROS/boot/darwin \
         "$ROOT/build/AROS/boot/darwin" \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64/AROS/boot/darwin \
         /tmp/*/bin/darwin-aarch64/AROS/boot/darwin ; do
@@ -76,7 +79,7 @@ BOOTD="$(find_bootd)"
 if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
     echo "run-window.sh: no AROSBootstrap found." >&2
     echo "  point AROS_CTL_BOOTD at <build>/bin/darwin-aarch64/AROS/boot/darwin," >&2
-    echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to /tmp/arosbuild)." >&2
+    echo "  or build one with graft/build-darwin-aarch64.sh (BUILD defaults to ~/aros-build)." >&2
     exit 1
 fi
 echo ">> boot dir: $BOOTD"
@@ -165,7 +168,7 @@ write_startup_sequence() {
                     '    LoadKeymap RESTORE' \
                     'EndIf' \
                     'If EXISTS "C:KeymapWatch"' \
-                    '    Run >NIL: C:KeymapWatch' \
+                    '    Run <NIL: >NIL: C:KeymapWatch' \
                     'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \

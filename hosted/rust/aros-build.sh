@@ -31,7 +31,7 @@ find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     local best="" bt=0 d t
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" \
         "$REPO/build/AROS"/.. \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 \
         /tmp/*/bin/darwin-aarch64 ; do
@@ -52,11 +52,11 @@ echo "[stage2] AROS tree: $T"
 
 GEN="$T/gen"; DEV="$T/AROS/Developer"; LIBDIR="$DEV/lib"
 # The crosstools install: prefer an in-tree copy, else the canonical stable
-# toolchain (/tmp/aros-crosstools). $T/tools holds the HOST tools (collect-aros
+# toolchain ($HOME/aros-crosstools). $T/tools holds the HOST tools (collect-aros
 # etc.), NOT the cross toolchain -- pointing XTLIB there silently loses
 # -lclang_rt.builtins-aarch64 the moment no scratchpad tree matches.
 XT="${AROS_CROSSTOOLS:-$T/tools/crosstools}"
-[ -x "$XT/bin/clang" ] || XT="/tmp/aros-crosstools"
+[ -x "$XT/bin/clang" ] || XT="$HOME/aros-crosstools"
 [ -x "$XT/bin/clang" ] || { echo "aros-build: no crosstools (set AROS_CROSSTOOLS)" >&2; exit 2; }
 XTBIN="$XT/bin"; XTLIB="$XT/lib/generic"
 CDIR="$T/AROS/C"; COLLECT="$T/tools/collect-aros"

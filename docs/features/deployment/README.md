@@ -158,7 +158,7 @@ Generate them straight into the boot tree (each writes into `AROSDIR`, i.e. the
 tree you already boot) — one metatarget per `make` call, same env as the build doc:
 
 ```sh
-cd /tmp/arosbuild
+cd ~/aros-build
 make iconset-Gorilla-wbench-icons    # drawer + Prefs/System/Tools/Utilities .info (pulls in additional-icons)
 make workbench-images                # Themes → Prefs/Presets/Themes, Wallpapers, AROS.logo
 ```

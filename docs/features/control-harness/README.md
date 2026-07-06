@@ -147,7 +147,7 @@ repo root, so in-repo artifacts are found wherever the checkout lives):
 | `AROS_CTL_BOOTD` | *auto-discovered* | the AROS `boot/darwin` dir (`AROSBootstrap` + `.conf`) |
 
 `BOOTD` is a build output that lives outside the repo, so `run` discovers it
-(`$AROS_CTL_BOOTD` → `${BUILD:-/tmp/arosbuild}/…` → in-repo `build/AROS/boot/darwin`
+(`$AROS_CTL_BOOTD` → `${BUILD:-~/aros-build}/… → legacy /tmp/arosbuild/…` → in-repo `build/AROS/boot/darwin`
 → newest scratchpad build). If none is found, `run` prints how to set it or build one.
 
 ## Usage recipes

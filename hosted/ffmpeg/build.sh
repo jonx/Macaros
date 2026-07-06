@@ -31,7 +31,7 @@ find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     best="" ; bt=0
     for d in \
-        "${BUILD:-/tmp/arosbuild}/bin/darwin-aarch64" \
+        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 \
         /private/tmp/*/*/*/scratchpad/arosbuild/bin/darwin-aarch64 ; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
