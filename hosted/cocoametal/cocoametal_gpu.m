@@ -206,9 +206,15 @@ static int gpu_run(id<MTLComputePipelineState> pso, NSArray *buffers,
     return cb.status == MTLCommandBufferStatusCompleted ? 0 : -1;
 }
 
-int cm_gpu_scale(const void *src, int srcStride, int sw, int sh, void *dst,
-                 int dstStride, int dw, int dh, int filter)
+int cm_gpu_scale(const CmGpuScaleReq *req)
 {
+    if (!req)
+        return -1;
+    const void *src = req->src;
+    void *dst = req->dst;
+    int srcStride = req->srcStride, sw = req->sw, sh = req->sh;
+    int dstStride = req->dstStride, dw = req->dw, dh = req->dh;
+    int filter = req->filter;
     if (!src || !dst || sw < 1 || sh < 1 || dw < 1 || dh < 1
         || srcStride < sw * 4 || dstStride < dw * 4)
         return -1;
@@ -237,10 +243,15 @@ int cm_gpu_scale(const void *src, int srcStride, int sw, int sh, void *dst,
     return 0;
 }
 
-int cm_gpu_convert_yuv420(const void *y, int yStride, const void *u,
-                          int uStride, const void *v, int vStride, int w,
-                          int h, void *rgba, int dstStride, int fullRange)
+int cm_gpu_convert_yuv420(const CmGpuYuvReq *req)
 {
+    if (!req)
+        return -1;
+    const void *y = req->y, *u = req->u, *v = req->v;
+    void *rgba = req->rgba;
+    int yStride = req->yStride, uStride = req->uStride, vStride = req->vStride;
+    int w = req->w, h = req->h, dstStride = req->dstStride;
+    int fullRange = req->fullRange;
     if (!y || !u || !v || !rgba || w < 1 || h < 1 || yStride < w
         || uStride < (w + 1) / 2 || vStride < (w + 1) / 2
         || dstStride < w * 4)

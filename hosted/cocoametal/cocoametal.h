@@ -308,23 +308,42 @@ int        cm_record_stop(CMContext *);
  * (one GPU context for the process); headless callers get a lazy pair.
  * Any-thread callable; every call returns -1 when the GPU is unavailable
  * so callers keep a CPU fallback. Pixel formats are byte-order-agnostic
- * 4 bpp for scale; convert writes RGBA in memory order. */
-#define CM_GPU_ABI 1
+ * 4 bpp for scale; convert writes RGBA in memory order.
+ *
+ * ABI 2: the ops take a request STRUCT BY POINTER, not a long argument list.
+ * This is deliberate and load-bearing on the hosted port: an AROS->host call
+ * passes arguments 9+ on the stack, and the AArch64-ELF (AROS caller) and
+ * Apple-arm64 (host dylib) stack-argument layouts differ, so a trailing
+ * scalar arg is misread (ABI-1 `cm_gpu_convert_yuv420`'s `fullRange` and
+ * `cm_gpu_scale`'s `filter` both landed as garbage through the bridge). A
+ * single struct pointer rides entirely in a register, so every field is
+ * read correctly. Any host-facing shim call with >8 register-class args has
+ * this hazard — prefer a struct pointer. */
+#define CM_GPU_ABI 2
+
+typedef struct CmGpuScaleReq {
+    const void *src;
+    void       *dst;
+    int         srcStride, sw, sh;   /* source: bytes, pixels, pixels    */
+    int         dstStride, dw, dh;   /* dest:   bytes, pixels, pixels    */
+    int         filter;              /* 0 = nearest, 1 = bilinear        */
+} CmGpuScaleReq;
+
+typedef struct CmGpuYuvReq {
+    const void *y, *u, *v;           /* planar YUV 4:2:0 planes          */
+    void       *rgba;
+    int         yStride, uStride, vStride;
+    int         w, h;
+    int         dstStride;
+    int         fullRange;           /* 0 = limited (video), 1 = full    */
+} CmGpuYuvReq;
 
 int        cm_gpu_open(void);  /* idempotent; 0 = compute section ready */
 int        cm_gpu_abi(void);   /* CM_GPU_ABI compiled into this dylib */
-/* Point/bilinear scale (filter: 0 = nearest, 1 = bilinear); strides in
- * bytes; src and dst are tightly-rowed-or-wider 4 bpp buffers. */
-int        cm_gpu_scale(const void *src, int srcStride, int sw, int sh,
-                        void *dst, int dstStride, int dw, int dh,
-                        int filter);
-/* Planar YUV 4:2:0 -> RGBA8888. BT.601; fullRange 0 = limited (video)
- * range, 1 = full range. */
-int        cm_gpu_convert_yuv420(const void *y, int yStride,
-                                 const void *u, int uStride,
-                                 const void *v, int vStride,
-                                 int w, int h,
-                                 void *rgba, int dstStride, int fullRange);
+/* Point/bilinear scale; src/dst are tightly-rowed-or-wider 4 bpp buffers. */
+int        cm_gpu_scale(const CmGpuScaleReq *req);
+/* Planar YUV 4:2:0 -> RGBA8888, BT.601. */
+int        cm_gpu_convert_yuv420(const CmGpuYuvReq *req);
 
 #ifdef __cplusplus
 }

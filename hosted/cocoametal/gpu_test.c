@@ -21,10 +21,8 @@
 
 typedef int (*fn_open)(void);
 typedef int (*fn_abi)(void);
-typedef int (*fn_scale)(const void *, int, int, int, void *, int, int, int,
-                        int);
-typedef int (*fn_yuv)(const void *, int, const void *, int, const void *,
-                      int, int, int, void *, int, int);
+typedef int (*fn_scale)(const CmGpuScaleReq *);
+typedef int (*fn_yuv)(const CmGpuYuvReq *);
 
 static unsigned char clamp255(float v)
 {
@@ -157,7 +155,8 @@ int main(void)
     static unsigned char gout[DH * DW * 4], rout[DH * DW * 4];
 
     /* [GPU1] nearest, upscale + downscale: byte-exact vs the reference. */
-    if (gpu_scale(src, SW * 4, SW, SH, gout, DW * 4, DW, DH, 0) != 0) {
+    CmGpuScaleReq sc = { src, gout, SW * 4, SW, SH, DW * 4, DW, DH, 0 };
+    if (gpu_scale(&sc) != 0) {
         fprintf(stderr, "[GPU1] FAIL: cm_gpu_scale nearest\n");
         return 1;
     }
@@ -166,7 +165,8 @@ int main(void)
         fprintf(stderr, "[GPU1] FAIL: nearest upscale mismatch\n");
         return 1;
     }
-    if (gpu_scale(src, SW * 4, SW, SH, gout, DW2 * 4, DW2, DH2, 0) != 0
+    CmGpuScaleReq sc2 = { src, gout, SW * 4, SW, SH, DW2 * 4, DW2, DH2, 0 };
+    if (gpu_scale(&sc2) != 0
         || (ref_scale(src, SW * 4, SW, SH, rout, DW2 * 4, DW2, DH2, 0),
             memcmp(gout, rout, DH2 * DW2 * 4) != 0)) {
         fprintf(stderr, "[GPU1] FAIL: nearest downscale mismatch\n");
@@ -176,7 +176,8 @@ int main(void)
            SW, SH, DW, DH, DW2, DH2);
 
     /* [GPU2] bilinear: within +/-1 (GPU may fuse multiply-adds). */
-    if (gpu_scale(src, SW * 4, SW, SH, gout, DW * 4, DW, DH, 1) != 0) {
+    sc.filter = 1;
+    if (gpu_scale(&sc) != 0) {
         fprintf(stderr, "[GPU2] FAIL: cm_gpu_scale bilinear\n");
         return 1;
     }
@@ -199,7 +200,8 @@ int main(void)
     }
     static unsigned char gy[YH * YW * 4], ry[YH * YW * 4];
     for (int full = 0; full <= 1; full++) {
-        if (gpu_yuv(yb, YW, ub, CW, vb, CW, YW, YH, gy, YW * 4, full) != 0) {
+        CmGpuYuvReq yr = { yb, ub, vb, gy, YW, CW, CW, YW, YH, YW * 4, full };
+        if (gpu_yuv(&yr) != 0) {
             fprintf(stderr, "[GPU3] FAIL: cm_gpu_convert_yuv420 full=%d\n",
                     full);
             return 1;
