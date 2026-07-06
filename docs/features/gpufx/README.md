@@ -67,8 +67,21 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
 
 ## Milestones (greppable `[GFX*]`)
 
-- **[GFX0]** `cm_*` compute/blit section in the shim, sharing `cx->device`/queue;
-  a standalone host test scales a test image.
+- **[GFX0] DONE** — `cm_gpu_*` compute section in the shim
+  (`hosted/cocoametal/cocoametal_gpu.m`: `cm_gpu_open/abi/scale/convert_yuv420`),
+  sharing the display's `MTLDevice`+queue via `cm__gpu_adopt`. Host test
+  `make cocoametal-gpu` PASS (nearest byte-exact, bilinear ±1, YUV ±2). A
+  separate dlsym contract (`CM_GPU_ABI`); the frozen display CMIFace and
+  `CM_ABI_VERSION` are untouched.
+  - **On-device measured** ([`hosted/gpufx-bench`](../../../hosted/gpufx-bench/README.md),
+    `C:GpuFxBench`, a Rust software-vs-shim video benchmark): YUV420→RGBA is
+    **5.48× faster on the GPU at 720p, 6.72× at 1080p**. Two findings there: the
+    AROS hosted `CLOCK_MONOTONIC` is too coarse to time a frame (the benchmark
+    uses the host ns clock via `HostBind_LibcSym`), and **the shim's `fullRange`
+    argument is not honored across the AROS→host call** (the trailing stack arg
+    on AArch64) — the GPU always computes full-range. Host-direct calls
+    (`gpu_test.c`) honor it, so it is an AROS→host marshalling bug to fix before
+    the video consumer relies on range selection.
 - **[GFX1]** `gpufx.library` skeleton (native module) forwarding one call
   (`gpufx_scale`) to the shim via host-bridge; a `C:` test program drives it.
 - **[GFX2]** ffmpeg `libswscale` YUV→RGB routed through `gpufx`; output

@@ -41,7 +41,7 @@ one-look summary. Verified against the code, not just the docs.)
 [native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
 [printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
 [feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway) ·
-[gpufx](gpufx/README.md) (shim compute section built + host-tested; `gpufx.library` underway).
+[gpufx](gpufx/README.md) (shim compute section built + host-tested; Rust video benchmark shows 5-7x GPU speedup; `gpufx.library` underway).
 
 **⚪ Idea — design/spec only, no implementation yet:**
 [serial-bridge](serial-bridge/README.md) ·
