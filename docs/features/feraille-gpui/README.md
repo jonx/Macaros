@@ -1,11 +1,23 @@
 # Feraille on AROS (GPUI port)
 
-Status: **stage 1 PASS on booted AROS** (2026-07-03). Feraille's four UI-free
-crates (`feraille-core`, `feraille-disk-usage`, `feraille-fs-native`,
-`feraille-meta` incl. bundled SQLite) cross-compile for `aarch64-unknown-aros`
-and run live: `C:FerailleProbe` prints `FERAILLE-AROS: CORE PASS` (treemap
-layout + HTML export, homoglyph name hazards, SQLite preference/ant-trail
-roundtrip). Probe + link recipe: [`hosted/feraille/`](../../../hosted/feraille/).
+Status: **FERAILLE RUNS ON BOOTED AROS** (2026-07-04): `C:Feraille` boots the
+full app through the `gpui_aros` CPU backend — complete chrome, dark theme, a
+real `SYS:` listing — after `C:GpuiSmoke` proved the backend interactively
+(gradients/glyphs/shadows + live keyboard end-to-end). Since then (2026-07-06):
+dirty-rect repaint (identical frames skip raster+blit entirely), the native
+shell (Intuition menus via gadtools, asl.library file requesters, pointerclass
+cursor set, programmatic resize), a stack self-guard in the launcher, wheel +
+nav-key automation (`aros-ctl wheel`/`key`), and the emul-handler stack fix
+that un-gates Feraille's folder-size walker. Day-to-day status, launch
+contract, and feature-parity table live in the Feraille repo:
+`~/Source/Feraille/docs/features/aros-port.md` (the authoritative page);
+backend field notes in `~/Source/zed-aros/crates/gpui_aros/PORTING.md` +
+`HANDOFF.md`.
+
+Stage-1 probe (still useful as a smoke): `C:FerailleProbe` prints
+`FERAILLE-AROS: CORE PASS` (treemap layout + HTML export, homoglyph name
+hazards, SQLite roundtrip). Probe + link recipe:
+[`hosted/feraille/`](../../../hosted/feraille/).
 
 ## Goal
 
@@ -107,10 +119,14 @@ All encoded in `hosted/feraille/core-probe/.cargo/config.toml` and
 ## Milestones
 
 1. ~~UI-free crates run on booted AROS~~ — **DONE** (`C:FerailleProbe`).
-2. Static window: gpui_aros opens an Intuition-hosted window via the shim,
-   software-rasterizes a quad + one line of shaped text, `cm_present`s it.
-3. Interactive shell: input/clipboard/menus/dialogs/dispatchers; Feraille's
-   real views; dirty-rect repaint model.
-4. GPU accel explicit path (`gpufx.library` + shim compute section).
+2. ~~Static window~~ — **DONE** (`C:GpuiSmoke`: window + primitive gallery +
+   live keyboard on booted AROS).
+3. ~~Interactive shell~~ — **DONE**: Feraille's real views run; input,
+   clipboard, Intuition menus, asl requesters, pointer styles, wheel, and
+   the dirty-rect repaint model are in `gpui_aros`.
+4. GPU accel explicit path — shim compute section **DONE** (`cm_gpu_*`,
+   `make cocoametal-gpu` PASS; see [gpufx](../gpufx/README.md));
+   `gpufx.library` + consumers in progress.
 5. Native-the-Amiga-way feature pass (e.g. quarantine "where from" ->
-   filenote provenance), Zune theming.
+   filenote provenance), Zune theming, `feraille-shell-aros` for real
+   (icon.library icons, Workbench reveal, datatypes thumbnails).

@@ -40,7 +40,8 @@ one-look summary. Verified against the code, not just the docs.)
 [processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
 [native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
 [printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
-[feraille-gpui](feraille-gpui/README.md) (stage-1 probe passes; `gpui_aros` backend underway).
+[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway) ·
+[gpufx](gpufx/README.md) (shim compute section built + host-tested; `gpufx.library` underway).
 
 **⚪ Idea — design/spec only, no implementation yet:**
 [serial-bridge](serial-bridge/README.md) ·
