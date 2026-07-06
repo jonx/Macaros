@@ -1,0 +1,18 @@
+# Video-conversion benchmark: software (pure Rust) vs the cocoametal 3D shim's
+# GPU compute path (cm_gpu_convert_yuv420), for the YUV420 -> RGBA hot path that
+# a video player runs every frame. Built like hosted/feraille/core-probe.
+[package]
+name = "gpufx-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
+# Keep the software path honestly optimized — this is a fair fight.
+opt-level = 3
+lto = true
+codegen-units = 1
