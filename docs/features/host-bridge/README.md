@@ -67,6 +67,19 @@ inline library-call stubs, so Rust needs a hand-written `extern "C"` glue
 purely how the AROS side is exposed. Wrap host taps as normal functions and the glue
 disappears.
 
+## Gotcha: keep host-facing calls to ≤8 register-class arguments
+
+An AROS→host call crosses two calling conventions: the AROS side is compiled
+AArch64-ELF (AAPCS64), the host dylib is Apple-arm64. They agree on the first 8
+integer/pointer arguments (registers `x0`–`x7`) but **disagree on how arguments
+9+ are laid out on the stack**, so a 9th+ scalar argument is read as garbage on
+the host side. This bit gpufx: `cm_gpu_convert_yuv420`'s 11th arg (`fullRange`)
+always arrived nonzero across the bridge even though host-direct calls were
+correct. The fix — and the rule for every new host-facing shim entry point —
+is to **pass a request struct by pointer** when you need more than a handful of
+arguments: the pointer rides in one register and every field is then read
+correctly (see `CmGpuScaleReq`/`CmGpuYuvReq` in `hosted/cocoametal/cocoametal.h`).
+
 ## What can't be standardized
 
 The custom host dylib itself (shape 2) is real, feature-specific code. And async
