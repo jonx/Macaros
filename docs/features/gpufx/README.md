@@ -2,8 +2,10 @@
 
 **Status: GFX0 + GFX1 built and verified on booted AROS** (2026-07-07) — the
 shim compute section and `gpufx.library` (the AROS-native front door) work, with
-a measured 5-7× video-conversion speedup over software. GFX2/GFX3 (the ffmpeg
-and gpui consumers) are not started; see [Milestones](#milestones-greppable-gfx).
+a measured **5-7× video-conversion** and **10-13× gpui present-scale** speedup
+over software (all output diff 0). GFX3's gpui-scale capability is measured; its
+`gpui_aros` wiring, the ffmpeg consumer (GFX2), and a full GPU scene rasteriser
+(GFX4) are the remaining work; see [Milestones](#milestones-greppable-gfx).
 This gives hosted AROS a GPU fast-path for pixel work (scale, colour convert, and
 eventually scene rasterisation), reusing the Metal device the display already
 owns. The baseline stays CPU — the [Feraille/gpui_aros](../feraille-gpui/README.md)
