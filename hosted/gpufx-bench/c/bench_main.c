@@ -31,11 +31,12 @@ char **aros_argv = 0;
 struct GpuFxIFace {
     int (*cm_gpu_open)(void);
     int (*cm_gpu_abi)(void);
+    int (*cm_gpu_scale)(const CmGpuScaleReq *req);
     int (*cm_gpu_convert_yuv420)(const CmGpuYuvReq *req);
 };
 
 static const char *gpufx_libs[] = { "cocoametal.dylib", (const char *)0 };
-static const char *gpufx_syms[] = { "cm_gpu_open", "cm_gpu_abi",
+static const char *gpufx_syms[] = { "cm_gpu_open", "cm_gpu_abi", "cm_gpu_scale",
                                     "cm_gpu_convert_yuv420", (const char *)0 };
 
 static struct GpuFxIFace *gpufx_bind(void)
@@ -99,6 +100,16 @@ int gfxbench_gpu_convert_yuv420(const void *y, int yStride, const void *u,
     CmGpuYuvReq req = { y, u, v, rgba, yStride, uStride, vStride,
                         w, h, dstStride, fullRange };
     return g->cm_gpu_convert_yuv420(&req);
+}
+
+int gfxbench_gpu_scale(const void *src, int srcStride, int sw, int sh,
+                       void *dst, int dstStride, int dw, int dh, int filter)
+{
+    struct GpuFxIFace *g = gpufx_bind();
+    if (!g || !g->cm_gpu_scale)
+        return -1;
+    CmGpuScaleReq req = { src, dst, srcStride, sw, sh, dstStride, dw, dh, filter };
+    return g->cm_gpu_scale(&req);
 }
 
 int main(int argc, char **argv)

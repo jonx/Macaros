@@ -1,41 +1,51 @@
-# gpufx-bench — video conversion: software vs the 3D shim
+# gpufx-bench — software vs the 3D shim (video convert + gpui scale)
 
-A Rust program (`C:GpuFxBench`) that measures the YUV420 -> RGBA color
-conversion a video player runs on every decoded frame, both ways:
+A Rust program (`C:GpuFxBench`) that measures the two pixel hot paths gpufx
+accelerates, each software vs GPU:
 
-- **software** — a pure-Rust BT.601 kernel, `-O3`/LTO (the honest baseline);
-- **GPU (3D shim)** — the cocoametal display shim's `cm_gpu_convert_yuv420`
-  compute path ([gpufx](../../docs/features/gpufx/README.md)), which runs on the
-  same Metal device the AROS window already owns.
+- **video** — YUV420 -> RGBA color conversion (what a player runs per decoded
+  frame; `libswscale`'s job), via `cm_gpu_convert_yuv420`;
+- **gpui present-scale** — RGBA bilinear upscale (render at 1x, GPU-upscale to a
+  2x HiDPI window — "dynamic resolution"), via `cm_gpu_scale`.
 
-It builds a deterministic 1280x720 and 1920x1080 frame, times both paths, and
-reports frames/s, megapixels/s, MB/s, the GPU speedup, and a correctness check
-that the two paths agree.
+Software is a pure-Rust `-O3`/LTO kernel (the honest baseline); GPU is the
+cocoametal shim's compute path ([gpufx](../../docs/features/gpufx/README.md)),
+on the same Metal device the AROS window already owns. Each path is timed with
+the host ns clock and byte-verified against the software reference.
 
-## Results (Apple M-series, 2026-07-06, booted hosted AROS, gpufx ABI 2)
+## Results (Apple M-series, 2026-07-07, booted hosted AROS, gpufx ABI 2)
+
+Video conversion (YUV420 -> RGBA, BT.601 limited):
 
 ```
-[1280x720]  (0.92 MP/frame)
-  software (Rust -O3)       4.240 ms/frame    235.9 fps    217.4 MP/s     869 MB/s
-  GPU (3D shim)             0.868 ms/frame   1152.3 fps   1062.0 MP/s    4248 MB/s
-  => GPU speedup 4.89x vs software
-     correctness: OK (matches software limited-range, diff 0)
-
-[1920x1080]  (2.07 MP/frame)
-  software (Rust -O3)      10.019 ms/frame     99.8 fps    207.0 MP/s     828 MB/s
-  GPU (3D shim)             1.582 ms/frame    632.0 fps   1310.5 MP/s    5242 MB/s
-  => GPU speedup 6.33x vs software
-     correctness: OK (matches software limited-range, diff 0)
+[1280x720]   software  4.39 ms  228 fps  |  GPU  0.88 ms  1131 fps  => 4.96x  (diff 0)
+[1920x1080]  software 10.89 ms   92 fps  |  GPU  1.58 ms   634 fps  => 6.90x  (diff 0)
 ```
 
-The GPU is **5-7x faster**, and the margin grows with resolution: the per-call
-cost includes the CPU<->GPU buffer copies (shared-storage `MTLBuffer`s) and the
-AROS<->host bridge, which is fixed overhead that more pixels amortize. A
-zero-copy present path (gpufx GFX3, feeding the finished frame straight to the
-window texture) would remove that copy and widen the gap further. Even so, at
-1080p the software path (99 fps) is already near the limit for smooth 60 fps
-video once decode + paint are added, while the GPU path (669 fps) has ample
-headroom.
+gpui present-scale (RGBA bilinear upscale, render 1x -> HiDPI 2x):
+
+```
+[640x400  -> 1280x800]   software  9.85 ms  102 fps  |  GPU 1.02 ms  986 fps  =>  9.71x  (diff 0)
+[1280x800 -> 2560x1600]  software 38.98 ms   26 fps  |  GPU 3.00 ms  334 fps  => 13.00x  (diff 0)
+```
+
+Video: GPU **5-7x**, margin growing with resolution (the per-call CPU<->GPU copy
++ AROS<->host bridge is fixed overhead more pixels amortize). At 1080p software
+(92 fps) is already near the smooth-video limit once decode + paint are added;
+GPU (634 fps) has ample headroom.
+
+gpui scale: GPU **10-13x**, larger because bilinear scaling is heavier per output
+pixel and the CPU cost grows with output size — at 2560x1600 the software upscale
+is 39 ms/frame (26 fps, unusable for a smooth UI) while the GPU does it in 3 ms.
+
+**Honest scope for gpui.** This measures the *scale* step, which is the only
+part of gpui's present that gpufx accelerates. gpui's real per-frame cost is
+CPU *rasterization* (tiny-skia turning the scene into pixels), which gpufx does
+NOT touch, and gpui's default 1:1 present already ends in Metal via the shim.
+So the 10-13x is the win *if* gpui adopts a dynamic-resolution present (render
+low, GPU-upscale — a quality/speed tradeoff), not a blanket "gpui is 13x
+faster." A full gpui GPU speedup would need a Metal scene renderer (gpufx GFX4,
+out of scope).
 
 ## Two things this benchmark surfaced
 

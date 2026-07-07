@@ -115,21 +115,31 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
     convention.
 - **[GFX2]** ffmpeg `libswscale` YUV→RGB routed through `gpufx` (or direct
   `cm_gpu_*`); FFView video verified, output byte-compared to the CPU kernel.
-- **[GFX3]** `gpui_aros` present/scale through `gpufx` — hand the finished RGBA
-  frame to `cm_gpu_scale` for the upload+present instead of the CPU
-  `WritePixelArray` blit. **This is what yields a gpui software-vs-GPU number**
-  (today gpui is CPU-only, so there is none). Pairs with a gpui-scene benchmark
-  alongside the video one. Software fallback verified identical.
-- **[GFX4]** (optional) transparent `graphics.library` scale/`CopyBox` hook.
+- **[GFX3] MEASURED (capability), integration is opt-in** — the gpui
+  present-scale path. The `gpufx-bench` gpui-scale section measures RGBA
+  bilinear upscale (render 1x -> HiDPI 2x) software vs GPU on booted AROS:
+  **9.7x at 1280x800, 13.0x at 2560x1600**, output diff 0. Honest scope: gpufx
+  accelerates the *scale* step only; gpui's per-frame cost is CPU
+  *rasterization* (tiny-skia), which gpufx does not touch, and the default 1:1
+  present already ends in Metal via the shim. So the win is real *if* gpui
+  adopts a dynamic-resolution present (render low, GPU-upscale — a quality/speed
+  tradeoff). Wiring that into `gpui_aros` (e.g. an opt-in `GPUI_AROS_DYNRES`
+  factor: render to a smaller pixmap, `cm_gpu_scale` to the window) is the
+  remaining integration; the perf case for it is now proven.
+- **[GFX4]** (optional) full GPU scene rasteriser (a Metal port of gpui's
+  quad/sprite/path renderer) for a blanket gpui speedup, and/or a transparent
+  `graphics.library` scale/`CopyBox` hook. Out of scope for now.
 
 ## Current state (2026-07-07)
 
-Built and verified on booted AROS: **GFX0 + GFX1** — the shim compute section
-(ABI 2), the Rust video benchmark (5-6× vs software, diff 0), and
-**`gpufx.library`** as the AROS-native front door (`C:GpuFxTest` = `GPUFX: PASS`,
-GPU path AVAILABLE). GFX2/GFX3 unstarted. Recommended next: **GFX3** (route
-gpui's present/scale through gpufx) — it unlocks the gpui software-vs-GPU number
-the video benchmark can't give — then **GFX2** (the ffmpeg consumer).
+Built and verified on booted AROS: **GFX0 + GFX1**, plus the **GFX3 capability**
+measured. The shim compute section (ABI 2), `gpufx.library` (front door,
+`C:GpuFxTest` = `GPUFX: PASS`), and `C:GpuFxBench` measuring both hot paths:
+video YUV->RGBA (5-7x GPU) and gpui present-scale (10-13x GPU), both diff 0.
+What's left: wiring the gpui dynamic-resolution present into `gpui_aros` (GFX3
+integration, opt-in), the ffmpeg consumer (GFX2), and a full GPU scene
+rasteriser (GFX4). All GPU paths keep a CPU fallback, so software is always the
+baseline.
 
 ## Risks
 
