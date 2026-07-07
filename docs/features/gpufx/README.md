@@ -1,10 +1,14 @@
-# gpufx.library — GPU-accelerated 2D for hosted AROS (design)
+# gpufx.library — GPU-accelerated 2D for hosted AROS
 
-**Status: design only, not built.** This is the plan for giving hosted AROS a
-GPU fast-path for pixel work (scale, blit, colour convert, and eventually
-scene rasterisation), reusing the Metal device the display already owns. Today
-everything is CPU: the [Feraille/gpui_aros](../feraille-gpui/README.md)
-renderer is pure tiny-skia, and ffmpeg's colour conversion is a scalar kernel.
+**Status: GFX0 + GFX1 built and verified on booted AROS** (2026-07-07) — the
+shim compute section and `gpufx.library` (the AROS-native front door) work, with
+a measured 5-7× video-conversion speedup over software. GFX2/GFX3 (the ffmpeg
+and gpui consumers) are not started; see [Milestones](#milestones-greppable-gfx).
+This gives hosted AROS a GPU fast-path for pixel work (scale, colour convert, and
+eventually scene rasterisation), reusing the Metal device the display already
+owns. The baseline stays CPU — the [Feraille/gpui_aros](../feraille-gpui/README.md)
+renderer is pure tiny-skia and ffmpeg's colour conversion is a scalar kernel —
+and `gpufx` accelerates it without becoming a hard dependency.
 
 ## The core idea: share one GPU context, don't make a second
 
