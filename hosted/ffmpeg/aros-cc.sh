@@ -60,6 +60,12 @@ export COMPILER_PATH="$T/tools:$CT/bin"
 # matches the host ABI and fixes the h264/hevc crashes. See ffmpeg-native README.
 COMMON=(--target=aarch64-unknown-aros -mcmodel=large -ffixed-x18)
 INC=(-isystem "$DEV/aros/posixc" -isystem "$DEV/aros/stdc" -isystem "$DEV" -isystem "$T/gen/include")
+# Self-heal a crosstools gap: the clang resource dir is a preserved binary
+# outside the repo and a scrub can drop <stdalign.h> (ffmpeg needs it; the AROS
+# SDK C does not). -idirafter is searched LAST, so the toolchain's own copy
+# wins when present and this vendored one fills the gap only when it is missing.
+HERE_CC="$(cd "$(dirname "$0")" && pwd)"
+[ -d "$HERE_CC/compat" ] && INC+=(-idirafter "$HERE_CC/compat")
 
 # compile / preprocess / depgen only -> just the front end, no link machinery
 case " $* " in

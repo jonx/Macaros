@@ -21,6 +21,13 @@ T="$(find_tree)"
 [ -n "$T" ] || { echo "deploy: no AROS SDK tree (set AROS_BUILD)" >&2; exit 1; }
 export AROS_BUILD="$T"
 [ -d "$SYS/lib" ] || { echo "deploy: $SYS missing -- run build-video.sh first" >&2; exit 1; }
+# FFView opens gpufx.library for GPU colour-convert/scale, so ffview.c includes
+# <proto/gpufx.h>. That header is installed by the gpufx.library build; fail
+# early with a clear message rather than a cryptic mid-compile error.
+[ -f "$T/gen/include/proto/gpufx.h" ] || {
+    echo "deploy: $T is missing the gpufx headers (proto/gpufx.h)." >&2
+    echo "        Build gpufx.library first:  (cd ~/aros-build && make hostlibs-gpufx)" >&2
+    exit 1; }
 CDEST="$T/AROS/C"
 
 LIBS="-lavformat -lavcodec -lswscale -lswresample -lavutil -lpthread"
