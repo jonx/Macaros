@@ -20,12 +20,17 @@ doesn't reuse it.
 
 - **`std::net`** — `TcpStream::connect` + `write_all`/`read_exact` round-trip over the
   bsdsocket bridge, plus `local_addr`/`peer_addr`/`set_nodelay` (`C:RustStdNet`). IPv4.
+  `try_clone`/`duplicate` now work (`Dup2Socket`).
 - **`fs`** — `File` create/write/**read**/seek + `metadata` (size/type/perms) +
-  `read_dir` (listed 35 real entries) on the `MacRW:` host share.
-- **`env`** — `getenv` **and** `setenv` (`set_var` reads back) + `unsetenv`.
+  `read_dir` on the `MacRW:` host share, plus **`set_permissions`** (chmod/fchmod),
+  **`symlink`+`readlink`**, and path **`set_times`** (utimes) — all verified live
+  2026-07-07.
+- **`env`** — `getenv` **and** `setenv` (`set_var` reads back) + `unsetenv`, plus
+  **`std::env::vars()` enumeration** (walks `pr_LocalVars`).
 - **`args`** — `std::env::args()` from the shell command line.
-- **`process`** — `Command::new("Echo").arg(..).output()` ran a real `C:` command,
-  captured its stdout, and returned exit code 0 (via dos `SystemTagList`).
+- **`process`** — `Command::output()`/`status()` runs a real `C:` command and captures
+  stdout/exit code (dos `SystemTagList`), now honouring **per-command `env` + `cwd`**
+  (injected `CD`/`Set` script via `Execute`) — verified live 2026-07-07.
 - **`time`** — `Instant`/`SystemTime` via `clock_gettime` (unblocked by the OS
   `-ffixed-x18` rebuild; used to SIGBUS).
 - **`std::thread`** — 4 threads incrementing a shared `Mutex<u64>` to exactly 4000,

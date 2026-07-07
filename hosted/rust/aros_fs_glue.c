@@ -10,7 +10,9 @@
  */
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <dirent.h>
+#include <unistd.h>
 
 /* Fixed layout the Rust pal mirrors 1:1 (all naturally aligned, 8-byte alignment). */
 struct aros_fileattr {
@@ -97,4 +99,23 @@ void aros_closedir(void *dir)
 {
     if (dir)
         closedir((DIR *)dir);
+}
+
+/* --- file times (set_times) ------------------------------------------------- *
+ * posixc has utimes() (path + struct timeval[2]) but no futimes/lutimes/utimensat,
+ * so the fd-based File::set_times and the nofollow variant stay Unsupported in the
+ * pal. We take sec/nsec pairs and build the timeval[2] on the C side so the Rust pal
+ * never lays out struct timeval (usec, not nsec). times[0]=atime, times[1]=mtime. */
+int aros_utimes(const char *path,
+                long long atime_sec, long long atime_nsec,
+                long long mtime_sec, long long mtime_nsec)
+{
+    struct timeval tv[2];
+    if (!path)
+        return -1;
+    tv[0].tv_sec  = (long)atime_sec;
+    tv[0].tv_usec = (long)(atime_nsec / 1000);
+    tv[1].tv_sec  = (long)mtime_sec;
+    tv[1].tv_usec = (long)(mtime_nsec / 1000);
+    return utimes(path, tv);
 }

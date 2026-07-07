@@ -282,6 +282,17 @@ int aros_np_set_nonblock(int s, int nonblock)
     return IoctlSocket(s, FIONBIO, (char *)&arg);
 }
 
+/* Dup2Socket(fd, -1) allocates a fresh descriptor referring to the same underlying
+ * socket (BSD dup semantics), for TcpStream/TcpListener/UdpSocket::try_clone. The
+ * library park model does NOT interfere here: both descriptors share one host socket.
+ * Returns the new fd, or -1. */
+int aros_np_dup(int s)
+{
+    if (!SocketBase || s < 0)
+        return -1;
+    return Dup2Socket(s, -1);
+}
+
 /* Resolve an IPv4 host name to up to `max` addresses (network order) via
  * gethostbyname. Returns the count written, or -1 on failure (h_errno-ish via
  * Errno). Rust only calls this for non-literal hosts. */

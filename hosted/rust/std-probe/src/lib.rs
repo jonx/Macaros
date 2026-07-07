@@ -4,6 +4,7 @@
 //! build either succeeds (some pal selected) or fails at the pal/libc wall.
 //! With the aros stdio pal + build.rs known-target entry, std is no longer
 //! `restricted_std` and println writes through posixc to dos Output().
+#![feature(fs_set_times)] // std::fs::set_times is still unstable; exercised in RS3e
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -231,6 +232,135 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
             r.as_ref().ok().and_then(|o| o.status.code()),
             r.as_ref().err().map(|e| e.kind())
         );
+    }
+
+    // RS3e: the pal corners closed this pass -- fs symlinks/perms/times, env::vars
+    // enumeration, per-command env + cwd, and net try_clone. Each is its own closure
+    // so one failure prints and never aborts the run (panic=abort).
+
+    // A1 fs: set_permissions round-trip (chmod -> readonly bit visible in metadata).
+    {
+        let pf = "MacRW:rs3e-perm.txt";
+        let _ = std::fs::remove_file(pf);
+        let r = (|| -> std::io::Result<bool> {
+            std::fs::write(pf, b"x")?;
+            let mut p = std::fs::metadata(pf)?.permissions();
+            p.set_readonly(true);
+            std::fs::set_permissions(pf, p)?;
+            let ro = std::fs::metadata(pf)?.permissions().readonly();
+            let mut p2 = std::fs::metadata(pf)?.permissions();
+            p2.set_readonly(false); // undo so remove_file works
+            let _ = std::fs::set_permissions(pf, p2);
+            Ok(ro)
+        })();
+        println!("[RS3e] fs set_permissions: readonly-after-chmod={r:?} (expect Ok(true))");
+        let _ = std::fs::remove_file(pf);
+    }
+
+    // A1 fs: std::fs::set_times (path, utimes) -- set mtime, read it back.
+    {
+        let tf = "MacRW:rs3e-time.txt";
+        let _ = std::fs::remove_file(tf);
+        let want = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_100_000_000);
+        let r = (|| -> std::io::Result<u64> {
+            std::fs::write(tf, b"t")?;
+            let ft = std::fs::FileTimes::new().set_modified(want).set_accessed(want);
+            std::fs::set_times(tf, ft)?;
+            let got = std::fs::metadata(tf)?.modified()?;
+            Ok(got.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        })();
+        println!("[RS3e] fs set_times: mtime-readback={r:?}s (expect ~1100000000)");
+        let _ = std::fs::remove_file(tf);
+    }
+
+    // A1 fs: symlink + readlink (posixc symlink->MakeLink, readlink->ReadLink).
+    // Link support is filesystem-dependent; report exactly what the handler did.
+    {
+        let target = "MacRW:rs3e-lnk-target.txt";
+        let link = "MacRW:rs3e-lnk";
+        let _ = std::fs::remove_file(link);
+        let _ = std::fs::remove_file(target);
+        let r = (|| -> std::io::Result<(bool, bool)> {
+            std::fs::write(target, b"linked")?;
+            #[allow(deprecated)]
+            std::fs::soft_link(target, link)?; // -> sys::fs::symlink (posixc symlink)
+            let is_link = std::fs::symlink_metadata(link)?.file_type().is_symlink();
+            let readback = std::fs::read_link(link)?;
+            let readback_ok = readback.to_string_lossy().contains("rs3e-lnk-target");
+            Ok((readback_ok, is_link))
+        })();
+        // Success = the link was created and readlink returned the right target. The
+        // is_symlink flag depends on the handler's lstat (host-backed emul-handler
+        // does not set S_IFLNK), so it is reported but not the pass criterion.
+        println!("[RS3e] fs symlink+readlink: readlink-target-ok/is_symlink={r:?} (expect readlink-ok=true)");
+        let _ = std::fs::remove_file(link);
+        let _ = std::fs::remove_file(target);
+    }
+
+    // A4 env: std::env::vars() enumeration (walks pr_LocalVars). set two, expect both.
+    {
+        unsafe {
+            std::env::set_var("RS3E_ONE", "alpha");
+            std::env::set_var("RS3E_TWO", "beta");
+        }
+        let all: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let one = all.get("RS3E_ONE").map(String::as_str);
+        let two = all.get("RS3E_TWO").map(String::as_str);
+        println!(
+            "[RS3e] env::vars: total={} RS3E_ONE={one:?} RS3E_TWO={two:?} (expect Some(\"alpha\"),Some(\"beta\"))",
+            all.len()
+        );
+    }
+
+    // A2 process: per-command env reaches the child. `Get` reads the LOCAL var store
+    // -- the same store posixc `getenv` (any real child) reads and our injected `Set`
+    // writes. (`Getenv` would be wrong: it reads global ENV: only.)
+    {
+        let r = std::process::Command::new("Get")
+            .arg("RS3E_CMDENV")
+            .env("RS3E_CMDENV", "env-to-child-77")
+            .output();
+        match &r {
+            Ok(o) => println!(
+                "[RS3e] process env: Get -> {:?} (expect contains env-to-child-77)",
+                String::from_utf8_lossy(&o.stdout).trim()
+            ),
+            Err(e) => println!("[RS3e] process env: FAILED {e:?}"),
+        }
+    }
+
+    // A2 process: current_dir -- MakeDir a relative name in a set cwd, check where it lands.
+    {
+        let base = "RAM:rs3e-cwd";
+        let made = "RAM:rs3e-cwd/made-here";
+        let _ = std::fs::remove_dir(made);
+        let _ = std::fs::remove_dir(base);
+        let r = (|| -> std::io::Result<bool> {
+            std::fs::create_dir(base)?;
+            let out = std::process::Command::new("MakeDir")
+                .arg("made-here")
+                .current_dir(base)
+                .output()?;
+            let landed = std::fs::metadata(made).map(|m| m.is_dir()).unwrap_or(false);
+            let _ = out;
+            Ok(landed)
+        })();
+        println!("[RS3e] process cwd: relative MakeDir landed in cwd={r:?} (expect Ok(true))");
+        let _ = std::fs::remove_dir(made);
+        let _ = std::fs::remove_dir(base);
+    }
+
+    // A3 net: try_clone (Dup2Socket) -- a UDP socket and its clone share the same local addr.
+    {
+        use std::net::UdpSocket;
+        let r = (|| -> std::io::Result<bool> {
+            let s = UdpSocket::bind("127.0.0.1:0")?;
+            let a = s.local_addr()?;
+            let s2 = s.try_clone()?;
+            let a2 = s2.local_addr()?;
+            Ok(a == a2 && a.port() != 0)
+        })();
+        println!("[RS3e] net try_clone: dup shares local addr={r:?} (expect Ok(true))");
     }
 
     println!("RUST-AROS: STD PASS");

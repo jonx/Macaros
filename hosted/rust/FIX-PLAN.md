@@ -6,6 +6,20 @@
 > in `../aros-upstream`. Status doc: [STD-PORT.md](STD-PORT.md). The Rust-on-68k
 > track lives in [../jit68k/rust68k/](../jit68k/rust68k/README.md).
 
+## 0. 2026-07-07 pal additions (verified live)
+
+New pal surface landed and verified on booted AROS (`RUST-AROS: STD PASS` + the RS3e
+block): `fs` `set_permissions`/`set_perm` (chmod/fchmod), `symlink`+`readlink`, path
+`set_times` (utimes); `env::vars()` enumeration (`aros_env_glue.c` over `pr_LocalVars`);
+`process` per-command **env + cwd** (injected `CD`/`Set` script run by `Execute`); `net`
+`try_clone`/`duplicate` (`Dup2Socket`, code+link only — live-blocked on an unbuilt
+`bsdsocket.library`). Disclosed tier-3 gaps for the remaining corners are listed in
+[pr-artifacts/README.md](pr-artifacts/README.md). These are new features, not defect
+fixes, so the M-items below are unchanged — **except** that the new process temp script
+(`MacRW:rustcmd-<n>.aros`) shares finding **M4**'s per-process-counter collision risk
+(every process is pid 1); the same entropy fix (DateStamp ticks + task ptr) applies to
+both the capture temp names and the script name.
+
 ## 1. Fixes ALREADY APPLIED (in-tree, need a rebuild + test pass to verify)
 
 Applied to the working trees (this repo + `../rust-aros`), not yet

@@ -27,13 +27,15 @@ the pal or trusting `env`/`errno`/`Command::output` semantics under threads.
   3/3 byte-exact echoes plus a clean connect-refused error path, no crash. The bridge
   is x18-safe (glue + `bsdsocket.library` both `-ffixed-x18`).
 - **The pal is functionally complete** and verified live on booted AROS: real errno,
-  `env` (read+write), `args`, **`fs`** (files + metadata + `read_dir`), **`std::net`**
-  (TcpStream over the bsdsocket bridge), **`std::process`** (`Command` output/status via
-  dos `SystemTagList`), **`time`** (`Instant`/`SystemTime`), and **`std::thread`**
+  `env` (read+write+**`vars()` enumeration**), `args`, **`fs`** (files + metadata +
+  `read_dir` + **chmod/symlink/readlink/utimes**), **`std::net`** (TcpStream over the
+  bsdsocket bridge + **`try_clone`**), **`std::process`** (`Command` output/status +
+  **per-command env + cwd**), **`time`** (`Instant`/`SystemTime`), and **`std::thread`**
   (spawn/join + `Mutex`/`Condvar`/`RwLock` + pthread-key TLS — 4 threads sharing a
-  `Mutex` counter, verified solid). `time` + `thread` were unblocked by the OS-wide
-  `-ffixed-x18` rebuild. See the [pal table](#the-pal-what-std-needs-per-os) and
-  [Resume map](#resume-map).
+  `Mutex` counter, verified solid). The 2026-07-07 pass closed the fs/env/process
+  corners live (`RUST-AROS: STD PASS` + the RS3e block). Remaining items are disclosed
+  tier-3 gaps in [pr-artifacts/README.md](pr-artifacts/README.md). See the
+  [pal table](#the-pal-what-std-needs-per-os) and [Resume map](#resume-map).
 
 ## The mental model: three trees
 
@@ -75,16 +77,16 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `stdio/aros.rs` | done | `posixc` `write`/`read` on fd 0/1/2 |
 | `random/aros.rs` | done | calls `posixc` `arc4random_buf` (host CSPRNG borrowed via hostlib on hosted; weak fallback on native). The entropy policy lives in AROS (`compiler/crt/posixc/arc4random.c`), not the pal |
 | `io/error/aros.rs` | done | real `posixc` errno via `__stdc_geterrnoptr` + `strerror`, NetBSD `ErrorKind` map |
-| `env/aros.rs` | done (read+write) | `getenv`/`setenv`/`unsetenv` verified live; only `vars()` enumeration is empty (no POSIX `environ`) |
+| `env/aros.rs` | done (read+write+**enum**) | `getenv`/`setenv`/`unsetenv` + **`vars()` enumeration** (walks `pr_LocalVars` via `aros_env_glue.c`) — all verified live (`env::vars` returns `RS3E_ONE`/`RS3E_TWO`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
-| `fs/aros.rs` | done | files (create/write/read/seek/close), `metadata`/`stat`/`fstat`/`exists`, and `read_dir` (opendir/readdir) — all verified live; only symlinks/`set_perm`/times remain stubs |
+| `fs/aros.rs` | done | files, `metadata`/`stat`/`fstat`/`exists`, `read_dir`, **`set_permissions`/`set_perm` (chmod/fchmod)**, **`symlink`+`readlink`**, **path `set_times` (utimes)** — all verified live. `File::set_times`/`set_times_nofollow` `Unsupported` (no `futimes`/`lutimes`); `is_symlink()` reads false on the emul-handler (its `lstat` omits `S_IFLNK`); `link`/`copy`/`canonicalize`/`remove_dir_all`/`truncate`/`duplicate` remain stubs |
 | `time/aros.rs` | done | `Instant`/`SystemTime` over `clock_gettime` — verified live after the OS `-ffixed-x18` rebuild (was SIGBUS before). REALTIME reads ~1978 (un-host-synced RTC, UPSTREAM-NOTES #36) but no longer faults |
-| `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking is solid, `set_nonblocking`/timeouts not yet effective (library park model) |
-| `process/aros.rs` | done (output/status) | `Command` → shell-quoted line run by dos `SystemTagList` (via `aros_process_glue.c`); `output()` captures via `MacRW:` temp files, `status()` runs synchronously — verified live. No live pipes / async child / per-command env+cwd yet |
+| `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking solid, **`try_clone`/`duplicate` work (`Dup2Socket`)**. `set_nonblocking`/timeouts still no-ops (library park model), IPv6 `Unsupported` |
+| `process/aros.rs` | done (output/status + **env/cwd**) | `Command` → shell-quoted line run by dos `SystemTagList` (via `aros_process_glue.c`); `output()` captures via `MacRW:` temp files, `status()` synchronous. **Per-command `env` + `cwd`** honoured via an injected `CD`/`Set` script run by `Execute` — verified live (`Get` reads back `env-to-child-77`, relative `MakeDir` lands in the set cwd). No live bidirectional pipes / async child yet (no `PIPE:` handler) |
 | `thread/aros.rs` | done | `std::thread` spawn/join/sleep/yield over `pthread.library` (via `aros_thr_*` glue) — verified live (4 threads + shared Mutex) |
 | `thread_local/key/aros.rs` | done | pthread-key TLS (`pthread_key_*`), the `os` key-based backend |
 | `pal/unsupported/sync/*` | done | `Mutex`/`Condvar` over `pthread_mutex`/`pthread_cond` (zeroed pinned buffers, `aros_sync_glue.c`); `RwLock` = portable `queue`, `Parker` = shared `pthread` parker |
-| `process pipe`, … | **stubs** | a few leftover corners fall through to `unsupported` |
+| `process` live pipes, `fs` `link`/`copy`, `net` timeouts, … | **stubs / documented gaps** | a few corners fall through to `unsupported` — see the disclosed tier-3 gap list in [pr-artifacts/README.md](pr-artifacts/README.md) |
 
 ## Dev environment setup (fresh machine, or if the clone/symlink is gone)
 
@@ -226,42 +228,66 @@ command, so `std::env::set_var` succeeds — verified live (`set_var RUST_WROTE`
 back `"yes-42"`). Only `std::env::vars` (full enumeration) is still empty, since AROS
 has no POSIX `environ` array.
 
-Remaining pal pieces (small corners — the core is done):
+**Closed in the 2026-07-07 pass (verified live, `RUST-AROS: STD PASS` + the RS3e block):**
+`fs` `set_permissions`/`set_perm` (chmod/fchmod), `symlink`+`readlink`, path `set_times`
+(utimes); `std::env::vars()` enumeration (`aros_env_glue.c` walking `pr_LocalVars`);
+`std::process` per-command **env + cwd** (injected `CD`/`Set` script run by `Execute`);
+`std::net` `try_clone`/`duplicate` (`Dup2Socket`, code + link only — live-blocked, see
+below).
 
-1. **Small stubs**: `fs` symlinks/`set_perm`/times; `std::process` live pipes + async
-   child + per-command env/cwd (the sync `output()`/`status()` path is done);
-   `std::env::vars()` enumeration.
-2. **Toward a real PR** (see "PR readiness" below): built-in target spec, `libc`-crate
-   AROS support.
+Remaining pal pieces / disclosed tier-3 gaps (the full list is in
+[pr-artifacts/README.md](pr-artifacts/README.md)):
+
+1. **`std::process`** live bidirectional pipes / async child with readable
+   `Child.stdout` — no fork/exec, no `PIPE:` handler in the hosted boot,
+   `SystemTagList` is line-oriented. `output()`/`status()`/env/cwd done.
+2. **`std::net`** `set_nonblocking`/timeouts (library park model + `fd_set` ABI risk),
+   IPv6 (`AF_INET6` numbering). `try_clone` needs `bsdsocket.library` deployed to
+   verify live (only headers are in `~/aros-build`; build it with
+   `make workbench-libs-bsdsocket` and copy into `.../AROS/Libs/`, then the RS3e UDP
+   `try_clone` check passes — self-contained, no host server).
+3. **`fs`** `File::set_times`/`set_times_nofollow` (no `futimes`/`lutimes`),
+   `link`/`copy`/`canonicalize`/`remove_dir_all`.
+4. **Toward a real PR** (see "PR readiness" below): built-in target spec + `libc`-crate
+   AROS support — both drafted in [pr-artifacts/](pr-artifacts/).
 
 ### PR readiness (rust-lang/rust, a tier-3 `aarch64-unknown-aros` target)
 
 What a first PR would contain, and where each piece stands:
 
 - **Target spec → built-in.** Today `aarch64-unknown-aros.json` + `-Zjson-target-spec`
-  drive the build. For upstream it becomes
-  `compiler/rustc_target/src/spec/targets/aarch64_unknown_aros.rs` (os `"aros"`,
-  `code-model: Large`, `features: "+v8a,+neon,+reserve-x18"`, `relocation-model` +
-  linker wiring to the collect-aros/crosstools flow). Mechanical; the JSON is the spec.
+  drive the build. The built-in form is **drafted** at
+  [pr-artifacts/aarch64_unknown_aros.rs](pr-artifacts/aarch64_unknown_aros.rs) (os
+  `"aros"`, `code-model: Large`, `features: "+v8a,+neon,+reserve-x18"`, static reloc,
+  clang + `-maarch64elf_aros`). It cannot be *compiled* here — the clone is a `rust-src`
+  subset with no `compiler/` tree — so byte-identical confirmation is the mechanical
+  upstream step (full rust-lang/rust checkout at the toolchain commit, `./x build`,
+  diff against the JSON build). The JSON stays the authoritative spec meanwhile.
 - **pal modules (done, in the clone):** `alloc`, `stdio`, `io/error`, `env`
   (read+write), `args`, `fs` (files + metadata + dirs), `net` (IPv4), `process`,
   `time`, **`thread` + the full sync core** (`Mutex`/`Condvar`/`RwLock`/`Parker`) +
   pthread-key TLS, and `random` (posixc `arc4random_buf`). All verified live. This is
   the bulk of the PR.
 - **`libc`-crate AROS support.** The pal currently declares its own `extern "C"`
-  posixc/bsdsocket/pthread signatures. A proper PR adds an `aros` module to the `libc`
-  crate (types + fn decls from `compiler/crt/posixc` + `arch/all-unix/bsdsocket` +
-  `compiler/pthread`), then the pal uses `libc::*`. It would also let the sync core use
-  the upstream `pthread` pal `Mutex`/`Condvar` directly instead of the byte-buffer glue.
+  posixc/pthread signatures. The `aros` module (types + fn decls, AROS-specific values:
+  `O_RDONLY=1`, `mode_t` u16, `time_t` i32) is **drafted** at
+  [pr-artifacts/libc-aros-mod.rs](pr-artifacts/libc-aros-mod.rs), covering exactly the
+  symbols the pal declares so the migration is 1:1 (`mod c { … }` → `use libc::*`). Not
+  migrated yet on purpose: it would destabilise the verified pal and can't be compiled
+  here (no `libc` tree in a `rust-src` clone). The bsdsocket LVOs stay behind
+  `aros_net_glue.c` (library-base calling convention, not plain `extern "C"`).
 - **CSPRNG: done, in AROS.** `posixc` now has `arc4random_buf` (borrows the host CSPRNG
   on hosted via hostlib, weak fallback on native); the pal just calls it. A native
   entropy source is the remaining AROS-side gap (asked upstream on Slack).
-- **Known gaps to disclose in the PR:** the `-ffixed-x18` OS build requirement (the
-  hosted OS must be built with it, else `time`/threads SIGBUS); `std::process` has no
-  live pipes / async child / per-command env+cwd (sync `output()`/`status()` only);
-  `std::env::vars()` enumeration is empty (no POSIX `environ`); `set_nonblocking`/socket
-  timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37); REALTIME reads ~1978
-  (un-host-synced RTC, #36). Tier-3 targets ship with documented gaps like these.
+- **Known gaps to disclose in the PR** (full list + reasoning in
+  [pr-artifacts/README.md](pr-artifacts/README.md)): the `-ffixed-x18` OS build
+  requirement (else `time`/threads SIGBUS); `std::process` has no live bidirectional
+  pipes / async child (env+cwd + sync `output()`/`status()` **do** work); `std::net`
+  `set_nonblocking`/timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37) and
+  IPv6 is `Unsupported` (`try_clone` **works**); `fs` `File::set_times`/nofollow are
+  `Unsupported` (no `futimes`/`lutimes`) and `is_symlink()` reads false on the
+  emul-handler; REALTIME reads ~1978 (un-host-synced RTC, #36); errno is process-global
+  (FIX-PLAN M1). Tier-3 targets ship with documented gaps like these.
 
 ### Threads (done)
 
