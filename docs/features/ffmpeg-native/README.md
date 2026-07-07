@@ -13,6 +13,20 @@ viewer, **FFView**, runs on it: decode + display + play/pause, proven live.
 | **[FF2]** | show a decoded frame in a window | `ff2_show.c`, commit b29091e |
 | **[FF3]** | decode **through libavformat** over the dos-backed AVIO | `ff3_avio.c` (`packets=1`, was 0) |
 | **FFView** | image/video viewer: open → decode → display, video play/pause | proofs `run/darwin-aarch64/proofs/ffview-*.png` |
+| **FFViewX** | same viewer, broad codec set; GPU colour-convert via gpufx.library ([GFX2](../gpufx/README.md)) | verified live 2026-07-08 |
+| **FFProbe** | media inspector (ffmpeg's own `fftools/ffprobe`); prints stream/format info | verified live 2026-07-08 |
+
+**FFProbe** (`C:FFProbe`, built by `hosted/ffmpeg/build-ffprobe.sh`) reuses
+ffmpeg's `fftools/ffprobe.c` + `cmdutils` against the broad `videox` libs
+(the avfilter/avdevice symbols the shared fftools reference for `-filters`/
+`-sources` are stubbed — `ffprobe_stubs.c` — since basic probing never hits
+them). One quirk: **prefix the path with `file:`** —
+`FFProbe -show_format -show_streams file:MacRW:clip.mp4` — because ffmpeg parses
+a leading `MacRW:` as a URL protocol (`Protocol not found` otherwise). The
+header probe works (codec, resolution, pix_fmt, duration, tags, `probe_score`)
+even though full frame reads over the built-in `file:` protocol are empty (why
+the viewers use the custom AVIO below); `format.size` reads garbage for the same
+reason. `deploy.sh` builds it automatically when the videox sysroot exists.
 
 Proven media: a still JPEG, MJPEG-in-AVI (full-range YUVJ444P) playing+looping
 with SPACE toggling PLAYING/PAUSED, and MPEG-4/DivX (limited-range YUV420P,

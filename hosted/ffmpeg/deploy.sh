@@ -61,6 +61,9 @@ if [ -d "$SYSX/lib" ]; then
         -L"$SYSX/lib" $LIBS -o "$OUT/FFViewX"
     [ -x "$STRIP" ] && "$STRIP" --strip-unneeded "$OUT/FFViewX" 2>/dev/null || true
     cp -f "$OUT/FFViewX" "$CDEST/FFViewX" && chmod +x "$CDEST/FFViewX"
+    # C:FFProbe -- the media inspector, built from ffmpeg's own fftools against
+    # the same broad libs (needs the build dir + source, so its own script).
+    [ -f "$OUT/build-videox/config.h" ] && "$DIR/build-ffprobe.sh"
 fi
 
-echo "[deploy] done -> $CDEST/{FFView,FF3Avio${SYSX:+,FFViewX}} ($(du -h "$OUT/FFView" | cut -f1) FFView)"
+echo "[deploy] done -> $CDEST/{FFView,FF3Avio${SYSX:+,FFViewX,FFProbe}} ($(du -h "$OUT/FFView" | cut -f1) FFView)"
