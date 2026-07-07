@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  aros-host-release.entitlements.plist — the DISTRIBUTION entitlements for a
+  Developer-ID-signed, notarized Macaros.app (make-aros-release.sh output).
+
+  Identical to aros-host.entitlements.plist EXCEPT it drops
+  com.apple.security.get-task-allow — that debug entitlement makes Apple's
+  notary service reject the submission. Keep the JIT / dyld-env / library-
+  validation keys: they are notarization-compatible and the hosted-AROS runtime
+  needs them (DYLD_FALLBACK_LIBRARY_PATH for the bundled shims; MAP_JIT / native
+  LoadSeg exec memory; dlopen of the host dylibs).
+
+  Signing recipe (see ../../Source/apple-codesigning.md):
+    DEVID="Developer ID Application: John Knipper (C43N3NG7Z5)"
+    # sign the 4 Frameworks dylibs: --options runtime --timestamp
+    # sign Resources/AROS/boot/darwin/{Macaros,AROSBootstrap} with THIS plist
+    # sign the .app, then: notarytool submit --wait + stapler staple
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-executable-page-protection</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

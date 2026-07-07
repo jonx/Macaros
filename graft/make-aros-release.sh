@@ -70,7 +70,7 @@ sed "s|@AROSROOT@|$AROSROOT|g" "$BOOTD/AROSBootstrap.conf.tmpl" > "$STATE/AROSBo
 
 # Host share: two volumes onto one Mac folder (read-only MacRO:, read/write MacRW:).
 : "${AROS_HOST_CONF:=$STATE/aros-host.conf}"; export AROS_HOST_CONF
-[ -f "$D/aros-host-conf.sh" ] && . "$D/aros-host-conf.sh"
+[ -f "$APP/Resources/aros-host-conf.sh" ] && . "$APP/Resources/aros-host-conf.sh"
 if [ -z "${AROS_HOST_VOLUME:-}" ]; then
     SHARE="${AROS_SHARE:-$HOME/AROS/Shared}"; mkdir -p "$SHARE"
     [ -e "$SHARE/ReadMe" ] || printf "Files here appear in AROS as MacRO: (read-only) and MacRW: (read/write).\n" > "$SHARE/ReadMe"
@@ -82,7 +82,7 @@ export AROS_HOST_VOLUME
 cd "$BOOTD"
 exec env AROS_DARWIN_THREADED=1 \
     DYLD_FALLBACK_LIBRARY_PATH="$APP/Frameworks" \
-    AROS_SETTINGS_SCHEMA="$APP/Frameworks/settings.json" \
+    AROS_SETTINGS_SCHEMA="$APP/Resources/settings.json" \
     AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
     AROS_RUN_DIR="$STATE" \
     ./Macaros -c "$STATE/AROSBootstrap.conf"'
@@ -261,10 +261,9 @@ cp "$DYLIB" "$APP/Contents/Frameworks/cocoametal.dylib"
 [ -f "$PASTEBOARD" ] && cp "$PASTEBOARD" "$APP/Contents/Frameworks/libpasteboard.dylib"
 [ -f "$COREAUDIO" ]  && cp "$COREAUDIO"  "$APP/Contents/Frameworks/libcoreaudio.dylib"
 [ -f "$BSDSOCK" ]    && cp "$BSDSOCK"    "$APP/Contents/Frameworks/libbsdsockhost.dylib"
-cp "$SCHEMA" "$APP/Contents/Frameworks/settings.json"
 cp "$SCHEMA" "$APP/Contents/Resources/settings.json"
 [ -f "$ICON" ] && cp "$ICON" "$APP/Contents/Resources/Macaros.icns"
-[ -f "$HERE/aros-host-conf.sh" ] && cp "$HERE/aros-host-conf.sh" "$APP/Contents/MacOS/aros-host-conf.sh"
+[ -f "$HERE/aros-host-conf.sh" ] && cp "$HERE/aros-host-conf.sh" "$APP/Contents/Resources/aros-host-conf.sh"
 printf '%s' "$LAUNCHER"   > "$APP/Contents/MacOS/Macaros"; chmod +x "$APP/Contents/MacOS/Macaros"
 printf '%s' "$INFO_PLIST" > "$APP/Contents/Info.plist"
 
