@@ -7,7 +7,7 @@ people "redo the whole thing again." Read both: build produces the modules,
 deploy stages and runs them.
 
 > The OS source is a **separate** checkout at `../aros-upstream` (branch
-> `crash-containment`). You build from there, commit there, and push to the
+> `aarch64-darwin-graft`). You build from there, commit there, and push to the
 > jonx fork (remote `fork`). This repo (`aros-aarch64`) is only the host/graft
 > layer.
 
@@ -286,11 +286,11 @@ not, just leave it out.
 
 ## 7. After changing AROS source — commit and push to the fork
 
-The build fixes live in `../aros-upstream` on branch `crash-containment`. Commit
-them there and push to the jonx fork (the off-machine backup and where we
-publish from):
+The build fixes live in `../aros-upstream` on branch `aarch64-darwin-graft`.
+Commit them there and push to the jonx fork (the off-machine backup and where
+we publish from):
 
 ```sh
 cd ../aros-upstream
-git push fork crash-containment
+git push fork aarch64-darwin-graft
 ```
