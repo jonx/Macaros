@@ -1,0 +1,11 @@
+[package]
+name = "rust-hello-aros"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# RustHello: a friendly std demo bundled with Macaros -- proof that real Rust
+# `std` runs on AROS / Apple Silicon. A staticlib linked with hello_main.c (C owns
+# AROS startup) and the std pal glues, exactly like std-probe.
+[lib]
+crate-type = ["staticlib"]
