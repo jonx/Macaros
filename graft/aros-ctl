@@ -307,8 +307,14 @@ write_startup_sequence() {
                     'If EXISTS "WANDERER:Wanderer"' \
                     '    Run <NIL: >NIL: QUIET WANDERER:Wanderer' \
                     '    Wait 2' \
-                    '    EndCLI' \
                     'EndIf'
+                # Optional automation payload: extra shell lines to run after
+                # the desktop is up (e.g. 'NewShell "CON:0/24/640/300/Test"'
+                # or 'Execute MacRW:battery.script'). One boot per payload.
+                if [ -n "${AROS_CTL_DESKTOP_EXTRA:-}" ]; then
+                    printf '%s\n' "$AROS_CTL_DESKTOP_EXTRA"
+                fi
+                printf '%s\n' 'EndCLI'
             } > "$startup"
             ;;
         console)
