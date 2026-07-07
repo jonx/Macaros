@@ -30,6 +30,15 @@
 #include <libavutil/pixdesc.h>
 #include "aros_avio.h"
 
+/* gpufx.library (docs/features/gpufx): GPU YUV420->RGBA + scale, sharing the
+   display's Metal device. Opened lazily; when present and the frame is planar
+   4:2:0, the per-frame colour convert (and any downscale-to-fit) run on the GPU
+   -- 5-7x the scalar path -- with the library's own CPU fallback underneath, so
+   there is no behaviour change when it is absent. */
+#include <libraries/gpufx.h>
+#include <proto/gpufx.h>
+struct Library *GfxFxBase;
+
 /* ---- decode/display state ---- */
 static AVFormatContext *g_fmt;
 static AVCodecContext  *g_ctx;
@@ -168,9 +177,82 @@ static void draw_stats(void)
     Text(rp, (CONST_STRPTR)s, (LONG)(p - s));
 }
 
+/* GPU path (gpufx.library): planar 4:2:0 -> RGBA on the GPU, plus a GPU
+   bilinear downscale when the video does not fit the window, then blit RGBA.
+   Returns 1 if it handled the frame, 0 to fall back to the scalar/sws path.
+   Buffers are grown as needed and freed in cleanup(). */
+static unsigned char *g_gpu_conv;   /* source-size RGBA (convert dst)      */
+static unsigned char *g_gpu_disp;   /* display-size RGBA (scale dst)       */
+static int g_gpu_conv_cap, g_gpu_disp_cap;
+
+static int gpufx_blit(void)
+{
+    const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(g_frame->format);
+    int need, full, scaled;
+    unsigned char *rgba; int rgba_stride;
+    struct GfxFxYuvReq yr;
+
+    if (!GfxFxBase || !d)
+        return 0;
+    /* Exactly planar 8-bit 4:2:0 (what cm_gpu_convert_yuv420 assumes). */
+    if (!(d->flags & AV_PIX_FMT_FLAG_PLANAR) || d->nb_components < 3
+        || d->comp[0].depth != 8 || d->log2_chroma_w != 1 || d->log2_chroma_h != 1
+        || (d->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_PAL)))
+        return 0;
+
+    full = (g_frame->color_range == AVCOL_RANGE_JPEG)
+        || g_frame->format == AV_PIX_FMT_YUVJ420P;
+
+    /* convert at source size into g_gpu_conv */
+    need = g_w * g_h * 4;
+    if (g_gpu_conv_cap < need) {
+        FreeVec(g_gpu_conv);
+        g_gpu_conv = AllocVec(need, MEMF_ANY);
+        g_gpu_conv_cap = g_gpu_conv ? need : 0;
+    }
+    if (!g_gpu_conv) return 0;
+
+    yr.y = g_frame->data[0]; yr.u = g_frame->data[1]; yr.v = g_frame->data[2];
+    yr.rgba = g_gpu_conv;
+    yr.yStride = g_frame->linesize[0]; yr.uStride = g_frame->linesize[1];
+    yr.vStride = g_frame->linesize[2];
+    yr.w = g_w; yr.h = g_h; yr.dstStride = g_w * 4; yr.fullRange = full;
+    if (GfxFx_ConvertYUV420(&yr) != 0)
+        return 0;
+
+    scaled = (g_dw != g_w || g_dh != g_h);
+    if (scaled) {
+        struct GfxFxScaleReq sc;
+        need = g_dw * g_dh * 4;
+        if (g_gpu_disp_cap < need) {
+            FreeVec(g_gpu_disp);
+            g_gpu_disp = AllocVec(need, MEMF_ANY);
+            g_gpu_disp_cap = g_gpu_disp ? need : 0;
+        }
+        if (!g_gpu_disp) return 0;
+        sc.src = g_gpu_conv; sc.dst = g_gpu_disp;
+        sc.srcStride = g_w * 4; sc.sw = g_w; sc.sh = g_h;
+        sc.dstStride = g_dw * 4; sc.dw = g_dw; sc.dh = g_dh; sc.filter = 1;
+        if (GfxFx_Scale(&sc) != 0)
+            return 0;
+        rgba = g_gpu_disp; rgba_stride = g_dw * 4;
+    } else {
+        rgba = g_gpu_conv; rgba_stride = g_w * 4;
+    }
+
+    WritePixelArray(rgba, 0, 0, rgba_stride, g_win->RPort,
+                    g_win->BorderLeft, g_win->BorderTop, g_dw, g_dh, RECTFMT_RGBA);
+    g_count++;
+    if (g_showstats) draw_stats();
+    return 1;
+}
+
 /* Convert g_frame to RGB24 and blit into the window's inner area. */
 static void blit(void)
 {
+    if (gpufx_blit())        /* GPU fast path (planar 4:2:0); else scalar/sws */
+        return;
+
     if (!g_rgbframe) {
         g_rgbframe = av_frame_alloc();
         if (!g_rgbframe) return;
@@ -218,6 +300,12 @@ int main(int argc, char **argv)
     if (argc < 2) { msg("usage: FFView <file>\n"); return 5; }
     if (argc > 2 && argv[2] && argv[2][0]) g_trace = Open((CONST_STRPTR)argv[2], MODE_NEWFILE);
     trace("start");
+
+    /* Optional GPU colour-convert/scale. Absent => the scalar path runs
+       unchanged, so this never gates playback. */
+    GfxFxBase = OpenLibrary((CONST_STRPTR)"gpufx.library", 0);
+    if (GfxFxBase && GfxFx_Available())
+        trace("gpufx: GPU path available");
 
     g_fmt = aros_avio_open(argv[1]);
     if (!g_fmt) { msg("FFView: cannot open "); msg(argv[1]); msg("\n"); return 20; }
@@ -354,6 +442,8 @@ cleanup:
     if (treq)  DeleteIORequest((struct IORequest *)treq);
     if (tport) DeleteMsgPort(tport);
     if (g_win) CloseWindow(g_win);
+    FreeVec(g_gpu_conv); FreeVec(g_gpu_disp);
+    if (GfxFxBase) CloseLibrary(GfxFxBase);
     if (g_rgbframe) av_frame_free(&g_rgbframe);
     if (g_sws) sws_freeContext(g_sws);
     if (g_frame) av_frame_free(&g_frame);
