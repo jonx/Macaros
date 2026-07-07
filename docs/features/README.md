@@ -79,16 +79,16 @@ one-look summary. Verified against the code, not just the docs.)
 | control-harness | `aros-ctl`: puppet the windowed AROS headlessly (type/click/shot/log) | [README](control-harness/README.md) |
 | benchmarks | `bench-run` (`make bench`): in-tree exec/clib micro-benchmarks on booted AROS | [README](benchmarks/README.md) |
 | debug-tools | bring-up diagnostics (`TestLib`, `lddemon` trace) + how to debug a crash/memory bug (trap backtrace, MUNGWALL, host lldb) | [README](debug-tools/README.md) |
-| crash-handling | A bounded guru with a symbolized backtrace | [design](crash-handling/design.md) |
+| crash-handling | A bounded guru with a symbolized backtrace | [README](crash-handling/README.md) |
 
 **Features & ports:**
 
 | Folder | What | Start here |
 |---|---|---|
-| 68k-jit | Host 68k→AArch64 translator to run classic Amiga binaries natively | [design](68k-jit/design.md) |
+| 68k-jit | Host 68k→AArch64 translator to run classic Amiga binaries natively | [README](68k-jit/README.md) |
 | 68k-marshalling | The big-endian-on-LE library-call marshalling boundary for the JIT | [README](68k-marshalling/README.md) |
-| cocoa-metal-display | Live macOS Metal window as the AROS display | [design](cocoa-metal-display/design.md) |
-| host-app-shell | Make the window a first-class Mac app (menu/About/icon/Settings) | [design](host-app-shell/design.md) |
+| cocoa-metal-display | Live macOS Metal window as the AROS display | [README](cocoa-metal-display/README.md) |
+| host-app-shell | Make the window a first-class Mac app (menu/About/icon/Settings) | [README](host-app-shell/README.md) |
 | clipboard-bridge | Two-way macOS NSPasteboard ↔ AROS `clipboard.device` | [README](clipboard-bridge/README.md) |
 | host-volume | A real macOS folder mounted as an AROS volume | [README](host-volume/README.md) |
 | coreaudio-audio | Real sound via a CoreAudio-backed AHI sub-driver (built) | [README](coreaudio-audio/README.md) |

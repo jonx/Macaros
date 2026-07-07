@@ -44,6 +44,10 @@ this page is the design/why.
 `posixc`/`bsdsocket`/`pthread` directly, developed in a **local rust clone**
 (`../rust-aros`, not pushed) so it is PR-able to rust-lang/rust later.
 
+> **Building your own** Rust program for AROS — empty Mac → a `C:` command that
+> runs from the Shell like `FFViewX`: **[hosted/rust/BUILDING-PROGRAMS.md](../../../hosted/rust/BUILDING-PROGRAMS.md)**
+> (0 → hero). The `RustHello` sample bundled with Macaros is that guide's endpoint.
+
 ## Goal
 
 Make Rust target darwin-aarch64 AROS, in two stages:
