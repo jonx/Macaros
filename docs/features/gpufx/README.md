@@ -1,11 +1,12 @@
 # gpufx.library — GPU-accelerated 2D for hosted AROS
 
-**Status: GFX0 + GFX1 built and verified on booted AROS** (2026-07-07) — the
-shim compute section and `gpufx.library` (the AROS-native front door) work, with
-a measured **5-7× video-conversion** and **10-13× gpui present-scale** speedup
-over software (all output diff 0). GFX3's gpui-scale capability is measured; its
-`gpui_aros` wiring, the ffmpeg consumer (GFX2), and a full GPU scene rasteriser
-(GFX4) are the remaining work; see [Milestones](#milestones-greppable-gfx).
+**Status: GFX0-GFX3 done on booted AROS** (2026-07-07) — the shim compute
+section, `gpufx.library` (the AROS-native front door), the gpui dynamic-
+resolution present (opt-in), and the ffmpeg consumer (code; on-device verify
+pending an ffmpeg rebuild). Measured: **5-7× video-conversion** and **10-13×
+gpui present-scale** over software, all output diff 0. Remaining: GFX2's live
+verify, and GFX4 (a full GPU scene rasteriser — multi-week, deferred); see
+[Milestones](#milestones-greppable-gfx).
 This gives hosted AROS a GPU fast-path for pixel work (scale, colour convert, and
 eventually scene rasterisation), reusing the Metal device the display already
 owns. The baseline stays CPU — the [Feraille/gpui_aros](../feraille-gpui/README.md)
@@ -115,33 +116,46 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
     (the benchmark does) — the library's value is DRY (one bridge + one fallback)
     and being a normal AROS call per the [host-bridge](../host-bridge/README.md)
     convention.
-- **[GFX2]** ffmpeg `libswscale` YUV→RGB routed through `gpufx` (or direct
-  `cm_gpu_*`); FFView video verified, output byte-compared to the CPU kernel.
-- **[GFX3] MEASURED (capability), integration is opt-in** — the gpui
-  present-scale path. The `gpufx-bench` gpui-scale section measures RGBA
-  bilinear upscale (render 1x -> HiDPI 2x) software vs GPU on booted AROS:
-  **9.7x at 1280x800, 13.0x at 2560x1600**, output diff 0. Honest scope: gpufx
-  accelerates the *scale* step only; gpui's per-frame cost is CPU
-  *rasterization* (tiny-skia), which gpufx does not touch, and the default 1:1
-  present already ends in Metal via the shim. So the win is real *if* gpui
-  adopts a dynamic-resolution present (render low, GPU-upscale — a quality/speed
-  tradeoff). Wiring that into `gpui_aros` (e.g. an opt-in `GPUI_AROS_DYNRES`
-  factor: render to a smaller pixmap, `cm_gpu_scale` to the window) is the
-  remaining integration; the perf case for it is now proven.
-- **[GFX4]** (optional) full GPU scene rasteriser (a Metal port of gpui's
-  quad/sprite/path renderer) for a blanket gpui speedup, and/or a transparent
-  `graphics.library` scale/`CopyBox` hook. Out of scope for now.
+- **[GFX2] CODE DONE, on-device verify pending** — `FFView` (`hosted/ffmpeg/ffview.c`)
+  opens `gpufx.library` and, for planar 8-bit 4:2:0 frames, runs the per-frame
+  colour convert on the GPU (`GfxFx_ConvertYUV420`) plus a GPU bilinear downscale
+  (`GfxFx_Scale`) when the video doesn't fit the window, then blits RGBA. Any
+  other format, or an absent library, falls straight back to the scalar/sws path
+  — no behaviour change. The gpufx usage mirrors the verified `C:GpuFxTest`
+  exactly, so it is type-correct; deploy+run is blocked only because the ffmpeg
+  sysroot (`build-video.sh`, a heavy libav* cross-build) is not present in this
+  checkout. Rebuild ffmpeg, then `hosted/ffmpeg/deploy.sh`, to verify live.
+- **[GFX3] DONE (capability + integration)** — the gpui present-scale path.
+  - *Capability, measured:* `gpufx-bench`'s gpui-scale section times RGBA
+    bilinear upscale (render 1x -> HiDPI 2x) software vs GPU on booted AROS:
+    **9.7x at 1280x800, 13.0x at 2560x1600**, output diff 0.
+  - *Integration, live:* `gpui_aros` reads `GPUI_AROS_RENDER_SCALE` (< 1.0,
+    default 1.0). When set (and `gpufx.library` is present), gpui renders into a
+    smaller drawable and GPU-upscales it to the window via `GfxFx_Scale` instead
+    of the CPU `WritePixelArray`. Verified on booted AROS at 0.5: a full-window,
+    softer render, no crash — `gpui_aros` is now a real `gpufx.library` consumer.
+  - *Honest scope:* gpufx accelerates the *scale* step only. gpui's per-frame
+    cost is CPU *rasterization* (tiny-skia), which gpufx does not touch, and the
+    default 1:1 present already ends in Metal via the shim. So dynamic-resolution
+    is a quality/speed tradeoff (softer image, fewer pixels rasterized), off by
+    default. A blanket gpui speedup needs GFX4.
+- **[GFX4] NOT STARTED (large)** — a full GPU scene rasteriser: a Metal port of
+  gpui's quad/sprite/path/shadow renderer, so the *rasterization* (gpui's real
+  per-frame cost) runs on the GPU, not just the present-scale. This is what gpui
+  does natively on macOS. It is a multi-week effort (reimplementing the renderer
+  against the shared Metal device), not a drop-in — deliberately deferred. A
+  transparent `graphics.library` scale/`CopyBox` hook (accel for unmodified
+  apps) is the other optional GFX4-tier item.
 
 ## Current state (2026-07-07)
 
-Built and verified on booted AROS: **GFX0 + GFX1**, plus the **GFX3 capability**
-measured. The shim compute section (ABI 2), `gpufx.library` (front door,
-`C:GpuFxTest` = `GPUFX: PASS`), and `C:GpuFxBench` measuring both hot paths:
-video YUV->RGBA (5-7x GPU) and gpui present-scale (10-13x GPU), both diff 0.
-What's left: wiring the gpui dynamic-resolution present into `gpui_aros` (GFX3
-integration, opt-in), the ffmpeg consumer (GFX2), and a full GPU scene
-rasteriser (GFX4). All GPU paths keep a CPU fallback, so software is always the
-baseline.
+Done + verified on booted AROS: **GFX0** (shim compute section, ABI 2),
+**GFX1** (`gpufx.library`, `C:GpuFxTest` PASS), **GFX3** (gpui dynamic-resolution
+present, `GPUI_AROS_RENDER_SCALE`, verified at 0.5). `C:GpuFxBench` measures both
+hot paths: video YUV->RGBA (5-7x) and gpui present-scale (10-13x), both diff 0.
+**GFX2** (ffmpeg/FFView) is code-complete; on-device verify waits on an ffmpeg
+sysroot rebuild. **GFX4** (full GPU scene rasteriser) is deferred (multi-week).
+All GPU paths keep a CPU fallback, so software is always the baseline.
 
 ## Risks
 
