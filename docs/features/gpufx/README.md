@@ -89,35 +89,26 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
     host-facing shim call with >8 register-class args is unsafe on this bridge —
     prefer a struct pointer.** Verified: `fullRange` now honored (benchmark diff
     0), `[GPU] PASS all` host-side.
-- **[GFX1] NOT STARTED** — `gpufx.library`, the AROS-native front door. (A
-  background agent tasked with this on 2026-07-06 died producing nothing; there
-  is no library source, `.conf`, or `hosted/gpufx/` anywhere. GFX0 is the only
-  built piece.) Concrete plan, now that the ABI is settled (v2 struct-by-pointer)
-  and the shim path is proven from AROS (the benchmark reaches `cm_gpu_*` via
-  `HostBind_Interface` and works):
-  1. **Host binding** — copy the exact pattern in
-     `aros-upstream/arch/all-darwin/hidd/cocoa/cocoa_hostlib.c`: `HostLib_Open`
-     `cocoametal.dylib`, resolve `cm_gpu_open/abi/scale/convert_yuv420` into a
-     function-pointer struct. Refuse init unless `cm_gpu_abi() == 2`.
-  2. **Library scaffold** — a new shared library in `aros-upstream` per
-     [native-modules](../native-modules/README.md) (`.conf` + `mmakefile.src`);
-     generate `proto/gpufx.h` etc. Public API takes **request structs by
-     pointer** (mirroring the shim ABI — one register arg, dodges the same
-     >8-arg hazard on the AROS library-call side too):
-     `LONG GfxFx_Available(void)`, `LONG GfxFx_Scale(const struct GfxFxScale *)`,
-     `LONG GfxFx_ConvertYUV420(const struct GfxFxYuv *)`.
-  3. **CPU fallback baked in** — each op runs the GPU path when available, else
-     the scalar reference (the formulas in `hosted/cocoametal/gpu_test.c`), so a
-     call ALWAYS succeeds. Software stays the baseline; GPU is the fast path.
-  4. **Build + land** in `Libs:` via the metatarget into `~/aros-build`; refresh
-     the boot image.
-  5. **`C:GpuFxTest`** (in `hosted/gpufx/`) drives it: `GfxFx_Available`, a
-     scale + a convert, GPU-vs-CPU byte-compare (tolerances as GFX0), prints
-     `GPUFX: PASS`. Build like `hosted/gpufx-bench`; do not boot in the build.
-  - *Shortcut option:* consumers can reach `cm_gpu_*` directly via
-    `HostBind_Interface` today (the benchmark does), so GFX2/GFX3 need not block
-    on GFX1. The library's value is DRY (one bridge + one fallback) and being a
-    normal AROS call per the [host-bridge](../host-bridge/README.md) convention.
+- **[GFX1] DONE** — `gpufx.library`, the AROS-native front door
+  (`aros-upstream/arch/all-darwin/libs/gpufx/`, public header
+  `compiler/include/libraries/gpufx.h`). Opens `cocoametal.dylib` via
+  `hostlib.resource` at library init (under `Disable()` so Metal/dispatch
+  threads inherit a blocked SIGALRM mask, same as the cocoa HIDD), resolves
+  `cm_gpu_open/abi/scale/convert_yuv420`, and refuses the GPU path unless
+  `cm_gpu_abi() == 2`. Public API (request **structs by pointer** — dodges the
+  >8-arg hazard on the AROS call side too): `GfxFx_Available()`,
+  `GfxFx_Scale(const struct GfxFxScaleReq *)`,
+  `GfxFx_ConvertYUV420(const struct GfxFxYuvReq *)`. Each op runs the GPU when
+  available, else a **CPU fallback** (`gpufx_fallback.c`, the same formulas as
+  the shim kernels / `gpu_test.c`), so a call always succeeds — software is the
+  baseline, GPU the fast path. Builds via the `hostlibs-gpufx` metatarget into
+  `AROS/Libs/gpufx.library`. **Verified on booted AROS** (`C:GpuFxTest`,
+  `hosted/gpufx/`): *GPU path AVAILABLE*, scale byte-exact / bilinear ±1, YUV
+  both ranges diff 0, `GPUFX: PASS`.
+  - *Note:* consumers can also reach `cm_gpu_*` directly via `HostBind_Interface`
+    (the benchmark does) — the library's value is DRY (one bridge + one fallback)
+    and being a normal AROS call per the [host-bridge](../host-bridge/README.md)
+    convention.
 - **[GFX2]** ffmpeg `libswscale` YUV→RGB routed through `gpufx` (or direct
   `cm_gpu_*`); FFView video verified, output byte-compared to the CPU kernel.
 - **[GFX3]** `gpui_aros` present/scale through `gpufx` — hand the finished RGBA
@@ -129,14 +120,12 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
 
 ## Current state (2026-07-07)
 
-Built and verified: **GFX0 only** — the shim compute section (ABI 2) + host
-test + the Rust video benchmark (5-6× on booted AROS, output diff 0). Reaching
-the GPU today means binding `cm_gpu_*` directly via `HostBind_Interface`
-(`hosted/gpufx-bench` is the worked example). GFX1 (the `gpufx.library` front
-door) is unstarted; GFX2/GFX3 unstarted. Recommended order: **GFX1 → GFX3 → GFX2**
-— the library first (it's the clean substrate and now fully scoped), then the
-gpui present path (unlocks the gpui GPU perf number the video benchmark can't
-give), then the ffmpeg consumer.
+Built and verified on booted AROS: **GFX0 + GFX1** — the shim compute section
+(ABI 2), the Rust video benchmark (5-6× vs software, diff 0), and
+**`gpufx.library`** as the AROS-native front door (`C:GpuFxTest` = `GPUFX: PASS`,
+GPU path AVAILABLE). GFX2/GFX3 unstarted. Recommended next: **GFX3** (route
+gpui's present/scale through gpufx) — it unlocks the gpui software-vs-GPU number
+the video benchmark can't give — then **GFX2** (the ffmpeg consumer).
 
 ## Risks
 
