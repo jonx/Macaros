@@ -2,10 +2,8 @@
 
 **Status: GFX0-GFX3 done on booted AROS** (2026-07-07) — the shim compute
 section, `gpufx.library` (the AROS-native front door), the gpui dynamic-
-resolution present (opt-in), and the ffmpeg consumer (code; on-device verify
-pending an ffmpeg rebuild). Measured: **5-7× video-conversion** and **10-13×
-gpui present-scale** over software, all output diff 0. Remaining: GFX2's live
-verify, and GFX4 (a full GPU scene rasteriser — multi-week, deferred); see
+resolution present (opt-in), and the ffmpeg consumer (FFViewX, verified live). Measured: **5-7× video-conversion** and **10-13×
+gpui present-scale** over software, all output diff 0. Remaining: GFX4 (a full GPU scene rasteriser — multi-week, deferred); see
 [Milestones](#milestones-greppable-gfx).
 This gives hosted AROS a GPU fast-path for pixel work (scale, colour convert, and
 eventually scene rasterisation), reusing the Metal device the display already
@@ -116,15 +114,16 @@ Start at (1); it needs no change to the renderer's logic, only its output path.
     (the benchmark does) — the library's value is DRY (one bridge + one fallback)
     and being a normal AROS call per the [host-bridge](../host-bridge/README.md)
     convention.
-- **[GFX2] CODE DONE, on-device verify pending** — `FFView` (`hosted/ffmpeg/ffview.c`)
+- **[GFX2] DONE (verified live)** — `FFView`/`FFViewX` (`hosted/ffmpeg/ffview.c`)
   opens `gpufx.library` and, for planar 8-bit 4:2:0 frames, runs the per-frame
   colour convert on the GPU (`GfxFx_ConvertYUV420`) plus a GPU bilinear downscale
   (`GfxFx_Scale`) when the video doesn't fit the window, then blits RGBA. Any
   other format, or an absent library, falls straight back to the scalar/sws path
   — no behaviour change. The gpufx usage mirrors the verified `C:GpuFxTest`
-  exactly, so it is type-correct; deploy+run is blocked only because the ffmpeg
-  sysroot (`build-video.sh`, a heavy libav* cross-build) is not present in this
-  checkout. Rebuild ffmpeg, then `hosted/ffmpeg/deploy.sh`, to verify live.
+  exactly. Verified live on booted AROS (2026-07-08): FFViewX plays a YUV420 clip
+  through the GPU convert path. Build: `build.sh` -> `build-video.sh` +
+  `build-videox.sh` -> `deploy.sh` (which requires gpufx.library built first, for
+  the gpufx headers).
 - **[GFX3] DONE (capability + integration)** — the gpui present-scale path.
   - *Capability, measured:* `gpufx-bench`'s gpui-scale section times RGBA
     bilinear upscale (render 1x -> HiDPI 2x) software vs GPU on booted AROS:
