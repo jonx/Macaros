@@ -7,9 +7,9 @@ people "redo the whole thing again." Read both: build produces the modules,
 deploy stages and runs them.
 
 > The OS source is a **separate** checkout at `../aros-upstream` (branch
-> `aarch64-darwin-graft`). You build from there. The pushable snapshot lives in
-> [graft/upstream-patches/](../../../graft/upstream-patches/). This repo
-> (`aros-aarch64`) is only the host/graft layer.
+> `crash-containment`). You build from there, commit there, and push to the
+> jonx fork (remote `fork`). This repo (`aros-aarch64`) is only the host/graft
+> layer.
 
 ---
 
@@ -284,13 +284,13 @@ not, just leave it out.
 | `ObtainSemaphore called in supervisor mode!!!` (intermittent) | VBlank `SIGALRM` delivered to a foreign host thread | SIGALRM guard in `core_IRQ` (§4) |
 | Random guest wedges/corruption under input load (e.g. window resize freezes the app; no `[KRN]` trap) | **stale pre-`-ffixed-x18` objects**: a `make.cfg` flag change does NOT invalidate `.o` files, so modules built before the flag keep allocating x18, which macOS zeroes on any signal/kernel entry | `find gen -name '*.o' -not -path '*tools*' -delete`, rebuild the full metatarget set; verify with `graft/deploy-check` (x18 section; clean modules have ≤4 x18 refs). Saving x18 in the context can't help — the host has already clobbered it before our handler runs (`hosted/x18probe`) |
 
-## 7. After changing AROS source — refresh the snapshot
+## 7. After changing AROS source — commit and push to the fork
 
-The build fixes live in `../aros-upstream`. When that branch moves, regenerate the
-pushable snapshot (see [graft/upstream-patches/README.md](../../../graft/upstream-patches/README.md)):
+The build fixes live in `../aros-upstream` on branch `crash-containment`. Commit
+them there and push to the jonx fork (the off-machine backup and where we
+publish from):
 
 ```sh
-OUT=../aros-aarch64/graft/upstream-patches
-git format-patch origin/master..aarch64-darwin-graft --stdout > "$OUT/aarch64-darwin-graft.mbox"
-git diff origin/master                                        > "$OUT/full-worktree.diff"
+cd ../aros-upstream
+git push fork crash-containment
 ```
