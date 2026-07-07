@@ -29,6 +29,9 @@ this page is the code-side map. Maturity is shown in three tiers:
 | `rust/` | Rust on aarch64 AROS — full `std` runs (net/fs/env/args/process/time/thread) | [rust-aros](../docs/features/rust-aros/README.md) |
 | `hostbind/` | Sample + `HostBind` helper showing how AROS code taps a host library via `hostlib.resource` | [host-bridge](../docs/features/host-bridge/README.md) |
 | `x18probe/` | Diagnostic probe that proved the macOS host clobbers `x18` on signal entry (drove the port-wide `-ffixed-x18`) | [README](x18probe/README.md) |
+| `gpufx/` | GPU-accelerated 2D (YUV→RGB + scale) via a compute section in the cocoametal shim + a `gpufx.library` front door; FFViewX's GPU video path runs on it (5–7×) | [gpufx](../docs/features/gpufx/README.md) |
+| `gpufx-bench/` | Rust benchmark (`C:GpuFxBench`) measuring the software vs gpufx pixel paths (video convert + gpui scale) | [gpufx](../docs/features/gpufx/README.md) |
+| `exwalk/` | Concurrent directory-walker stress test for the emul-handler (Examine/ExNext/ExAll) | `hosted/exwalk/build.sh` |
 | `*.c` / `*.S` (top level) | The Act-2 spikes H1–H12 (`host.c`, `preempt.c`, `abishim.*`, `exec.c`, `execboot.c`, `display.c`, `device.c`, `mem.c`, `kern.c`, `signal.c`, `msgport.c`, `library.c`, `switch.S`) — all green via `make hosted-test` | [PHASE2.md](../PHASE2.md) |
 
 ## Started

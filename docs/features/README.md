@@ -29,6 +29,7 @@ one-look summary. Verified against the code, not just the docs.)
 [bsdsocket-net](bsdsocket-net/README.md) ·
 [ffmpeg-native](ffmpeg-native/README.md) ·
 [rust-aros](rust-aros/README.md) ·
+[gpufx](gpufx/README.md) ·
 [status-led-theme](status-led-theme/README.md) ·
 [host-bridge](host-bridge/README.md) ·
 [benchmarks](benchmarks/README.md) ·
@@ -40,8 +41,7 @@ one-look summary. Verified against the code, not just the docs.)
 [processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
 [native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
 [printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
-[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway) ·
-[gpufx](gpufx/README.md) (GPU 2D via the cocoametal shim; `gpufx.library` front door + `C:GpuFxTest` PASS on booted AROS; Rust video benchmark 5-7x).
+[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway).
 
 **⚪ Idea — design/spec only, no implementation yet:**
 [serial-bridge](serial-bridge/README.md) ·
@@ -107,7 +107,7 @@ one-look summary. Verified against the code, not just the docs.)
 | status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
 | rust-aros | Rust on aarch64 AROS: full `std` runs (net/fs/env/args/process/time/thread verified live) | [README](rust-aros/README.md) |
 | feraille-gpui | Feraille (GPUI file manager) ported to AROS: runs live via the `gpui_aros` CPU backend | [README](feraille-gpui/README.md) |
-| gpufx | GPU-accelerated 2D (scale/blit/convert) via a compute section in the cocoametal shim + a `gpufx.library` front door (design) | [README](gpufx/README.md) |
+| gpufx | GPU-accelerated 2D (YUV→RGB + scale) via a compute section in the cocoametal shim + a `gpufx.library` front door (built; FFViewX runs on it) | [README](gpufx/README.md) |
 | host-bridge | How hosted AROS taps the host (`hostlib.resource`) + the `HostBind` helper + sample | [README](host-bridge/README.md) |
 | ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
 | dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
