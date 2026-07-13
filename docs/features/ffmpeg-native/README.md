@@ -81,6 +81,13 @@ Controls (window active): **SPACE** play/pause · **R** restart · **Q / ESC /
 close** quit. The title bar shows `PLAYING` / `PAUSED` / `image`. Video loops at
 EOF. (Audio is not wired — no AHI output yet; video only.)
 
+**Drag-and-drop:** the window is a Workbench **AppWindow**, so dropping a file
+icon from a Wanderer drawer onto it opens that file. Run `FFView` with no
+argument and it comes up empty (`drop an image or video here`) waiting for a
+drop; a drop tears down the current file and reopens the window at the new
+frame size (a non-media file leaves the window titled `cannot open that file`).
+`workbench.library` is optional — absent, FFView just is not a drop target.
+
 Pixel conversion is a **hand-written planar-YUV → RGB24** (`yuv_to_rgb24()`):
 chroma subsampling is read from the format descriptor (handles 4:2:0 / 4:2:2 /
 4:4:4), full- and limited-range BT.601, with a **fit-to-window nearest-neighbour
@@ -203,7 +210,8 @@ libswscale yuv2rgb kernel (worked around via the manual converter). Shares the
 - **aarch64 NEON asm** (currently `--disable-asm`) — a perf layer, not required.
 - **Audio output** via AHI, then A/V sync in FFView.
 - **Datatype / MultiView** surface on `libavcodec` so the desktop opens media.
-- A scaled display (fit-to-window) and an ASL file requester in FFView.
+- An ASL file requester in FFView (open a file from within the app). Fit-to-window
+  scaling and drag-and-drop (drop a Wanderer icon to open) are **done**.
 
 ---
 
