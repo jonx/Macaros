@@ -209,9 +209,15 @@ libswscale yuv2rgb kernel (worked around via the manual converter). Shares the
   (`--disable-pthreads`); the highest-risk runtime layer, untested under load.
 - **aarch64 NEON asm** (currently `--disable-asm`) — a perf layer, not required.
 - **Audio output** via AHI, then A/V sync in FFView.
-- **Datatype / MultiView** surface on `libavcodec` so the desktop opens media.
 - An ASL file requester in FFView (open a file from within the app). Fit-to-window
   scaling and drag-and-drop (drop a Wanderer icon to open) are **done**.
+- **Datatype / MultiView** — **done** (first-frame still). `ffmpeg.datatype`
+  (a `libavcodec`-backed **picture** datatype, in
+  `aros-upstream/workbench/classes/datatypes/ffmpeg`, built by
+  `hosted/ffmpeg/build-datatype.sh`) decodes the first video frame so MultiView
+  and the desktop preview media; verified opening `test.avi`. Follow-ups: an
+  *animation* datatype for in-MultiView playback, more container descriptors,
+  and launching FFView from the datatype.
 
 ---
 
