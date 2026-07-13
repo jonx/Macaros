@@ -60,13 +60,24 @@ workbench-libs-mathieeedoubtrans workbench-system-wanderer
 workbench-classes-zune workbench-datatypes-picture workbench-datatypes-png
 workbench-utilities-clock workbench-utilities-multiview workbench-utilities-more"
 
+# AHI audio (CoreAudio host path). AHI is an autotools subsystem, so the order
+# matters: the coreaudio-bridge linklib must exist in Developer/lib BEFORE the
+# AHI subsystem configures, or configure's `-lcoreaudio-bridge` probe fails and
+# the CoreAudio driver is silently dropped (the `-quick` targets skip the
+# prereq that would otherwise build it). Build the bridge first, then the
+# subsystem+drivers (which install ahi.device, coreaudio.audio, the COREAUDIO
+# mode file and AddAudioModes), then the AHISmoke test client.
+# See docs/features/coreaudio-audio/README.md.
+AUDIO_TARGETS="AHI-coreaudio-bridge-darwin workbench-devs-AHI-quick
+workbench-c-ahismoke"
+
 # Final assembly: link the hosted kickstart core (the `boot/darwin/kernel` file
 # AROSBootstrap loads first — darwin hosted uses the unix bootstrap flavor), then
 # `boot` stages the boot image + AROS.boot. Without kernel-link-unix the boot
 # dies immediately with "Failed to open file kernel!".
 ASSEMBLE_TARGETS="kernel-link-unix boot"
 
-TARGETS="${TARGETS:-$BOOT_TARGETS $DESKTOP_TARGETS $ASSEMBLE_TARGETS}"
+TARGETS="${TARGETS:-$BOOT_TARGETS $DESKTOP_TARGETS $AUDIO_TARGETS $ASSEMBLE_TARGETS}"
 
 cd "$AROS_BUILD"
 ok=0; fail=0; failed=""

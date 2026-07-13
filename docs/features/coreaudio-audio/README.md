@@ -103,32 +103,51 @@ to AROS as a `CM_EV_SETTING` for logging/UI visibility. It is deliberately not
 an AHI mixer-control path yet; AROS produces PCM, and the Mac host applies the
 final output gain.
 
+## Build (first-class since 2026-07-13)
+
+The AHI audio build is now part of the standard rebuild — no manual rescue.
+`graft/rebuild-aros.sh` builds it (target group `AUDIO_TARGETS`), or by hand:
+
+```sh
+cd ~/aros-build
+make AHI-coreaudio-bridge-darwin     # the host-CoreAudio bridge linklib FIRST
+make workbench-devs-AHI-quick        # subsystem + drivers (installs all 4 pieces)
+make workbench-c-ahismoke            # the AHISmoke test client
+```
+
+This installs `Devs/ahi.device`, `Devs/AHI/coreaudio.audio`,
+`Devs/AudioModes/COREAUDIO` and `C:AddAudioModes` into the boot tree.
+
+Two things made it first-class (`workbench/devs/AHI/mmakefile.src`):
+
+- **Order.** AHI is an autotools subsystem; its `configure` probes for
+  `-lcoreaudio-bridge` and *silently drops the CoreAudio driver* if the linklib
+  is not yet in `Developer/lib`. The `-quick` targets skip the prereq that would
+  build it, so the bridge (`AHI-coreaudio-bridge-darwin`) must be built first.
+  `rebuild-aros.sh` orders them; a from-clean build without it leaves you with
+  `ahi.device` but no `coreaudio.audio`.
+- **Flags.** `%build_with_configure` feeds AHI `USER_CFLAGS`/`USER_LDFLAGS`
+  through the configure environment (its Makefiles use `@CFLAGS@`/`@LDFLAGS@`)
+  but not the tree-wide `LDFLAGS`/`make.cfg` flags. So the AHI mmakefile now
+  restates the two aarch64-host-port requirements — `-ffixed-x18` and
+  `-Wl,--allow-multiple-definition` — or every AHI link fails with
+  `duplicate symbol __aros_libreq_SysBase`.
+
+The translation catalogs (`workbench/devs/AHI/{AHI,Device}/translations`) must
+be present as git submodules; they are already initialized in `../aros-upstream`.
+
 ## Remaining Polish
 
-The low-level playback path works. Remaining work is build and UX polish:
+The low-level playback path works and its build is first-class. Remaining work
+is UX polish:
 
-- make the `ahi.device` build workaround first-class in the source build.
-  The concrete rescue (performed 2026-07-02; repeat into the build dir (now `~/aros-build`) if
-  the gen dir is wiped): the missing pieces are (a) the translation catalogs,
-  which are UNINITIALIZED GIT SUBMODULES in `../aros-upstream`
-  (`git submodule update --init workbench/devs/AHI/AHI/translations
-  workbench/devs/AHI/Device/translations`), and (b) configure never
-  substituting the tool paths. Then, in
-  `$BUILD/bin/darwin-aarch64/gen/workbench/devs/AHI`, with
-  `T=$BUILD/bin/darwin-aarch64/tools` and `COMPILER_PATH=$T` exported, run
-  `make -C <Device|Drivers|AHI-Handler|AddAudioModes> SFDC=$T/sfdc
-  FLEXCAT=$T/flexcat`, adding to Device/AddAudioModes an LDFLAGS override
-  that appends `-Wl,--allow-multiple-definition`, and to Device a CFLAGS
-  override that appends `-ffixed-x18` (its config.status predates the flag).
-  Install: `Device/ahi.device` -> `Devs/`, `Drivers/CoreAudio/coreaudio.audio`
-  -> `Devs/AHI/`, `Drivers/CoreAudio/COREAUDIO` -> `Devs/AudioModes/`,
-  `AddAudioModes/AddAudioModes` -> `C:`, plus the AHI SDK headers
-  (`Include/C/devices/ahi.h` and the gen'd proto/clib/defines ahi.h) into
-  `Developer/include/`, then `make workbench-c-ahismoke`.
 - add default AHI preference wiring so the CoreAudio mode is selected by normal
   desktop configuration rather than only registered by startup
 - add mute and, if needed later, AHI-native mixer preference integration
 - expand the smoke to cover longer playback and repeated start/stop cycles
+- **audio-smoke** now sets `COREAUDIO_DEBUG=1` so the shim's `ca_start`/ring
+  markers appear (the dylib is quiet by default); the same env turns them on for
+  any manual launch.
 
 The older `design.md` and `spec.md` remain the design record. Their planning
 language predates this implementation; use this README as the live status.

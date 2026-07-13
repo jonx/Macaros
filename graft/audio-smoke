@@ -7,6 +7,12 @@
 # a direct ahi.device client that plays a generated tone through the host shim.
 set -u
 
+# libcoreaudio.dylib is quiet by default (clean release stderr); its lifecycle
+# markers -- including the "ca_start live=1" line this smoke asserts on -- are
+# gated behind COREAUDIO_DEBUG. The Macaros process inherits this env, so set it
+# before launching or the smoke greps for a line the shim never prints.
+export COREAUDIO_DEBUG=1
+
 SELF="$0"
 while [ -h "$SELF" ]; do
     dir="$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
