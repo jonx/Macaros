@@ -35,7 +35,8 @@ one-look summary. Verified against the code, not just the docs.)
 [benchmarks](benchmarks/README.md) ·
 [debug-tools](debug-tools/README.md) ·
 [crash-handling](crash-handling/design.md) ·
-[build](build/README.md) · [deployment](deployment/README.md).
+[build](build/README.md) · [deployment](deployment/README.md) ·
+[manual-testing](manual-testing/README.md).
 
 **🟡 Started — real code exists, not yet complete:**
 [processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
@@ -77,6 +78,7 @@ one-look summary. Verified against the code, not just the docs.)
 | build | Compile AROS from source: metatargets, stable dir, toolchain reuse | [README](build/README.md) |
 | deployment | Deploy + run built artifacts; the several-copies trap | [README](deployment/README.md) |
 | control-harness | `aros-ctl`: puppet the windowed AROS headlessly (type/click/shot/log) | [README](control-harness/README.md) |
+| manual-testing | Boot the interactive Workbench window and exercise features by hand (per-feature recipes + gotchas) | [README](manual-testing/README.md) |
 | benchmarks | `bench-run` (`make bench`): in-tree exec/clib micro-benchmarks on booted AROS | [README](benchmarks/README.md) |
 | debug-tools | bring-up diagnostics (`TestLib`, `lddemon` trace) + how to debug a crash/memory bug (trap backtrace, MUNGWALL, host lldb) | [README](debug-tools/README.md) |
 | crash-handling | A bounded guru with a symbolized backtrace | [README](crash-handling/README.md) |
