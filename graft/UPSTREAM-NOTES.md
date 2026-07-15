@@ -307,24 +307,49 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     EMU boot node and `AROS_HOST_VOLUME` mounts. Stress test:
     `hosted/exwalk` (C:ExWalk, N concurrent ExNext/ExAll walker processes).
 
-36. **[OPEN] A SECOND emul-handler fault in `DoExamineNext` — a hardware
-    bus/address error (0x80000002), not a stack overflow.** Surfaced
-    2026-07-06 after item 35's stack fix shipped: `C:ExWalk 8x25 EXALL` over
-    `SYS:C` PASSes clean (24600 entries, 0 errors), but booting `C:Feraille`
-    with its recursive `SYS:` folder-size walker re-enabled throws a
-    containment requester — `Error 0x80000002 Hardware bus fault/address
-    error, Module emul-handler Segment 1 .text Offset 0x37A8, Function
-    DoExamineNext`. So it is a *distinct* bug from the stack overflow: an
-    unaligned or bad-pointer access on a path ExWalk's flat `SYS:C` walk does
-    not exercise but Feraille's concurrent recursive walk (ExAll with
-    size/comment over the whole boot volume, including nested drawers and the
-    darwin sidecar `.info`/meta reads) does. Feraille's folder-size walker is
-    re-gated off on AROS (Feraille `aros-port` 144433c) until this is fixed;
-    everything else in Feraille runs clean. To reproduce without Feraille,
-    extend `hosted/exwalk` to recurse into subdirectories and read
-    `ED_COMMENT`/`ED_SIZE` on a deep tree (the current ExWalk is flat). Prime
-    suspects: `hv_to_nfc`/`NameToAros` buffer handling or a misaligned struct
-    field in the ExAll control block on aarch64.
+36. **[FIXED 2026-07-16] The "second emul-handler `DoExamineNext` fault" was
+    never an emul-handler bug — `posixc.library`'s shared fd table had no
+    locking at all.** The tell was the fault offset: `.text+0x37A8` is the
+    *first instruction* of `DoExamineNext` (`ldr w8, [x1, #0x10]`, reading
+    `fh->type`) — the handler trapped dereferencing the filehandle *argument*
+    it was handed in the DOS packet. The garbage `fh` came from the client
+    side: pthreads (all Rust std threads) share the opener's `PosixCIntBase`,
+    and `__fdesc.c` mutated `fd_array`/`fd_slots` and `internalpool` with zero
+    synchronization (`/* TODO: Add locking */` was in the file). Three race
+    classes, one per observed symptom:
+    - `__getfdslot()` grew the table by `AllocPooled` + `CopyMem` +
+      `FreePooled(old)` + pointer swap while other tasks read
+      `fd_array[fd]` lock-free → a reader mid-`readdir()` gets a *freed*
+      fdesc → garbage BPTR into the `ExNext` packet → emul-handler traps at
+      `DoExamineNext+0`. Growth was to exactly `wanted_fd+1`, so under
+      concurrent load nearly **every** open at the high-water mark
+      realloc-freed the table — maximal race exposure (and O(n²) copying).
+      Why ExWalk never reproduced it: single-threaded, one fd, no table churn.
+    - Concurrent `AllocPooled`/`FreePooled` on `internalpool` (exec pools are
+      not thread-safe) corrupted the pool free lists → wild faults in
+      unrelated DOS calls (seen live: Feraille boot trap in `File::write` →
+      `Dos_8_Write` → `dopacket` → `Exec_41_AddTail` on a NULL list).
+    - `open()`/`opendir()` did find-then-claim (`__getfdslot(__getfirstfd())`)
+      non-atomically → two threads claim the same fd; `__getfdslot` even
+      `close()`s the occupied slot, killing a sibling thread's live handle
+      (the "posixc `__open` bus-fault on a missing path" was this — the
+      missing path was incidental, the concurrency was the trigger).
+    Depending on what the corruption hit, the symptom was a containment
+    requester, a silent deadend reboot, or a wedge — matching every flavor
+    Feraille logged. *Fix (aros-upstream `crash-containment`, T-FDLOCK):* a
+    `SignalSemaphore fd_sem` in `PosixCIntBase` — `__getfdesc` obtains
+    shared; every table/pool mutation obtains exclusive; `__open`/`opendir`/
+    `pipe`/`dup`/`dup2`/`fcntl(F_DUPFD)` find+claim atomically under it
+    (claiming *before* the blocking DOS I/O so a slow volume can't stall
+    other threads); `close()` unhooks the slot before freeing the fdesc
+    (was freed-then-cleared); fd table grows geometrically. Verified on
+    device: the previously-fatal Feraille repro (tree expand of `SYS:` +
+    `SYS:Classes`, which deadend-rebooted the whole OS) plus a rapid
+    all-locations navigation stress now run clean, `crash=none`. Remaining
+    known-unprotected (pre-existing, lower severity): errno crosstalk via
+    the shared `StdCBase`, `__upath` conversion buffer (unused by Rust std,
+    which passes AROS paths), and closing an fd while another thread is
+    mid-I/O on it.
 
 ---
 
