@@ -39,9 +39,13 @@ aros_host_conf_load() {
                 ;;
         esac
     }
-    _hv="$(_val hostvolume)"; [ -n "$_hv" ]  && export AROS_HOST_VOLUME="$(_volume_spec "$_hv")"
-    _mem="$(_val memory)";    [ -n "$_mem" ] && export AROS_HOST_MEMORY="$_mem"
-    _keymap="$(_val keymap)"; [ -n "$_keymap" ] && export AROS_CTL_KEYMAP="$_keymap"
+    # Explicit env beats the conf file (standard precedence): the documented
+    # `AROS_HOST_MEMORY=1280 aros-ctl run` recipe must keep working — the conf
+    # used to clobber it, silently booting 256 MB guests (Rust apps then die
+    # of OOM panics that read as spontaneous reboots).
+    _hv="$(_val hostvolume)"; [ -n "$_hv" ] && [ -z "${AROS_HOST_VOLUME:-}" ] && export AROS_HOST_VOLUME="$(_volume_spec "$_hv")"
+    _mem="$(_val memory)";    [ -n "$_mem" ] && [ -z "${AROS_HOST_MEMORY:-}" ] && export AROS_HOST_MEMORY="$_mem"
+    _keymap="$(_val keymap)"; [ -n "$_keymap" ] && [ -z "${AROS_CTL_KEYMAP:-}" ] && export AROS_CTL_KEYMAP="$_keymap"
     : "${AROS_CTL_KEYMAP:=pc105_f}"; export AROS_CTL_KEYMAP   # default to French AZERTY when unset
     return 0
 }
