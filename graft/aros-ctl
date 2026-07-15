@@ -601,7 +601,7 @@ status)
         echo "log=$LOG missing"
         rc=2
     fi
-    crash_lines="$(grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" "$LOG" 2>/dev/null | head -5 || true)"
+    crash_lines="$(grep -v "KRN-DIAG" "$LOG" 2>/dev/null | grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" | head -5 || true)"
     if [ -n "$crash_lines" ]; then
         echo "crash=present"
         printf '%s\n' "$crash_lines"
@@ -733,7 +733,7 @@ tasks)
         exit 2
     fi
     ;;
-crash)  grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" "$LOG" 2>/dev/null | head -40;;
+crash)  grep -v "KRN-DIAG" "$LOG" 2>/dev/null | grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Module |Function |Privilege" | head -40;;
 warn)   grep -nE "supervisor mode|WARN|WARNING" "$LOG" 2>/dev/null | head -40;;
 libs)
     # Host (macOS) dylibs mapped into the AROS process — path + version. Verifies
@@ -770,14 +770,14 @@ diag)
     {
         echo "==== aros-ctl diag  pid=$pid ===="
         echo "---- AROS log: traps / boot failures ----"
-        grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Privilege|Could not open|emergency shell|Display driver|Module |Function " "$LOG" 2>/dev/null | tail -25
+        grep -v "KRN-DIAG" "$LOG" 2>/dev/null | grep -nE "Trap signal|Trap re-faulting|unrecoverable|halting host|Alert|stack limits|Privilege|Could not open|emergency shell|Display driver|Module |Function " | tail -25
         echo; echo "---- last 30 log lines ----"; tail -n 30 "$LOG" 2>/dev/null
         echo; echo "---- thread backtraces (sample ${secs}s) ----"
         /usr/bin/sample "$pid" "$secs" -mayDie 2>&1
     } > "$out"
     echo "diag written -> $out"
     echo "==== likely cause (log) ===="
-    grep -nE "Trap signal|unrecoverable|halting host|Alert|Privilege|emergency shell|Display driver|Could not open" "$LOG" 2>/dev/null | tail -8 || echo "  (no trap/boot-failure lines in log)"
+    grep -v "KRN-DIAG" "$LOG" 2>/dev/null | grep -nE "Trap signal|unrecoverable|halting host|Alert|Privilege|emergency shell|Display driver|Could not open" | tail -8 || echo "  (no trap/boot-failure lines in log)"
     echo "==== where it is (sample, top frames) ===="
     sed -n '/Call graph/,/Total number/p' "$out" 2>/dev/null | head -28
     if [ "$dokill" = 1 ]; then
