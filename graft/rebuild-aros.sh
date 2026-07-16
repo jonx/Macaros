@@ -36,6 +36,16 @@ export PATH="$AROS_CROSSTOOLS/bin:/opt/homebrew/bin:$PATH"
     echo "  cd $AROS_BUILD && $AROS_SRC/configure --target=darwin-aarch64 --with-toolchain=llvm --with-aros-toolchain=yes --with-aros-toolchain-install=$AROS_CROSSTOOLS --without-x" >&2
     exit 3; }
 
+# A git branch switch in $AROS_SRC touches configure's mtime without changing
+# it; the top Makefile then rejects every make with "The configure script must
+# be executed". Refresh the stored configuration instead of re-running
+# configure (which risks the LLVM rebuild). If configure CONTENT actually
+# changed, a real reconfigure is still on you.
+if [ "$AROS_SRC/configure" -nt "$AROS_BUILD/config.status" ]; then
+    echo "[rebuild] configure mtime newer than config.status (branch switch?) -- refreshing config.status"
+    (cd "$AROS_BUILD" && ./config.status >/dev/null && touch config.status)
+fi
+
 # The boot module set (kickstart) -- section 3 of docs/features/build/README.md.
 BOOT_TARGETS="kernel-dos kernel-kernel kernel-dosboot kernel-utility kernel-aros
 kernel-oop kernel-intuition kernel-graphics kernel-layers kernel-keymap
@@ -60,6 +70,39 @@ workbench-libs-mathieeedoubtrans workbench-system-wanderer
 workbench-classes-zune workbench-datatypes-picture workbench-datatypes-png
 workbench-utilities-clock workbench-utilities-multiview workbench-utilities-more"
 
+# The Workbench apps behind the staged icons (Tools/, System/, Prefs/). The
+# icon set is staged wholesale, so every app missing from this list shows up
+# as a dead icon on the desktop. NOT here on purpose:
+#   - workbench-system (aggregate): broken, workbench-system-vmm-app fails to
+#     compile (missing generated locale strings) and VMM is pointless hosted;
+#     the aggregate's own FILES (FixFonts + CLI) are built by
+#     build_workbench_system_base below instead.
+#   - SysExplorer used to trap at launch (the 64-bit taglist bug class,
+#     bare-int tag values spilled to stack vararg slots -- see build README
+#     3b); fixed 2026-07-16 in the NList sources (upstream 471cb63f).
+APP_TARGETS="workbench-tools workbench-tools-ahirecord workbench-tools-hdtoolbox
+workbench-tools-installaros workbench-tools-sysexplorer-app
+workbench-utilities-help workbench-utilities-installer
+workbench-devs-diskimage-gui workbench-prefs-boot
+external-openurl-includes external-openurl-fd external-openurl-lib
+external-openurl-cmd external-openurl-prefs kernel-usb-trident"
+
+# System/FixFonts + System/CLI (the Shell icon's default tool) have no
+# standalone metatarget -- their mmake name IS the broken workbench-system
+# aggregate -- so invoke their directory's generated mmakefile directly.
+build_workbench_system_base() {
+    printf '[rebuild] %-40s ' "workbench-system (base files)"
+    if make --no-print-directory -C "$AROS_BUILD/workbench/system" \
+        TOP="$AROS_BUILD" SRCDIR="$AROS_SRC" CURDIR=workbench/system \
+        TARGET=workbench-system AROS_TARGET_ARCH=darwin AROS_TARGET_CPU=aarch64 \
+        AROS_HOST_ARCH=darwin AROS_HOST_CPU=aarch64 \
+        --file=mmakefile workbench-system > "$LOGDIR/workbench-system-base.log" 2>&1; then
+        echo "OK"; ok=$((ok+1))
+    else
+        echo "FAIL (see $LOGDIR/workbench-system-base.log)"; fail=$((fail+1)); failed="$failed workbench-system-base"
+    fi
+}
+
 # AHI audio (CoreAudio host path). AHI is an autotools subsystem, so the order
 # matters: the coreaudio-bridge linklib must exist in Developer/lib BEFORE the
 # AHI subsystem configures, or configure's `-lcoreaudio-bridge` probe fails and
@@ -77,7 +120,9 @@ workbench-c-ahismoke"
 # dies immediately with "Failed to open file kernel!".
 ASSEMBLE_TARGETS="kernel-link-unix boot"
 
-TARGETS="${TARGETS:-$BOOT_TARGETS $DESKTOP_TARGETS $AUDIO_TARGETS $ASSEMBLE_TARGETS}"
+FULL_SET=""
+[ -z "${TARGETS:-}" ] && FULL_SET=1
+TARGETS="${TARGETS:-$BOOT_TARGETS $DESKTOP_TARGETS $APP_TARGETS $AUDIO_TARGETS $ASSEMBLE_TARGETS}"
 
 cd "$AROS_BUILD"
 ok=0; fail=0; failed=""
@@ -89,6 +134,8 @@ for t in $TARGETS; do
         echo "FAIL (see $LOGDIR/$t.log)"; fail=$((fail+1)); failed="$failed $t"
     fi
 done
+
+[ -n "$FULL_SET" ] && build_workbench_system_base
 
 # AROS.boot signature: dos's __dos_IsBootable needs :AROS.boot at the boot
 # volume root holding the CPU string, else every boot mis-reports "can't open

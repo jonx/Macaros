@@ -206,6 +206,33 @@ a *different* dead end:
   (old binary vs the merged `stdc.library` -> SIGSEGV in `__stdc_program_end`).
   These live in `workbench/utilities/`, so they are NOT covered by `workbench-c`
   or the `.userland-targets` set -- rebuild them explicitly with the desktop set.
+- **Workbench apps (Tools/, System/, Prefs/)** — the icon set is staged
+  wholesale, so every app you do not build is a **dead icon** on the desktop
+  (`.info` with no binary behind it). Upstream builds them all through the
+  `workbench` aggregate (each app dir hooks in via a `#MM- workbench :` line),
+  which we cannot run on darwin; the cherry-picked equivalents live in
+  `rebuild-aros.sh` `APP_TARGETS` (`workbench-tools` = Calculator/GraphicDump/
+  InitPrinter/PrintFiles, plus `-ahirecord`, `-hdtoolbox`, `-installaros`,
+  `-sysexplorer-app`, `workbench-devs-diskimage-gui`, `workbench-prefs-boot`,
+  the `external-openurl-*` set, `kernel-usb-trident`). Two traps:
+  - The `workbench-system` **aggregate is broken** (`workbench-system-vmm-app`
+    fails on missing generated locale strings, and VMM is pointless hosted).
+    Its own two files (`System/FixFonts`, `System/CLI` — the target of the
+    `Shell.info` project icon) have no standalone metatarget;
+    `rebuild-aros.sh` builds them by invoking the directory's generated
+    mmakefile directly (`build_workbench_system_base`).
+  - **The 64-bit taglist trap** (FIXED for SysExplorer + Zune GUI Settings,
+    2026-07-16, upstream 303db32b + 471cb63f): a **bare C int as a taglist
+    tag or value in a variadic MUI call**. Arguments in x1-x7 are safe
+    (w-register writes zero-extend), but one spilled to a stack vararg slot
+    is stored as 32 bits and read back as 64 -- the stale upper half turns
+    0/TRUE into a garbage pointer like `0x100000000` (fault addresses with
+    only high-half bits set are this bug). Fix = cast the tags and values
+    to IPTR at the offending call site. The safe SDK variadic macros
+    (`MUIMASTER_YES_INLINE_STDARG`) are NOT a wholesale fix: they break the
+    `VGroup ... End` idiom (the closing paren lives inside `End`, invisible
+    to macro argument scanning). Expect more of these lurking in other
+    32-bit-heritage Zune contribs.
 
 Rule of thumb: **rebuild the whole desktop set together** after any
 genmodule/startup/ABI change. A mixed tree (kickstart new, userland old) yields
@@ -269,6 +296,7 @@ not, just leave it out.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `make: No rule to make target 'kernel-dos'` | `Makefile`/`mmake.config` gone (scratchpad GC) | rebuild in a stable dir; re-run `configure` |
+| `The configure script must be executed before running 'make'` on EVERY target | a git branch switch in the source tree touched `configure`'s **mtime** (content unchanged), so the Makefile guard thinks the config is stale | `cd ~/aros-build && ./config.status && touch config.status` (`rebuild-aros.sh` now does this automatically); a real `configure` content change still needs a real reconfigure |
 | `can't open dos.library v36` then `dosboot` guru | ABI skew: modules built across genmodule/startup/struct changes | one coordinated rebuild of the whole boot set |
 | `fatal error: 'stdarg.h' file not found` | stripped toolchain resource headers | restore from Homebrew clang (§2) |
 | `ld.lld: duplicate symbol __aros_libreq_SysBase` | `KOBJ_LDFLAGS` not reaching the kobj link | fixed in `make.cfg.in`/`make.tmpl` (§4) |
