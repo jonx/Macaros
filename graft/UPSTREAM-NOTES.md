@@ -430,8 +430,8 @@ did. New issues found (candidate patches / bug reports):
 
 ---
 
-38. **[OPEN — root cause of the "Feraille freezes under use" saga] Hosted
-    darwin does not preempt a CPU-bound task.** Isolated with two standalone
+38. **[FIXED 2026-07-17 — root cause of the "Feraille freezes under use"
+    saga] Hosted darwin did not preempt a CPU-bound task.** Isolated with two standalone
     on-device tests (`hosted/timertest`, `hosted/clocktest`) after a long
     chase through the app. `ClockTest` matrix — a `pri -1` spinner thread vs a
     `pri 0` `timer.device` wait on the single guest CPU:
@@ -470,6 +470,16 @@ did. New issues found (candidate patches / bug reports):
     (or alongside) the process-directed `ITIMER_REAL`. That guarantees the tick
     lands on the thread actually running the guest and preempts a CPU-bound
     task. Verify against `C:ClockTest pure` (must reach `[D]`, not hang).
+
+    **FIXED (aros-upstream `crash-containment`): core_IRQ now FORWARDS a
+    mis-delivered tick to AROS's thread with `pthread_kill(aros_host_thread,
+    sig)` instead of dropping it** (async-signal-safe; classic signals
+    coalesce; a masked target just keeps it pending until the guest's next
+    Enable()). Measured before/after with the T-TICKPROBE counters printed in
+    the SIGINFO task dump: 40 handled / 7274 dropped under a pure spin ->
+    4293 handled / 35 forwarded. All four ClockTest variants now reach [D]
+    with the guest clock tracking real time exactly, and the Feraille scroll
+    stress that froze the GUI on every run holds 3-10% CPU, responsive.
 
     NB the many app-side mitigations found along the way are still worth
     keeping (they reduce how often anything spins, and each is an independent
