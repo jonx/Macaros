@@ -427,3 +427,53 @@ did. New issues found (candidate patches / bug reports):
     `IoctlSocket(FIONBIO)` actually switch the library's park behaviour per-socket
     (return `EWOULDBLOCK` from `recv`/`send`/`accept`/`connect` when set), and honour
     `SO_RCVTIMEO`/`SO_SNDTIMEO` in the park loop. Needed for mio/tokio later.
+
+---
+
+38. **[OPEN — root cause of the "Feraille freezes under use" saga] Hosted
+    darwin does not preempt a CPU-bound task.** Isolated with two standalone
+    on-device tests (`hosted/timertest`, `hosted/clocktest`) after a long
+    chase through the app. `ClockTest` matrix — a `pri -1` spinner thread vs a
+    `pri 0` `timer.device` wait on the single guest CPU:
+
+    | spinner | pri 0 timer wait | CPU |
+    | --- | --- | --- |
+    | `while(!stop){n++}` (no syscalls) | **HANGS** | 100% |
+    | `clock_gettime()` loop | **HANGS** | 100% |
+    | `sched_yield()` loop | ok | ~4% |
+    | `pthread_cond_timedwait(1ms)` loop | ok | ~4% |
+
+    The split is *voluntary yield vs not*, not anything clock- or
+    syscall-specific (the pure-arithmetic spinner makes zero syscalls and still
+    wedges everything). So a task that never blocks monopolizes the CPU
+    forever; the UI task and `timer.device` completion delivery both starve, so
+    the software clock (`CLOCK_MONOTONIC`/`GetUpTime`) appears frozen too — a
+    live frozen Feraille showed exactly that (app-time pinned while wall time
+    advanced minutes). `TimerTest` separately proved every timed-wait primitive
+    is correct with a healthy clock, so this is not a primitive bug.
+
+    **Mechanism.** Preemption relies solely on `setitimer(ITIMER_REAL)` →
+    **process-directed** `SIGALRM` (`arch/all-unix/timer/timer_init.c`). On
+    darwin a process-directed signal goes to an arbitrary thread with it
+    unblocked, and the Macaros process has many (cocoa main, NSEventThread,
+    Metal, libdispatch). `core_IRQ` then **drops** any `SIGALRM` that lands on
+    a non-AROS thread (`arch/all-unix/kernel/kernel.c:~500`, the
+    `pthread_self() != aros_host_thread` guard), on the assumption "the next
+    tick will hit the AROS thread." Under CPU-bound load that assumption fails:
+    the ticks keep missing the busy AROS scheduler thread and get dropped, so
+    the spinner is never preempted. There is **no thread-directed tick**
+    (no `pthread_kill(aros_host_thread, SIGALRM)`) as a fallback.
+
+    **Fix direction.** Deliver the preemption tick thread-directed to
+    `aros_host_thread` — e.g. a small dedicated host timer thread that
+    `pthread_kill(aros_host_thread, SIGALRM)`s every VBlank period, instead of
+    (or alongside) the process-directed `ITIMER_REAL`. That guarantees the tick
+    lands on the thread actually running the guest and preempts a CPU-bound
+    task. Verify against `C:ClockTest pure` (must reach `[D]`, not hang).
+
+    NB the many app-side mitigations found along the way are still worth
+    keeping (they reduce how often anything spins, and each is an independent
+    real bug): sched_yield doing 2x SetTaskPri per call, cond_timedwait opening
+    timer.device per call, negative-deadline SendIO, posixc's unlocked fd
+    table, the gpui_aros poll loop and crossbeam/parking_lot spin-waits. But
+    none of them is the root cause; this is.
