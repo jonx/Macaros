@@ -129,7 +129,15 @@ ok=0; fail=0; failed=""
 for t in $TARGETS; do
     printf '[rebuild] %-40s ' "$t"
     if make "$t" > "$LOGDIR/$t.log" 2>&1; then
-        echo "OK"; ok=$((ok+1))
+        # mmake exits 0 on an UNKNOWN target ("Nothing known about target X"),
+        # silently no-oping -- this masked stale-source deploys for hours
+        # (fixes appeared built but the old library kept shipping). Treat it
+        # as the failure it is.
+        if grep -q "Nothing known about target" "$LOGDIR/$t.log"; then
+            echo "FAIL (unknown target -- see $LOGDIR/$t.log)"; fail=$((fail+1)); failed="$failed $t"
+        else
+            echo "OK"; ok=$((ok+1))
+        fi
     else
         echo "FAIL (see $LOGDIR/$t.log)"; fail=$((fail+1)); failed="$failed $t"
     fi
