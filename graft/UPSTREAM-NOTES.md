@@ -307,8 +307,28 @@ especially on macOS. Each is a candidate patch for `aros-development-team`.
     EMU boot node and `AROS_HOST_VOLUME` mounts. Stress test:
     `hosted/exwalk` (C:ExWalk, N concurrent ExNext/ExAll walker processes).
 
-36. **[FIXED 2026-07-16] The "second emul-handler `DoExamineNext` fault" was
-    never an emul-handler bug — `posixc.library`'s shared fd table had no
+36. **[RE-OPENED 2026-07-17 — partially explained, NOT fixed] The recursive-walk
+    bus fault.** The posixc fd-table race below was real and is fixed, but it
+    did **not** close this item: with the fixed posixc, Feraille's folder-size
+    walker still bus-faults under real (human, mouse-driven) use — now
+    reported as `Error 0x80000002 ... Module kernel Segment 1 .text Offset
+    0x1AA0`, task `C:Feraille` (a *kernel*-module offset, not emul-handler as
+    before — the posixc fix may have moved the fault rather than removed it).
+    Feraille's walker is re-gated again (Feraille `main`, 2026-07-17). A
+    separate hang also reproduces: the AROS exec thread pinned at 100% CPU
+    spinning on `sigprocmask` (the hosted interrupt-mask path) while every
+    guest task sits in `WAIT` — i.e. a scheduler livelock, no trap.
+    **Methodology note for whoever picks this up:** synthetic input
+    (`aros-ctl click`) does NOT reproduce either failure — dozens of scripted
+    rounds pass while a human freezes it in a few clicks, because injected
+    clicks teleport the pointer and generate none of the mouse-move/hover
+    traffic real use does. And `crash=none`/`state=running` is NOT a liveness
+    check: livelocks and contained Gurus both report clean. Test with a human
+    at the mouse, or teach the harness to stream real pointer motion.
+
+    Original (2026-07-16) analysis, still valid as far as it goes: the "second
+    emul-handler `DoExamineNext` fault" was
+    not purely an emul-handler bug — `posixc.library`'s shared fd table had no
     locking at all.** The tell was the fault offset: `.text+0x37A8` is the
     *first instruction* of `DoExamineNext` (`ldr w8, [x1, #0x10]`, reading
     `fh->type`) — the handler trapped dereferencing the filehandle *argument*
