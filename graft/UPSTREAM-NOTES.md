@@ -487,3 +487,29 @@ did. New issues found (candidate patches / bug reports):
     timer.device per call, negative-deadline SendIO, posixc's unlocked fd
     table, the gpui_aros poll loop and crossbeam/parking_lot spin-waits. But
     none of them is the root cause; this is.
+
+39. **posixc `realpath()` can never succeed in AROS-native path mode.** Its
+    first act is `open(".", O_RDONLY)` to save the cwd for the later
+    `fchdir()` restore — and `.` is not a valid path component to DOS
+    (`Lock(".")` → `ERROR_INVALID_COMPONENT_NAME` → EINVAL), so every call
+    fails before even looking at its input. Proved on-device by the RS3g
+    probe in `hosted/rust/std-probe` (2026-07-18): `open(".")` = -1 EINVAL
+    while `chdir("MacRW:")`/`getcwd()` work fine. Fix direction: save the
+    cwd without posix `open` — `Lock("", SHARED_LOCK)` + `CurrentDir()` (or
+    a `getcwd()` string + final `chdir()`), and translate `.`/`..`
+    components before handing paths to DOS. The Rust std pal now sidesteps
+    it entirely: `aros_realpath()` in `hosted/rust/aros_fs_glue.c` does
+    `Lock()` + `NameFromLock()`, which is both simpler and handler-correct.
+
+40. **emul-handler `CreateDir` with a missing parent returns the wrong
+    IoErr.** `mkdir("MacRW:a/b")` with `MacRW:a` absent fails with IoErr
+    that maps to EINVAL — and on a freshly booted instance was observed as
+    IoErr()=0 (errno 0, "No error") — instead of ERROR_DIR_NOT_FOUND /
+    ERROR_OBJECT_NOT_FOUND (ENOENT). Consequence: any recover-on-ENOENT
+    recursion (Rust's `fs::create_dir_all`, and the same pattern in other
+    ported software) aborts instead of creating the parents. Reproduced by
+    the RS3f step prints (std-probe, 2026-07-18): `create_dir_all` =
+    Err(EINVAL) while the same two mkdirs done stepwise succeed. Fix: the
+    host-errno→IoErr mapping in emul-handler's create path should
+    distinguish ENOENT-on-parent (host ENOENT with a nonexistent
+    intermediate) and must never leave IoErr()=0 on failure.

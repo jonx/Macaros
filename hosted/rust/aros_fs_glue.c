@@ -101,6 +101,46 @@ void aros_closedir(void *dir)
         closedir((DIR *)dir);
 }
 
+/* --- canonicalize (realpath) ------------------------------------------------ *
+ * posixc realpath() cannot work in AROS-native path mode: its first act is
+ * open(".", O_RDONLY) to save the cwd, and "." is ERROR_INVALID_COMPONENT_NAME
+ * to DOS (EINVAL), so every call fails before looking at the input (proved by
+ * the RS3g probe, 2026-07-18). Canonicalize the DOS way instead: Lock() the
+ * path and ask NameFromLock() for the absolute volume-rooted name. No cwd
+ * games, no "." components, symlinks resolved by the handler itself. */
+#include <proto/dos.h>
+#include <dos/dos.h>
+#include <errno.h>
+
+int aros_realpath(const char *path, char *buf, unsigned long buflen)
+{
+    BPTR lock;
+    LONG ok;
+    if (!path || !buf || buflen == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    lock = Lock((CONST_STRPTR)path, SHARED_LOCK);
+    if (!lock) {
+        LONG e = IoErr();
+        errno = (e == ERROR_LINE_TOO_LONG)              ? ENAMETOOLONG
+              : (e == ERROR_INVALID_COMPONENT_NAME
+                 || e == ERROR_OBJECT_WRONG_TYPE)       ? EINVAL
+              : (e == ERROR_WRITE_PROTECTED
+                 || e == ERROR_READ_PROTECTED)          ? EACCES
+              : (e == ERROR_OBJECT_IN_USE)              ? EBUSY
+                                                        : ENOENT;
+        return -1;
+    }
+    ok = NameFromLock(lock, (STRPTR)buf, (LONG)buflen);
+    UnLock(lock);
+    if (!ok) {
+        errno = (IoErr() == ERROR_LINE_TOO_LONG) ? ENAMETOOLONG : EIO;
+        return -1;
+    }
+    return 0;
+}
+
 /* --- file times (set_times) ------------------------------------------------- *
  * posixc has utimes() (path + struct timeval[2]) but no futimes/lutimes/utimensat,
  * so the fd-based File::set_times and the nofollow variant stay Unsupported in the

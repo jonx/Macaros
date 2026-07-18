@@ -363,6 +363,120 @@ pub extern "C" fn aros_rust_std_hello() -> u32 {
         println!("[RS3e] net try_clone: dup shares local addr={r:?} (expect Ok(true))");
     }
 
+    // RS3f: fs surfaces implemented 2026-07-18 -- canonicalize (posixc
+    // realpath), File::truncate (ftruncate), File::duplicate (dup), and the
+    // portable copy/remove_dir_all. Each in its own closure: one failure
+    // prints, the run continues (panic=abort).
+
+    // RS3g: posixc-level probes for the RS3f failures — realpath's own
+    // ingredients (open("."), chdir, getcwd) and mkdir, called directly so
+    // errno is observed per call, not through std's wrappers.
+    {
+        use core::ffi::{c_char, c_int};
+        unsafe extern "C" {
+            fn open(path: *const c_char, flags: c_int, mode: c_int) -> c_int;
+            fn close(fd: c_int) -> c_int;
+            fn chdir(path: *const c_char) -> c_int;
+            fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char;
+            fn mkdir(path: *const c_char, mode: u16) -> c_int;
+        }
+        let e = || std::io::Error::last_os_error();
+        unsafe {
+            let fd = open(c".".as_ptr(), 1, 0); // posixc O_RDONLY = 0x1
+            println!("[RS3g] open(\".\", O_RDONLY) = {fd} errno={:?}", e());
+            if fd >= 0 { close(fd); }
+            let r = chdir(c"MacRW:".as_ptr());
+            println!("[RS3g] chdir(MacRW:) = {r} errno={:?}", e());
+            let mut buf = [0u8; 1024];
+            let p = getcwd(buf.as_mut_ptr() as *mut c_char, buf.len());
+            let cwd = if p.is_null() { None } else {
+                let n = buf.iter().position(|&b| b == 0).unwrap_or(0);
+                Some(String::from_utf8_lossy(&buf[..n]).into_owned())
+            };
+            println!("[RS3g] getcwd = {cwd:?} errno={:?}", e());
+            let r = mkdir(c"MacRW:rs3g-dir".as_ptr(), 0o777);
+            println!("[RS3g] mkdir(MacRW:rs3g-dir) = {r} errno={:?}", e());
+            let meta = std::fs::metadata("MacRW:rs3g-dir");
+            println!("[RS3g] metadata(MacRW:rs3g-dir) = is_dir {:?}", meta.map(|m| m.is_dir()));
+            let r = mkdir(c"MacRW:rs3g-dir/sub".as_ptr(), 0o777);
+            println!("[RS3g] mkdir(MacRW:rs3g-dir/sub) = {r} errno={:?}", e());
+            let r = chdir(c"SYS:".as_ptr());
+            println!("[RS3g] chdir(SYS:) back = {r}");
+        }
+        // leave no leftovers for the next run
+        let _ = std::fs::remove_dir("MacRW:rs3g-dir/sub");
+        let _ = std::fs::remove_dir("MacRW:rs3g-dir");
+    }
+
+    // canonicalize: resolve a `/`-joined subpath back to device syntax.
+    // Step-by-step prints: the first on-device run failed with an errno-0
+    // error somewhere in this block and NotFound cascades after it.
+    {
+        // KNOWN BUG (AROS side): mkdir with a missing parent gets the wrong
+        // IoErr from emul-handler (EINVAL or even 0 instead of ENOENT), so
+        // create_dir_all's recover-on-NotFound never triggers. Print its
+        // signature, then build the tree stepwise so the rest of RS3f runs.
+        let a = std::fs::create_dir_all("MacRW:rs3f/sub");
+        println!("[RS3f] step create_dir_all(MacRW:rs3f/sub) = {a:?} (KNOWN emul-handler IoErr bug if Err(EINVAL/errno0))");
+        let a1 = std::fs::create_dir("MacRW:rs3f");
+        let a2 = std::fs::create_dir("MacRW:rs3f/sub");
+        println!("[RS3f] step stepwise create_dir = {a1:?} / {a2:?}");
+        let b = std::fs::write("MacRW:rs3f/sub/c.txt", b"c");
+        println!("[RS3f] step write(MacRW:rs3f/sub/c.txt) = {b:?}");
+        let c1 = std::fs::canonicalize("MacRW:");
+        println!("[RS3f] step canonicalize(MacRW:) = {c1:?}");
+        let c2 = std::fs::canonicalize("MacRW:rs3f");
+        println!("[RS3f] step canonicalize(MacRW:rs3f) = {c2:?}");
+        let c3 = std::fs::canonicalize("MacRW:rs3f/sub/c.txt");
+        println!("[RS3f] step canonicalize(file) = {c3:?}");
+        let c4 = std::fs::canonicalize("MacRW:rs3f/sub/../sub/c.txt");
+        println!("[RS3f] step canonicalize(dotted) = {c4:?}");
+        let same = matches!((&c3, &c4), (Ok(x), Ok(y)) if x == y);
+        println!("[RS3f] fs canonicalize: dotted==direct={same} (expect true)");
+    }
+
+    // copy: bytes + length must survive; source stays.
+    {
+        let r = (|| -> std::io::Result<(u64, Vec<u8>)> {
+            std::fs::write("MacRW:rs3f/src.txt", b"copy-me-7")?;
+            let n = std::fs::copy("MacRW:rs3f/src.txt", "MacRW:rs3f/dst.txt")?;
+            Ok((n, std::fs::read("MacRW:rs3f/dst.txt")?))
+        })();
+        let ok = matches!(&r, Ok((9, b)) if b == b"copy-me-7");
+        println!("[RS3f] fs copy: n/content ok={ok} ({r:?}; expect Ok((9, \"copy-me-7\")))");
+    }
+
+    // File::truncate: 9 bytes -> 4; metadata must agree.
+    {
+        let r = (|| -> std::io::Result<u64> {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("MacRW:rs3f/src.txt")?;
+            f.set_len(4)?;
+            Ok(f.metadata()?.len())
+        })();
+        println!("[RS3f] fs File::set_len(4): len-after={r:?} (expect Ok(4))");
+    }
+
+    // File::duplicate: clone must read from the same open file.
+    {
+        let r = (|| -> std::io::Result<usize> {
+            let f = std::fs::File::open("MacRW:rs3f/src.txt")?;
+            let mut d = f.try_clone()?;
+            let mut buf = [0u8; 8];
+            d.read(&mut buf[..])
+        })();
+        println!("[RS3f] fs File::try_clone: read-via-dup={r:?} bytes (expect Ok(4))");
+    }
+
+    // remove_dir_all: the whole rs3f tree (files + subdir) must go.
+    {
+        let r = std::fs::remove_dir_all("MacRW:rs3f");
+        let gone = std::fs::metadata("MacRW:rs3f").is_err();
+        println!("[RS3f] fs remove_dir_all: {r:?} gone={gone} (expect Ok + true)");
+    }
+
     println!("RUST-AROS: STD PASS");
     0x5253_3320 // "RS3 "
 }
