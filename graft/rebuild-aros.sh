@@ -50,7 +50,7 @@ fi
 BOOT_TARGETS="kernel-dos kernel-kernel kernel-dosboot kernel-utility kernel-aros
 kernel-oop kernel-intuition kernel-graphics kernel-layers kernel-keymap
 kernel-debug kernel-bootloader kernel-console kernel-input kernel-keyboard
-kernel-gameport kernel-clipboard kernel-hidd kernel-hidd-gfx kernel-hidd-input
+kernel-gameport workbench-devs-clipboard kernel-hidd kernel-hidd-gfx kernel-hidd-input
 kernel-hidd-kbd kernel-hidd-mouse kernel-filesystem kernel-lddemon kernel-fs-con
 kernel-fs-ram kernel-expansion kernel-timer kernel-battclock kernel-processor
 kernel-hostlib kernel-unixio kernel-fs-emul kernel-entropy compiler-stdcio
@@ -58,7 +58,7 @@ workbench-libs-muimaster
 workbench-libs-cgfx workbench-libs-datatypes workbench-libs-gadtools
 workbench-libs-iffparse workbench-libs-locale workbench-libs-asl
 workbench-libs-commodities workbench-libs-coolimages workbench-libs-rexxsyslib
-workbench-libs-stdc kernel-hidd-cocoa kernel-bootstrap-hosted"
+compiler-stdc kernel-hidd-cocoa kernel-bootstrap-hosted"
 
 # The desktop userland -- section 3b. Without these the boot reaches only a CLI
 # or dies in the display-driver / dos.library check.
