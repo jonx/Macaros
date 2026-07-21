@@ -513,3 +513,19 @@ did. New issues found (candidate patches / bug reports):
     host-errno→IoErr mapping in emul-handler's create path should
     distinguish ENOENT-on-parent (host ENOENT with a nonexistent
     intermediate) and must never leave IoErr()=0 on failure.
+
+41. **[FIXED 2026-07-21] Darwin hostlib semaphore lock deadlocks against
+    host threads once preemption works.** Guest tasks preempted mid-host-
+    call keep host-libc locks (environ via emul-handler
+    localtime->tzset->getenv) in their suspended context; the cocoa main
+    thread blocks on the lock (it ran getenv every watchdog tick), and a
+    guest cm_pump_events dispatch_sync onto the blocked main thread closes
+    a three-way deadlock: 0% CPU, un-signalable (SIGINFO converges on the
+    AROS thread, which is parked in dispatch_sync). Unreachable pre-tick-
+    forwarding — dropped ticks meant host calls were never interrupted, so
+    darwin was safe by accident. Fixed like Windows-hosted: USE_FORBID_LOCK
+    on darwin (aros-upstream `061b4b98`; free on a 1-cpu guest — no other
+    guest task can run during a host call anyway) plus a cached watchdog
+    env probe in cocoametal (`d15750f`). Diagnosed from a macOS `sample`
+    of the wedged process. Upstream candidate together with item 38 —
+    any darwin-hosted AROS needs both.
