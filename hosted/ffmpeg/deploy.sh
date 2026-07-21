@@ -61,6 +61,13 @@ if [ -d "$SYSX/lib" ]; then
         -L"$SYSX/lib" $LIBS -o "$OUT/FFViewX"
     [ -x "$STRIP" ] && "$STRIP" --strip-unneeded "$OUT/FFViewX" 2>/dev/null || true
     cp -f "$OUT/FFViewX" "$CDEST/FFViewX" && chmod +x "$CDEST/FFViewX"
+    # C:FFThumb -- the headless one-frame thumbnailer Feraille's preview pane
+    # shells out to (its qlmanage). Same broad codec set as FFViewX.
+    echo "[deploy] FFThumb (preview poster helper)"
+    "$DIR/aros-cc.sh" -O2 -I"$SYSX/include" -I"$DIR" "$DIR/ffthumb.c" "$DIR/aros_avio.c" \
+        -L"$SYSX/lib" $LIBS -o "$OUT/FFThumb"
+    [ -x "$STRIP" ] && "$STRIP" --strip-unneeded "$OUT/FFThumb" 2>/dev/null || true
+    cp -f "$OUT/FFThumb" "$CDEST/FFThumb" && chmod +x "$CDEST/FFThumb"
     # C:FFProbe -- the media inspector, built from ffmpeg's own fftools against
     # the same broad libs (needs the build dir + source, so its own script).
     [ -f "$OUT/build-videox/config.h" ] && "$DIR/build-ffprobe.sh"
