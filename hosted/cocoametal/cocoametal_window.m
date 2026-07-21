@@ -238,10 +238,20 @@ static CMContentView *cm__metal_view(NSWindow *win) {
  *    kernel's diag handler prints every task's backtrace to the log, so any
  *    future hang self-captures its own autopsy. Re-arms when pumping resumes. */
 static double cm__watchdog_secs(void) {
-    const char *s = getenv("AROS_CM_WATCHDOG_SECS");
-    if (!s) return 5.0;
-    double v = atof(s);
-    return (v > 0) ? v : 0;                  /* 0 or garbage = disabled */
+    /* Cached: this runs on EVERY host tick, and getenv takes the libc
+     * environ lock -- the same lock a guest task can be holding while
+     * suspended mid-host-call. Per-tick acquisition made the main thread
+     * the reliable second party of that deadlock (2026-07-21 freeze:
+     * main thread parked here in _os_unfair_lock while a preempted guest
+     * task held environ via localtime/tzset). The env var can't change
+     * mid-run; read it once. */
+    static double cached = -1.0;
+    if (cached < 0) {
+        const char *s = getenv("AROS_CM_WATCHDOG_SECS");
+        double v = s ? atof(s) : 5.0;
+        cached = (s == NULL) ? 5.0 : ((v > 0) ? v : 0);  /* 0/garbage = disabled */
+    }
+    return cached;
 }
 
 static void cm__host_tick(CMContext *cx) {
