@@ -115,19 +115,26 @@ host language server. Staging:
   the host.
 - **(4) AROS-side handshake: PASS (2026-07-22).** `C:AEdit` connects from AROS
   over the bsdsocket loopback and completes `initialize`; the status bar shows
-  `LSP: connected — rust-analyzer 1.98.0-nightly`. Prereq: `bsdsocket.library`
-  built + deployed. **Finding that reorders the plan:** the round-trip took tens
-  of seconds because AROS's *blocking* `recv` wakes slowly — the hosted
-  bsdsocket blocking-read park polls on a timer and does not wake promptly on
-  data arrival (it woke instantly on socket close). The byte pump confirmed the
-  request reached rust-analyzer and its reply was written straight back; the
-  latency is entirely AROS's recv. Fine for a one-shot handshake, unusable for
-  interactive completion.
-- **(5) NEXT — make `recv` wake on data** (the real critical path): wire
-  `WaitSelect` / exec-signal readiness (and real `FIONBIO`) in the hosted
-  bsdsocket bridge so a blocking read returns as soon as bytes arrive. This is
-  the async-layer OS work in `aros-upstream`, and it now gates usable LSP.
-- **(6)** then wire completion/hover/diagnostics into the provider traits.
+  `LSP: connected — rust-analyzer 1.98.0-nightly (50 ms)`. Prereq:
+  `bsdsocket.library` built + deployed.
+- **Latency: ~50 ms, and the AROS recv path is fine.** An earlier draft claimed
+  the handshake took "tens of seconds" and blamed a slow blocking `recv` /
+  bsdsocket park, and named an async-layer OS fix as the critical path. **That
+  was wrong** — a test-harness artifact. The `PollFd` park
+  (`bsdsocket_util.c`) polls every ~20 ms (`Delay(1)`) with a level-triggered
+  kqueue pump (`aros-aarch64/hosted/bsdsocket/bsdsock_pump.c`) that raises the
+  task signal on readiness, so recv wakes promptly. The real cause of the hangs
+  was the **host bridge**: it served one connection at a time and blocked, so
+  repeated test boots left half-closed connections and orphaned `rust-analyzer`
+  processes that wedged it. Fixed by making `host-lsp-bridge`
+  thread-per-connection and reaping the child on session end; a clean boot then
+  handshakes in ~50 ms.
+- **Consequence: usable LSP does NOT require the deep async-layer OS work.** A
+  ~50 ms blocking round-trip plus a `std::thread` is enough for interactive
+  completion/hover. So the plan does not reorder — the WaitSelect/FIONBIO work
+  is a later responsiveness/throughput refinement, not a prerequisite.
+- **(5) NEXT — wire completion/hover/diagnostics into gpui-component's provider
+  traits**, backed by the `std::net` LSP client (now unblocked).
 
 ## Compile frontier (what actually builds for AROS)
 
