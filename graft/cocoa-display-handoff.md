@@ -60,9 +60,9 @@ shell prompt.
 ## 3. Proof AROS *is* rendering (so this is a display-path bug, not a boot bug)
 
 `C:GrabScreen` dumps `LockPubScreen(NULL)->RastPort.BitMap` via `ReadPixelArray`.
-Its output (`graft/cocoa-display-shell-proof.png`) is a **fully rendered shell**:
-blue screen, AROS banner, **Kickstart 51.51**, a live `1>` prompt. So AROS
-renders the shell into *a* bitmap. The window just isn't showing *that* bitmap.
+Its output was a **fully rendered shell**: blue screen, AROS banner,
+**Kickstart 51.51**, a live `1>` prompt. So AROS renders the shell into *a*
+bitmap. The window just isn't showing *that* bitmap.
 
 ---
 
