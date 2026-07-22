@@ -87,7 +87,16 @@ rust-aros std compile for `aarch64-unknown-aros` — the API surface is confirme
 before the link-and-boot cycle. (Config gotcha: the workspace `.cargo/config`
 target CFLAGS must carry the AROS SDK include chain + compat `-I` +
 `-DHAVE_ENDIAN_H`, else tree-sitter's vendored C fails `stdio.h not found`.)
-Next: link `C:AEdit` + boot via `aros-ctl` (boot-to-buffer).
+
+**Boot-to-buffer: PASS (2026-07-22).** `C:AEdit` (61 MB ET_REL) boots on hosted
+AROS and opens the editor window — code buffer, line numbers, live tree-sitter
+syntax highlighting, and working keyboard input (typed text edits the buffer and
+re-highlights). The Apache gpui-component editor runs on AROS through the
+gpui_aros CPU backend. Second link gotcha (besides the CFLAGS include chain):
+the workspace `.cargo/config` must set `AR_aarch64_unknown_aros` to the
+crosstools `llvm-ar` — Apple's `ar` silently makes **empty** archives from ELF
+objects, so every cc-rs native lib (tree-sitter runtime + grammars, psm asm)
+links as undefined symbols. Next: async layer + LSP-over-TCP.
 
 ## Compile frontier (what actually builds for AROS)
 
