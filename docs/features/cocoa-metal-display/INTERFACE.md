@@ -671,8 +671,16 @@ The AROS side registers a 16-mode ladder (800x600 first = the boot default;
 
 The main window is user-resizable from v3 (`NSWindowStyleMaskResizable`,
 min 640x480 content). During a live drag the present path scales
-(`CM_OPT_SCALE_MODE`); the mode change lands at drag end. A resize grab's
-LeftMouseDown reaches the guest before AppKit's tracking session starts and the
-session consumes the matching LeftMouseUp, so `windowWillStartLiveResize`
-synthesizes the release into the event ring (otherwise the guest is left with a
-stuck button, i.e. a drag rectangle after every resize).
+(`CM_OPT_SCALE_MODE`); the mode change lands at drag end.
+
+Resize-drag button handling (the "drag rectangle after every resize" bug): a
+resize grab's `LeftMouseDown` is translated for the guest, but forwarding it to
+`[NSApp sendEvent:]` blocks for the whole drag inside AppKit's modal
+live-resize tracking loop. So the event drain must (1) put the translated
+CMEvent in the ring BEFORE the `sendEvent:` forward, otherwise the grab's DOWN
+is filed after everything the session generates and the guest sees `UP, UP,
+DOWN` and arms a lasso with nothing to cancel it; and (2) stand down entirely
+while `window.inLiveResize`, so it does not steal the drag events the session
+needs. `windowWillStartLiveResize` / `windowDidEndLiveResize` also synthesize a
+`LeftMouseUp` into the ring as belt-and-braces; an unmatched release is a no-op
+for the guest.

@@ -847,8 +847,15 @@ void cm__drain_nsevents(CMContext *cx) {
                 if (aw && ev.window != (__bridge NSWindow *)aw) emit = 0;
             }
 
-            if (forward) [app sendEvent:ev];
+            /* Ring BEFORE forward: sendEvent can block for a long time inside an
+             * AppKit modal tracking session (a live window resize runs entirely
+             * inside sendEvent of the grab's LeftMouseDown). Putting after it
+             * would file this event in the ring AFTER everything generated
+             * during the session (e.g. the synthesized resize releases), so the
+             * guest would see the grab's DOWN arrive last and be left with a
+             * stuck button. */
             if (emit) cm__evring_put(cx, e);
+            if (forward) [app sendEvent:ev];
             /* If neither emit nor forward (shouldn't happen), the event is simply
              * dropped after dequeue — but every branch sets at least one. */
         }
