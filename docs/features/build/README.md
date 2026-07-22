@@ -106,16 +106,13 @@ Then point `configure` at it with `--with-aros-toolchain=yes
 **`checking whether to build crosstools... no`**. Keep the copy in `$HOME`,
 not `/tmp` — the tmp purge (§1) eats it too.
 
-**Guard:** a bare `make` (default target) will still try to *build* the toolchain
-from source. The crosstools mmakefile now **refuses** unless you opt in:
-
-```
-make AROS_ALLOW_LLVM_REBUILD=1 <target>   # only if you really mean it
-```
-
-Without that variable it prints a "REFUSING to build LLVM from source" banner and
-exits — so nobody triggers the 1–2 h build by accident.
-(`tools/crosstools/llvm/mmakefile.src`.)
+**No guard:** a bare `make` (default target) on a tree configured *without* a
+prebuilt toolchain will silently start the 1–2 h LLVM build — nothing blocks it
+(a local refuse-guard existed briefly and was removed 2026-07-22 to stay closer
+to upstream, whose normal flow builds the toolchain via `make`). The protection
+is the configure line: always pass `--with-aros-toolchain=yes
+--with-aros-toolchain-install=$HOME/aros-crosstools` and check for
+`checking whether to build crosstools... no`.
 
 **Stripped resource dir?** If you see `fatal error: 'stdarg.h' file not found`,
 the GC ate the compiler's builtin headers. **Do NOT blindly copy them from
@@ -300,7 +297,7 @@ not, just leave it out.
 | `can't open dos.library v36` then `dosboot` guru | ABI skew: modules built across genmodule/startup/struct changes | one coordinated rebuild of the whole boot set |
 | `fatal error: 'stdarg.h' file not found` | stripped toolchain resource headers | restore from Homebrew clang (§2) |
 | `ld.lld: duplicate symbol __aros_libreq_SysBase` | `KOBJ_LDFLAGS` not reaching the kobj link | fixed in `make.cfg.in`/`make.tmpl` (§4) |
-| Suddenly building `LLVMSupport`/clang from source | configured without `--with-aros-toolchain=yes` | the guard now blocks it; reuse the toolchain (§2) |
+| Suddenly building `LLVMSupport`/clang from source | configured without `--with-aros-toolchain=yes` (nothing blocks the 1–2 h build) | interrupt it; reconfigure with the prebuilt toolchain (§2) |
 | SIGSEGV at kernel entry, **before** `[KRN]` prints | weak `SysBase` (genmodule regression) → kernel reads NULL | keep `SysBase` GLOBAL; `readelf -s` to verify (§4) |
 | SIGSEGV in `kernel.resource` startup, **before** `[KRN]` (fault `0xfffffffffffff480`) | hosted kickstart `memset`/`memcpy` bound to the weak `-lstdc` StdCBase stub (NULL StdCBase early) — `-lstdc.static` missing from the general `LDFLAGS` | `-lstdc.static` in `config/make.cfg.in` `LDFLAGS` (NOT just `KERNEL_LDFLAGS` — hosted kickstart is compiler=target). Verify `llvm-nm kernel.resource \| grep -w memset` is `T`, not `W`/`__memset_StdCBase_wrapper` |
 | Builds clean but the boot faults with no diagnostic | clang‑22 `va_start` header compiled by the clang‑20 binary | restore clang‑20.1.0 freestanding headers (§2) |
