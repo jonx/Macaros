@@ -54,6 +54,7 @@ one-look summary. Verified against the code, not just the docs.)
 [memory-protection](memory-protection/README.md) ·
 [arexx-host-port](arexx-host-port/README.md) ·
 [dotnet-native](dotnet-native/README.md) ·
+[seamless-windows](seamless-windows/README.md) ·
 [68k-marshalling](68k-marshalling/README.md) (design; the boundary itself is realized inside the JIT).
 
 > Provenance note: everything above is independent clean-room work **except** the
@@ -112,6 +113,7 @@ one-look summary. Verified against the code, not just the docs.)
 | zed-editor | Zed-shaped code editor on AROS (investigation): licensing boundary + compile-frontier probe; rig in `hosted/zed/` | [README](zed-editor/README.md) |
 | gpufx | GPU-accelerated 2D (YUV→RGB + scale) via a compute section in the cocoametal shim + a `gpufx.library` front door (built; FFViewX runs on it) | [README](gpufx/README.md) |
 | host-bridge | How hosted AROS taps the host (`hostlib.resource`) + the `HostBind` helper + sample | [README](host-bridge/README.md) |
+| seamless-windows | Rootless mode: each Intuition window as its own native macOS window + AROS volumes in Finder (feasibility study) | [README](seamless-windows/README.md) |
 | ffmpeg-native | `libav*` built natively for aarch64 AROS | [README](ffmpeg-native/README.md) |
 | dotnet-native | A .NET runtime ported to aarch64 AROS (Mono interp recommended) | [README](dotnet-native/README.md) |
 
