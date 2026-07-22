@@ -96,7 +96,38 @@ gpui_aros CPU backend. Second link gotcha (besides the CFLAGS include chain):
 the workspace `.cargo/config` must set `AR_aarch64_unknown_aros` to the
 crosstools `llvm-ar` — Apple's `ar` silently makes **empty** archives from ELF
 objects, so every cc-rs native lib (tree-sitter runtime + grammars, psm asm)
-links as undefined symbols. Next: async layer + LSP-over-TCP.
+links as undefined symbols.
+
+**Open / edit / save real files: PASS (2026-07-22).** `C:AEdit MacRW:sample.rs`
+reads a file from the AROS filesystem (rust-aros std `fs`), highlights it by
+extension, and Cmd+S writes it back — verified end-to-end (the edit lands on the
+host at `~/AROS/Shared/sample.rs`). It is now a real editor, not a demo buffer.
+
+**Code intelligence over LSP** (the goal-defining step), using the
+host-embedded-server architecture above. gpui-component's editor exposes LSP as
+Rust **provider traits** (`CompletionProvider`, `HoverProvider`,
+`DefinitionProvider`, `CodeActionProvider`, semantic tokens), so the AROS side
+implements those traits backed by a JSON-RPC client over `std::net` TCP to a
+host language server. Staging:
+
+- **(3) Host bridge: PASS (2026-07-22).** `aros-editor/crates/host-lsp-bridge`
+  exposes `rust-analyzer` stdio on a loopback TCP port. Handshake verified on
+  the host.
+- **(4) AROS-side handshake: PASS (2026-07-22).** `C:AEdit` connects from AROS
+  over the bsdsocket loopback and completes `initialize`; the status bar shows
+  `LSP: connected — rust-analyzer 1.98.0-nightly`. Prereq: `bsdsocket.library`
+  built + deployed. **Finding that reorders the plan:** the round-trip took tens
+  of seconds because AROS's *blocking* `recv` wakes slowly — the hosted
+  bsdsocket blocking-read park polls on a timer and does not wake promptly on
+  data arrival (it woke instantly on socket close). The byte pump confirmed the
+  request reached rust-analyzer and its reply was written straight back; the
+  latency is entirely AROS's recv. Fine for a one-shot handshake, unusable for
+  interactive completion.
+- **(5) NEXT — make `recv` wake on data** (the real critical path): wire
+  `WaitSelect` / exec-signal readiness (and real `FIONBIO`) in the hosted
+  bsdsocket bridge so a blocking read returns as soon as bytes arrive. This is
+  the async-layer OS work in `aros-upstream`, and it now gates usable LSP.
+- **(6)** then wire completion/hover/diagnostics into the provider traits.
 
 ## Compile frontier (what actually builds for AROS)
 
@@ -184,6 +215,17 @@ Consequences for the editor:
   new OS work; the port work is a TCP arm in the transport (Zed's `lsp.rs` is
   `Stdio::piped` today). This is independent of, and cheaper than, mounting
   `PIPE:`.
+- **Design decision: embed the language server in the Macaros host.** Rather
+  than asking the user to launch `rust-analyzer` by hand, the Macaros host app
+  (which already runs AROS as a macOS process) optionally spawns the language
+  server as a native **host** child process and exposes it on a loopback TCP
+  port; the AROS editor connects over the bsdsocket bridge. This puts all the
+  subprocess/stdio complexity on macOS, where spawning is trivial, and leaves
+  AROS needing only a blocking TCP client (works today) plus one `std::thread`
+  for the read side. It means step-3 LSP does **not** wait on the AROS async /
+  `PIPE:` OS work at all — that stays a step-4 concern for self-hosted tools.
+  (rust-analyzer speaks LSP over stdio; the host wraps its stdio in a tiny
+  stdio↔socket pump, or runs it in the LS's TCP mode where available.)
 
 ## Upstream stance (AROS core, 2026-07-22)
 
