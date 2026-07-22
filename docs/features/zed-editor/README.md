@@ -185,8 +185,18 @@ host language server. Staging:
   ~50 ms blocking round-trip plus a `std::thread` is enough for interactive
   completion/hover. So the plan does not reorder — the WaitSelect/FIONBIO work
   is a later responsiveness/throughput refinement, not a prerequisite.
-- **(5) NEXT — wire completion/hover/diagnostics into gpui-component's provider
-  traits**, backed by the `std::net` LSP client (now unblocked).
+- **(5) Live completions: PASS (2026-07-23).** A persistent LSP client
+  (`aros-editor/src/lsp.rs`: initialize/didOpen/didChange/completion) backs a
+  gpui-component `CompletionProvider` (`src/provider.rs`). Typing `greeting.` in
+  a cargo-project file opened on AROS pops rust-analyzer's String methods **with
+  hover documentation** — real code intelligence, driven from the Mac over the
+  TCP bridge (`MacRW:` paths map to the host `~/AROS/Shared` so the server reads
+  the real project). This is a Zed-shaped editor with working code intelligence
+  running on AROS.
+- **(6) Next:** hover/go-to-definition/diagnostics (the other provider traits,
+  same client), and productizing the bridge into the Macaros host so the server
+  starts with AROS. The blocking-`recv` latency (~50 ms) is fine for these; the
+  WaitSelect/FIONBIO OS work remains a later throughput refinement.
 
 ## Compile frontier (what actually builds for AROS)
 
