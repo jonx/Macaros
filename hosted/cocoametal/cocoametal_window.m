@@ -209,14 +209,15 @@ static CMContentView *cm__metal_view(NSWindow *win) {
     (void)note;
     if (self.cx) cm__set_resize_pending(self.cx);
 }
-/* A resize grab delivers its LeftMouseDown to the guest before AppKit's
- * tracking session starts, and the session then consumes the matching
- * LeftMouseUp, leaving the guest with a stuck button (a drag rectangle after
- * the resize). Synthesize the release as soon as the session begins. */
-- (void)windowWillStartLiveResize:(NSNotification *)note {
-    NSWindow *win = note.object;
-    if (!self.cx) return;
+/* A resize grab can deliver its LeftMouseDown to the guest while AppKit's
+ * tracking session consumes the matching LeftMouseUp, leaving the guest with
+ * a stuck button (a drag rectangle after every resize). Synthesize the
+ * release when the session begins AND when it ends: whichever side of the
+ * session the stray down landed on, an up follows it in the ring. An
+ * unmatched release is ignored by the guest. */
+static void cm__synth_lmb_release(CMContext *cx, NSWindow *win) {
     CMEvent e;
+    if (!cx) return;
     e.type = CM_EV_MOUSEBTN; e.code = 0; e.pressed = 0; e.mods = 0;
     e.x = 0; e.y = 0;
     CMContentView *mv = cm__metal_view(win);
@@ -229,17 +230,21 @@ static CMContentView *cm__metal_view(NSWindow *win) {
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
         e.x = x; e.y = y;
     }
-    cm__evring_put(self.cx, &e);
+    cm__evring_put(cx, &e);
 }
-/* End of a user drag: ask the AROS side for a display mode matching the new
- * content size. The request travels the same CM_EV_SETTING pair the settings
- * panel uses; AROS snaps it to the nearest database mode and reopens the
- * screen, which comes back to us as cm_set_mode. During the drag the present
- * path just scales. */
+- (void)windowWillStartLiveResize:(NSNotification *)note {
+    cm__synth_lmb_release(self.cx, note.object);
+}
+/* End of a user drag: cancel any stray grab state, then ask the AROS side for
+ * a display mode matching the new content size. The request travels the same
+ * CM_EV_SETTING pair the settings panel uses; AROS snaps it to the nearest
+ * database mode and reopens the screen, which comes back to us as
+ * cm_set_mode. During the drag the present path just scales. */
 - (void)windowDidEndLiveResize:(NSNotification *)note {
     NSWindow *win = note.object;
     NSView *view = cm__metal_view(win);
     if (!self.cx || !view) return;
+    cm__synth_lmb_release(self.cx, win);
     if (win.styleMask & NSWindowStyleMaskFullScreen) return;
     int w = (int)lround(view.bounds.size.width);
     int h = (int)lround(view.bounds.size.height);
@@ -697,6 +702,14 @@ static void cm__sync_mods(CMContext *cx, NSEventModifierFlags f) {
 void cm__drain_nsevents(CMContext *cx) {
     NSApplication *app = NSApp;
     if (!cx || !app) return;                 /* no NSApp -> no event source */
+    /* During a live window resize AppKit's tracking loop owns the event queue.
+     * Dequeuing here steals the drag events the session needs and leaks
+     * grab/release halves to the guest; stand down until the drag ends. */
+    {
+        void *winp = cm__get_window(cx);
+        if (winp && ((__bridge NSWindow *)winp).inLiveResize)
+            return;
+    }
     @autoreleasepool {
         for (int i = 0; i < 256; i++) {
             /* Non-blocking: distantPast => return immediately if nothing queued. */
