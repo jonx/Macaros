@@ -185,18 +185,30 @@ host language server. Staging:
   ~50 ms blocking round-trip plus a `std::thread` is enough for interactive
   completion/hover. So the plan does not reorder — the WaitSelect/FIONBIO work
   is a later responsiveness/throughput refinement, not a prerequisite.
-- **(5) Live completions: PASS (2026-07-23).** A persistent LSP client
-  (`aros-editor/src/lsp.rs`: initialize/didOpen/didChange/completion) backs a
-  gpui-component `CompletionProvider` (`src/provider.rs`). Typing `greeting.` in
-  a cargo-project file opened on AROS pops rust-analyzer's String methods **with
-  hover documentation** — real code intelligence, driven from the Mac over the
-  TCP bridge (`MacRW:` paths map to the host `~/AROS/Shared` so the server reads
-  the real project). This is a Zed-shaped editor with working code intelligence
-  running on AROS.
-- **(6) Next:** hover/go-to-definition/diagnostics (the other provider traits,
-  same client), and productizing the bridge into the Macaros host so the server
-  starts with AROS. The blocking-`recv` latency (~50 ms) is fine for these; the
-  WaitSelect/FIONBIO OS work remains a later throughput refinement.
+- **(5) Code intelligence: PASS (2026-07-23).** The LSP client
+  (`aros-editor/src/lsp.rs`) is a background-reader design: a reader thread
+  demuxes request responses, pushed notifications, and server requests over one
+  `Arc<TcpStream>` (bsdsocket `try_clone` is unsupported, so no half-splitting).
+  Backing gpui-component's provider traits, verified live on AROS:
+  - **Completions** — typing `greeting.` pops rust-analyzer's String methods.
+  - **Diagnostics** — `let count: i32 = "…"` shows a red type-mismatch squiggle
+    (pushed `publishDiagnostics` → a polled `DiagnosticSet`).
+  - **Hover** — hovering a symbol shows its type + docs.
+  A Zed-shaped editor with real code intelligence, running on AROS.
+- **The language server is managed for you.** `aros-editor/run-editor.sh` starts
+  rust-analyzer (via `host-lsp-bridge`), boots the editor, and tears both down on
+  quit — one command, no terminal juggling. The bridge drives a graceful LSP
+  `shutdown` when the editor disconnects, so the server exits cleanly.
+- **(6) Remaining:**
+  - **Click-to-position caret** — clicking does not move the caret (keyboard
+    nav works). Not a position-mapping bug (hover resolves the symbol under the
+    cursor correctly), so it is specifically the `MouseDown`→caret path in
+    gpui-component/gpui_aros; needs on-device iteration.
+  - **Go-to-definition** (another provider trait, same client).
+  - **Extension settings UI** — a status-bar icon (bottom-right) per extension
+    that opens its settings.
+  - The blocking-`recv` latency (~50 ms) is fine for all of this; WaitSelect/
+    FIONBIO remains a later throughput refinement.
 
 ## Compile frontier (what actually builds for AROS)
 
