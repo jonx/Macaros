@@ -34,6 +34,18 @@
 /* Host-internal: inject a synthetic key transition into the event ring (defined in
  * cocoametal_control.m), so the Edit menu can hand the Amiga clipboard keys to AROS. */
 extern void cm__inject_key(int vk, int pressed, unsigned mods);
+extern int  cm__logical_w(CMContext *cx);   /* current framebuffer size, for the */
+extern int  cm__logical_h(CMContext *cx);   /* Resolution menu checkmark          */
+
+/* View ▸ Resolution: the standard sizes the AROS mode ladder offers. A menu tag
+ * packs (w << 16) | h; the AROS side snaps a request to its nearest database
+ * mode and reopens the screen, which resizes this window. */
+static const struct { int w, h; } kCMResolutions[] = {
+    {  640,  480 }, {  800,  600 }, { 1024,  768 }, { 1152,  864 },
+    { 1280,  720 }, { 1280,  800 }, { 1280, 1024 }, { 1366,  768 },
+    { 1440,  900 }, { 1600,  900 }, { 1600, 1200 }, { 1680, 1050 },
+    { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 }, { 2560, 1600 },
+};
 
 /* ------------------------------------------------------------------ icon ----
  * App icon: the purple macaron, decoded from an embedded base64 PNG
@@ -206,6 +218,11 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
     [(NSMenuItem *)s setState:_fullscreenOn ? NSControlStateValueOn : NSControlStateValueOff];
     cm_set_option(_cx, CM_OPT_FULLSCREEN, _fullscreenOn);
 }
+- (void)resolutionAction:(id)s {
+    NSInteger tag = [(NSMenuItem *)s tag];
+    cm_set_option(_cx, CM_OPT_REQUEST_MODE_W, (tag >> 16) & 0xFFFF);
+    cm_set_option(_cx, CM_OPT_REQUEST_MODE_H, tag & 0xFFFF);
+}
 - (void)scalingAction:(id)s { cm_set_option(_cx, CM_OPT_SCALE_MODE, [(NSMenuItem *)s tag]); }
 - (void)filterAction:(id)s  { cm_set_option(_cx, CM_OPT_FILTER, [(NSMenuItem *)s tag]); }
 - (void)scanlinesAction:(id)s {
@@ -267,6 +284,11 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
     if (item.action == @selector(editPasteAction:))
         return [[NSPasteboard generalPasteboard]
                    canReadObjectForClasses:@[[NSString class]] options:nil];
+    if (item.action == @selector(resolutionAction:)) {
+        NSInteger cur = ((NSInteger)cm__logical_w(_cx) << 16) | cm__logical_h(_cx);
+        item.state = (item.tag == cur) ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
     return YES;
 }
 
@@ -338,6 +360,14 @@ static void cmsh_build_menu(CMShellController *c) {
     NSMenu *view = cmsh_submenu(bar, @"View");
     cmsh_add(view, @"Enter Full Screen", @selector(fullscreenAction:), c, @"f",
              NSEventModifierFlagControl | NSEventModifierFlagCommand);
+    NSMenu *resolution = [[NSMenu alloc] initWithTitle:@"Resolution"];
+    NSMenuItem *rh = [[NSMenuItem alloc] initWithTitle:@"Resolution" action:NULL keyEquivalent:@""];
+    rh.submenu = resolution; [view addItem:rh];
+    for (size_t i = 0; i < sizeof(kCMResolutions)/sizeof(kCMResolutions[0]); i++) {
+        int w = kCMResolutions[i].w, h = kCMResolutions[i].h;
+        NSString *t = [NSString stringWithFormat:@"%d × %d", w, h];
+        cmsh_add(resolution, t, @selector(resolutionAction:), c, @"", 0).tag = (w << 16) | h;
+    }
     NSMenu *scaling = [[NSMenu alloc] initWithTitle:@"Scaling"];
     NSMenuItem *sh = [[NSMenuItem alloc] initWithTitle:@"Scaling" action:NULL keyEquivalent:@""];
     sh.submenu = scaling; [view addItem:sh];
