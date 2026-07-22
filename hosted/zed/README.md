@@ -70,13 +70,21 @@ Summary:
   `target-lexicon` (trimmable) or `polling`/`socket2`/wasmtime (load-bearing:
   the async reactor + wasm runtime).
 
-## Next steps (once the frontier is mapped)
+## The editor (built — see `~/Source/aros-editor`)
 
-1. Classify every `FAIL` as trimmable vs load-bearing; fill the frontier table
-   in the feature doc.
-2. Pick the editor path per the licensing decision rule (default: the Apache
-   gpui-component editor).
-3. Stand up the entry point — either a `zed_aros_app` staticlib in `zed-aros`
-   (GPL, separate artifact) or a component-editor `bin` — mirroring
-   `feraille-aros-app`. Boot-to-buffer with `BlockedHttpClient` and everything
-   network stubbed; async layer and LSP-over-TCP come second.
+The frontier decided it: the Apache `gpui-component` editor path was taken and
+stood up as a standalone workspace at **`~/Source/aros-editor`** (a
+component-editor build mirroring `feraille-aros-app`, kept out of this repo for
+product/license cleanliness). It runs on hosted AROS today: a code editor with
+tree-sitter highlighting, open/edit/save of real files, and **live
+rust-analyzer completions** over a host TCP bridge.
+
+- **How to build, boot, and drive it:**
+  [aros-editor/GETTING_STARTED.md](../../../aros-editor/GETTING_STARTED.md).
+- **Design, status, and the licensing boundary:**
+  [docs/features/zed-editor/README.md](../../docs/features/zed-editor/README.md).
+
+This `hosted/zed/` directory stays the **rig** — the compile-frontier probe and
+the pinned-toolchain notes above. Use it to re-check the frontier when bumping
+gpui/gpui-component, or to evaluate the GPL Zed-crate path (which the frontier
+showed needs the async reactor + wasm runtime first).
