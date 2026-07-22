@@ -600,6 +600,45 @@ static void cm__fill_mouse_xy(CMContext *cx, NSEvent *ev, CMEvent *out) {
     out->x = x; out->y = y;
 }
 
+/* Absolute modifier resync. macOS only reports flagsChanged EDGES, and an
+ * edge that happens while our window is not key (Cmd-Tab away mid-chord,
+ * releasing over another app) is never delivered -- the guest's keyboard
+ * qualifier then latches that modifier forever. Observed as: single clicks
+ * multi-select (phantom ctrl), Esc stops matching bindings (ctrl-Esc), and
+ * typed characters vanish (chords suppress key_char). Every NSEvent carries
+ * the ABSOLUTE modifierFlags, so before translating any event we diff
+ * against the last state forwarded to the guest and synthesize the missing
+ * modifier ups/downs -- any latch heals on the next input activity. */
+static void cm__sync_mods(CMContext *cx, NSEventModifierFlags f) {
+    static const struct { NSEventModifierFlags flag; unsigned short kc; } TBL[] = {
+        { NSEventModifierFlagShift,    56 },   /* left shift   */
+        { NSEventModifierFlagControl,  59 },   /* left control */
+        { NSEventModifierFlagOption,   58 },   /* left option  */
+        { NSEventModifierFlagCommand,  55 },   /* left command */
+        { NSEventModifierFlagCapsLock, 57 },   /* caps lock    */
+        { NSEventModifierFlagFunction, 63 },   /* fn           */
+    };
+    static const NSEventModifierFlags MASK =
+        NSEventModifierFlagShift | NSEventModifierFlagControl |
+        NSEventModifierFlagOption | NSEventModifierFlagCommand |
+        NSEventModifierFlagCapsLock | NSEventModifierFlagFunction;
+    static NSEventModifierFlags last = 0;
+    NSEventModifierFlags cur = f & MASK;
+    if (cur == last) return;
+    for (unsigned i = 0; i < sizeof TBL / sizeof TBL[0]; i++) {
+        if ((cur ^ last) & TBL[i].flag) {
+            CMEvent me;
+            me.type = CM_EV_KEY;
+            me.x = me.y = 0;
+            me.code = (int)TBL[i].kc;
+            me.pressed = (cur & TBL[i].flag) ? 1 : 0;
+            me.mods = cm__map_mods(cur);
+            cm__evring_put(cx, &me);
+        }
+    }
+    last = cur;
+}
+
 /* Drain pending NSEvents into the host event ring, translating each to a
  * CMEvent. Called from the guest pump below AND from the host timer
  * (cm__host_tick), so the NSEvent queue is serviced even while the guest is
@@ -621,6 +660,11 @@ void cm__drain_nsevents(CMContext *cx) {
             e->type = CM_EV_NONE; e->x = e->y = e->code = e->pressed = 0; e->mods = 0;
             int emit = 0;             /* 1 => this event produced a CMEvent */
             int forward = 0;          /* 1 => forward to [NSApp sendEvent:] (untranslated) */
+
+            /* Heal any missed modifier transition before translating (see
+             * cm__sync_mods). Makes the FlagsChanged case below a no-op for
+             * transitions this already synthesized. */
+            cm__sync_mods(cx, ev.modifierFlags);
 
             switch (ev.type) {
             case NSEventTypeMouseMoved:
@@ -717,29 +761,11 @@ void cm__drain_nsevents(CMContext *cx) {
                  * responder. The AROS side owns the keyboard. */
                 break;
 
-            case NSEventTypeFlagsChanged: {
-                /* A modifier transition. Emit CM_EV_KEY for the modifier key; derive
-                 * pressed from whether THIS key's flag is now set. We test the device-
-                 * independent flag that corresponds to the keyCode's modifier. */
-                NSEventModifierFlags f = ev.modifierFlags;
-                unsigned short kc = ev.keyCode;
-                int pressed = 0;
-                switch (kc) {
-                case 56: case 60: pressed = (f & NSEventModifierFlagShift)   ? 1 : 0; break; /* L/R Shift */
-                case 59: case 62: pressed = (f & NSEventModifierFlagControl) ? 1 : 0; break; /* L/R Control */
-                case 58: case 61: pressed = (f & NSEventModifierFlagOption)  ? 1 : 0; break; /* L/R Option */
-                case 55: case 54: pressed = (f & NSEventModifierFlagCommand) ? 1 : 0; break; /* L/R Command */
-                case 57:          pressed = (f & NSEventModifierFlagCapsLock)? 1 : 0; break; /* Caps Lock */
-                case 63:          pressed = (f & NSEventModifierFlagFunction)? 1 : 0; break; /* Fn */
-                default:          pressed = 0; break;
-                }
-                e->type = CM_EV_KEY;
-                e->code = (int)kc;
-                e->pressed = pressed;
-                e->mods = cm__map_mods(f);
-                emit = 1;
+            case NSEventTypeFlagsChanged:
+                /* Modifier transitions are fully handled by the absolute
+                 * resync above (cm__sync_mods) — emitting here again would
+                 * just duplicate the synthesized key event. */
                 break;
-            }
 
             default:
                 /* System / window-management event we do not translate (window drag,

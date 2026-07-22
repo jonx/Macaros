@@ -14,6 +14,9 @@
  * third-party source consulted.
  */
 #include <proto/dos.h>   /* Delay() for aros_thr_sleep -- no <time.h> */
+#include <proto/exec.h>  /* FindTask/AllocVec for the spawn trampoline */
+#include <dos/dosextens.h>
+#include <exec/nodes.h>
 
 typedef unsigned int pthread_t;
 
@@ -37,6 +40,24 @@ extern int  pthread_join(pthread_t thread, void **value_ptr);
 extern int  pthread_detach(pthread_t thread);
 extern int  sched_yield(void);
 
+/* Trampoline: pthread threads are their own DOS Processes, and
+ * pr_WindowPtr is per-Process — the main()'s "-1, never pop insert-volume
+ * requesters" setting does NOT inherit. Without this, any worker-thread
+ * path probe of an unknown volume (e.g. sqlite's VFS walking "/System:")
+ * blocks that worker on a DOS requester. Set -1 on every spawned thread
+ * before its Rust entry runs. */
+struct aros_thr_boot { void *(*start)(void *); void *arg; };
+
+static void *aros_thr_entry(void *raw)
+{
+    struct aros_thr_boot boot = *(struct aros_thr_boot *)raw;
+    struct Task *me = FindTask(0);
+    FreeVec(raw);
+    if (me->tc_Node.ln_Type == NT_PROCESS)
+        ((struct Process *)me)->pr_WindowPtr = (APTR)-1;
+    return boot.start(boot.arg);
+}
+
 /* Spawn a joinable thread with the requested stack size (0 = library default).
  * Writes the thread id to *out_tid and returns 0, or a pthread errno on failure. */
 int aros_thr_spawn(unsigned long stacksize, void *(*start)(void *), void *arg,
@@ -45,20 +66,31 @@ int aros_thr_spawn(unsigned long stacksize, void *(*start)(void *), void *arg,
     pthread_attr_t attr;
     pthread_t tid = 0;
     int rc;
+    struct aros_thr_boot *boot;
 
     if (!start || !out_tid)
         return 22 /* EINVAL */;
 
-    if (pthread_attr_init(&attr) != 0)
+    boot = AllocVec(sizeof(*boot), 0 /* MEMF_ANY */);
+    if (!boot)
         return 12 /* ENOMEM */;
+    boot->start = start;
+    boot->arg = arg;
+
+    if (pthread_attr_init(&attr) != 0) {
+        FreeVec(boot);
+        return 12 /* ENOMEM */;
+    }
     if (stacksize > 0)
         pthread_attr_setstacksize(&attr, stacksize);
 
-    rc = pthread_create(&tid, &attr, start, arg);
+    rc = pthread_create(&tid, &attr, aros_thr_entry, boot);
     pthread_attr_destroy(&attr);
 
     if (rc == 0)
         *out_tid = tid;
+    else
+        FreeVec(boot);
     return rc;
 }
 
