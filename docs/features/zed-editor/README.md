@@ -107,13 +107,12 @@ distributable) with **one snag: three GPL-3.0-or-later crates in the graph —
   default); `zlog` is only called in sum_tree's `#[cfg(test)]` code; the
   `ztracing_macro` proc-macro is build-time only and never links into any target
   binary. LTO strips the dead code.
-- **But relying on "the optimizer removed it" is not a sound distribution
-  posture.** For a clean bill of health, sever the dependency at the source: in
-  the `zed-aros` fork's `sum_tree`, drop the `ztracing`/`zlog` deps and the two
-  `#[instrument]` attributes (`cursor.rs`, `sum_tree.rs`) — they are profiling
-  no-ops — and the test-only `zlog::init_test()`. That removes all three GPL
-  crates from the entire gpui graph, benefiting both `aros-editor` and Feraille.
-  Low risk (removing inert instrumentation); verify by rebuilding both.
+- **Fixed at the source (2026-07-22).** Rather than rely on "the optimizer
+  removed it", the `zed-aros` fork's `sum_tree` now drops the `ztracing`/`zlog`
+  deps and the inert `#[instrument]` attributes (`cursor.rs`, `sum_tree.rs`) plus
+  the test-only `zlog::init_test()`. Verified: all three GPL crates leave the
+  graph, and both `aros-editor` and Feraille still build. The gpui graph is now
+  permissive at the source level, not merely after dead-code elimination.
 - Two crates report no SPDX license (`gpui_shared_string`, `gpui_util`) and one
   a bare `LICENSE` file (`tree-sitter-graphql`); these are Apache/MIT in
   substance but the metadata field is unset — worth pinning down before a formal
