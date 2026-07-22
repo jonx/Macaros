@@ -15,7 +15,10 @@
 #include <cybergraphx/cybergraphics.h>
 
 static struct Window *g_win;
-static int g_held;   /* bits: left1 right2 up4 down8 fire16 */
+/* held bits (keep in sync with moonstone-aros src/game.rs `mod bits`):
+ * left1 right2 up4 down8 fire16 [quit32] endturn64 a128 d256 w512 s1024
+ * x2048 tab4096 n8192 */
+static int g_held;
 static int g_quit;
 
 int aros_ms_open(int w, int h)
@@ -68,7 +71,17 @@ int aros_ms_input(void)
                 case 0x4E: bit = 2;  break;  /* cursor right */
                 case 0x4C: bit = 4;  break;  /* cursor up    */
                 case 0x4D: bit = 8;  break;  /* cursor down  */
-                case 0x40: bit = 16; break;  /* space = fire */
+                case 0x40:                   /* space = fire */
+                case 0x63: bit = 16; break;  /* ctrl doubles as fire */
+                case 0x12: bit = 64; break;  /* E = end turn (map) */
+                /* the letter set: P1 alias out of duels, P2 in them */
+                case 0x20: bit = 128;  break; /* A */
+                case 0x22: bit = 256;  break; /* D */
+                case 0x11: bit = 512;  break; /* W */
+                case 0x21: bit = 1024; break; /* S */
+                case 0x32: bit = 2048; break; /* X */
+                case 0x42: bit = 4096; break; /* Tab = P2 fire */
+                case 0x36: bit = 8192; break; /* N = practice next foe */
                 case 0x45: if (down) g_quit = 1; break; /* esc */
             }
             if (bit) { if (down) g_held |= bit; else g_held &= ~bit; }
