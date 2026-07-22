@@ -89,6 +89,40 @@ Zed-crate path only if a must-have capability lives only in Zed's
 a downloaded Zed release, built as a separate GPL artifact and aggregated into
 (never linked into) the permissive release.
 
+### Dependency-graph audit (distribution-readiness)
+
+"Top-level Apache" does not prove the whole transitive tree is safe to ship. A
+full scan of `aros-editor`'s dependency graph (`cargo metadata`, 2026-07-22)
+found it ~99% permissive (MIT/Apache/BSD/ISC/Zlib/Unicode-3.0/MPL-2.0 — all
+distributable) with **one snag: three GPL-3.0-or-later crates in the graph —
+`zlog`, `ztracing`, `ztracing_macro`** (Zed's logging/tracing crates).
+
+- **Single choke point: `sum_tree`** (a core gpui crate) pulls all three:
+  `sum_tree → ztracing → zlog`, plus the `ztracing_macro` proc-macro. Everything
+  downstream inherits them — gpui, gpui_platform, gpui-component, `aros-editor`,
+  **and Feraille** (same gpui fork).
+- **The shipped binary contains none of it (verified: 0 `zlog`/`ztracing`
+  symbols in `libaros_editor_app.a`).** `ztracing::instrument` is a profiling
+  attribute macro that expands to a no-op unless a `tracy` feature is on (off by
+  default); `zlog` is only called in sum_tree's `#[cfg(test)]` code; the
+  `ztracing_macro` proc-macro is build-time only and never links into any target
+  binary. LTO strips the dead code.
+- **But relying on "the optimizer removed it" is not a sound distribution
+  posture.** For a clean bill of health, sever the dependency at the source: in
+  the `zed-aros` fork's `sum_tree`, drop the `ztracing`/`zlog` deps and the two
+  `#[instrument]` attributes (`cursor.rs`, `sum_tree.rs`) — they are profiling
+  no-ops — and the test-only `zlog::init_test()`. That removes all three GPL
+  crates from the entire gpui graph, benefiting both `aros-editor` and Feraille.
+  Low risk (removing inert instrumentation); verify by rebuilding both.
+- Two crates report no SPDX license (`gpui_shared_string`, `gpui_util`) and one
+  a bare `LICENSE` file (`tree-sitter-graphql`); these are Apache/MIT in
+  substance but the metadata field is unset — worth pinning down before a formal
+  release, not a blocker.
+
+Takeaway for shipping Macaros: the Apache path is distributable, but do the
+`sum_tree` severance (and a `cargo-deny`/`cargo-about` pass) before treating any
+gpui-based binary as formally GPL-free.
+
 ### The editor app (the chosen path)
 
 The Apache path is scaffolded as a standalone workspace at
