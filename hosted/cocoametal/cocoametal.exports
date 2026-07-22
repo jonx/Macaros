@@ -26,6 +26,7 @@ _cm_get_option_str
 _cm_capture_png
 _cm_record_start
 _cm_record_stop
+_cm_set_mode
 # GPU compute section (cocoametal_gpu.m). Its own dlsym contract for
 # gpufx.library — NOT in the frozen display CMIFace; versioned by
 # cm_gpu_abi (CM_GPU_ABI), append-only like everything here.

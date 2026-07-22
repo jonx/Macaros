@@ -159,9 +159,14 @@ static void cm__control_exec(CMContext *cx, char *line) {
         break;
     }
     case 'R': {
+        /* Headless equivalent of a user window resize: resize the content area
+         * AND request a matching display mode, like windowDidEndLiveResize. */
         int w, h;
-        if (sscanf(line + 1, "%d %d", &w, &h) == 2)
+        if (sscanf(line + 1, "%d %d", &w, &h) == 2) {
             cm__resize_window(cx, w, h);
+            cm_set_option(cx, CM_OPT_REQUEST_MODE_W, w);
+            cm_set_option(cx, CM_OPT_REQUEST_MODE_H, h);
+        }
         break;
     }
     case 'G': {

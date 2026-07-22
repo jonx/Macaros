@@ -254,6 +254,11 @@ void cm__apply_persisted_options(CMContext *cx);
 void cm__set_fullscreen_appkit(CMContext *cx, int on);
 int  cm__window_is_fullscreen(CMContext *cx);
 
+/* Resize the live window's content area (strong override in cocoametal_window.m;
+ * weak no-op stub below for headless builds). cm_set_mode calls it after
+ * retexturing. */
+void cm__resize_window(CMContext *cx, int w, int h);
+
 /* Resync the live CAMetalLayer's drawableSize/contentsScale to the content view's
  * current backing-pixel size (INTERFACE.md §2a: the layer-fills-the-content-view
  * contract). Strong override in cocoametal_window.m; weak no-op stub below for the
@@ -979,6 +984,9 @@ int cm_render_effect_readback(CMContext *cx, CMEffect effect,
  * Defined in cocoametal_window.m when AppKit is linked, else stubbed here so
  * the shim builds and runs headless without AppKit. The standalone D1 build
  * links AppKit and provides the real implementations. */
+__attribute__((weak)) void cm__resize_window(CMContext *cx, int w, int h) {
+    (void)cx; (void)w; (void)h;                 /* headless: no window to resize */
+}
 __attribute__((weak)) void cm_try_window(CMContext *cx, const char *title) {
     (void)cx; (void)title;   /* default: no window (headless) */
 }
@@ -1128,6 +1136,47 @@ int cm_pump_events(CMContext *cx, CMEvent *out, int maxEvents) {
  * stale dylib can't silently bind to a newer loader (or vice versa). */
 int cm_abi_version(void) {
     return CM_ABI_VERSION;
+}
+
+/* cm_set_mode (v3): reconfigure the logical framebuffer to w x h in place.
+ * Recreates the upload ring and the offscreen oracle at the new size, then
+ * resizes the live window's content to match (cm__resize_window is a weak
+ * no-op headless and skips fullscreen). Textures still referenced by an
+ * in-flight present are retained by their command buffer, so swapping the
+ * refs here is safe. */
+int cm_set_mode(CMContext *cx, int w, int h) {
+    if (!cx || w <= 0 || h <= 0 || w > 8192 || h > 8192) return -1;
+    if (![NSThread isMainThread]) {
+        __block int r = -1;
+        cm__sync_main(^{ r = cm_set_mode(cx, w, h); });
+        return r;
+    }
+    if (w == cx->w && h == cx->h) return 0;
+
+    @autoreleasepool {
+        id<MTLTexture> ring[3], off;
+        int tw = w * cx->scale, th = h * cx->scale;
+        unsigned i;
+
+        for (i = 0; i < 3; i++) {
+            ring[i] = [cx->device newTextureWithDescriptor:
+                bgra8_desc(w, h, MTLTextureUsageShaderRead)];
+            if (!ring[i]) return -1;
+        }
+        off = [cx->device newTextureWithDescriptor:
+            bgra8_desc(tw, th, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead)];
+        if (!off) return -1;
+
+        for (i = 0; i < 3; i++) cx->fbRing[i] = ring[i];
+        cx->fbIdx = 0;
+        cx->fbTex = cx->fbRing[0];
+        cx->offTex = off;
+        cx->w = w;  cx->h = h;
+        cx->tw = tw; cx->th = th;
+    }
+
+    cm__resize_window(cx, w, h);
+    return 0;
 }
 
 /* ---- controlled accessors for cocoametal_window.m -------------------------

@@ -209,6 +209,44 @@ static CMContentView *cm__metal_view(NSWindow *win) {
     (void)note;
     if (self.cx) cm__set_resize_pending(self.cx);
 }
+/* A resize grab delivers its LeftMouseDown to the guest before AppKit's
+ * tracking session starts, and the session then consumes the matching
+ * LeftMouseUp, leaving the guest with a stuck button (a drag rectangle after
+ * the resize). Synthesize the release as soon as the session begins. */
+- (void)windowWillStartLiveResize:(NSNotification *)note {
+    NSWindow *win = note.object;
+    if (!self.cx) return;
+    CMEvent e;
+    e.type = CM_EV_MOUSEBTN; e.code = 0; e.pressed = 0; e.mods = 0;
+    e.x = 0; e.y = 0;
+    CMContentView *mv = cm__metal_view(win);
+    if (mv) {
+        NSPoint p = [mv convertPoint:win.mouseLocationOutsideOfEventStream
+                            fromView:nil];
+        int w = (int)mv.bounds.size.width, h = (int)mv.bounds.size.height;
+        int x = (int)p.x, y = (int)(mv.bounds.size.height - p.y);
+        if (x < 0) x = 0; else if (x >= w) x = w - 1;
+        if (y < 0) y = 0; else if (y >= h) y = h - 1;
+        e.x = x; e.y = y;
+    }
+    cm__evring_put(self.cx, &e);
+}
+/* End of a user drag: ask the AROS side for a display mode matching the new
+ * content size. The request travels the same CM_EV_SETTING pair the settings
+ * panel uses; AROS snaps it to the nearest database mode and reopens the
+ * screen, which comes back to us as cm_set_mode. During the drag the present
+ * path just scales. */
+- (void)windowDidEndLiveResize:(NSNotification *)note {
+    NSWindow *win = note.object;
+    NSView *view = cm__metal_view(win);
+    if (!self.cx || !view) return;
+    if (win.styleMask & NSWindowStyleMaskFullScreen) return;
+    int w = (int)lround(view.bounds.size.width);
+    int h = (int)lround(view.bounds.size.height);
+    if (w < 1 || h < 1) return;
+    cm_set_option(self.cx, CM_OPT_REQUEST_MODE_W, w);
+    cm_set_option(self.cx, CM_OPT_REQUEST_MODE_H, h);
+}
 - (void)windowDidEnterFullScreen:(NSNotification *)note {
     cm__sync_layer_to_view(cm__metal_view(note.object));   /* drawable -> screen-sized now */
 }
@@ -290,10 +328,12 @@ void cm_try_window(CMContext *cx, const char *title) {
         NSWindow *win = [[NSWindow alloc]
             initWithContentRect:frame
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                                 NSWindowStyleMaskMiniaturizable)
+                                 NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
                         backing:NSBackingStoreBuffered
                           defer:NO];
         if (!win) return;
+        /* Keep drags inside the mode range the AROS side can honor. */
+        win.contentMinSize = NSMakeSize(640, 480 + FOOTER_H);
         [win setTitle:[NSString stringWithUTF8String:(title ? title : "AROS")]];
 
         /* BLACK backgrounds so the fullscreen letterbox / any uncovered area is
@@ -322,7 +362,10 @@ void cm_try_window(CMContext *cx, const char *title) {
          * cocoametal_statusbar.m; sits below the Metal view so the rounded bottom
          * corners never clip the AROS image. */
         NSView *footer = cm__build_status_bar(cx, w, (int)FOOTER_H);
-        if (footer) [root addSubview:footer];   /* nil in non-statusbar test builds (weak stub) */
+        if (footer) {
+            footer.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+            [root addSubview:footer];           /* nil in non-statusbar test builds (weak stub) */
+        }
 
         CMContentView *view = [[CMContentView alloc] initWithFrame:NSMakeRect(0, FOOTER_H, w, h)];
         view.wantsLayer = YES;                 /* triggers -makeBackingLayer (CAMetalLayer) */
@@ -445,6 +488,13 @@ void cm__resize_window(CMContext *cx, int w, int h) {
     if (!winp) return;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)winp;
+        /* In fullscreen the window owns its Space at screen size; only the
+           drawable resyncs and the present path letterboxes the new mode. */
+        if (win.styleMask & NSWindowStyleMaskFullScreen) {
+            cm__sync_layer_to_view(cm__metal_view(win));
+            cm__set_resize_pending(cx);
+            return;
+        }
         const CGFloat FOOTER_H = 22;
         [win setContentSize:NSMakeSize((CGFloat)w, (CGFloat)h + FOOTER_H)];
         cm__sync_layer_to_view(cm__metal_view(win));

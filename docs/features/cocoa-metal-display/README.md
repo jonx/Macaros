@@ -11,7 +11,11 @@ Wanderer desktop.
 AROS_CTL_STARTUP_MODE=desktop graft/run-window.sh   # AROS in a live Cocoa/Metal window
 ```
 
-Click the window for keyboard focus, then type at the shell prompt. The shim
+Click the window for keyboard focus, then type at the shell prompt. **The window
+is resizable and the resolution follows** (ABI v3): dragging the window edge
+snaps AROS to the nearest of 16 display modes at drag end (via
+`screenmode.prefs` + IPrefs, so it needs the desktop startup path), and picking
+a mode in ScreenMode Preferences resizes the window. See INTERFACE.md §10. The shim
 (`hosted/cocoametal/`, built with `make cocoametal-dylib`) also carries the
 **control FIFO** that lets [`aros-ctl`](../control-harness/README.md) drive and
 screenshot the window headlessly — no window-server session, no Screen-Recording

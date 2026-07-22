@@ -58,6 +58,7 @@ static const char *cocoametal_symbols[] =
     "cm_set_option",               /* 10 — appended at v2 per §9 (append-only) */
     "cm_get_option",               /* 11 — appended at v2 per §9 (append-only) */
     "cm_open_settings",            /* 12 — appended at v2 per §9 (append-only) */
+    "cm_set_mode",                 /* 13 — appended at v3 (dynamic display modes) */
     NULL
 };
 ```
@@ -80,6 +81,7 @@ struct CMInterface
     int               (*cm_set_option)(struct CMContext *, int key, long value);   /* entry 10 — v2 §9 */
     int               (*cm_get_option)(struct CMContext *, int key, long *value);  /* entry 11 — v2 §9 */
     int               (*cm_open_settings)(struct CMContext *);                     /* entry 12 — v2 §9 */
+    int               (*cm_set_mode)(struct CMContext *, int w, int h);             /* entry 13 — v3 */
 };
 ```
 
@@ -440,7 +442,7 @@ prompt. Rules:
 So a stale dylib can't silently mismatch the loader, `cocoametal.h` carries:
 
 ```c
-#define CM_ABI_VERSION 2          /* bump on ANY breaking change to this contract */
+#define CM_ABI_VERSION 3          /* bump on ANY breaking change to this contract */
 int cm_abi_version(void);          /* returns CM_ABI_VERSION; symbol-list entry 9 */
 ```
 
@@ -640,3 +642,37 @@ is merely recorded, as before) and `[FS]` skips the window asserts but still ass
 the oracle, so a headless run passes. The settings panel still degrades to a no-op
 (returns nonzero) in a headless launch context, same caveat as `cm_open`'s window
 (§3).
+
+## 10. Dynamic display modes — added at v3
+
+One new entry, appended per §7: `cm_set_mode(cx, w, h)` (symbol 13) reconfigures
+the logical framebuffer **in place**: the upload ring and the offscreen oracle are
+recreated at `w x h` and the live window's content area is resized to match
+(skipped in fullscreen, where the present path letterboxes the new mode). The next
+`cm_upload_rect` must deliver a full frame of the new size. Any-thread callable
+(main-thread hop inside); returns 0 on success.
+
+The full loop, both directions:
+
+- **Host -> AROS** (Settings panel resolution popup, end of a user window drag
+  via `windowDidEndLiveResize`, or the control FIFO `R w h`): the host calls
+  `cm_set_option(CM_OPT_REQUEST_MODE_W/H)`; the pair reaches AROS as
+  `CM_EV_SETTING` (§9). The cocoa HIDD's mode process snaps the request to the
+  nearest database mode (`BestModeIDA`) and writes `ENV:SYS/screenmode.prefs`;
+  IPrefs is notified and intuition reopens the Workbench screen. Requires IPrefs
+  (the desktop startup path) — without it the request is written but nothing
+  reopens the screen.
+- **AROS -> host** (ScreenMode Preferences "Use", or any screen opened in a new
+  mode): the driver's `Show()` sees a front bitmap whose size differs from the
+  current mode and calls `cm_set_mode`; the window resizes to the new mode.
+
+The AROS side registers a 16-mode ladder (800x600 first = the boot default;
+640x480 up to 2560x1600). A drag snaps to the nearest ladder mode.
+
+The main window is user-resizable from v3 (`NSWindowStyleMaskResizable`,
+min 640x480 content). During a live drag the present path scales
+(`CM_OPT_SCALE_MODE`); the mode change lands at drag end. A resize grab's
+LeftMouseDown reaches the guest before AppKit's tracking session starts and the
+session consumes the matching LeftMouseUp, so `windowWillStartLiveResize`
+synthesizes the release into the event ring (otherwise the guest is left with a
+stuck button, i.e. a drag rectangle after every resize).

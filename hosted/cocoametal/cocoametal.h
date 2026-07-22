@@ -245,7 +245,7 @@ int        cm_render_effect_readback(CMContext *, CMEffect effect,
  * the appended symbols are an orthogonal host-side extension a v2 driver ignores.
  * Bump to 3 (and rebuild the AROS HIDD to match) only when the AROS side is taught to
  * CONSUME a new symbol — e.g. cm_get_option_str for the clipboard/volume bridge. */
-#define CM_ABI_VERSION 2
+#define CM_ABI_VERSION 3
 int        cm_abi_version(void);
 
 /* ---- Settings & options ABI (INTERFACE.md §9) — appended at v2 ------------
@@ -297,6 +297,13 @@ int        cm_capture_png(CMContext *, const char *path);
  * the audio seam in cm_record_start, cocoametal_shell.m). Returns 0 on success. */
 int        cm_record_start(CMContext *, const char *path, int fps, int codec);
 int        cm_record_stop(CMContext *);
+
+/* v3 (dynamic display modes): reconfigure the logical framebuffer to w x h in
+ * place. The upload ring and the offscreen oracle are recreated at the new size
+ * and the live window's content area is resized to match (skipped in
+ * fullscreen, where the present path letterboxes). The next cm_upload_rect must
+ * deliver a full frame of the new size. Any-thread callable; 0 on success. */
+int        cm_set_mode(CMContext *, int w, int h);
 
 /* ---- GPU compute section (docs/features/gpufx, cocoametal_gpu.m) --------
  *
