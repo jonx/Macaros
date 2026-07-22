@@ -41,34 +41,53 @@ the split runs exactly along the line we care about.
 (Counts from the `zed-aros` checkout, branch `aros-platform`: 28 Apache, 198
 GPL.) `gpui-component-aros` is Apache-2.0 throughout.
 
+There are **two independent licensing axes**; keep them separate.
+
+**Axis 1 — repo hygiene / provenance** (what source lives in which repo). AROS
+practice (confirmed by AROS core devs, 2026-07-22): do **not** commit GPL source
+into an AROS-official codebase; keep a ports-style **diff** applied to upstream
+sources downloaded at build time (see the AROS `ports` repo). If GPL code must
+be present in-tree, keep its license headers intact (e.g. AHI). This is the same
+model as BSD ports / Homebrew, and it fits how we already work (rust-aros is a
+diff toward an upstream PR; the zed/gpui-component forks are our changes over
+pinned upstream revs).
+
+**Axis 2 — license of the distributed binary** (copyright of the linked result).
+Independent of Axis 1. Using or privately compiling GPL software is
+**unrestricted** — GPL obligations attach only on **distribution** of a binary.
+Static-linking Rust crates creates one combined work, so a *distributed* binary
+that links GPL crates is a GPL work and must ship under GPL terms (source offer,
+no incompatible-proprietary code linked into that same binary). Zed's editor
+crates are GPL-3.0-or-later (plain GPL, not AGPL — network/service use triggers
+nothing; only shipping the binary does).
+
 What this means in practice:
 
 - **The GPUI backend we wrote (`gpui_aros`) is Apache-2.0** and stays clean to
   publish, exactly like the Feraille work. Nothing about the platform port is
   encumbered.
-- **Linking any GPL editor crate makes the resulting binary GPL.** A
-  `zed_aros_app` that pulls in `editor`/`language`/`lsp` is a GPL work. That is
-  fine for a standalone research build or a separately-distributed GPL app, but
-  it **cannot** be folded into the Macaros release bundle on the same terms as
-  the rest, and it cannot go in this repo's normal (product-neutral, publishable)
-  posture without making the combined distribution GPL. Keep any GPL-linking
-  build physically separate (its own crate, its own artifact, its own license
-  notice) and decide distribution deliberately.
+- **A GPL Zed-crate binary can still ship in the Macaros release — by
+  aggregation, not linking.** GPL's mere-aggregation clause allows a standalone
+  GPL binary (e.g. `AEdit-zed`) on the same DMG as the permissive binaries;
+  what's disallowed is linking GPL crates *into* one of the permissive/
+  proprietary binaries. So a GPL editor path is: keep Zed's GPL source out of
+  our repos (Axis 1: a ports-style patch over a downloaded Zed release), build
+  it as its **own** artifact with a GPL notice + source offer, and aggregate it.
+  (Earlier drafts of this doc said such a build "cannot be folded into the
+  release" — that overstated it; aggregation is fine, linking-in is not.)
 - **The gpui-component path avoids the GPL entirely.** An Apache-2.0 editor on
-  an Apache-2.0 platform is compatible with the existing release posture. If the
-  goal is "a code editor shipping in Macaros" rather than "Zed specifically,"
-  this is the license-clean route and should be the default unless a Zed-only
-  feature forces the GPL path.
+  an Apache-2.0 platform — no ports diff, no GPL notice, folds straight into
+  Macaros. This is what `~/Source/aros-editor` is, and it stays the default.
 - **Provenance rules still apply** ([CLEANROOM.md](../CLEANROOM.md)): whichever
   path, our own AROS glue carries no third-party product names and no AI
   attribution. The upstream licenses of the vendored crates are theirs and stay
   intact; that is orthogonal to our own-code posture.
 
-Decision rule: **default to the gpui-component (Apache) editor.** Only take the
-GPL Zed-crate path if the frontier probe shows the component editor is
-unviable, or a must-have capability lives only in Zed's `editor`/`language`
-crates — and if so, build it as a separate GPL artifact, never merged into the
-permissive release.
+Decision rule: **default to the gpui-component (Apache) editor.** Take the GPL
+Zed-crate path only if a must-have capability lives only in Zed's
+`editor`/`language` crates — and if so, structure it as a ports-style patch over
+a downloaded Zed release, built as a separate GPL artifact and aggregated into
+(never linked into) the permissive release.
 
 ### The editor app (the chosen path)
 
