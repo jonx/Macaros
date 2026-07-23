@@ -377,6 +377,13 @@ Consequences for the editor:
   (rust-analyzer speaks LSP over stdio; the host wraps its stdio in a tiny
   stdio↔socket pump, or runs it in the LS's TCP mode where available.)
 
+## OS capabilities requested (handoff to the AROS side)
+
+The IDE features that need real OS primitives (networking/async, live child
+pipes, a PTY) are speced as capability contracts for the OS team in
+[os-requirements.md](os-requirements.md) — ordered by leverage, each with an
+acceptance test, phrased AROS-idiom-neutral. Core editing needs none of them.
+
 ## Upstream stance (AROS core, 2026-07-22)
 
 `fork`/`select`/`poll`/`mmap`/`dlopen` will not be implemented POSIX-style; use
