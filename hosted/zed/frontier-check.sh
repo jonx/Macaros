@@ -11,6 +11,10 @@
 # (see hosted/rust/STD-PORT.md, "Dev environment setup").
 # Does not stop at the first failure: the point is the per-crate map.
 set -u
+# The AROS C recipe (CC_/AR_/CFLAGS_ for cc-rs) unless the caller already set it.
+if [ -z "${CFLAGS_aarch64_unknown_aros:-}" ]; then
+    . "$(dirname "$0")/aros-env.sh"
+fi
 WS="$1"; shift
 JSON="${AROS_TARGET_JSON:-$(cd "$(dirname "$0")/../rust" && pwd)/aarch64-unknown-aros.json}"
 LOGDIR="${FRONTIER_LOG_DIR:-$(pwd)/frontier-logs}"
