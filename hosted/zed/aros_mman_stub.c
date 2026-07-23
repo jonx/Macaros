@@ -73,3 +73,29 @@ int getpagesize(void)
 {
     return 4096;
 }
+
+/* zstd tracing hooks (weak, referenced by libzstd). Returning 0 from the
+ * *_begin hooks disables tracing, so these no-ops satisfy the link. */
+unsigned long long ZSTD_trace_compress_begin(const void *cctx)
+{
+    (void)cctx;
+    return 0;
+}
+
+void ZSTD_trace_compress_end(unsigned long long ctx, const void *cctx)
+{
+    (void)ctx;
+    (void)cctx;
+}
+
+unsigned long long ZSTD_trace_decompress_begin(const void *dctx)
+{
+    (void)dctx;
+    return 0;
+}
+
+void ZSTD_trace_decompress_end(unsigned long long ctx, const void *dctx)
+{
+    (void)ctx;
+    (void)dctx;
+}
