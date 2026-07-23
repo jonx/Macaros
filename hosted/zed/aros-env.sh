@@ -26,13 +26,14 @@ export AR_aarch64_unknown_aros="$AROS_CROSSTOOLS/bin/llvm-ar"
 # The crosstools clang defaults to the aarch64-unknown-aros triple. The two
 # SQLITE_* flags drop mmap (AROS has no mmap) and the load-extension path.
 # HAVE_ENDIAN_H + the c-compat shim satisfy endian.h / sys/mman.h lookups.
-# -mcmodel=large and -ffixed-x18 match the Rust target ABI (code-model "large",
-# "+reserve-x18" in aarch64-unknown-aros.json): this C runs inside AROS
-# processes, where x18 belongs to the platform and addresses need the large
-# model. They must agree or the linked binary misbehaves at run time.
+# -fno-pic -mcmodel=large and -ffixed-x18 match the Rust target ABI
+# (relocation-model "static", code-model "large", "+reserve-x18" in
+# aarch64-unknown-aros.json): this C runs inside AROS processes, where x18
+# belongs to the platform and addresses need the large model. They must agree
+# or the linked binary misbehaves at run time. (large model requires -fno-pic.)
 export CFLAGS_aarch64_unknown_aros="\
 --target=aarch64-unknown-aros \
--mcmodel=large -ffixed-x18 \
+-fno-pic -mcmodel=large -ffixed-x18 \
 -D_GNU_SOURCE -DHAVE_ENDIAN_H \
 -DSQLITE_MAX_MMAP_SIZE=0 -DSQLITE_OMIT_LOAD_EXTENSION \
 -I$_aros_shim \
