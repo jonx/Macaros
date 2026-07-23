@@ -56,9 +56,11 @@ AUTOLIB=(-lmui -lamiga -larossupport -lamiga -lcodesets -lkeymap -lexpansion
          -liffparse -lgraphics -llocale -ldos -lutility -loop -llibinit -lautoinit)
 STDLIBS=(-lposixc -lstdcio -lstdc -lexec -lpthread)
 
-echo "[zed-aros] compile C shim"
+echo "[zed-aros] compile C shim + mmap leaves"
 "$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -I"$GEN/include/aros/stdc" \
     -c "$DIR/zed_aros_main.c" -o "$OUT/zed_aros_main.o"
+"$CC" "${CFLAGS[@]}" -I"$GEN/include/aros/posixc" -I"$GEN/include/aros/stdc" \
+    -c "$DIR/aros_mman_stub.c" -o "$OUT/aros_mman_stub.o"
 
 echo "[zed-aros] compile std pal glue"
 for g in aros_net_glue aros_process_glue aros_thread_glue; do
@@ -79,7 +81,7 @@ echo "[zed-aros] link C:ZedAros"
 COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/ZedAros" \
-    "$LIBDIR/startup.o" "$OUT/zed_aros_main.o" \
+    "$LIBDIR/startup.o" "$OUT/zed_aros_main.o" "$OUT/aros_mman_stub.o" \
     "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" \
     "$OUT/aros_thread_glue.o" "$OUT/aros_sync_glue.o" \
     "$RSLIB" "${NATIVE_A[@]}" \
