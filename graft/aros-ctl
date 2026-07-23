@@ -627,8 +627,16 @@ resize) ctl "R ${1:-800} ${2:-600}";;
 click)
     b="${1:-0}"
     if [ $# -ge 3 ]; then
-        ctl "B $b 1 ${2:-0} ${3:-0}"
-        ctl "B $b 0 ${2:-0} ${3:-0}"
+        # Move the pointer to the target FIRST, then press/release with no
+        # coords: a button event carrying coordinates does not actually
+        # reposition the pointer, so gpui-component's hit-test (which reads the
+        # current mouse position) misses. Moving first, then clicking at the
+        # current position, is what a real mouse does.
+        ctl "M ${2:-0} ${3:-0}"
+        sleep 0.3    # let the move register before the press (else the button
+                     # is hit-tested at the old position and misses)
+        ctl "B $b 1"
+        ctl "B $b 0"
     else
         ctl "B $b 1"
         ctl "B $b 0"
