@@ -205,11 +205,13 @@ harness sets — verified live: `RustStd alpha beta 42` → `std::env::args()` =
 `["RustStd","alpha","beta","42"]`).
 
 **`std::net` caveats (bsdsocket bridge limits, not pal bugs):** IPv4 only (IPv6
-requests return `Unsupported`); `set_nonblocking(true)` and socket timeouts are not
-yet effective because the AROS library keeps host sockets `O_NONBLOCK` and emulates
-blocking with a timer-poll park (`FIONBIO` is a no-op; we return `Unsupported` for a
-requested timeout rather than lie). `try_clone`/`duplicate` return `Unsupported`.
-See UPSTREAM-NOTES #37.
+requests return `Unsupported`). `set_nonblocking(true)` is now supported by the
+**library** (2026-07-24): `IoctlSocket(FIONBIO)` makes a would-block return
+`EWOULDBLOCK`/`EINPROGRESS` instead of parking. The pal still needs wiring to call
+it (currently `net/connection/aros.rs` leaves it a no-op); once wired, `EWOULDBLOCK`
+maps to `WouldBlock` and the reactor can drive readiness via `WaitSelect`. Socket
+timeouts are still no-ops (the blocking park uses an infinite wait). `try_clone`/
+`duplicate` work (`Dup2Socket`). See UPSTREAM-NOTES #37.
 
 **The x18 blocker is fixed (2026-07-01).** `time` used to SIGBUS from Rust: the fault
 was the **x18 clobber in OS code not built with `-ffixed-x18`** (macOS zeroes x18 on

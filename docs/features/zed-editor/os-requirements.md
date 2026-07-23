@@ -26,11 +26,19 @@ phrased from the editor's needs. Cross-reference the std-side view in
 panel — and structurally the entire `tokio` / `mio` / `async-io` stack, which is
 pulled in by most of Zed's networked features.
 
-**Current state.** Blocking `std::net` TCP/UDP works today over the bsdsocket
-bridge (an LSP `initialize` handshake round-trips in ~50 ms). What is missing:
-`FIONBIO` is a no-op, socket read/write timeouts are no-ops, and there is no
-readiness primitive — so no async runtime can drive sockets, only one blocking
-call at a time on a dedicated thread.
+**Current state (updated 2026-07-24).** Blocking `std::net` TCP/UDP works over the
+bsdsocket bridge (an LSP `initialize` handshake round-trips in ~50 ms). The
+non-blocking path now works too:
+- **`FIONBIO` is real** (2026-07-24). A socket put in non-blocking mode returns
+  `EWOULDBLOCK` (`EINPROGRESS` for connect) immediately instead of parking, so an
+  async reactor can drive it. Default sockets keep blocking behaviour. Verified
+  live (`nettest` `[NB]`: FIONBIO connect -> write-ready -> recv EWOULDBLOCK).
+- **Readiness wait already exists**: `WaitSelect` (LVO 21) over the kqueue pump,
+  and the out-of-band wakeup is expressible today by passing a signal in its
+  sigmask and `Signal()`-ing the reactor task (`notify()`).
+Still missing: socket read/write **timeouts** are no-ops (the blocking park uses
+an infinite wait), and the readiness wakeup is a ~20 ms poll tick rather than
+signal-driven (ms-latency via unixio.hidd is the follow-up).
 
 **Contract.**
 1. **Real non-blocking mode.** Putting a socket into non-blocking mode (however
