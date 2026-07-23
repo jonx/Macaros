@@ -199,14 +199,22 @@ host language server. Staging:
   rust-analyzer (via `host-lsp-bridge`), boots the editor, and tears both down on
   quit — one command, no terminal juggling. The bridge drives a graceful LSP
   `shutdown` when the editor disconnects, so the server exits cleanly.
+- **Click-to-position caret: FIXED (2026-07-23).** The code-editor `Input` used
+  `.size_full()` inside a flex column with the status bar, so it overflowed and
+  its mouse hitbox no longer matched the rendered text — `MouseDown` never
+  landed (hover, a window-level listener, still worked). Root-caused by
+  instrumenting `on_mouse_down` (it never fired), fixed with `.flex_1()`.
+  Clicking a line now moves the caret there. (Also `graft/aros-ctl click` now
+  moves the pointer before pressing, since a button event with coordinates
+  doesn't reposition.)
+- **Extension settings UI: DONE (2026-07-23).** A bottom status bar hosts
+  extension icons on the right: a theme toggle (light/dark) and an `⚙ LSP` icon
+  that opens a floating settings panel (server address + Reconnect/Close). The
+  pattern for an extension exposing settings from a status-bar affordance.
 - **(6) Remaining:**
-  - **Click-to-position caret** — clicking does not move the caret (keyboard
-    nav works). Not a position-mapping bug (hover resolves the symbol under the
-    cursor correctly), so it is specifically the `MouseDown`→caret path in
-    gpui-component/gpui_aros; needs on-device iteration.
-  - **Go-to-definition** (another provider trait, same client).
-  - **Extension settings UI** — a status-bar icon (bottom-right) per extension
-    that opens its settings.
+  - **Go-to-definition** (a `DefinitionProvider`, same client + a
+    `textDocument/definition` request; jump the caret / open the target).
+  - Diagnostics/hover/completion polish; multi-file navigation.
   - The blocking-`recv` latency (~50 ms) is fine for all of this; WaitSelect/
     FIONBIO remains a later throughput refinement.
 
