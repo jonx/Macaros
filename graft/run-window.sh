@@ -154,6 +154,9 @@ write_startup_sequence() {
                     'EndIf' \
                     'Assign "T:" "RAM:T"' \
                     'Assign "CLIPS:" "SYS:clips"' \
+                    'If EXISTS "C:SetClock"' \
+                    '    SetClock LOAD' \
+                    'EndIf' \
                     'If EXISTS "DEVS:Keymaps"' \
                     '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
                     'EndIf'
@@ -222,6 +225,9 @@ write_startup_sequence() {
                     'EndIf' \
                     'Assign "T:" "RAM:T"' \
                     'Assign CLIPS: SYS:clips' \
+                    'If EXISTS "C:SetClock"' \
+                    '    SetClock LOAD' \
+                    'EndIf' \
                     'If EXISTS "C:AddAudioModes"' \
                     '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \
                     '        AddAudioModes DEVS:AudioModes/COREAUDIO QUIET' \

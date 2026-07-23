@@ -406,10 +406,18 @@ did. New issues found (candidate patches / bug reports):
     The earlier "-1" was a boot-stall run misattributed to `setenv`. Left here so the
     numbering is stable.
 
-36. **Hosted RTC isn't seeded from the host clock.** `clock_gettime(CLOCK_REALTIME)`
-    returns `tv_sec` ≈ 252460808 (~1978), not the host wall-clock — the hosted AROS
-    battclock/timer isn't seeded from the macOS host time at boot. `CLOCK_MONOTONIC`
-    is fine (uptime). Minor, but every `SystemTime::now()` / `time()` is wrong.
+36. **[FIXED 2026-07-24] Hosted RTC wasn't seeded from the host clock.**
+    `clock_gettime(CLOCK_REALTIME)` returned `tv_sec` ≈ 252460808 (~1978), not the
+    host wall-clock. Cause was not the bridge: `battclock.resource` opens
+    `libSystem.dylib` and reads host `time`/`localtime` correctly on darwin
+    (verified: `SetClock LOAD` then `Date` prints the real host date). The boot just
+    never invoked it — the compact hosted Startup-Sequence omitted `SetClock LOAD`.
+    Fix: the boot recipes now run `If EXISTS "C:SetClock" / SetClock LOAD` (both
+    console and desktop modes in `graft/run-window.sh` + `graft/aros-ctl`, and the
+    baked release Startup-Sequence in `graft/make-aros-release.sh`). `Date` reads the
+    correct host time from a fresh boot. Cleaner follow-up (not done): seed
+    `timer.device` REALTIME at hosted timer init (`arch/all-unix/timer`) so it is
+    right from the first tick with no dependency on a boot command.
 
 > Not an AROS bug: `clock_gettime` itself works from a C command (rc=0, correct
 > `sizeof(timespec)`=16, `sizeof(long)`=8). The *Rust* path faulting on it is the x18

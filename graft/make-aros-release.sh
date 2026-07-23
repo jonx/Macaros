@@ -104,6 +104,9 @@ If NOT EXISTS "RAM:ENV"
 EndIf
 Assign "T:" "RAM:T"
 Assign "CLIPS:" "SYS:clips"
+If EXISTS "C:SetClock"
+    SetClock LOAD
+EndIf
 If EXISTS "DEVS:Keymaps"
     Assign "KEYMAPS:" "DEVS:Keymaps"
 EndIf

@@ -127,8 +127,11 @@ pipe/child-exit work in item 2 and the readiness primitive in item 1.
 - **Per-task errno.** Threads must not clobber each other's errno; `rustix` and
   parts of std assume per-task errno. Needed for correctness once the async
   stack runs multi-threaded.
-- **Host-synced RTC.** So file timestamps and log times are correct on the
-  hosted boot (currently drifts / defaults).
+- **Host-synced RTC.** *Done (2026-07-24, dev/release boot).* The boot now runs
+  `SetClock LOAD`, seeding the clock from the Mac via the battclock bridge, so
+  `SystemTime::now()` / file timestamps read the real date. Cleaner follow-up:
+  seed `timer.device` REALTIME at hosted timer init so it is right from the first
+  tick without the boot command.
 
 ## Explicitly *not* asks for the OS team (our side)
 
