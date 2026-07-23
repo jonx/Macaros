@@ -1,11 +1,16 @@
 # hosted/zed — the Zed-editor-on-AROS build rig
 
-The rig for the [Zed-shaped editor](../../docs/features/zed-editor/README.md)
-investigation. Same split as [hosted/rust/](../rust/): the rig lives here, the
-Rust source lives in sibling repos (`../../../zed-aros`,
-`../../../gpui-component-aros`, `../../../rust-aros`). Read the feature doc first
-— **especially the licensing boundary**, which decides which editor path we
-build before any port code is written.
+The rig for the [Zed-shaped editor](../../docs/features/zed-editor/README.md).
+Same split as [hosted/rust/](../rust/): the rig lives here, the Rust source
+lives in sibling repos (`../../../zed-aros`, `../../../gpui-component-aros`,
+`../../../rust-aros`). Read the feature doc first — **especially the licensing
+boundary**, which decides which editor path we build before any port code is
+written.
+
+Two things live here now: the **compile-frontier probe** (below) and the
+**GPL Zed-crate boot** — `build.sh` links `zed-aros/crates/zed_aros_app` into
+`C:ZedAros`, which boots the real `editor` crate on AROS. See
+[Building and booting C:ZedAros](#building-and-booting-czedaros).
 
 ## Prerequisites (the pinned toolchain + rust-src symlink)
 
@@ -85,6 +90,35 @@ rust-analyzer completions** over a host TCP bridge.
   [docs/features/zed-editor/README.md](../../docs/features/zed-editor/README.md).
 
 This `hosted/zed/` directory stays the **rig** — the compile-frontier probe and
-the pinned-toolchain notes above. Use it to re-check the frontier when bumping
-gpui/gpui-component, or to evaluate the GPL Zed-crate path (which the frontier
-showed needs the async reactor + wasm runtime first).
+the pinned-toolchain notes above, plus the GPL Zed-crate boot below.
+
+## Building and booting C:ZedAros
+
+The GPL Zed-crate path (path 1 in the feature doc) now boots editor-core. One
+command does the two stages:
+
+```sh
+hosted/zed/build.sh          # stage 1: cargo -Zbuild-std staticlib
+                             # stage 2: collect-aros link -> C:ZedAros, deployed
+graft/aros-ctl run           # boot AROS windowed
+graft/aros-ctl type ZedAros; graft/aros-ctl enter   # renders the editor window
+```
+
+Files here:
+
+- `aros-env.sh` — the cc-rs C recipe for the native deps (sqlite/tree-sitter/
+  ring), derived from `$AROS_BUILD` / `$AROS_CROSSTOOLS`. Sourced automatically
+  by `frontier-check.sh` and `build.sh`; source it yourself before a manual
+  `cargo build` for the AROS target. ABI must match the Rust target:
+  `-fno-pic -mcmodel=large -ffixed-x18`.
+- `zed_aros_main.c` — the C entry: sets `aros_argc`/`argv`, claims the
+  `INIT_ARRAY` symbol set (so `inventory` constructors run), and
+  `NewStackSwap`s onto a 16 MB stack before calling the Rust `zed_aros_main`.
+- `aros_mman_stub.c` — heap-backed `mmap`/`munmap`/`getpagesize` leaves that
+  sqlite and `memmap2` reference (AROS has no VM mmap).
+
+The AROS-specific gotchas behind these three files (why each exists) are in the
+feature doc's
+[Zed-crate boot section](../../docs/features/zed-editor/README.md#the-zed-crate-boot-editor-core-on-aros).
+
+Use the probe above to re-check the frontier when bumping gpui/gpui-component.

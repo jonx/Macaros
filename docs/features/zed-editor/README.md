@@ -5,9 +5,13 @@ Investigation into running a Zed-shaped code editor on hosted AROS
 [Feraille](../feraille-gpui/README.md). Status and design live here; the build
 rig is [hosted/zed/](../../../hosted/zed/README.md).
 
-**State: investigation.** No editor boots yet. The GPUI platform layer
-(`gpui_aros`) runs real apps on AROS today; the open question is how much of the
-editor stack above GPUI can follow, and under which license.
+**State: both paths boot.** The Apache `gpui-component` editor
+(`~/Source/aros-editor`, path 2 below) is the feature-complete one (files, LSP).
+The **GPL Zed-crate path** (path 1, `~/Source/zed-aros` → `C:ZedAros`) now also
+**boots editor-core** on AROS: a real `editor`-crate `Editor` view renders a
+buffer with line numbers and the base theme, networking/wasm/terminal stubbed
+(see [The Zed-crate boot](#the-zed-crate-boot-editor-core-on-aros) below). Typed
+input into that window is not wired yet.
 
 ## The two candidate paths
 
@@ -218,6 +222,51 @@ host language server. Staging:
   - The blocking-`recv` latency (~50 ms) is fine for all of this; WaitSelect/
     FIONBIO remains a later throughput refinement.
 
+## The Zed-crate boot (editor-core on AROS)
+
+`C:ZedAros` boots the real GPL `editor` crate on hosted AROS and renders an
+`Editor` view (buffer + line numbers + base theme) through the `gpui_aros` CPU
+backend, with networking/wasm/terminal stubbed. The entry point is a minimal
+staticlib crate, `zed-aros/crates/zed_aros_app` (`application()` →
+`settings::init` → `theme_settings::init(JustBase)` → `release_channel::init` →
+`editor::init` → open a window whose root is `Editor::multi_line`). The build +
+link + boot recipe and prerequisites live in
+[hosted/zed/README.md](../../../hosted/zed/README.md); run it with
+`hosted/zed/build.sh`.
+
+Five AROS-specific things had to be solved past "the crates compile", each a
+durable gotcha for any Rust-GUI-on-AROS binary:
+
+- **C cross-compile recipe for cc-rs deps** (sqlite, tree-sitter, ring). Sourced
+  from `hosted/zed/aros-env.sh` (path-free `.cargo/config.toml` can't hold the
+  SDK include roots). Must match the Rust target ABI: `--target=aarch64-unknown-aros
+  -fno-pic -mcmodel=large -ffixed-x18` (static reloc + large code model + x18
+  reserved; `-mcmodel=large` *requires* `-fno-pic`), plus `-DSQLITE_MAX_MMAP_SIZE=0`.
+- **`inventory` constructors must actually run.** Zed's settings and action
+  registries use `inventory`, whose life-before-main constructors register via a
+  `.init_array` `link_section` gated to a fixed `target_os` list that omits
+  `aros` — so on AROS nothing registered and the first setting lookup panicked
+  ("unregistered setting type"). Fix: vendored `inventory` with `aros` added to
+  that list (`zed-aros/vendor-aros/inventory`). collect-aros then gathers
+  `.init_array` into the AROS `INIT_ARRAY` symbol set.
+- **…and that symbol set must be invoked.** A bare `startup.o` + our own `main`
+  runs the autoinit chain only if the program *claims* the set handler; the C
+  shim (`hosted/zed/zed_aros_main.c`) does `THIS_PROGRAM_HANDLES_SYMBOLSET(INIT_ARRAY)`.
+  Do **not** also call `set_call_funcs` manually — that double-runs every
+  constructor (symptom: "action … already registered").
+- **Stack.** The editor's init + gpui layout overflow the few-KB default CLI
+  stack (SIGSEGV, "went out of stack limits"). collect-aros emits no seglist
+  stack cookie for hosted ELF, so a `long __stack` global is ignored; the shim
+  instead `NewStackSwap`s onto a 16 MB heap stack before calling the Rust entry.
+- **mmap leaves.** sqlite and `memmap2` reference `mmap`/`munmap`/`getpagesize`,
+  which AROS has no VM for. `hosted/zed/aros_mman_stub.c` backs them with the
+  heap (anonymous → zeroed malloc; file-backed → malloc + `lseek`/`read`, since
+  posixc has no `pread`). Also a getrandom **0.2** custom backend (arc4random_buf)
+  alongside the 0.3/0.4 one, since 0.2 is still in the graph.
+
+Not yet wired: keyboard input into the gpui window, and the file/LSP features the
+Apache path already has.
+
 ## Compile frontier (what actually builds for AROS)
 
 The first empirical question is which crate in each path breaks first against
@@ -232,6 +281,18 @@ hosted/zed/frontier-check.sh <workspace> <crate> [crate...]
 Results land in `frontier-logs/frontier-results.txt`. See
 [hosted/zed/README.md](../../../hosted/zed/README.md) for the probe recipe and
 the pinned-toolchain prerequisites.
+
+**Update (2026-07-23): the whole `editor` graph now compiles AND boots.** The
+"first ladder" table below was the starting map; every FAIL in it has since been
+cleared by vendoring the offending crate with an AROS arm (the
+vendor-and-add-aros-arm loop, ~50 crates in `zed-aros/vendor-aros/`) and
+stubbing the three goal capabilities: **networking** (rustls on the `ring`
+provider, no aws-lc; `mio`/`tokio`/`socket2` given AROS arms), **wasm** (drop
+tree-sitter's `wasm` feature → no wasmtime/JIT/mmap; gate the `WasmStore` sites
+in `language`), **terminal** (an alacritty `tty` stub). `editor` and every crate
+under it (`project`, `client`, `language`, `fs`, `settings`, `util`, …) now PASS
+`frontier-check.sh`, and `zed_aros_app` links and boots (below). The original
+findings, kept for the record:
 
 **Findings (first ladder, 2026-07-22, toolchain `nightly-2026-06-27`).** The
 break is exactly where predicted: the whole Apache platform layer compiles, and

@@ -110,7 +110,7 @@ one-look summary. Verified against the code, not just the docs.)
 | status-led-theme | Status-bar LEDs + Theme switch | [README](status-led-theme/README.md) |
 | rust-aros | Rust on aarch64 AROS: full `std` runs (net/fs/env/args/process/time/thread verified live) | [README](rust-aros/README.md) |
 | feraille-gpui | Feraille (GPUI file manager) ported to AROS: runs live via the `gpui_aros` CPU backend | [README](feraille-gpui/README.md) |
-| zed-editor | Zed-shaped code editor on AROS (investigation): licensing boundary + compile-frontier probe; rig in `hosted/zed/` | [README](zed-editor/README.md) |
+| zed-editor | Zed-shaped code editor on AROS: Apache gpui-component path (files+LSP) and the GPL Zed-crate path both boot; licensing boundary; rig in `hosted/zed/` | [README](zed-editor/README.md) |
 | gpufx | GPU-accelerated 2D (YUV→RGB + scale) via a compute section in the cocoametal shim + a `gpufx.library` front door (built; FFViewX runs on it) | [README](gpufx/README.md) |
 | host-bridge | How hosted AROS taps the host (`hostlib.resource`) + the `HostBind` helper + sample | [README](host-bridge/README.md) |
 | seamless-windows | Rootless mode: each Intuition window as its own native macOS window + AROS volumes in Finder (feasibility study) | [README](seamless-windows/README.md) |
