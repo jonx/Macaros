@@ -324,8 +324,16 @@ int aros_np_resolve4(const char *name, unsigned int *out_addrs, int max)
  *
  * fd_set / timeval are the AROS bsdsocket ABI: FD_SETSIZE 64, 32-bit fd_mask,
  * timeval two u32s. AROS socket fds are small (< 64). */
-struct aros_fd_set { int fds_bits[2]; };            /* 64 bits */
-struct aros_timeval { unsigned int tv_sec; unsigned int tv_usec; };
+/* fd_set / timeval, matching the AROS bsdsocket ABI inline so we don't pull the
+ * posixc socket headers (their socket()/connect() prototypes shadow the
+ * SocketBase LVO macros from <defines/bsdsocket.h>). FD_SETSIZE 64, 32-bit mask;
+ * timeval two u32s. `struct timeval` is only forward-referenced by the
+ * WaitSelect macro's pointer cast, so a matching-layout struct passes cleanly. */
+typedef struct aros_fdset { int fds_bits[2]; } fd_set;
+struct aros_tv { unsigned int tv_sec; unsigned int tv_usec; };
+struct timeval; /* incomplete; WaitSelect's arg is cast to (struct timeval *) */
+#define AROS_FD_SET(fd, p)   ((p)->fds_bits[(fd) >> 5] |= (1 << ((fd) & 31)))
+#define AROS_FD_ISSET(fd, p) ((p)->fds_bits[(fd) >> 5] &  (1 << ((fd) & 31)))
 
 /* fds[i]: socket fd. want[i]: bit0=read, bit1=write. got[i] (out): bit0=readable,
  * bit1=writable. timeout_us < 0 => infinite. Returns WaitSelect's result
@@ -334,8 +342,8 @@ struct aros_timeval { unsigned int tv_sec; unsigned int tv_usec; };
 int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
                        unsigned char *got, long long timeout_us)
 {
-    struct aros_fd_set rfds, wfds;
-    struct aros_timeval tv, *tvp;
+    fd_set rfds, wfds;
+    struct aros_tv tv, *tvp;
     int i, nfds, fd, r;
 
     if (!SocketBase || n <= 0)
@@ -348,8 +356,8 @@ int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
         fd = fds[i];
         if (fd < 0 || fd >= 64)
             continue;
-        if (want[i] & 1) rfds.fds_bits[fd >> 5] |= (1 << (fd & 31));
-        if (want[i] & 2) wfds.fds_bits[fd >> 5] |= (1 << (fd & 31));
+        if (want[i] & 1) AROS_FD_SET(fd, &rfds);
+        if (want[i] & 2) AROS_FD_SET(fd, &wfds);
         if (fd + 1 > nfds) nfds = fd + 1;
     }
 
@@ -361,15 +369,14 @@ int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
         tvp = &tv;
     }
 
-    r = WaitSelect(nfds, (fd_set *)&rfds, (fd_set *)&wfds, (fd_set *)0,
-                   (struct timeval *)tvp, (unsigned long *)0);
+    r = WaitSelect(nfds, &rfds, &wfds, (fd_set *)0, tvp, (unsigned long *)0);
 
     for (i = 0; i < n; i++) {
         unsigned char g = 0;
         fd = fds[i];
         if (fd >= 0 && fd < 64) {
-            if (rfds.fds_bits[fd >> 5] & (1 << (fd & 31))) g |= 1;
-            if (wfds.fds_bits[fd >> 5] & (1 << (fd & 31))) g |= 2;
+            if (AROS_FD_ISSET(fd, &rfds)) g |= 1;
+            if (AROS_FD_ISSET(fd, &wfds)) g |= 2;
         }
         got[i] = g;
     }
