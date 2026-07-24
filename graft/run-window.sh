@@ -131,6 +131,14 @@ ensure_desktop_payloads() {
 write_startup_sequence() {
     startup="$AROS/S/Startup-Sequence"
 
+    # Stage the PIPE: mount description (the L:pipe-handler binary is a build
+    # artifact; the startup Mount below is guarded by If EXISTS).
+    _up="${AROS_UPSTREAM:-$ROOT/../aros-upstream}"
+    if [ ! -f "$AROS/Devs/DOSDrivers/PIPE" ] && [ -f "$_up/workbench/devs/DOSDrivers/PIPE" ]; then
+        mkdir -p "$AROS/Devs/DOSDrivers"
+        cp -f "$_up/workbench/devs/DOSDrivers/PIPE" "$AROS/Devs/DOSDrivers/PIPE"
+    fi
+
     if [ -n "${AROS_CTL_STARTUP_FILE:-}" ]; then
         cp -f "$AROS_CTL_STARTUP_FILE" "$startup"
     else
@@ -156,6 +164,9 @@ write_startup_sequence() {
                     'Assign "CLIPS:" "SYS:clips"' \
                     'If EXISTS "C:SetClock"' \
                     '    SetClock LOAD' \
+                    'EndIf' \
+                    'If EXISTS "L:pipe-handler"' \
+                    '    Mount DEVS:DOSDrivers/PIPE' \
                     'EndIf' \
                     'If EXISTS "DEVS:Keymaps"' \
                     '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
@@ -227,6 +238,9 @@ write_startup_sequence() {
                     'Assign CLIPS: SYS:clips' \
                     'If EXISTS "C:SetClock"' \
                     '    SetClock LOAD' \
+                    'EndIf' \
+                    'If EXISTS "L:pipe-handler"' \
+                    '    Mount DEVS:DOSDrivers/PIPE' \
                     'EndIf' \
                     'If EXISTS "C:AddAudioModes"' \
                     '    If EXISTS "DEVS:AudioModes/COREAUDIO"' \

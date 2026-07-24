@@ -107,6 +107,9 @@ Assign "CLIPS:" "SYS:clips"
 If EXISTS "C:SetClock"
     SetClock LOAD
 EndIf
+If EXISTS "DEVS:DOSDrivers/PIPE"
+    Mount DEVS:DOSDrivers/PIPE
+EndIf
 If EXISTS "DEVS:Keymaps"
     Assign "KEYMAPS:" "DEVS:Keymaps"
 EndIf
@@ -163,7 +166,7 @@ Libs/intuition.library Libs/gadtools.library Libs/iffparse.library \
 Libs/asl.library Libs/commodities.library Libs/cybergraphics.library \
 Libs/coolimages.library Libs/datatypes.library Libs/locale.library \
 Libs/muimaster.library Libs/rexxsyslib.library Libs/stdc.library \
-L/con-handler"
+L/con-handler L/pipe-handler"
 
 # ---------------------------------------------------------------------------
 find_bootd() {
