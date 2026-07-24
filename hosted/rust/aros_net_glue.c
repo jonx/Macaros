@@ -315,3 +315,63 @@ int aros_np_resolve4(const char *name, unsigned int *out_addrs, int max)
     }
     return n;
 }
+
+/* -- readiness (the async reactor's Phase B) ---------------------------------
+ * WaitSelect-based socket readiness for the vendored `polling` crate. The
+ * reactor calls this with the sockets it cares about; it blocks until one is
+ * readable/writable or the timeout elapses (the reactor caps the timeout to
+ * bound notify() latency), then reports which are ready.
+ *
+ * fd_set / timeval are the AROS bsdsocket ABI: FD_SETSIZE 64, 32-bit fd_mask,
+ * timeval two u32s. AROS socket fds are small (< 64). */
+struct aros_fd_set { int fds_bits[2]; };            /* 64 bits */
+struct aros_timeval { unsigned int tv_sec; unsigned int tv_usec; };
+
+/* fds[i]: socket fd. want[i]: bit0=read, bit1=write. got[i] (out): bit0=readable,
+ * bit1=writable. timeout_us < 0 => infinite. Returns WaitSelect's result
+ * (>=0 ready count, -1 error). SocketBase must be open (any std net use opens it);
+ * with no open library or n==0 the caller uses its own wait instead. */
+int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
+                       unsigned char *got, long long timeout_us)
+{
+    struct aros_fd_set rfds, wfds;
+    struct aros_timeval tv, *tvp;
+    int i, nfds, fd, r;
+
+    if (!SocketBase || n <= 0)
+        return 0;
+
+    rfds.fds_bits[0] = rfds.fds_bits[1] = 0;
+    wfds.fds_bits[0] = wfds.fds_bits[1] = 0;
+    nfds = 0;
+    for (i = 0; i < n; i++) {
+        fd = fds[i];
+        if (fd < 0 || fd >= 64)
+            continue;
+        if (want[i] & 1) rfds.fds_bits[fd >> 5] |= (1 << (fd & 31));
+        if (want[i] & 2) wfds.fds_bits[fd >> 5] |= (1 << (fd & 31));
+        if (fd + 1 > nfds) nfds = fd + 1;
+    }
+
+    if (timeout_us < 0) {
+        tvp = 0;
+    } else {
+        tv.tv_sec  = (unsigned int)(timeout_us / 1000000);
+        tv.tv_usec = (unsigned int)(timeout_us % 1000000);
+        tvp = &tv;
+    }
+
+    r = WaitSelect(nfds, (fd_set *)&rfds, (fd_set *)&wfds, (fd_set *)0,
+                   (struct timeval *)tvp, (unsigned long *)0);
+
+    for (i = 0; i < n; i++) {
+        unsigned char g = 0;
+        fd = fds[i];
+        if (fd >= 0 && fd < 64) {
+            if (rfds.fds_bits[fd >> 5] & (1 << (fd & 31))) g |= 1;
+            if (wfds.fds_bits[fd >> 5] & (1 << (fd & 31))) g |= 2;
+        }
+        got[i] = g;
+    }
+    return r;
+}
