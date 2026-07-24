@@ -108,9 +108,11 @@ Verified live. The contract the Rust std wires to (all on the pipe filehandle's
 - register readiness → `DoPkt(fh_Type, ACTION_PIPE_READ_NOTIFY /*0x50524E31*/, fh_Arg1, sigmask, task)` — signals `task` whenever readable, and immediately if already readable.
 - read → normal `Read()`; on a non-blocking empty pipe it returns `-1` with `IoErr() == ERROR_PIPE_WOULD_BLOCK /*0x50574F42*/` → map to `WouldBlock`.
 
-Still remaining on item 2: persistent `PIPE:` mount in the boot/deploy scripts,
-the child-exit signal, and the Rust `std::process` glue that connects a child's
-stdio to `PIPE:` endpoints using these primitives.
+`PIPE:` now mounts on every boot (2026-07-24, console + desktop + release
+recipes). Still remaining on item 2: the child-exit signal, and the Rust
+`std::process` glue that connects a child's stdio to `PIPE:` endpoints using
+these primitives (the glue is sequenced with the socket `set_nonblocking`
+work as one coordinated std pass, sockets first).
 
 ---
 
