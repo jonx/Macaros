@@ -206,8 +206,39 @@ WouldBlock` is seen. The std net pal glue (`aros_np_*`) and the WaitSelect glue
 strip the tag, so a fd created by the shim (socket2) and later driven through
 std's `TcpStream` works too. **Verified live: an `async-io` TCP round-trip to a
 host echo server passed.** This unblocks the whole `tokio`/`mio`/`async-io`
-stack (HTTP, networked LSP, agent). Next is the application layer: a TCP LSP
-transport in Zed's `lsp` crate to a host language-server bridge.
+stack (HTTP, networked LSP, agent).
+
+### LSP application layer (2026-07-24) — connects, one bug left
+
+The TCP LSP transport is built and the editor **connects to a real
+rust-analyzer** over the host bridge:
+
+- `lsp::LanguageServer::new_tcp` reaches a server over a socket instead of
+  spawning a local process (shares `new_internal`, so all framing/handling is
+  common). `lsp_store` takes this path on AROS (`$ZED_AROS_LSP_ADDR`, default
+  `127.0.0.1:9257`); a minimal Rust `LspAdapter` registers `rust-analyzer`.
+- **Path translation** was the missing piece and is done: `url`'s
+  path↔file-URL conversion is `cfg(unix/windows)`-gated and **absent on AROS**,
+  so `file://` URIs never built and servers silently never started. Vendored
+  `lsp-types` now converts manually and maps the AROS host-shared volume
+  (`MacRW:`) ↔ the real host path a host language server reads
+  (`vendor-aros/lsp-types/src/uri.rs`, `util::UrlExt::to_file_path_ext`).
+- **Verified:** opening `MacRW:proj/src/main.rs` connects to the bridge and
+  rust-analyzer starts (`[lsp-bridge] client … connected; starting server`).
+
+**Open bug (blocks diagnostics/completions):** the instant rust-analyzer
+replies, two gpui worker threads abort in `std::alloc::rust_oom`. It is **not**
+memory exhaustion (reproduces with a 140 MB stripped binary and >1 GB free
+heap): writes succeed (the server got our `initialize`), but the reader appears
+to misframe the streamed reply — a garbage `Content-Length` → a multi-GB
+allocation → abort. Suspect the socket **read path under streamed/partial
+reads** (`aros_np_recv` / reactor readiness), distinct from the single-shot
+`--nettest`. This is the next thing to chase; the transport and path mapping
+above are proven.
+
+Aside: the `-Zbuild-std` link emits ~1 GB of `.debug_*` sections that AROS
+loads into RAM; `hosted/zed/build.sh` now `--strip-debug`s the binary
+(~1 GB → ~140 MB).
 
 ---
 

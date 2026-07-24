@@ -89,5 +89,16 @@ COMPILER_PATH="$XTBIN" "$COLLECT" \
     -\( "${AUTOLIB[@]}" "${STDLIBS[@]}" -\)
 echo "[zed-aros] built: $OUT/ZedAros ($(stat -f%z "$OUT/ZedAros") bytes)"
 
+# Strip debug info: -Zbuild-std over the whole editor graph produces ~1 GB of
+# .debug_*/.rela.debug_* sections. AROS loads the file into RAM, so that is
+# ~900 MB of pure debug bloat resident at boot. Stripping it takes the binary
+# from ~1 GB to ~140 MB with no behavior change (symtab kept for crash traces).
+for STRIP in "$AROS_CROSSTOOLS/bin/llvm-strip" "$XTBIN/llvm-strip" "$(command -v llvm-strip 2>/dev/null)"; do
+    [ -x "$STRIP" ] || continue
+    "$STRIP" --strip-debug "$OUT/ZedAros"
+    echo "[zed-aros] stripped: $OUT/ZedAros ($(stat -f%z "$OUT/ZedAros") bytes)"
+    break
+done
+
 cp -f "$OUT/ZedAros" "$CDIR/ZedAros"; chmod +x "$CDIR/ZedAros"
 echo "[zed-aros] deployed -> $CDIR/ZedAros"
