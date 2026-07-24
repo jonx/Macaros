@@ -160,6 +160,49 @@ pipe/child-exit work in item 2 and the readiness primitive in item 1.
 
 ---
 
+## 4. Unified fd space for the async socket stack (the LSP/HTTP blocker)
+
+**Unblocks:** `async-io` / `mio` / `tokio` driving TCP sockets — i.e. networked
+LSP over the host bridge, the HTTP client, and the agent panel.
+
+**The problem (discovered 2026-07-24).** The reactor's Phase B (WaitSelect
+socket readiness) is built and compiles, and non-blocking sockets work. But
+`async-io`/`socket2`/`tokio` do not go through std's AROS net pal (which drives
+`bsdsocket` via the `aros_np_*` glue). They create and drive sockets as **raw
+libc fds**: `socket()` → `connect()` → `fcntl(F_SETFL, O_NONBLOCK)` →
+`read()`/`write()` → `close()`. On AROS that breaks two ways:
+- `socket()` / `connect()` are **not libc symbols** — sockets are `bsdsocket`
+  LVOs, so those references are undefined at link.
+- Even if provided, AROS keeps **sockets and files in separate fd spaces**
+  (`bsdsocket` closes with `CloseSocket`, dos files with `Close`), and their
+  small-integer fd ranges **overlap**. posixc `read`/`write`/`close`/`fcntl`
+  operate on the *file* space, so calling them on a socket fd is wrong.
+
+So the async socket stack assumes a **unified fd space** AROS does not have.
+
+**Two ways forward (a real fork):**
+1. **Unified-fd shim.** Provide `socket()`/`connect()`/… over `bsdsocket`,
+   returning fds in a high non-overlapping range, and override
+   `read`/`write`/`close`/`fcntl` (link-time, `--allow-multiple-definition`) to
+   dispatch socket-range fds to `bsdsocket` and the rest to posixc. Unblocks the
+   **entire** async networking stack (HTTP, LSP, agent). Substantial, delicate
+   C-layer work; more libc socket calls (`setsockopt`/`bind`/… ) will surface as
+   the async path goes live.
+2. **Blocking-`std::net` LSP transport.** Skip the async socket stack for LSP:
+   connect with blocking `std::net::TcpStream` (works today via the net pal) plus
+   reader/writer threads bridging into the editor's async channels — the model
+   `~/Source/aros-editor` already proved live. Targeted to LSP; needs a custom
+   transport in Zed's `lsp` crate (which is built around async subprocess stdio),
+   not a general networking fix.
+
+**Status.** Reactor Phase B (WaitSelect glue `aros_np_waitselect` + polling
+`aros.rs`) is committed and correct — it will drive sockets once option 1 lands.
+Networked LSP is deferred behind this fork; the pipe/process/terminal work
+(items 2-3) does **not** hit this wall (pipes are dos filehandles in the file
+space, which posixc `read`/`write` handle).
+
+---
+
 ## Smaller items (already on your list)
 
 - **Per-task errno.** *Done (2026-07-24).* C `errno` used to live in the
