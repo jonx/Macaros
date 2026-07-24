@@ -83,6 +83,7 @@ int aros_sock_errno(void)
 
 void aros_closesocket(int s)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (SocketBase && s >= 0)
         CloseSocket(s);
 }
@@ -133,11 +134,13 @@ int aros_np_socket(int domain, int type, int proto)
 
 int aros_np_connect(int s, unsigned int addr_net, unsigned short port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     return aros_connect_v4(s, addr_net, port_net);
 }
 
 int aros_np_bind(int s, unsigned int addr_net, unsigned short port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     if (!SocketBase || s < 0)
         return -1;
@@ -150,6 +153,7 @@ int aros_np_bind(int s, unsigned int addr_net, unsigned short port_net)
 
 int aros_np_listen(int s, int backlog)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0)
         return -1;
     return listen(s, backlog);
@@ -159,6 +163,7 @@ int aros_np_listen(int s, int backlog)
  * (network order). -1 on error. */
 int aros_np_accept(int s, unsigned int *addr_net, unsigned short *port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     int len = sizeof sa;
     int ns;
@@ -182,6 +187,7 @@ static unsigned long np_clamp_len(unsigned long len)
 
 long aros_np_send(int s, const void *buf, unsigned long len, int flags)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
     return send(s, buf, np_clamp_len(len), flags);
@@ -189,6 +195,7 @@ long aros_np_send(int s, const void *buf, unsigned long len, int flags)
 
 long aros_np_recv(int s, void *buf, unsigned long len, int flags)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
     return recv(s, buf, np_clamp_len(len), flags);
@@ -197,6 +204,7 @@ long aros_np_recv(int s, void *buf, unsigned long len, int flags)
 long aros_np_sendto(int s, const void *buf, unsigned long len, int flags,
                     unsigned int addr_net, unsigned short port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     if (!SocketBase || s < 0 || (!buf && len))
         return -1;
@@ -210,6 +218,7 @@ long aros_np_sendto(int s, const void *buf, unsigned long len, int flags,
 long aros_np_recvfrom(int s, void *buf, unsigned long len, int flags,
                       unsigned int *addr_net, unsigned short *port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     int slen = sizeof sa;
     long n;
@@ -225,6 +234,7 @@ long aros_np_recvfrom(int s, void *buf, unsigned long len, int flags,
 
 int aros_np_getsockname(int s, unsigned int *addr_net, unsigned short *port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     int len = sizeof sa;
     if (!SocketBase || s < 0)
@@ -238,6 +248,7 @@ int aros_np_getsockname(int s, unsigned int *addr_net, unsigned short *port_net)
 
 int aros_np_getpeername(int s, unsigned int *addr_net, unsigned short *port_net)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     struct sockaddr_in sa = {0};
     int len = sizeof sa;
     if (!SocketBase || s < 0)
@@ -251,6 +262,7 @@ int aros_np_getpeername(int s, unsigned int *addr_net, unsigned short *port_net)
 
 int aros_np_shutdown(int s, int how)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0)
         return -1;
     return shutdown(s, how);
@@ -258,6 +270,7 @@ int aros_np_shutdown(int s, int how)
 
 int aros_np_setsockopt(int s, int level, int name, const void *val, unsigned int len)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0)
         return -1;
     return setsockopt(s, level, name, (void *)val, (int)len);
@@ -265,6 +278,7 @@ int aros_np_setsockopt(int s, int level, int name, const void *val, unsigned int
 
 int aros_np_getsockopt(int s, int level, int name, void *val, unsigned int *len)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0)
         return -1;
     return getsockopt(s, level, name, val, len);
@@ -276,6 +290,7 @@ int aros_np_getsockopt(int s, int level, int name, void *val, unsigned int *len)
  * issue the ioctl so behaviour tracks the library instead of lying. */
 int aros_np_set_nonblock(int s, int nonblock)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     int arg = nonblock ? 1 : 0;
     if (!SocketBase || s < 0)
         return -1;
@@ -288,6 +303,7 @@ int aros_np_set_nonblock(int s, int nonblock)
  * Returns the new fd, or -1. */
 int aros_np_dup(int s)
 {
+    s &= ~0x40000000;  /* strip the unified-fd SOCK_TAG (socket() may return a tagged fd) */
     if (!SocketBase || s < 0)
         return -1;
     return Dup2Socket(s, -1);
@@ -353,7 +369,7 @@ int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
     wfds.fds_bits[0] = wfds.fds_bits[1] = 0;
     nfds = 0;
     for (i = 0; i < n; i++) {
-        fd = fds[i];
+        fd = fds[i] & ~0x40000000;      /* strip the unified-fd SOCK_TAG */
         if (fd < 0 || fd >= 64)
             continue;
         if (want[i] & 1) AROS_FD_SET(fd, &rfds);
@@ -373,7 +389,7 @@ int aros_np_waitselect(int n, const int *fds, const unsigned char *want,
 
     for (i = 0; i < n; i++) {
         unsigned char g = 0;
-        fd = fds[i];
+        fd = fds[i] & ~0x40000000;
         if (fd >= 0 && fd < 64) {
             if (AROS_FD_ISSET(fd, &rfds)) g |= 1;
             if (AROS_FD_ISSET(fd, &wfds)) g |= 2;

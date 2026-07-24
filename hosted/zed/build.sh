@@ -63,7 +63,7 @@ echo "[zed-aros] compile C shim + mmap leaves"
     -c "$DIR/aros_mman_stub.c" -o "$OUT/aros_mman_stub.o"
 
 echo "[zed-aros] compile std pal glue"
-for g in aros_net_glue aros_process_glue aros_thread_glue; do
+for g in aros_net_glue aros_process_glue aros_thread_glue aros_fd_shim; do
     "$CC" "${CFLAGS[@]}" -c "$RUSTDIR/$g.c" -o "$OUT/$g.o"
 done
 for g in aros_fs_glue aros_sync_glue; do
@@ -82,6 +82,7 @@ COMPILER_PATH="$XTBIN" "$COLLECT" \
     --eh-frame-hdr --allow-multiple-definition \
     -L"$LIBDIR" -L"$XTLIB" -o "$OUT/ZedAros" \
     "$LIBDIR/startup.o" "$OUT/zed_aros_main.o" "$OUT/aros_mman_stub.o" \
+    "$OUT/aros_fd_shim.o" \
     "$OUT/aros_net_glue.o" "$OUT/aros_fs_glue.o" "$OUT/aros_process_glue.o" \
     "$OUT/aros_thread_glue.o" "$OUT/aros_sync_glue.o" \
     "$RSLIB" "${NATIVE_A[@]}" \
