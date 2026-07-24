@@ -195,11 +195,19 @@ So the async socket stack assumes a **unified fd space** AROS does not have.
    transport in Zed's `lsp` crate (which is built around async subprocess stdio),
    not a general networking fix.
 
-**Status.** Reactor Phase B (WaitSelect glue `aros_np_waitselect` + polling
-`aros.rs`) is committed and correct — it will drive sockets once option 1 lands.
-Networked LSP is deferred behind this fork; the pipe/process/terminal work
-(items 2-3) does **not** hit this wall (pipes are dos filehandles in the file
-space, which posixc `read`/`write` handle).
+**RESOLVED (2026-07-24) — option 1, the unified-fd shim, works.**
+`hosted/rust/aros_fd_shim.c` provides `socket`/`connect`/`bind`/`listen`/
+`accept`/`send`/`recv`/`setsockopt`/… over `bsdsocket`, returns socket fds
+**tagged** with a high bit (`0x40000000`) so they never collide with posixc file
+fds, and overrides `read`/`write`/`close`/`fcntl`/`ioctl` to dispatch (tagged →
+bsdsocket, else → the real posixc `__*_PosixCBase_wrapper`, since posixc's are
+weak symbols). The bsdsocket errno is copied into the C errno so `EWOULDBLOCK →
+WouldBlock` is seen. The std net pal glue (`aros_np_*`) and the WaitSelect glue
+strip the tag, so a fd created by the shim (socket2) and later driven through
+std's `TcpStream` works too. **Verified live: an `async-io` TCP round-trip to a
+host echo server passed.** This unblocks the whole `tokio`/`mio`/`async-io`
+stack (HTTP, networked LSP, agent). Next is the application layer: a TCP LSP
+transport in Zed's `lsp` crate to a host language-server bridge.
 
 ---
 
