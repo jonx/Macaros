@@ -97,6 +97,21 @@ stdout **while it is still running** (before exit); receive an exit signal and
 read the status. A reactor waiting on both a child pipe and a socket wakes for
 whichever is ready first.
 
+**Delivered (2026-07-24) — the pipe readiness + non-blocking read primitives.**
+`PIPE:` mounts on aarch64; readiness→signal is level-triggered and composes with
+`WaitSelect`; non-blocking reads return would-block on empty; blocking reads now
+return available bytes (POSIX stream semantics, fixes a block-until-full hang).
+Verified live. The contract the Rust std wires to (all on the pipe filehandle's
+`fh_Type` port, `fh_Arg1` as the key):
+
+- `set_nonblocking(pipe)` → `DoPkt(fh_Type, ACTION_PIPE_SET_NONBLOCK /*0x50534E42*/, fh_Arg1, enable, 0)`
+- register readiness → `DoPkt(fh_Type, ACTION_PIPE_READ_NOTIFY /*0x50524E31*/, fh_Arg1, sigmask, task)` — signals `task` whenever readable, and immediately if already readable.
+- read → normal `Read()`; on a non-blocking empty pipe it returns `-1` with `IoErr() == ERROR_PIPE_WOULD_BLOCK /*0x50574F42*/` → map to `WouldBlock`.
+
+Still remaining on item 2: persistent `PIPE:` mount in the boot/deploy scripts,
+the child-exit signal, and the Rust `std::process` glue that connects a child's
+stdio to `PIPE:` endpoints using these primitives.
+
 ---
 
 ## 3. Pseudo-terminal (PTY) for the integrated terminal
