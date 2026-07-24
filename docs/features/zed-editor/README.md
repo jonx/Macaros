@@ -264,8 +264,34 @@ durable gotcha for any Rust-GUI-on-AROS binary:
   posixc has no `pread`). Also a getrandom **0.2** custom backend (arc4random_buf)
   alongside the 0.3/0.4 one, since 0.2 is still in the graph.
 
-Not yet wired: keyboard input into the gpui window, and the file/LSP features the
-Apache path already has.
+**Workspace, highlighting, and status bar (2026-07-24).** `C:ZedAros` now boots
+the real `workspace::Workspace` rather than a bare editor: opening a file
+(`ZedAros MacRW:foo.rs`) shows it in a pane with an editor **tab** and the window
+title tracking the file, through a real Zed `Project`. **Syntax highlighting**
+works and the **status bar** renders (a live Ln:Col cursor-position item). What
+this took beyond the editor-core boot:
+
+- **Registered tree-sitter grammars directly from the `grammars` crate** instead
+  of via the `languages` crate. Depending on `languages` drags in the LSP
+  adapters, and the Python one pulls Microsoft's ~25-crate `pet` suite (multiple
+  AROS gaps). `grammars` gives grammar + config + queries with no adapters.
+- **`LanguageRegistry::set_theme`** must be called or every token renders in the
+  default foreground (grammars load but highlight captures map to no color).
+- **Deferred: the file tree (`project_panel`) and the language-picker status
+  item (`language_selector`).** Both transitively pull `heed → LMDB`, whose C
+  needs `pread`/`pwrite`/`fdatasync`/`pthread_sigmask`/`sigwait` — POSIX calls
+  AROS lacks. They return once that dependency chain is cut or LMDB is ported.
+- **Vendored-crate AROS arms added for the workspace graph:** `is-terminal`
+  (kept std + "not a tty"), `page_size` (fixed 4 KiB granularity). And the
+  link-level one: **`ring` now compiles its aarch64 AEAD assembly** (the ELF
+  `linux64` perlasm target was gated to Linux; the Rust side references those
+  symbols unconditionally on aarch64, so without it the AEAD ciphers are
+  undefined at link). Plus no-op `ZSTD_trace_*` leaves.
+
+Not yet wired: keyboard input into the gpui window from the automation harness
+(real keyboard works), and the file/LSP features the Apache path already has
+(LSP is OS-gated on the async-socket work, item 1 of
+[os-requirements.md](os-requirements.md), now landing).
 
 ## Compile frontier (what actually builds for AROS)
 
