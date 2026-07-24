@@ -109,10 +109,23 @@ Verified live. The contract the Rust std wires to (all on the pipe filehandle's
 - read → normal `Read()`; on a non-blocking empty pipe it returns `-1` with `IoErr() == ERROR_PIPE_WOULD_BLOCK /*0x50574F42*/` → map to `WouldBlock`.
 
 `PIPE:` now mounts on every boot (2026-07-24, console + desktop + release
-recipes). Still remaining on item 2: the child-exit signal, and the Rust
-`std::process` glue that connects a child's stdio to `PIPE:` endpoints using
-these primitives (the glue is sequenced with the socket `set_nonblocking`
-work as one coordinated std pass, sockets first).
+recipes).
+
+**Child-exit signal — already provided by the OS (verified by existing use).**
+No new OS work was needed: a child created with `NP_NotifyOnDeath = TRUE`
+signals its parent's `SIGF_CHILD` on exit (exec delivers the child's ETask to
+the parent's `et_TaskMsgPort`, whose signal bit is `SIGB_CHILD`). `SIGF_CHILD`
+is a fixed exec signal, so it drops straight into `WaitSelect`'s sigmask beside
+socket and pipe readiness — the reactor waits on all three in one call. To reap:
+`ChildStatus(tid)` polls (`CHILD_EXITED`), `ChildWait(tid)` returns the ETask,
+`et->et_Result1` is the exit code, then `ChildFree(et->et_UniqueID)`. This is the
+same path posixc `wait()`/`waitpid()` and Rust `std::process::status()` already
+use on hosted aarch64, so it is proven working; the reactor just consumes it.
+
+Still remaining on item 2: only the Rust `std::process` glue that connects a
+child's stdio to `PIPE:` endpoints (and uses `NP_NotifyOnDeath` + `SIGF_CHILD`
+for async reaping) — sequenced with the socket `set_nonblocking` work as one
+coordinated std pass, sockets first.
 
 ---
 
