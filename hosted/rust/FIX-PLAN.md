@@ -47,12 +47,13 @@ Ordered by suggested priority.
    calls can realloc the buffer under each other. Fix: a static env `Mutex` in
    `env/aros.rs` held across `getenv` + the copy-out (and across `setenv`/
    `unsetenv`), like std's unix env lock.
-2. **M1 — process-global errno.** `__stdc_geterrnoptr` resolves to one `_errno`
-   for the whole process (stdc is peropener, opened once; pthread tasks share it),
-   so `Error::last_os_error()` races across threads. Pal-side locking cannot fix
-   this (the write happens inside the C library). Real fix is OS-side: per-task
-   errno in stdc/posixc (pertask storage). Until then, document the limitation in
-   STD-PORT.md and keep pal code reading errno immediately after each failing call.
+2. **M1 — process-global errno. FIXED 2026-07-24.** `__stdc_geterrnoptr` used to
+   resolve to one `_errno` for the whole process (stdc is peropener; pthread tasks
+   shared it), so `Error::last_os_error()` raced across threads. Fixed OS-side:
+   stdc now consults an optional errno-pointer hook (default off), and pthread
+   installs it to give each thread its own errno slot in `ThreadInfo`. Verified by
+   `developer/debug/test/misc/pthreaderrno`. (The socket `Errno()` was already
+   per-task via the bsdsocket TaskBase.)
 3. **M4 — `Command::output()` temp-name collisions.** The uniquifier is a
    per-process counter and every process is pid 1. Mix in entropy: `DateStamp()`
    ticks + the task pointer (or stdc `arc4random`), e.g.

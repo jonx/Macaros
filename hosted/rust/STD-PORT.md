@@ -288,8 +288,9 @@ What a first PR would contain, and where each piece stands:
   `set_nonblocking`/timeouts are no-ops (bsdsocket park model, UPSTREAM-NOTES #37) and
   IPv6 is `Unsupported` (`try_clone` **works**); `fs` `File::set_times`/nofollow are
   `Unsupported` (no `futimes`/`lutimes`) and `is_symlink()` reads false on the
-  emul-handler; REALTIME reads ~1978 (un-host-synced RTC, #36); errno is process-global
-  (FIX-PLAN M1). Tier-3 targets ship with documented gaps like these.
+  emul-handler; REALTIME now host-synced at boot (#36 fixed 2026-07-24). errno is
+  now per-task (FIX-PLAN M1 fixed 2026-07-24: stdc errno hook + pthread per-thread
+  slot). Tier-3 targets ship with documented gaps like these.
 
 ### Threads (done)
 

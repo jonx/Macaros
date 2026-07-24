@@ -132,9 +132,13 @@ pipe/child-exit work in item 2 and the readiness primitive in item 1.
 
 ## Smaller items (already on your list)
 
-- **Per-task errno.** Threads must not clobber each other's errno; `rustix` and
-  parts of std assume per-task errno. Needed for correctness once the async
-  stack runs multi-threaded.
+- **Per-task errno.** *Done (2026-07-24).* C `errno` used to live in the
+  per-process stdc libbase, so threads clobbered each other's errno. It is now
+  per-task: stdc consults an optional hook that pthread installs, giving each
+  thread its own errno slot. Non-threaded programs are unchanged (default hook is
+  off). Verified live (`developer/debug/test/misc/pthreaderrno`: two threads keep
+  distinct errno across 40 interleaved yields). Note the socket errno (`Errno()`)
+  was already per-task via the bsdsocket TaskBase.
 - **Host-synced RTC.** *Done (2026-07-24, dev/release boot).* The boot now runs
   `SetClock LOAD`, seeding the clock from the Mac via the battclock bridge, so
   `SystemTime::now()` / file timestamps read the real date. Cleaner follow-up:
