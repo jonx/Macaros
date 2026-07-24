@@ -582,3 +582,150 @@ pub extern "C" fn aros_rust_stdnet_test() -> u32 {
         }
     }
 }
+
+// --- STREAM: large streamed read, byte-exact verify (blocking + non-blocking) -
+// Isolates the LSP-over-socket corruption: a host server streams a known pattern
+// (byte[i] = i % 251) in small chunks to force partial reads; we read it back and
+// verify every byte. Blocking and non-blocking are tested separately because the
+// async LSP path drives the socket non-blocking, and that is the suspect. Needs
+// the streaming host server on 127.0.0.1:12346.
+const STREAM_SIZE: usize = 256 * 1024;
+
+fn stream_once(nonblocking: bool) -> u32 {
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::TcpStream;
+    let mode = if nonblocking { "nonblk" } else { "block " };
+    let mut s = match TcpStream::connect("127.0.0.1:12346") {
+        Ok(s) => s,
+        Err(e) => {
+            println!("[STREAM {mode}] connect fail: {e:?}");
+            return 1;
+        }
+    };
+    if writeln!(s, "{STREAM_SIZE}").and_then(|_| s.flush()).is_err() {
+        println!("[STREAM {mode}] request send fail");
+        return 1;
+    }
+    if nonblocking {
+        let _ = s.set_nonblocking(true);
+    }
+    let mut got: Vec<u8> = Vec::with_capacity(STREAM_SIZE);
+    let mut buf = [0u8; 4096];
+    let mut spins: u64 = 0;
+    loop {
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                // Sanity guard so a bogus count can't OOM the test itself.
+                if n > buf.len() {
+                    println!("[STREAM {mode}] BAD COUNT: read()={n} > buf {}", buf.len());
+                    return 1;
+                }
+                got.extend_from_slice(&buf[..n]);
+                if got.len() >= STREAM_SIZE {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                spins += 1;
+                if spins > 200_000_000 {
+                    println!("[STREAM {mode}] stuck WouldBlock at {} bytes", got.len());
+                    return 1;
+                }
+                continue;
+            }
+            Err(e) => {
+                println!("[STREAM {mode}] read err at {}: {e:?}", got.len());
+                return 1;
+            }
+        }
+    }
+    if got.len() != STREAM_SIZE {
+        println!("[STREAM {mode}] LEN MISMATCH got={} want={STREAM_SIZE}", got.len());
+        return 1;
+    }
+    for (i, b) in got.iter().enumerate() {
+        let want = (i % 251) as u8;
+        if *b != want {
+            println!(
+                "[STREAM {mode}] CORRUPT @off {i}: got {b} want {want} (spins {spins})"
+            );
+            return 1;
+        }
+    }
+    println!("[STREAM {mode}] PASS {STREAM_SIZE} bytes byte-exact (spins {spins})");
+    0
+}
+
+/// Connect on THIS task, then read the streamed pattern on a *spawned* task.
+/// bsdsocket's `SocketBase` is per-task and the glue keeps a single global one,
+/// so a socket touched from a second task is the suspected LSP corruption
+/// (the async executor is multi-threaded). If this corrupts while `stream_once`
+/// passes, per-task `SocketBase` is confirmed as the cause.
+fn stream_crossthread() -> u32 {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let mut s = match TcpStream::connect("127.0.0.1:12346") {
+        Ok(s) => s,
+        Err(e) => {
+            println!("[XTHREAD] connect fail: {e:?}");
+            return 1;
+        }
+    };
+    if writeln!(s, "{STREAM_SIZE}").and_then(|_| s.flush()).is_err() {
+        println!("[XTHREAD] request send fail");
+        return 1;
+    }
+    let handle = std::thread::spawn(move || -> u32 {
+        let mut got: Vec<u8> = Vec::with_capacity(STREAM_SIZE);
+        let mut buf = [0u8; 4096];
+        loop {
+            match s.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) if n <= buf.len() => {
+                    got.extend_from_slice(&buf[..n]);
+                    if got.len() >= STREAM_SIZE {
+                        break;
+                    }
+                }
+                Ok(n) => {
+                    println!("[XTHREAD] BAD COUNT read()={n}");
+                    return 1;
+                }
+                Err(e) => {
+                    println!("[XTHREAD] read err at {}: {e:?}", got.len());
+                    return 1;
+                }
+            }
+        }
+        if got.len() != STREAM_SIZE {
+            println!("[XTHREAD] LEN MISMATCH got={} want={STREAM_SIZE}", got.len());
+            return 1;
+        }
+        for (i, b) in got.iter().enumerate() {
+            let want = (i % 251) as u8;
+            if *b != want {
+                println!("[XTHREAD] CORRUPT @off {i}: got {b} want {want}");
+                return 1;
+            }
+        }
+        println!("[XTHREAD] PASS {STREAM_SIZE} bytes byte-exact (read on spawned task)");
+        0
+    });
+    handle.join().unwrap_or(1)
+}
+
+#[no_mangle]
+pub extern "C" fn aros_rust_stream_test() -> u32 {
+    let mut fails = 0;
+    fails += stream_once(false);
+    fails += stream_once(true);
+    fails += stream_crossthread();
+    if fails == 0 {
+        println!("RUST-AROS: STREAM PASS");
+        0x5354_5200 // "STR "
+    } else {
+        println!("RUST-AROS: STREAM FAIL");
+        7
+    }
+}
