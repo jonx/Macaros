@@ -46,8 +46,11 @@
 #define APS_NULL    2
 
 struct AProc {
-    struct Task *parent;
-    ULONG        exit_sig;      /* signal mask to hit the parent with */
+    /* Who to signal on exit, and with what. Only ever set while that task is
+     * inside wait(): a task that has finished waiting may be gone by the time
+     * the child dies, and signalling a dead Task faults. Guarded by Forbid(). */
+    struct Task *waiter;
+    ULONG        waiter_sig;
     volatile LONG exited;
     volatile LONG code;
 };
@@ -72,8 +75,35 @@ static void proc_exit_hook(IPTR result, IPTR data)
             p->code = cli->cli_ReturnCode;
     }
     p->exited = 1;
-    if (p->parent && p->exit_sig)
-        Signal(p->parent, p->exit_sig);
+
+    /* Forbid() pairs with aros_proc_set_waiter: the waiter cannot deregister
+     * (and then exit) between our read and the Signal. */
+    Forbid();
+    if (p->waiter && p->waiter_sig)
+        Signal(p->waiter, p->waiter_sig);
+    Permit();
+}
+
+/* Register (task != NULL) or clear (task == NULL) the task to wake on exit.
+ * Returns 1 if the child had already exited, so the caller does not wait. */
+int aros_proc_set_waiter(void *handle, void *task, ULONG sigmask)
+{
+    struct AProc *p = (struct AProc *)handle;
+    int already;
+
+    if (!p)
+        return 1;
+    Forbid();
+    p->waiter = (struct Task *)task;
+    p->waiter_sig = task ? sigmask : 0;
+    already = p->exited ? 1 : 0;
+    Permit();
+    return already;
+}
+
+void *aros_task_self(void)
+{
+    return (void *)FindTask((CONST_STRPTR)0);
 }
 
 /* Unique-per-call pipe names. Only ever touched under Forbid(). */
@@ -129,15 +159,15 @@ static int open_pipe_pair(ULONG seq, const char *which, int parent_writes,
 
 /* Spawn `cmdline`, wiring each stream per its disposition.
  *
- * `exit_sig` is the signal mask to hit the calling task with when the child
- * exits; the caller allocates it (AllocSignal) and waits on it.
+ * Nothing is signalled until a task registers itself with
+ * aros_proc_set_waiter, which it does only while it is actually waiting.
  *
  * Returns an opaque handle, or NULL if the child could not be started. The
  * parent ends of any piped streams land in *p_in / *p_out / *p_err as BPTRs
  * (0 when that stream is not piped).
  */
 void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mode,
-                      ULONG exit_sig, BPTR *p_in, BPTR *p_out, BPTR *p_err)
+                      BPTR *p_in, BPTR *p_out, BPTR *p_err)
 {
     struct AProc *p;
     struct TagItem tags[8];
@@ -157,9 +187,6 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     p = AllocMem(sizeof(struct AProc), MEMF_ANY | MEMF_CLEAR);
     if (!p)
         return (void *)0;
-    p->parent = FindTask((CONST_STRPTR)0);
-    p->exit_sig = exit_sig;
-
     seq = next_seq();
 
     /* No requesters while we open pipes: a missing PIPE: mount must fail
