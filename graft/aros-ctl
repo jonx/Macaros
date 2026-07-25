@@ -643,7 +643,7 @@ button)
     ;;
 mouse)  ctl "M ${1:-0} ${2:-0}";;
 wheel)  ctl "W ${1:-1} ${2:-0}";;
-resize) ctl "R ${1:-800} ${2:-600}";;
+resize) ctl "R ${1:-1366} ${2:-768}";;
 click)
     b="${1:-0}"
     if [ $# -ge 3 ]; then

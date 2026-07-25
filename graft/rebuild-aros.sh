@@ -33,7 +33,7 @@ export PATH="$AROS_CROSSTOOLS/bin:/opt/homebrew/bin:$PATH"
 
 [ -x "$AROS_CROSSTOOLS/bin/clang" ] || { echo "FATAL: no crosstools at $AROS_CROSSTOOLS" >&2; exit 2; }
 [ -f "$AROS_BUILD/Makefile" ] || { echo "FATAL: $AROS_BUILD is not a configured build tree (no Makefile). Configure it first:" >&2
-    echo "  cd $AROS_BUILD && $AROS_SRC/configure --target=darwin-aarch64 --with-toolchain=llvm --with-aros-toolchain=yes --with-aros-toolchain-install=$AROS_CROSSTOOLS --without-x" >&2
+    echo "  cd $AROS_BUILD && $AROS_SRC/configure --target=darwin-aarch64 --with-toolchain=llvm --with-aros-toolchain=yes --with-aros-toolchain-install=$AROS_CROSSTOOLS --without-x --with-resolution=1366x768x8" >&2
     exit 3; }
 
 # A git branch switch in $AROS_SRC touches configure's mtime without changing

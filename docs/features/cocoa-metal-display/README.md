@@ -21,6 +21,26 @@ a mode in ScreenMode Preferences resizes the window. See INTERFACE.md §10. The 
 screenshot the window headlessly — no window-server session, no Screen-Recording
 prompt — so the GUI stays inside the unattended loop.
 
+## Boot resolution
+
+The window comes up at **1366x768**. That is *not* the driver's doing: with no
+`screenmode.prefs` on disk, intuition's `OpenWorkbench` asks for
+`GfxBase->NormalDisplayColumns/Rows`, which graphics.library seeds from
+`AROS_NOMINAL_WIDTH/HEIGHT` in the generated `aros/config.h`. The knob is
+therefore a **configure** flag, not a source constant:
+
+```sh
+configure ... --with-resolution=1366x768x8
+#  -> "checking for default resolution of WBScreen... 1366 x 768 x 8"
+```
+
+Changing it needs `kernel-graphics` + `kernel-intuition` rebuilt (they bake the
+constants) and any stale `SYS:Prefs/Env-Archive/SYS/screenmode.prefs` deleted,
+since a saved prefs file wins over the nominal default. Reordering the driver's
+mode ladder does **not** move the boot default; the first ladder entry is only
+the default monitor *sync*. It matters because a resolution change needs the
+desktop idle, so the boot default is the one that has to be right.
+
 This is the display half of **Macaros**; the first-class Mac app around it (menu
 bar, About, icon, Settings) is the [host app shell](../host-app-shell/README.md).
 

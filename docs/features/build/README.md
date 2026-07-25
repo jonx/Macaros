@@ -44,8 +44,9 @@ cd "$BUILD"    # (rm -rf "$BUILD" first only for a truly clean reconfigure)
 ../aros-upstream/configure \
     --target=darwin-aarch64 --with-toolchain=llvm \
     --with-aros-toolchain=yes --with-aros-toolchain-install="$XT" \
-    --without-x
+    --without-x --with-resolution=1366x768x8
 #   -> must print "checking whether to build crosstools... no"
+#   -> must print "checking for default resolution of WBScreen... 1366 x 768 x 8"
 
 # 3. Build the BOOT MODULE SET + desktop via explicit metatargets (NOT a bare `make`)
 make kernel-exec kernel-kernel kernel-dos kernel-dosboot kernel-utility \
