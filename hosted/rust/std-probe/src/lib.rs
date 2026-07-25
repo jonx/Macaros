@@ -1150,3 +1150,118 @@ pub extern "C" fn aros_rust_stack_test() -> u32 {
         8
     }
 }
+
+// ---------------------------------------------------------------------------
+// A shell as a child, over pipes.
+//
+// This is what a terminal is: `C:Shell` with all three stdio streams on live
+// pipes, typed at from one end and read from the other. It is worth checking
+// separately from the editor, because the editor takes a quarter of an hour to
+// build and this takes one minute.
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn aros_rust_shell_test() -> u32 {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut fails = 0;
+
+    // Does a piped stdin break spawning at all, or only the shell?
+    match Command::new("C:Version")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(mut c) => {
+            println!("[SHELL] a command with a piped stdin spawns");
+            let _ = c.wait();
+        }
+        Err(e) => {
+            println!("[SHELL] FAIL a command with a piped stdin will not spawn: {e}");
+            fails += 1;
+        }
+    }
+
+    // The terminal's shape: no command at all, which is how AROS is asked for
+    // an interactive shell reading the stream it is given.
+    let mut cmd = Command::new("");
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[SHELL] FAIL spawn an interactive shell: {e}");
+            println!("RUST-AROS: SHELL FAIL ({})", fails + 1);
+            return 9;
+        }
+    };
+    println!("[SHELL] interactive shell spawned");
+
+    // Does it stay alive with an idle stdin, or read the empty pipe as EOF?
+    std::thread::sleep(Duration::from_millis(500));
+    match child.try_wait() {
+        Ok(Some(st)) => {
+            println!("[SHELL] FAIL exited while idle with status {st:?}");
+            fails += 1;
+        }
+        Ok(None) => println!("[SHELL] still running with an idle stdin"),
+        Err(e) => {
+            println!("[SHELL] FAIL try_wait: {e}");
+            fails += 1;
+        }
+    }
+
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+
+    // Read on a thread: the read blocks, and a shell that answered nothing
+    // would otherwise hang this probe forever.
+    let reader = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    seen.extend_from_slice(&chunk[..n]);
+                    if seen.windows(6).any(|w| w == b"marker") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        seen
+    });
+
+    if let Err(e) = stdin.write_all(b"echo marker\n").and_then(|()| stdin.flush()) {
+        println!("[SHELL] FAIL writing a command: {e}");
+        fails += 1;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && !reader.is_finished() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(stdin);
+
+    let seen = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&seen);
+    println!("[SHELL] read {} bytes: {:?}", seen.len(), text);
+    if !text.contains("marker") {
+        println!("[SHELL] FAIL the shell never answered the command");
+        fails += 1;
+    }
+
+    let _ = child.wait();
+
+    if fails == 0 {
+        println!("RUST-AROS: SHELL PASS");
+        0x5348_4c4c // "SHLL"
+    } else {
+        println!("RUST-AROS: SHELL FAIL ({fails})");
+        9
+    }
+}

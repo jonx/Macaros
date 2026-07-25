@@ -118,6 +118,9 @@ static ULONG next_seq(void)
     return n;
 }
 
+/* Which Open failed: 1 = the MODE_NEWFILE end, 2 = the MODE_OLDFILE end. */
+static volatile LONG g_pipe_step = 0;
+
 /* Open both ends of one pipe. `parent_writes` picks which end is whose:
  * the child's stdin is written by us, its stdout/stderr are read by us. */
 static int open_pipe_pair(ULONG seq, const char *which, int parent_writes,
@@ -145,16 +148,30 @@ static int open_pipe_pair(ULONG seq, const char *which, int parent_writes,
      * pipe with no writer would see EOF rather than block. */
     if (parent_writes) {
         *parent_end = Open((CONST_STRPTR)name, MODE_NEWFILE);
-        if (!*parent_end) return 0;
+        if (!*parent_end) { g_pipe_step = 1; return 0; }
         *child_end = Open((CONST_STRPTR)name, MODE_OLDFILE);
-        if (!*child_end) { Close(*parent_end); *parent_end = (BPTR)0; return 0; }
+        if (!*child_end) { g_pipe_step = 2; Close(*parent_end); *parent_end = (BPTR)0; return 0; }
     } else {
         *child_end = Open((CONST_STRPTR)name, MODE_NEWFILE);
-        if (!*child_end) return 0;
+        if (!*child_end) { g_pipe_step = 1; return 0; }
         *parent_end = Open((CONST_STRPTR)name, MODE_OLDFILE);
-        if (!*parent_end) { Close(*child_end); *child_end = (BPTR)0; return 0; }
+        if (!*parent_end) { g_pipe_step = 2; Close(*child_end); *child_end = (BPTR)0; return 0; }
     }
     return 1;
+}
+
+/* Why the last spawn failed, so a caller can say more than "it did not run".
+ * See APS_FAIL_* in the pal. */
+static volatile LONG g_last_fail = 0;
+static volatile LONG g_last_ioerr = 0;
+
+LONG aros_proc_last_fail(LONG *ioerr, LONG *step)
+{
+    if (ioerr)
+        *ioerr = g_last_ioerr;
+    if (step)
+        *step = g_pipe_step;
+    return g_last_fail;
 }
 
 /* Spawn `cmdline`, wiring each stream per its disposition.
@@ -182,11 +199,14 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     if (!cmdline)
         return (void *)0;
 
+    g_last_fail = 0; g_last_ioerr = 0; g_pipe_step = 0;
     *p_in = (BPTR)0; *p_out = (BPTR)0; *p_err = (BPTR)0;
 
     p = AllocMem(sizeof(struct AProc), MEMF_ANY | MEMF_CLEAR);
-    if (!p)
+    if (!p) {
+        g_last_fail = 1;
         return (void *)0;
+    }
     seq = next_seq();
 
     /* No requesters while we open pipes: a missing PIPE: mount must fail
@@ -196,22 +216,22 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     me->pr_WindowPtr = (APTR)-1;
 
     if (in_mode == APS_PIPE) {
-        if (!open_pipe_pair(seq, "in", 1, p_in, &c_in)) goto fail;
+        if (!open_pipe_pair(seq, "in", 1, p_in, &c_in)) { g_last_fail = 2; goto fail; }
     } else if (in_mode == APS_NULL) {
         c_in = nil_in = Open((CONST_STRPTR)"NIL:", MODE_OLDFILE);
-        if (!c_in) goto fail;
+        if (!c_in) { g_last_fail = 5; goto fail; }
     }
     if (out_mode == APS_PIPE) {
-        if (!open_pipe_pair(seq, "out", 0, p_out, &c_out)) goto fail;
+        if (!open_pipe_pair(seq, "out", 0, p_out, &c_out)) { g_last_fail = 3; goto fail; }
     } else if (out_mode == APS_NULL) {
         c_out = nil_out = Open((CONST_STRPTR)"NIL:", MODE_NEWFILE);
-        if (!c_out) goto fail;
+        if (!c_out) { g_last_fail = 5; goto fail; }
     }
     if (err_mode == APS_PIPE) {
-        if (!open_pipe_pair(seq, "err", 0, p_err, &c_err)) goto fail;
+        if (!open_pipe_pair(seq, "err", 0, p_err, &c_err)) { g_last_fail = 4; goto fail; }
     } else if (err_mode == APS_NULL) {
         c_err = nil_err = Open((CONST_STRPTR)"NIL:", MODE_NEWFILE);
-        if (!c_err) goto fail;
+        if (!c_err) { g_last_fail = 5; goto fail; }
     }
 
     me->pr_WindowPtr = oldwin;
@@ -226,6 +246,8 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
 
     rc = SystemTagList((CONST_STRPTR)cmdline, tags);
     if (rc == -1) {
+        g_last_fail = 6;
+        g_last_ioerr = IoErr();
         /* The shell never started: SYS_Asynch never took ownership of the
          * child ends, so they are still ours to close. */
         if (c_in) Close(c_in);
@@ -238,6 +260,8 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     return (void *)p;
 
 fail:
+    if (!g_last_fail) g_last_fail = 7;
+    g_last_ioerr = IoErr();
     me->pr_WindowPtr = oldwin;
     if (c_in) Close(c_in);
     if (c_out) Close(c_out);
