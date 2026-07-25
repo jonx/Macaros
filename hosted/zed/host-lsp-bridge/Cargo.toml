@@ -1,0 +1,17 @@
+[package]
+name = "host-lsp-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# A macOS-native tool (not built for AROS): it exposes a stdio language
+# server on a loopback TCP port so the AROS editor can reach it over the
+# bsdsocket bridge. std-only. See src/main.rs.
+[[bin]]
+name = "host-lsp-bridge"
+path = "src/main.rs"
+
+# Standalone: these fields used to be inherited from another workspace, and the
+# crate must not be adopted by one now that it lives here.
+[workspace]
