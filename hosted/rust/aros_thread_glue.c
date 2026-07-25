@@ -104,6 +104,17 @@ int aros_thr_detach(unsigned int tid)
     return pthread_detach((pthread_t)tid);
 }
 
+/* Bytes of stack the calling task was given. There is no guard page below it,
+ * so running past it corrupts unrelated memory instead of faulting; the probe
+ * uses this to check the stack is the size it asked for. */
+unsigned long aros_thr_stack_bytes(void)
+{
+    struct Task *me = FindTask(0);
+    if (!me || !me->tc_SPLower || !me->tc_SPUpper)
+        return 0;
+    return (unsigned long)((char *)me->tc_SPUpper - (char *)me->tc_SPLower);
+}
+
 void aros_thr_yield(void)
 {
     sched_yield();

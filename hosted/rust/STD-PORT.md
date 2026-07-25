@@ -80,6 +80,7 @@ In the clone, `library/std/src/sys/`. Real `aros` arms so far:
 | `env/aros.rs` | done (read+write+**enum**) | `getenv`/`setenv`/`unsetenv` + **`vars()` enumeration** (walks `pr_LocalVars` via `aros_env_glue.c`) — all verified live (`env::vars` returns `RS3E_ONE`/`RS3E_TWO`) |
 | `args/aros.rs` | done | reads argc/argv the C harness stashes in globals — verified live |
 | `fs/aros.rs` | done | files, `metadata`/`stat`/`fstat`/`exists`, `read_dir`, **`set_permissions`/`set_perm` (chmod/fchmod)**, **`symlink`+`readlink`**, **path `set_times` (utimes)** — all verified live. `File::set_times`/`set_times_nofollow` `Unsupported` (no `futimes`/`lutimes`); `is_symlink()` reads false on the emul-handler (its `lstat` omits `S_IFLNK`); `link`/`copy`/`canonicalize`/`remove_dir_all`/`truncate`/`duplicate` remain stubs |
+| `path/aros.rs` | done | `Path::is_absolute` for AROS volume paths. Without it `sys::path` falls to the unix module, whose `is_absolute` is `has_root() && prefix().is_some()` for any target outside its cfg list -- and AROS parses no prefixes, so **no path was ever absolute**, not even `/foo`. Every crate branching on `is_absolute()` then treated `MacRW:proj` as relative and joined it onto the cwd (this is what stopped `notify` watching a project directory). A volume name cannot be a `Prefix` (that enum is Windows-shaped; `Prefix::Disk` holds one byte), so the module answers `is_absolute` directly and leaves volume paths alone in `absolute()`. Probe: `C:RustPath`. |
 | `os/aros/fs.rs` | done | `std::os::aros::fs::MetadataExt` (`ino`/`mode`/`nlink`/`size`/`atime`/`mtime`/`ctime`), mirroring the unix trait. AROS derives `st_ino` from a path hash, so it identifies a file but two hard links do not share it. Without this, callers that dedup by inode see every file as the same one -- Zed's worktree scanner read all-zero inodes as a symlink loop and refused to descend into any subdirectory |
 | `time/aros.rs` | done | `Instant`/`SystemTime` over `clock_gettime` — verified live after the OS `-ffixed-x18` rebuild (was SIGBUS before). REALTIME reads ~1978 (un-host-synced RTC, UPSTREAM-NOTES #36) but no longer faults |
 | `net/connection/aros.rs` | done (IPv4) | TcpStream/TcpListener/UdpSocket/lookup_host over the bsdsocket LVOs (via `aros_net_glue.c`); blocking solid, **`try_clone`/`duplicate` work (`Dup2Socket`)**. `set_nonblocking`/timeouts still no-ops (library park model), IPv6 `Unsupported` |
@@ -316,6 +317,14 @@ shared `Mutex` counter to exactly 4000, over 5 runs, no race/hang). AROS's
 - `sys/thread/aros.rs` — `Thread` spawn/join/yield/sleep via the `aros_thr_*` glue
   (`hosted/rust/aros_thread_glue.c`), which owns the opaque `pthread_attr_t` for the
   stack size. `sleep` uses dos `Delay` (20ms granularity).
+  **`DEFAULT_MIN_STACK_SIZE` is 2 MiB, the same as unix, and must stay that way.**
+  AROS has no guard page and no stack growth, so a thread that runs off the end of
+  its stack writes into whatever the allocator put below it. The failure then
+  surfaces much later, somewhere else entirely: the same overflow was seen as a
+  NULL deref in `tlsf_freevec`, as `PC=0x0` on unrelated threads, and as a bus
+  fault inside `timer.device`. Only `[KRN] Task ... went out of stack limits`
+  in the boot log names the real cause. Crates sized for the unix default
+  (Zed's layout and paint passes reach ~1 MB) need the unix default.
 - `sys/thread_local/key/aros.rs` — pthread-key TLS (`pthread_key_*`); the library
   reserves a main-task slot at `ADD2INIT`, so keys work on the main thread too.
 - **Sync core**: `sys/pal/unsupported/sync/{mutex,condvar}.rs` implement the pal

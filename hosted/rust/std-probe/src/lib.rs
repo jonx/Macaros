@@ -997,3 +997,156 @@ pub extern "C" fn aros_rust_path_test() -> u32 {
         7
     }
 }
+
+// ---------------------------------------------------------------------------
+// Allocator: growing an over-aligned allocation.
+//
+// AROS's aligned_alloc returns an offset pointer into a bigger malloc block,
+// and only free() knows how to recover the real one. A block allocated that way
+// must never reach realloc(). This exercises exactly that: a small, heavily
+// over-aligned allocation (so alloc() takes the posix_memalign path) that is
+// then grown repeatedly.
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn aros_rust_alloc_test() -> u32 {
+    use std::alloc::{alloc, dealloc, realloc, Layout};
+
+    let mut fails = 0;
+
+    // align > size forces the aligned path in alloc()
+    for (align, size) in [(64usize, 8usize), (32, 4), (128, 16), (16, 8)] {
+        unsafe {
+            let layout = Layout::from_size_align(size, align).expect("valid layout");
+            let p = alloc(layout);
+            if p.is_null() {
+                println!("[ALLOC] FAIL alloc({size},{align}) returned null");
+                fails += 1;
+                continue;
+            }
+            if (p as usize) % align != 0 {
+                println!("[ALLOC] FAIL alloc({size},{align}) misaligned: {p:p}");
+                fails += 1;
+            }
+            std::ptr::write_bytes(p, 0xAB, size);
+
+            // grow it a few times, checking the payload survives each move
+            let mut cur = p;
+            let mut cur_size = size;
+            for step in 1..=4 {
+                let new_size = size * (1 << step);
+                let grown = realloc(cur, Layout::from_size_align(cur_size, align).unwrap(), new_size);
+                if grown.is_null() {
+                    println!("[ALLOC] FAIL realloc to {new_size} (align {align}) returned null");
+                    fails += 1;
+                    break;
+                }
+                let kept = std::slice::from_raw_parts(grown, size);
+                if kept.iter().any(|&b| b != 0xAB) {
+                    println!("[ALLOC] FAIL realloc to {new_size} (align {align}) lost the payload");
+                    fails += 1;
+                }
+                cur = grown;
+                cur_size = new_size;
+            }
+            dealloc(cur, Layout::from_size_align(cur_size, align).unwrap());
+        }
+    }
+
+    // and a Vec of an over-aligned type, which is what the terminal grid does
+    #[repr(align(64))]
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct Wide(u64);
+    let mut v: Vec<Wide> = Vec::new();
+    for i in 0..2000u64 {
+        v.push(Wide(i));
+    }
+    if v.len() != 2000 || v[0] != Wide(0) || v[1999] != Wide(1999) {
+        println!("[ALLOC] FAIL over-aligned Vec grow");
+        fails += 1;
+    }
+
+    if fails == 0 {
+        println!("RUST-AROS: ALLOC PASS");
+        0x414c_4c43 // "ALLC"
+    } else {
+        println!("RUST-AROS: ALLOC FAIL ({fails})");
+        7
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Thread stacks.
+//
+// AROS gives a task a fixed stack with nothing below it: no guard page, no
+// growth. A thread that runs off the end writes into whatever the allocator put
+// there, and the damage shows up much later somewhere else entirely. So the
+// stack std asks for has to be the one crates were written against (the unix
+// default, 2 MiB) -- and it has to actually arrive.
+//
+// This asserts the size the OS handed over rather than provoking an overflow,
+// which would be the very corruption the check exists to prevent.
+// ---------------------------------------------------------------------------
+
+unsafe extern "C" {
+    fn aros_thr_stack_bytes() -> usize;
+}
+
+/// Touch every page down to `depth` bytes so the stack is proven usable, not
+/// merely reserved. Recursive and `black_box`ed so it cannot be optimised away.
+fn walk_stack(depth: usize) -> u64 {
+    let mut frame = [0u8; 8 * 1024];
+    frame[0] = 1;
+    frame[frame.len() - 1] = 2;
+    std::hint::black_box(&mut frame);
+    let sum = u64::from(frame[0]) + u64::from(frame[frame.len() - 1]);
+    if depth <= frame.len() { sum } else { sum + walk_stack(depth - frame.len()) }
+}
+
+#[no_mangle]
+pub extern "C" fn aros_rust_stack_test() -> u32 {
+    const WANT: usize = 2 * 1024 * 1024;
+    // Deep enough to have smashed the old 256 KB stack, shallow enough to be
+    // safe inside the one we now ask for.
+    const WALK: usize = 768 * 1024;
+
+    let mut fails = 0;
+
+    let got = std::thread::spawn(|| unsafe { aros_thr_stack_bytes() }).join().expect("joined");
+    println!("[STACK] spawned thread stack: {} KB", got / 1024);
+    if got < WANT {
+        println!("[STACK] FAIL default thread stack is {got} bytes, want at least {WANT}");
+        fails += 1;
+    }
+
+    // An explicit request must be honoured too.
+    let asked = 4 * 1024 * 1024;
+    let got = std::thread::Builder::new()
+        .stack_size(asked)
+        .spawn(|| unsafe { aros_thr_stack_bytes() })
+        .expect("spawned")
+        .join()
+        .expect("joined");
+    if got < asked {
+        println!("[STACK] FAIL stack_size({asked}) gave {got} bytes");
+        fails += 1;
+    }
+
+    // Only walk the stack once the size is known good: on a short stack this
+    // would be the corruption it is meant to catch.
+    if fails == 0 {
+        let walked = std::thread::spawn(|| walk_stack(WALK)).join().expect("joined");
+        if walked == 0 {
+            println!("[STACK] FAIL walking {WALK} bytes of stack returned nothing");
+            fails += 1;
+        }
+    }
+
+    if fails == 0 {
+        println!("RUST-AROS: STACK PASS");
+        0x5354_434b // "STCK"
+    } else {
+        println!("RUST-AROS: STACK FAIL ({fails})");
+        8
+    }
+}
