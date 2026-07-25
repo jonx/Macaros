@@ -770,8 +770,46 @@ fn readlink_probe() {
     }
 }
 
+/// What `paths::set_custom_data_dir` does on startup: create_dir_all then
+/// canonicalize. One of these is panicking for the full zed binary.
+fn datadir_probe() {
+    // Raw mkdir + the is_dir() check std's create_dir_all relies on.
+    use core::ffi::{c_char, c_int};
+    unsafe extern "C" {
+        fn mkdir(path: *const c_char, mode: u16) -> c_int;
+        fn __stdc_geterrnoptr() -> *mut c_int;
+    }
+    for d in ["MacRW:zeddata\0", "MacRW:zdnew\0"] {
+        unsafe { *__stdc_geterrnoptr() = 0 };
+        let r = unsafe { mkdir(d.as_ptr() as *const c_char, 0o777) };
+        let e = unsafe { *__stdc_geterrnoptr() };
+        let name = &d[..d.len() - 1];
+        println!(
+            "[MKDIR] raw mkdir({name:?}) ret={r} errno={e}  is_dir={} exists={}",
+            std::path::Path::new(name).is_dir(),
+            std::path::Path::new(name).exists()
+        );
+        match std::fs::metadata(name) {
+            Ok(m) => println!("[MKDIR]   metadata: is_dir={} len={}", m.is_dir(), m.len()),
+            Err(err) => println!("[MKDIR]   metadata ERR {:?} {err}", err.kind()),
+        }
+    }
+
+    for d in ["MacRW:zeddata", "MacRW:zeddata/db", "MacRW:zdp/a/b"] {
+        match std::fs::create_dir_all(d) {
+            Ok(()) => println!("[DATADIR] create_dir_all({d:?}) OK"),
+            Err(e) => println!("[DATADIR] create_dir_all({d:?}) ERR {:?} {e}", e.kind()),
+        }
+        match std::fs::canonicalize(d) {
+            Ok(p) => println!("[DATADIR] canonicalize({d:?}) -> {p:?}"),
+            Err(e) => println!("[DATADIR] canonicalize({d:?}) ERR {:?} {e}", e.kind()),
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn aros_rust_stream_test() -> u32 {
+    datadir_probe();
     readlink_probe();
     let mut fails = 0;
     fails += stream_once(false);

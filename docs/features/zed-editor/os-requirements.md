@@ -273,6 +273,19 @@ Debugging notes worth keeping:
   seed `timer.device` REALTIME at hosted timer init so it is right from the first
   tick without the boot command.
 
+- **`mkdir` leaves errno 0 on failure.** AROS `mkdir` returns -1 without setting
+  `errno`, so a caller cannot tell "already exists" from "parent missing". Rust's
+  `create_dir_all` needs exactly `AlreadyExists` to treat the call as a success;
+  the std pal works around it by re-`stat`ing the path and the parent. A real
+  errno would remove the guesswork.
+- **`readlink` reports "buffer too small" for non-symlinks.** A caller that grows
+  its buffer until the call fits (which is the documented POSIX idiom, and what
+  Rust's `fs::read_link` did) never terminates. The pal now caps the loop at
+  64 KB, but the correct answer is `EINVAL` for a path that is not a symlink.
+- **`stat` fills `st_ino` from a path hash.** Fine for identity, but hard links to
+  one file get different values, so inode-based "same file?" checks are wrong on
+  AROS. Worth knowing before anything relies on it.
+
 ## Explicitly *not* asks for the OS team (our side)
 
 - **wasm extensions.** Blocked by no JIT/mmap; the path is wasmtime's Pulley

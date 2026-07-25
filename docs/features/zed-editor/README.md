@@ -5,13 +5,14 @@ Investigation into running a Zed-shaped code editor on hosted AROS
 [Feraille](../feraille-gpui/README.md). Status and design live here; the build
 rig is [hosted/zed/](../../../hosted/zed/README.md).
 
-**State: both paths boot.** The Apache `gpui-component` editor
-(`~/Source/aros-editor`, path 2 below) is the feature-complete one (files, LSP).
-The **GPL Zed-crate path** (path 1, `~/Source/zed-aros` → `C:ZedAros`) now also
-**boots editor-core** on AROS: a real `editor`-crate `Editor` view renders a
-buffer with line numbers and the base theme, networking/wasm/terminal stubbed
-(see [The Zed-crate boot](#the-zed-crate-boot-editor-core-on-aros) below). Typed
-input into that window is not wired yet.
+**State: the real `zed` binary runs.** `C:Zed` is Zed's own `main` (not a shim
+crate), and it renders the actual workspace on AROS: project panel with a
+recursive file tree, editor tabs, breadcrumbs, syntax highlighting, status bar,
+and the outline/debugger panels. See
+[The real `zed` binary](#the-real-zed-binary-2026-07-25) below.
+
+`C:ZedAros` (the earlier `zed_aros_app` shim over editor-core) and the Apache
+`gpui-component` editor remain as the two earlier milestones.
 
 ## The two candidate paths
 
@@ -292,6 +293,40 @@ Not yet wired: keyboard input into the gpui window from the automation harness
 (real keyboard works), and the file/LSP features the Apache path already has
 (LSP is OS-gated on the async-socket work, item 1 of
 [os-requirements.md](os-requirements.md), now landing).
+
+## The real `zed` binary (2026-07-25)
+
+`C:Zed` links the `zed` crate's own `main` through a staticlib entry
+(`crates/zed/src/aros_entry.rs`, built by `hosted/zed/build-zed.sh`), so the
+workspace, menus, panels and status bar are Zed's, not a reimplementation. The
+subsystems AROS cannot host are gated off per platform *in the workspace*, the
+same way Zed already gates per OS: the agent stack (LMDB), extensions (wasm),
+collab (WebRTC), and crash IPC.
+
+Three AROS-specific defects had to be fixed to get from "links" to "usable":
+
+- **The tokio runtime is time-only.** `mio` has no poll backend for AROS, so
+  `enable_all()` panics during `gpui_tokio::init`. `enable_time()` works.
+- **…so the HTTP client cannot be reqwest.** reqwest/hyper drive their sockets
+  through tokio's I/O driver. With no driver, `PollEvented::new` panics on the
+  worker thread running the request, which on AROS ends the process (telemetry
+  and the ACP registry fetch both trip it within seconds of startup). AROS uses
+  Zed's own `BlockedHttpClient`. This does not affect the language server, which
+  connects over `smol` (see [os-requirements.md](os-requirements.md) item 4).
+- **Every file had inode 0.** `RealFs::metadata` read the inode through
+  `std::os::unix::fs::MetadataExt`, absent on AROS, and the AROS arm hardcoded
+  `0`. The worktree scanner skips any child whose inode is already in its
+  ancestor set (its recursive-symlink guard), so with all inodes equal it
+  refused to descend into *any* subdirectory: the project panel listed the top
+  level and expanded nothing. Fixed in the std pal by adding
+  `std::os::aros::fs::MetadataExt` (see
+  [STD-PORT.md](../../../hosted/rust/STD-PORT.md)), not by working around it in
+  the editor.
+
+Known gaps: the file watcher does not deliver events (`fs_watcher` logs a watch
+error per directory), so external edits are not picked up; and rust-analyzer
+needs the host bridge running, otherwise the status bar reads "Failed to run
+rust-analyzer".
 
 ## Compile frontier (what actually builds for AROS)
 
