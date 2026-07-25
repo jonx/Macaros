@@ -130,6 +130,20 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
 
 ## Gotchas (each of these cost real time)
 
+- **Editing the pal does not rebuild `std`.** `-Zbuild-std` fingerprints do not
+  track the `rust-src` symlink, so cargo happily relinks a **stale** `libstd`
+  and your pal change silently is not in the binary — including in a 20-minute
+  editor build. Force it per target dir:
+
+  ```sh
+  D=<workspace>/target/aarch64-unknown-aros/release
+  rm -f  "$D"/deps/libstd-*.rlib "$D"/deps/libstd-*.rmeta
+  rm -rf "$D"/.fingerprint/std-*
+  ```
+
+  Verify before trusting a run: the new code must be *in* the archive, e.g.
+  `strings "$D"/deps/libstd-*.rlib | grep <a string you added>`. A `cargo build`
+  that does not print `Compiling std v0.0.0` did not rebuild the pal.
 - **Capture std output via the posixc redirect** (`RustStd >MacRW:file`), *not* a C
   harness's `PutStr`. posixc `write(1)` honors the shell redirect; `dos` `PutStr`
   (via `pr_COS`) does **not**, so C-side prints go to the console, not the file.

@@ -715,8 +715,64 @@ fn stream_crossthread() -> u32 {
     handle.join().unwrap_or(1)
 }
 
+/// Observe what AROS `readlink` returns for a regular (non-symlink) file, a
+/// directory, and a missing path. A POSIX readlink returns -1/EINVAL on a
+/// non-symlink; if it returns the buffer size instead, `std::fs::read_link`'s
+/// grow-until-it-fits loop never terminates (the editor OOM). Raw call with a
+/// fixed buffer so it can't run away.
+fn readlink_probe() {
+    use core::ffi::{c_char, c_int};
+    unsafe extern "C" {
+        fn readlink(path: *const c_char, buf: *mut c_char, bufsz: usize) -> isize;
+        fn __stdc_geterrnoptr() -> *mut c_int;
+    }
+    // A readlink that returns exactly bufsz is indistinguishable from "buffer
+    // too small" (AROS posixc maps a handler's -2 to bufsz), which is what made
+    // std's grow-until-it-fits loop run away. Find which paths do that.
+    let home = std::env::var("HOME").unwrap_or_else(|_| "<unset>".into());
+    println!("[READLINK] $HOME = {home:?}");
+    let mut owned: Vec<String> = vec![
+        "".into(), "/".into(), ":".into(),
+        "RAM:".into(), "SYS:".into(), "T:".into(), "ENV:".into(),
+        "PROGDIR:".into(), "MacRW:".into(), "MacRO:".into(),
+        "RAM:T".into(), "SYS:Prefs".into(),
+        "MacRW:lsptest".into(), "MacRW:lsptest/src/main.rs".into(),
+    ];
+    if home != "<unset>" {
+        owned.push(home.clone());
+        owned.push(format!("{home}/.config"));
+        owned.push(format!("{home}/.config/zed"));
+        owned.push(format!("{home}/.config/zed/settings.json"));
+    }
+    // The real path std takes: cstr() normalizes (drops a join-artifact slash
+    // after the colon), then readlink. With the pal cap in place a runaway shows
+    // up as an InvalidData error instead of an OOM, so this is safe to run.
+    for probe in [
+        "SYS:", "SYS:.config", "SYS:.config/zed", "SYS:.config/zed/settings.json",
+        "SYS:/.config/zed/settings.json", "/", "MacRW:lsptest/src/main.rs",
+    ] {
+        match std::fs::read_link(probe) {
+            Ok(t) => println!("[STD read_link] {probe:?}: Ok({t:?})"),
+            Err(e) => println!("[STD read_link] {probe:?}: {:?} {e}", e.kind()),
+        }
+    }
+    for path in owned {
+        let mut c = path.clone().into_bytes();
+        c.push(0);
+        let mut buf = [0u8; 256];
+        unsafe { *__stdc_geterrnoptr() = 0 };
+        let n = unsafe {
+            readlink(c.as_ptr() as *const c_char, buf.as_mut_ptr() as *mut c_char, buf.len())
+        };
+        let e = unsafe { *__stdc_geterrnoptr() };
+        let flag = if n == buf.len() as isize { "  <<< RUNAWAY TRIGGER" } else { "" };
+        println!("[READLINK] {path:?}: ret={n} errno={e}{flag}");
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn aros_rust_stream_test() -> u32 {
+    readlink_probe();
     let mut fails = 0;
     fails += stream_once(false);
     fails += stream_once(true);

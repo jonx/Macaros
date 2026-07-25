@@ -208,10 +208,11 @@ std's `TcpStream` works too. **Verified live: an `async-io` TCP round-trip to a
 host echo server passed.** This unblocks the whole `tokio`/`mio`/`async-io`
 stack (HTTP, networked LSP, agent).
 
-### LSP application layer (2026-07-24) — connects, one bug left
+### LSP application layer (2026-07-25) — WORKING: live diagnostics
 
-The TCP LSP transport is built and the editor **connects to a real
-rust-analyzer** over the host bridge:
+The editor gets **live rust-analyzer diagnostics over the host bridge**: opening
+`MacRW:proj/src/main.rs` underlines a genuine error and marks it in the gutter,
+and the server reaches `PrimeCaches(End)` (a full analysis pass). Pieces:
 
 - `lsp::LanguageServer::new_tcp` reaches a server over a socket instead of
   spawning a local process (shares `new_internal`, so all framing/handling is
@@ -223,22 +224,37 @@ rust-analyzer** over the host bridge:
   `lsp-types` now converts manually and maps the AROS host-shared volume
   (`MacRW:`) ↔ the real host path a host language server reads
   (`vendor-aros/lsp-types/src/uri.rs`, `util::UrlExt::to_file_path_ext`).
-- **Verified:** opening `MacRW:proj/src/main.rs` connects to the bridge and
-  rust-analyzer starts (`[lsp-bridge] client … connected; starting server`).
+- **The `readlink` runaway** was the last blocker, and it was *not* in the LSP
+  or socket code at all. Every worker thread aborted in `std::alloc::rust_oom`
+  the moment a language server started. The chain:
+  `RealFs::watch` asks `read_link` whether a watched path is a symlink →
+  unix `DoReadLink` answers `-2` when the host `readlink` fills the buffer
+  ([emul_host.c:1000](https://github.com/aros-development-team/AROS/blob/master/arch/all-unix/filesys/emul_handler/emul_host.c)) →
+  posixc `readlink` turns `-2` into `bufsize`
+  ([readlink.c:80](https://github.com/aros-development-team/AROS/blob/master/compiler/crt/posixc/readlink.c)) →
+  which POSIX defines as "may be truncated, retry bigger" → the std pal doubled
+  its buffer forever (256 B → 1 GB) and the allocation failed.
+  Some paths answer that way unconditionally (`readlink("/")`, and the `SYS:/…`
+  form Rust produces from `home_dir().join(..)`), so the loop never terminated.
+  **Fixed** in the std pal by bounding the growth and failing with `InvalidData`
+  past a sane symlink length (`rust-aros` `library/std/src/sys/fs/aros.rs`).
+  An OS-side fix (not answering "buffer too small" for a non-symlink) would be
+  the cleaner root-cause repair and is still worth doing.
 
-**Open bug (blocks diagnostics/completions):** the instant rust-analyzer
-replies, two gpui worker threads abort in `std::alloc::rust_oom`. It is **not**
-memory exhaustion (reproduces with a 140 MB stripped binary and >1 GB free
-heap): writes succeed (the server got our `initialize`), but the reader appears
-to misframe the streamed reply — a garbage `Content-Length` → a multi-GB
-allocation → abort. Suspect the socket **read path under streamed/partial
-reads** (`aros_np_recv` / reactor readiness), distinct from the single-shot
-`--nettest`. This is the next thing to chase; the transport and path mapping
-above are proven.
+Debugging notes worth keeping:
 
-Aside: the `-Zbuild-std` link emits ~1 GB of `.debug_*` sections that AROS
-loads into RAM; `hosted/zed/build.sh` now `--strip-debug`s the binary
-(~1 GB → ~140 MB).
+- The one-frame AROS trap backtrace is what made this expensive. Building with
+  `-C force-frame-pointers=yes` (now set for the AROS target) makes the trap
+  backtrace walk the full chain and name the culprit immediately.
+- Socket-stack reproducers (`hosted/rust` `RustStream`, `hosted/zed` `SockProbe`)
+  read real rust-analyzer output byte-exact — blocking, non-blocking, cross-task,
+  multi-threaded, and through the editor's own
+  `BufReader`/`read_until`/`read_exact`. They exonerated the socket layer; keep
+  them for the next "is it the network?" question.
+- The `-Zbuild-std` link emits ~1 GB of `.debug_*` sections that AROS loads into
+  RAM; `hosted/zed/build.sh` now `--strip-debug`s the binary (~1 GB → ~140 MB).
+- **Editing the std pal does not rebuild `std`** (cargo does not fingerprint the
+  `rust-src` symlink) — see the gotcha in `hosted/rust/STD-PORT.md`.
 
 ---
 
