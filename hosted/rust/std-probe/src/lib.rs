@@ -823,3 +823,128 @@ pub extern "C" fn aros_rust_stream_test() -> u32 {
         7
     }
 }
+
+// ---------------------------------------------------------------------------
+// std::process streaming: live child pipes through the real std API.
+//
+// Uses C:ProcProbe (the C reproducer) as the child, in its `child <code>` mode:
+// it prints "child-ready", echoes two lines back with an "echo:" prefix, then
+// exits with the code it was given.
+// ---------------------------------------------------------------------------
+
+fn proc_stream_probe() -> u32 {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let mut fails = 0;
+
+    let mut child = match Command::new("C:ProcProbe")
+        .arg("child")
+        .arg("7")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[PROC] spawn FAILED: {e:?}");
+            return 1;
+        }
+    };
+    println!("[PROC] spawned");
+
+    let mut out = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut stdin = child.stdin.take().expect("piped stdin");
+
+    // (1) read the greeting while the child is still running
+    let mut line = String::new();
+    match out.read_line(&mut line) {
+        Ok(n) if n > 0 => println!("[PROC] greeting while running: {:?}", line.trim_end()),
+        other => {
+            println!("[PROC] FAIL no greeting: {other:?}");
+            fails += 1;
+        }
+    }
+    if !line.starts_with("child-ready") {
+        println!("[PROC] FAIL unexpected greeting");
+        fails += 1;
+    }
+
+    // the child must still be alive at this point
+    match child.try_wait() {
+        Ok(None) => println!("[PROC] still running, good"),
+        other => {
+            println!("[PROC] FAIL child already gone: {other:?}");
+            fails += 1;
+        }
+    }
+
+    // (2) write to its stdin, read the echo back
+    if let Err(e) = stdin.write_all(b"ping-one\n").and_then(|_| stdin.flush()) {
+        println!("[PROC] FAIL write stdin: {e:?}");
+        fails += 1;
+    }
+    line.clear();
+    match out.read_line(&mut line) {
+        Ok(n) if n > 0 => println!("[PROC] echo: {:?}", line.trim_end()),
+        other => {
+            println!("[PROC] FAIL no echo: {other:?}");
+            fails += 1;
+        }
+    }
+    if !line.starts_with("echo:ping-one") {
+        println!("[PROC] FAIL echo mismatch");
+        fails += 1;
+    }
+
+    // let the child finish
+    let _ = stdin.write_all(b"ping-two\n");
+    let _ = stdin.flush();
+    drop(stdin);
+
+    // (3) wait, and check the exit code survived the shell
+    match child.wait() {
+        Ok(st) => {
+            println!("[PROC] exit status: {st:?}");
+            if st.code() != Some(7) {
+                println!("[PROC] FAIL wanted code 7");
+                fails += 1;
+            }
+        }
+        Err(e) => {
+            println!("[PROC] FAIL wait: {e:?}");
+            fails += 1;
+        }
+    }
+
+    // (4) the classic one-shot path must still work
+    match Command::new("C:ProcProbe").arg("child").arg("0").output() {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            println!("[PROC] output() captured {} bytes, status {:?}", o.stdout.len(), o.status);
+            if !s.contains("child-ready") {
+                println!("[PROC] FAIL output() missing greeting");
+                fails += 1;
+            }
+        }
+        Err(e) => {
+            println!("[PROC] FAIL output(): {e:?}");
+            fails += 1;
+        }
+    }
+
+    fails
+}
+
+#[no_mangle]
+pub extern "C" fn aros_rust_proc_test() -> u32 {
+    let fails = proc_stream_probe();
+    if fails == 0 {
+        println!("RUST-AROS: PROC PASS");
+        0x5052_4f43 // "PROC"
+    } else {
+        println!("RUST-AROS: PROC FAIL ({fails})");
+        7
+    }
+}

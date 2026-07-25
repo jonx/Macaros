@@ -299,3 +299,29 @@ int aros_pipe_read_notify(BPTR fh, ULONG sigmask, void *task)
     return (int)DoPkt(h->fh_Type, ACTION_PIPE_READ_NOTIFY, h->fh_Arg1,
                       (IPTR)sigmask, (IPTR)task, 0, 0);
 }
+
+/*--------------------------------------------------------------------------
+ * Exec signal plumbing, so a parent can block on a child's exit instead of
+ * polling. The signal is allocated by the task that will wait on it.
+ *------------------------------------------------------------------------*/
+
+int aros_sig_alloc(void)
+{
+    BYTE bit = AllocSignal(-1);
+
+    if (bit == -1)
+        return -1;
+    SetSignal(0, 1UL << bit);        /* start clear */
+    return (int)bit;
+}
+
+void aros_sig_free(int bit)
+{
+    if (bit >= 0)
+        FreeSignal((BYTE)bit);
+}
+
+ULONG aros_sig_wait(ULONG mask)
+{
+    return Wait(mask);
+}

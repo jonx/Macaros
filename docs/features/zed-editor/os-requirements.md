@@ -122,10 +122,29 @@ socket and pipe readiness — the reactor waits on all three in one call. To rea
 same path posixc `wait()`/`waitpid()` and Rust `std::process::status()` already
 use on hosted aarch64, so it is proven working; the reactor just consumes it.
 
-Still remaining on item 2: only the Rust `std::process` glue that connects a
-child's stdio to `PIPE:` endpoints (and uses `NP_NotifyOnDeath` + `SIGF_CHILD`
-for async reaping) — sequenced with the socket `set_nonblocking` work as one
-coordinated std pass, sockets first.
+**Item 2 is DONE (2026-07-25).** The Rust side now streams.
+`hosted/rust/aros_proc_glue.c` spawns with each stream on a `PIPE:` endpoint,
+and `std::process` gained a real `Stdio::piped()`, a `wait()` that blocks on the
+child's exit signal, and an `output()` on the same path (the temp-file capture is
+gone). Verified live by two reproducers: **`C:ProcProbe`** (pure C, the OS
+contract) and **`C:RustProc`** (`RUST-AROS: PROC PASS`, the std API). Both read a
+child's stdout while it is still running, round-trip a line through its stdin,
+and get the exact exit code back.
+
+Two things differ from what was planned here, both found by building it:
+
+- **No `NP_NotifyOnDeath`/`SIGF_CHILD` needed.** `SystemTagList` passes
+  `NP_ExitCode`/`NP_ExitData` through to `CreateNewProc` unfiltered, so the exit
+  hook runs in the dying child with its return code and signals the parent
+  directly. Simpler, and no trampoline process.
+- **The exit code needs `cli_ReturnCode`.** AROS's Shell ends with
+  `return error ? RETURN_FAIL : RETURN_OK`, so every failure reaches the parent
+  as 20. The command's real code survives in `cli->cli_ReturnCode`, which
+  `pr_CLI` still points at when the exit hook runs.
+
+Remaining gaps on the Rust side: `Child::kill()` (AROS has no safe way to tear
+down a running Process) and duplicating a pipe endpoint (the handler allows one
+reader plus one writer).
 
 ---
 
