@@ -948,3 +948,52 @@ pub extern "C" fn aros_rust_proc_test() -> u32 {
         7
     }
 }
+
+// ---------------------------------------------------------------------------
+// Path::is_absolute on AROS volume paths.
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn aros_rust_path_test() -> u32 {
+    use std::path::Path;
+    let mut fails = 0;
+
+    let absolute = [
+        "MacRW:lsptest",
+        "MacRW:lsptest/src/main.rs",
+        "SYS:C/List",
+        "PIPE:name",
+        "/rooted",
+    ];
+    let relative = ["src/main.rs", "main.rs", "./x", "../y", "a/b:c"];
+
+    for p in absolute {
+        if !Path::new(p).is_absolute() {
+            println!("[PATH] FAIL {p:?} should be absolute");
+            fails += 1;
+        }
+    }
+    for p in relative {
+        if Path::new(p).is_absolute() {
+            println!("[PATH] FAIL {p:?} should be relative");
+            fails += 1;
+        }
+    }
+
+    // absolute() must leave a volume path alone rather than gluing it onto cwd
+    match std::path::absolute(Path::new("MacRW:lsptest")) {
+        Ok(p) if p == Path::new("MacRW:lsptest") => {}
+        other => {
+            println!("[PATH] FAIL absolute(MacRW:lsptest) = {other:?}");
+            fails += 1;
+        }
+    }
+
+    if fails == 0 {
+        println!("RUST-AROS: PATH PASS");
+        0x5041_5448 // "PATH"
+    } else {
+        println!("RUST-AROS: PATH FAIL ({fails})");
+        7
+    }
+}
