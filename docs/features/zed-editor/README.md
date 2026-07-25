@@ -323,6 +323,28 @@ Three AROS-specific defects had to be fixed to get from "links" to "usable":
   [STD-PORT.md](../../../hosted/rust/STD-PORT.md)), not by working around it in
   the editor.
 
+A fourth defect only showed up once the editor ran long enough to be used, and
+it is the one worth remembering:
+
+- **`parking_lot` busy-spun, starving everything else.** AROS is not
+  `cfg(unix)`, so `parking_lot_core`'s parker selection fell through to its
+  `generic.rs` fallback, whose `park()` is a bare `spin_loop()`. Tokio parks its
+  idle workers on a `parking_lot` condvar, so one worker held the CPU forever at
+  priority 0; AROS round-robins equal priorities, so the GUI task and the
+  language-server reader both stalled behind it on the single `stdc` malloc pool
+  semaphore. The editor froze *and* diagnostics never rendered, because the
+  starved task was the one reading the server's stdout. One symptom, one cause.
+  Vendored `parking_lot_core` now parks on `pthread.library` mutex/condvar
+  through the same `aros_sync_glue.c` the std sync pal uses.
+
+  The task dump (`aros-ctl tasks`) is what found it: three tasks queued on one
+  semaphore, all inside `malloc`, and one task in `state=RUN` in every sample
+  minutes apart. Reach for it first for any "it just stops" symptom.
+
+  Note that a task blocked in a *host* call (the async-io reactor parked in
+  `aros_np_waitselect`) also reads as `state=RUN`, since AROS cannot see that the
+  host thread is blocked. That one is not a spinner.
+
 Known gaps: the file watcher does not deliver events (`fs_watcher` logs a watch
 error per directory), so external edits are not picked up; and rust-analyzer
 needs the host bridge running, otherwise the status bar reads "Failed to run
