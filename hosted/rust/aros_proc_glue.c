@@ -176,6 +176,11 @@ LONG aros_proc_last_fail(LONG *ioerr, LONG *step)
 
 /* Spawn `cmdline`, wiring each stream per its disposition.
  *
+ * `interactive` picks which kind of shell. A background one runs a single
+ * command line and exits, which is what running a command means. A foreground
+ * one is a new CLI: it keeps reading its input, which is what a terminal is.
+ * SystemTagList's default is the background kind.
+ *
  * Nothing is signalled until a task registers itself with
  * aros_proc_set_waiter, which it does only while it is actually waiting.
  *
@@ -184,10 +189,10 @@ LONG aros_proc_last_fail(LONG *ioerr, LONG *step)
  * (0 when that stream is not piped).
  */
 void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mode,
-                      BPTR *p_in, BPTR *p_out, BPTR *p_err)
+                      int interactive, BPTR *p_in, BPTR *p_out, BPTR *p_err)
 {
     struct AProc *p;
-    struct TagItem tags[8];
+    struct TagItem tags[9];
     BPTR c_in = (BPTR)0, c_out = (BPTR)0, c_err = (BPTR)0;
     BPTR nil_in = (BPTR)0, nil_out = (BPTR)0, nil_err = (BPTR)0;
     ULONG seq;
@@ -240,6 +245,9 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     if (c_out) { tags[nt].ti_Tag = SYS_Output; tags[nt].ti_Data = (IPTR)c_out; nt++; }
     if (c_err) { tags[nt].ti_Tag = SYS_Error;  tags[nt].ti_Data = (IPTR)c_err; nt++; }
     tags[nt].ti_Tag = SYS_Asynch;  tags[nt].ti_Data = (IPTR)TRUE;        nt++;
+    if (interactive) {
+        tags[nt].ti_Tag = SYS_Background; tags[nt].ti_Data = (IPTR)FALSE;  nt++;
+    }
     tags[nt].ti_Tag = NP_ExitCode; tags[nt].ti_Data = (IPTR)proc_exit_hook; nt++;
     tags[nt].ti_Tag = NP_ExitData; tags[nt].ti_Data = (IPTR)p;           nt++;
     tags[nt].ti_Tag = TAG_DONE;    tags[nt].ti_Data = 0;

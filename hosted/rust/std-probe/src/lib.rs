@@ -1163,99 +1163,93 @@ pub extern "C" fn aros_rust_stack_test() -> u32 {
 #[no_mangle]
 pub extern "C" fn aros_rust_shell_test() -> u32 {
     use std::io::{Read, Write};
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// Drain a child's stdout and stderr into one buffer, the way a terminal
+    /// shows both on one screen.
+    fn tap(child: &mut Child) -> Arc<Mutex<Vec<u8>>> {
+        let seen: Arc<Mutex<Vec<u8>>> = Arc::default();
+        for src in [
+            child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>),
+            child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let seen = seen.clone();
+            std::thread::spawn(move || {
+                let mut src = src;
+                let mut chunk = [0u8; 512];
+                while let Ok(n) = src.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    seen.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
+                }
+            });
+        }
+        seen
+    }
+
+    fn said(seen: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8_lossy(&seen.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+    }
+
+    /// Spawn an interactive shell on pipes, optionally with a cwd and an env
+    /// var, type `what` at it, and report whether it is still there afterwards.
+    fn probe(label: &str, cwd: Option<&str>, env: Option<(&str, &str)>, what: &str) -> bool {
+        let mut cmd = Command::new("");
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        if let Some((k, v)) = env {
+            cmd.env(k, v);
+        }
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[SHELL] {label}: FAIL spawn: {e}");
+                return false;
+            }
+        };
+        let seen = tap(&mut child);
+        let mut stdin = child.stdin.take().expect("piped stdin");
+
+        std::thread::sleep(Duration::from_millis(400));
+        let after_setup = child.try_wait().ok().flatten();
+
+        if !what.is_empty() {
+            let _ = stdin.write_all(what.as_bytes()).and_then(|()| stdin.flush());
+            std::thread::sleep(Duration::from_millis(600));
+        }
+        let after_cmd = child.try_wait().ok().flatten();
+
+        println!(
+            "[SHELL] {label}: after setup {after_setup:?}, after command {after_cmd:?}, said {:?}",
+            said(&seen)
+        );
+        drop(stdin);
+        let _ = child.wait();
+        after_setup.is_none() && after_cmd.is_none()
+    }
 
     let mut fails = 0;
 
-    // Does a piped stdin break spawning at all, or only the shell?
-    match Command::new("C:Version")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(mut c) => {
-            println!("[SHELL] a command with a piped stdin spawns");
-            let _ = c.wait();
-        }
-        Err(e) => {
-            println!("[SHELL] FAIL a command with a piped stdin will not spawn: {e}");
-            fails += 1;
-        }
-    }
-
-    // The terminal's shape: no command at all, which is how AROS is asked for
-    // an interactive shell reading the stream it is given.
-    let mut cmd = Command::new("");
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            println!("[SHELL] FAIL spawn an interactive shell: {e}");
-            println!("RUST-AROS: SHELL FAIL ({})", fails + 1);
-            return 9;
-        }
-    };
-    println!("[SHELL] interactive shell spawned");
-
-    // Does it stay alive with an idle stdin, or read the empty pipe as EOF?
-    std::thread::sleep(Duration::from_millis(500));
-    match child.try_wait() {
-        Ok(Some(st)) => {
-            println!("[SHELL] FAIL exited while idle with status {st:?}");
-            fails += 1;
-        }
-        Ok(None) => println!("[SHELL] still running with an idle stdin"),
-        Err(e) => {
-            println!("[SHELL] FAIL try_wait: {e}");
-            fails += 1;
-        }
-    }
-
-    let mut stdin = child.stdin.take().expect("piped stdin");
-    let mut stdout = child.stdout.take().expect("piped stdout");
-
-    // Read on a thread: the read blocks, and a shell that answered nothing
-    // would otherwise hang this probe forever.
-    let reader = std::thread::spawn(move || {
-        let mut seen = Vec::new();
-        let mut chunk = [0u8; 512];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    seen.extend_from_slice(&chunk[..n]);
-                    if seen.windows(6).any(|w| w == b"marker") {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        seen
-    });
-
-    if let Err(e) = stdin.write_all(b"echo marker\n").and_then(|()| stdin.flush()) {
-        println!("[SHELL] FAIL writing a command: {e}");
+    if !probe("plain", None, None, "echo marker\n") {
         fails += 1;
     }
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && !reader.is_finished() {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    drop(stdin);
-
-    let seen = reader.join().unwrap_or_default();
-    let text = String::from_utf8_lossy(&seen);
-    println!("[SHELL] read {} bytes: {:?}", seen.len(), text);
-    if !text.contains("marker") {
-        println!("[SHELL] FAIL the shell never answered the command");
+    if !probe("cwd only", Some("MacRW:"), None, "echo marker\n") {
         fails += 1;
     }
-
-    let _ = child.wait();
+    if !probe("env only", None, Some(("TERM", "alacritty")), "echo marker\n") {
+        fails += 1;
+    }
+    if !probe("two commands", None, None, "echo one\necho two\n") {
+        fails += 1;
+    }
 
     if fails == 0 {
         println!("RUST-AROS: SHELL PASS");

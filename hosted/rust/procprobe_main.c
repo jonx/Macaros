@@ -26,6 +26,7 @@
 #define APS_NULL    2
 
 extern void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mode,
+                             int interactive,
                              ULONG exit_sig, BPTR *p_in, BPTR *p_out, BPTR *p_err);
 extern int  aros_proc_exited(void *handle, LONG *code);
 extern void aros_proc_free(void *handle);
@@ -184,7 +185,7 @@ int main(int argc, char **argv)
     sigmask = 1UL << sigbit;
     SetSignal(0, sigmask);                   /* start clear */
 
-    proc = aros_proc_spawn(g_child_cmd, APS_PIPE, APS_PIPE, APS_NULL,
+    proc = aros_proc_spawn(g_child_cmd, APS_PIPE, APS_PIPE, APS_NULL, 0,
                            sigmask, &p_in, &p_out, &p_err);
     if (!proc) {
         say("FAIL: spawn returned NULL\n");
