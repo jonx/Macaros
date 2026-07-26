@@ -150,32 +150,47 @@ reader plus one writer).
 
 ## 3. Pseudo-terminal (PTY) for the integrated terminal
 
-**Unblocks:** the integrated terminal panel (the shell-in-the-editor pane).
+**Unblocks:** full-screen terminal programs. **A working terminal panel no
+longer needs this** (2026-07-26): a shell runs, is typed at, and answers, over
+the pipes from item 2.
 
-**Current state.** No PTY. The terminal is stubbed on our side (the terminal
-backend's tty layer returns *unsupported* on AROS), so the editor builds and
-runs without it.
+**Current state.** Still no PTY, and the terminal panel works anyway. AROS does
+not have a terminal device to give a child, but it does have the two pieces that
+matter: a child whose stdio is on live `PIPE:` endpoints, and a shell that can
+be asked to keep reading its input. Two things a tty's line discipline would
+have done are done in the tty layer instead: what is typed is echoed back, and
+newlines are translated in both directions (`\r` to `\n` towards the shell,
+`\n` to `\r\n` towards the screen).
 
-**Contract.**
+Asking AROS for the right kind of shell is the load-bearing part.
+`SystemTagList` starts a shell that runs one command line and exits, which is
+what running a command means and is not a terminal; `SYS_Background = FALSE`
+starts a new CLI that goes on reading its input, which is. See
+[STD-PORT.md](../../../hosted/rust/STD-PORT.md); `C:RustShell` checks it.
+
+**What is still missing without a PTY.**
+1. **No terminal size.** The child is never told how big the window is, and
+   cannot be notified when it changes, so `on_resize` is inert and full-screen
+   programs have nothing to reflow to.
+2. **No line discipline in the OS.** No job control, and no interrupt key: a
+   running command cannot be stopped from the terminal.
+3. **The shell does not know it is interactive**, so it prints no prompt.
+
+**Contract, if a PTY is ever added.**
 1. **A master/slave terminal pair.** A shell spawned on the slave end behaves as
    if it has a controlling terminal: interactive line editing and job-control
    behaviour work.
 2. **Master endpoint** is a byte stream the editor reads (shell output) and
    writes (keystrokes), integrating with item 1's readiness.
-3. **Resize.** A way to set the terminal size (rows × columns) such that the
+3. **Resize.** A way to set the terminal size (rows x columns) such that the
    child is notified of the change (the `SIGWINCH`-equivalent), so full-screen
    programs reflow.
 
-**How it surfaces to us.** It replaces the aros stub in the terminal backend's
-tty layer: an open-pty equivalent, spawn-shell-on-slave, master read/write, and
-set-size. We wire the terminal crate to it.
+**How it would surface to us.** It replaces the pipe-backed tty layer for AROS:
+an open-pty equivalent, spawn-shell-on-slave, master read/write, and set-size.
 
-**Acceptance.** Run a shell in the pty; type a command and see its output; run a
-full-screen program (e.g. an editor or pager) and have it use the whole area;
-resize and have the program reflow to the new size.
-
-**Note.** Highest effort and most terminal-specific; conceptually depends on the
-pipe/child-exit work in item 2 and the readiness primitive in item 1.
+**Acceptance.** Run a full-screen program (e.g. an editor or pager) and have it
+use the whole area; resize and have it reflow.
 
 ---
 

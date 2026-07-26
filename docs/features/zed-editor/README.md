@@ -460,6 +460,36 @@ Consequences for the editor:
   (rust-analyzer speaks LSP over stdio; the host wraps its stdio in a tiny
   stdio↔socket pump, or runs it in the LS's TCP mode where available.)
 
+## The terminal panel (2026-07-26)
+
+The terminal runs a real AROS shell, typed at and answering, with no PTY. What
+makes it work:
+
+- **The right kind of shell.** `SystemTagList` starts one that runs a single
+  command line and exits. A terminal needs the other kind, a new CLI that keeps
+  reading its input, and that only happens with `SYS_Background = FALSE`. Asking
+  for a shell with no command line at all is how the std pal expresses it
+  (`Command::new("")`), because there is no `C:Shell` to run: the shell is a
+  resident segment.
+- **A stand-in for the line discipline.** No tty means nothing echoes what is
+  typed and nothing translates newlines. The AROS tty layer does both: `\r` to
+  `\n` towards the shell, `\n` to `\r\n` towards the screen, and every
+  keystroke echoed into the same buffer the shell's output arrives in.
+- **A ticked event loop.** An AROS pipe endpoint is a dos filehandle, not a
+  descriptor, so it cannot be registered with the poller and the alacritty event
+  loop would wait forever to be told it was ready. On AROS the loop wakes on a
+  short timer and drives the pty itself.
+- **cwd and env without ending the session.** Both routes the process pal uses
+  for a normal command finish the shell: `Execute` gives it a file and it is
+  done when the file is, and an injected command line is done when the line is.
+  For an interactive shell the `CD`/`Set` preamble is written into its stdin
+  instead.
+
+Not there without a PTY: no terminal size (so full-screen programs have nothing
+to reflow to), no job control or interrupt key, and no prompt, the shell not
+knowing it is interactive. See
+[os-requirements.md](os-requirements.md) item 3.
+
 ## OS capabilities requested (handoff to the AROS side)
 
 The IDE features that need real OS primitives (networking/async, live child
