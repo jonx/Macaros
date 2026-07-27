@@ -490,14 +490,19 @@ to reflow to), no job control or interrupt key, and no prompt, the shell not
 knowing it is interactive. See
 [os-requirements.md](os-requirements.md) item 3.
 
-**A command that writes in small pieces is slow through the pipe.** `dir SYS:C`
-(around 180 entries, 3.3 KB) takes seconds on the console and roughly a minute
-in the terminal, arriving all at once at the end. It is not throughput and
-nothing is lost: `C:RustBulk` moves 244 KB through the same pipe in under twenty
-seconds, and the same `dir` through the same path returns its full listing. The
-difference is the shape of the writing -- `Type` writes big chunks, `Dir` writes
-a name at a time, and every write to `PIPE:` costs a round-trip to the handler
-task. Set `AROS_TTY_TRACE` to watch it happen (`MacRW:zed-tty.log`).
+**An external command's output is held until the shell next flushes.** `Echo`
+appears at once; `Dir` shows nothing, even for a four-entry directory, until the
+next command is typed. Echo is a shell built-in, so its output goes out with the
+shell's own; `Dir` is a separate command whose output sits in a dos buffer. AROS
+buffers a pipe fully and a console by line (a console being interactive), and
+nothing flushes the buffer in between, because this shell prints no prompt.
+Nothing is lost, and closing the shell's input flushes everything -- which is
+why a probe that counts bytes after closing stdin sees the whole listing and
+concludes, wrongly, that the pipe is fine.
+
+The fix is on the OS side: a pipe wants the flush behaviour an interactive
+stream gets, or the shell should flush after each command. Set `AROS_TTY_TRACE`
+to watch the bytes arrive (`MacRW:zed-tty.log`).
 
 ## OS capabilities requested (handoff to the AROS side)
 
