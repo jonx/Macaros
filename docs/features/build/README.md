@@ -289,6 +289,36 @@ reason to build module metatargets instead:
 If you hit a new one, check whether the module is in the boot set (above). If
 not, just leave it out.
 
+## 5b. Cargo never reclaims: the editor's build tree fills the disk
+
+Building the editor produces a **2.4 GB** staticlib, and cargo keeps every
+previous one — a `-<hash>.rlib` per crate per configuration, forever. Twenty
+builds is tens of gigabytes, and the failure mode is a link that dies with `No
+space left on device` after twenty minutes of compiling.
+
+Reclaim the superseded copies (keeps the newest of each crate, so the next build
+still incremental-links):
+
+```sh
+D=~/Source/zed-aros/target/aarch64-unknown-aros/release
+python3 - <<'EOF'
+import os, glob, collections, re
+d = os.path.expanduser('~/Source/zed-aros/target/aarch64-unknown-aros/release/deps')
+groups = collections.defaultdict(list)
+for f in glob.glob(os.path.join(d, 'lib*.rlib')):
+    m = re.match(r'^(lib.+)-[0-9a-f]{16}\.rlib$', os.path.basename(f))
+    if m:
+        groups[m.group(1)].append((os.path.getmtime(f), f))
+for name, files in groups.items():
+    files.sort(reverse=True)
+    for _, f in files[1:]:
+        os.remove(f)
+EOF
+```
+
+Also worth deleting outright: `$D/deps/libzed_aros_*.a` (2.4 GB each, one per
+build of the editor staticlib) and `$D/libzed_aros_app.a`, the superseded shim.
+
 ## 6. Troubleshooting — symptom → cause
 
 | Symptom | Cause | Fix |
