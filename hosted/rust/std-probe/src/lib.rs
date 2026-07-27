@@ -1245,11 +1245,65 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
         fails += 1;
     }
 
-    let (seen, took, alive) = run("dir SYS:C\n", Duration::from_secs(30));
+    let (seen, took, alive) = run("dir SYS:C\n", Duration::from_secs(20));
     println!("[BULK] dir SYS:C: {seen} bytes in {took:?}, shell alive: {alive}");
     if seen == 0 {
         println!("[BULK] FAIL dir SYS:C said nothing");
         fails += 1;
+    }
+
+    // The editor's exact shape: a working directory, an environment variable,
+    // and both output streams drained, which is where `dir SYS:C` showed
+    // nothing.
+    {
+        let mut child = match Command::new("")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir("MacRW:")
+            .env("TERM", "alacritty")
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[BULK] FAIL spawn like the editor: {e}");
+                println!("RUST-AROS: BULK FAIL ({})", fails + 1);
+                return 10;
+            }
+        };
+        let out = child.stdout.take().expect("piped stdout");
+        let err = child.stderr.take().expect("piped stderr");
+        let counts: Vec<_> = [("stdout", Box::new(out) as Box<dyn Read + Send>), ("stderr", Box::new(err))]
+            .into_iter()
+            .map(|(what, mut src)| {
+                std::thread::spawn(move || {
+                    let mut seen = 0usize;
+                    let mut chunk = [0u8; 4096];
+                    while let Ok(n) = src.read(&mut chunk) {
+                        if n == 0 {
+                            break;
+                        }
+                        seen += n;
+                    }
+                    (what, seen)
+                })
+            })
+            .collect();
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let _ = stdin.write_all(b"dir SYS:C\n").and_then(|()| stdin.flush());
+        std::thread::sleep(Duration::from_secs(20));
+        drop(stdin);
+        let mut total = 0usize;
+        for h in counts {
+            let (what, seen) = h.join().unwrap_or(("?", 0));
+            println!("[BULK] like the editor, {what}: {seen} bytes");
+            total += seen;
+        }
+        let _ = child.wait();
+        if total == 0 {
+            println!("[BULK] FAIL nothing came back with the editor's setup");
+            fails += 1;
+        }
     }
 
     let _ = std::fs::remove_file(path);

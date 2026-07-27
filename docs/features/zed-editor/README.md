@@ -490,6 +490,15 @@ to reflow to), no job control or interrupt key, and no prompt, the shell not
 knowing it is interactive. See
 [os-requirements.md](os-requirements.md) item 3.
 
+**A command that writes in small pieces is slow through the pipe.** `dir SYS:C`
+(around 180 entries, 3.3 KB) takes seconds on the console and roughly a minute
+in the terminal, arriving all at once at the end. It is not throughput and
+nothing is lost: `C:RustBulk` moves 244 KB through the same pipe in under twenty
+seconds, and the same `dir` through the same path returns its full listing. The
+difference is the shape of the writing -- `Type` writes big chunks, `Dir` writes
+a name at a time, and every write to `PIPE:` costs a round-trip to the handler
+task. Set `AROS_TTY_TRACE` to watch it happen (`MacRW:zed-tty.log`).
+
 ## OS capabilities requested (handoff to the AROS side)
 
 The IDE features that need real OS primitives (networking/async, live child
