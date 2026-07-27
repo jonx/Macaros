@@ -1160,6 +1160,109 @@ pub extern "C" fn aros_rust_stack_test() -> u32 {
 // build and this takes one minute.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Volume through a pipe.
+//
+// A terminal that only carries a few lines is not much of a terminal: a build
+// or a long listing has to come through intact. `dir SYS:C` produced nothing
+// while `dir SYS:Libs` rendered fine, so this measures where the boundary is:
+// a known-size payload read back byte for byte, then a command with a lot of
+// output of its own.
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn aros_rust_bulk_test() -> u32 {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut fails = 0;
+
+    // A file whose length is known exactly, so a short read is unambiguous.
+    const LINES: usize = 4000;
+    let path = "MacRW:bulk-probe.txt";
+    {
+        let mut body = String::new();
+        for i in 0..LINES {
+            body.push_str(&format!("line {i:06} ................................................\n"));
+        }
+        match std::fs::write(path, body.as_bytes()) {
+            Ok(()) => println!("[BULK] wrote {} bytes to {path}", body.len()),
+            Err(e) => {
+                println!("[BULK] FAIL cannot write {path}: {e}");
+                println!("RUST-AROS: BULK FAIL (1)");
+                return 10;
+            }
+        }
+    }
+    let expected = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    /// Run one command in an interactive shell and return what came back.
+    fn run(what: &str, budget: Duration) -> (usize, Duration, bool) {
+        let mut child = match Command::new("")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[BULK] FAIL spawn: {e}");
+                return (0, Duration::ZERO, false);
+            }
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let counter = std::thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut seen = 0usize;
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = stdout.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                seen += n;
+            }
+            seen
+        });
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let started = Instant::now();
+        let _ = stdin.write_all(what.as_bytes()).and_then(|()| stdin.flush());
+
+        // The shell holds the pipe open, so wait on quiet rather than on EOF.
+        std::thread::sleep(budget);
+        let alive = child.try_wait().ok().flatten().is_none();
+        drop(stdin);
+        let seen = counter.join().unwrap_or(0);
+        let _ = child.wait();
+        (seen, started.elapsed(), alive)
+    }
+
+    // The banner the shell prints is part of what comes back, so allow for it.
+    let (seen, took, alive) = run(&format!("type {path}\n"), Duration::from_secs(20));
+    println!("[BULK] type: {seen} bytes in {took:?} (expected >= {expected}), shell alive: {alive}");
+    if (seen as u64) < expected {
+        println!("[BULK] FAIL the payload came back short");
+        fails += 1;
+    }
+
+    let (seen, took, alive) = run("dir SYS:C\n", Duration::from_secs(30));
+    println!("[BULK] dir SYS:C: {seen} bytes in {took:?}, shell alive: {alive}");
+    if seen == 0 {
+        println!("[BULK] FAIL dir SYS:C said nothing");
+        fails += 1;
+    }
+
+    let _ = std::fs::remove_file(path);
+
+    if fails == 0 {
+        println!("RUST-AROS: BULK PASS");
+        0x42_554c4b // "BULK"
+    } else {
+        println!("RUST-AROS: BULK FAIL ({fails})");
+        10
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn aros_rust_shell_test() -> u32 {
     use std::io::{Read, Write};
