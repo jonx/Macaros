@@ -176,6 +176,13 @@ starts a new CLI that goes on reading its input, which is. See
    running command cannot be stopped from the terminal.
 3. **The shell does not know it is interactive**, so it prints no prompt.
 
+**A smaller ask that would help now: flush a pipe like an interactive stream.**
+AROS buffers writes to a pipe fully and writes to a console by line. In a
+terminal that means a separate command's output (`Dir`) is held until the shell
+next flushes, i.e. until the next command is typed, while a shell built-in
+(`Echo`) appears at once. Either flushing a pipe per line, or having the shell
+flush after each command, would fix it. Nothing is lost today, only late.
+
 **Contract, if a PTY is ever added.**
 1. **A master/slave terminal pair.** A shell spawned on the slave end behaves as
    if it has a controlling terminal: interactive line editing and job-control
