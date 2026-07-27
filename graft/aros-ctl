@@ -357,6 +357,24 @@ write_startup_sequence() {
                     '    EndIf' \
                     'EndIf' \
                     'Run ConClip'
+                # The keyboard layout, same as the desktop path. Without this a
+                # console boot is US whatever the host is set to, and every app
+                # in it -- the shell, the editor -- reads the keyboard through
+                # keymap.library, so all of them are.
+                if [ -n "${AROS_CTL_KEYMAP:-}" ] && [ ! -s "$AROS/Prefs/Env-Archive/Keymap" ]; then
+                    mkdir -p "$AROS/Prefs/Env-Archive" 2>/dev/null
+                    printf '%s' "$AROS_CTL_KEYMAP" > "$AROS/Prefs/Env-Archive/Keymap"
+                fi
+                printf '%s\n' \
+                    'If EXISTS "DEVS:Keymaps"' \
+                    '    Assign "KEYMAPS:" "DEVS:Keymaps"' \
+                    'EndIf' \
+                    'If EXISTS "C:LoadKeymap"' \
+                    '    LoadKeymap RESTORE' \
+                    'EndIf' \
+                    'If EXISTS "C:KeymapWatch"' \
+                    '    Run <NIL: >NIL: C:KeymapWatch' \
+                    'EndIf'
             } > "$startup"
             ;;
         *)
