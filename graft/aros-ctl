@@ -466,8 +466,9 @@ MacRW:$HOST_FOLDER;WRITE"
                   || codesign -s - -f "$BOOTD/Macaros" 2>/dev/null
 }
 
-# char -> "VK SHIFT"  (macOS virtual keycodes). SHIFT=1 means hold left-shift.
-char2vk() {
+# char -> "VK SHIFT"  (macOS virtual keycodes), US layout. SHIFT=1 means hold
+# left-shift.
+char2vk_us() {
     case "$1" in
         a) echo "0 0";;  b) echo "11 0";; c) echo "8 0";;  d) echo "2 0";;
         e) echo "14 0";; f) echo "3 0";;  g) echo "5 0";;  h) echo "4 0";;
@@ -486,8 +487,53 @@ char2vk() {
         '!') echo "18 1";; '@') echo "19 1";; '#') echo "20 1";; '$') echo "21 1";;
         '%') echo "23 1";; '^') echo "22 1";; '&') echo "26 1";; '*') echo "28 1";;
         '(') echo "25 1";; ')') echo "29 1";; '"') echo "39 1";;
-        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk "$lc" | cut -d' ' -f1) 1";;
+        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk_us "$lc" | cut -d' ' -f1) 1";;
         *) echo "";;
+    esac
+}
+
+# Same, for a French AZERTY layout. `type` names a character; the host sends a
+# key *position*, and AROS turns that back into a character through whatever
+# keymap is loaded. So the position depends on the layout, and typing "echo"
+# against an AZERTY keymap from the US table spells something else.
+#
+# Positions are still named by their US keycap, that being what the macOS
+# virtual codes mean. Only the keys that actually move are listed; the rest
+# fall through to the US table.
+char2vk_fr() {
+    case "$1" in
+        a) echo "12 0";; q) echo "0 0";;  z) echo "13 0";; w) echo "6 0";;
+        m) echo "41 0";;
+        ',') echo "46 0";; ';') echo "43 0";; ':') echo "47 0";; '!') echo "44 0";;
+        '.') echo "43 1";; '/') echo "47 1";;
+        '-') echo "22 0";; ')') echo "27 0";; '_') echo "28 1";;
+        # Digits are shifted on AZERTY; the positions are unchanged.
+        [0-9]) echo "$(char2vk_us "$1" | cut -d' ' -f1) 1";;
+        [A-Z]) lc=$(echo "$1" | tr 'A-Z' 'a-z'); echo "$(char2vk_fr "$lc" | cut -d' ' -f1) 1";;
+        *) char2vk_us "$1";;
+    esac
+}
+
+# Which table `type` uses, from the layout the session actually booted with
+# (ENVARC:Keymap, the same file `aros-ctl keymap` writes).
+active_keymap() {
+    if [ -z "${AROS_CTL_ACTIVE_KEYMAP+x}" ]; then
+        local bootd aros
+        bootd="$(find_bootd 2>/dev/null)"
+        if [ -n "$bootd" ]; then
+            aros="$(cd "$bootd/../.." 2>/dev/null && pwd)"
+            AROS_CTL_ACTIVE_KEYMAP="$(cat "$aros/Prefs/Env-Archive/Keymap" 2>/dev/null || echo '')"
+        else
+            AROS_CTL_ACTIVE_KEYMAP=""
+        fi
+    fi
+    printf '%s' "$AROS_CTL_ACTIVE_KEYMAP"
+}
+
+char2vk() {
+    case "$(active_keymap)" in
+        *_f|*_b|*_ca) char2vk_fr "$1";;
+        *) char2vk_us "$1";;
     esac
 }
 
