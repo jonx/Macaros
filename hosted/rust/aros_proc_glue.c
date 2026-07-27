@@ -181,6 +181,10 @@ LONG aros_proc_last_fail(LONG *ioerr, LONG *step)
  * one is a new CLI: it keeps reading its input, which is what a terminal is.
  * SystemTagList's default is the background kind.
  *
+ * `cwd` (NULL for none) is where the child starts. Passing it as the process's
+ * directory rather than a `CD` command matters for an interactive shell: a
+ * command would be read, run and prompted for like anything the user typed.
+ *
  * Nothing is signalled until a task registers itself with
  * aros_proc_set_waiter, which it does only while it is actually waiting.
  *
@@ -189,10 +193,12 @@ LONG aros_proc_last_fail(LONG *ioerr, LONG *step)
  * (0 when that stream is not piped).
  */
 void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mode,
-                      int interactive, BPTR *p_in, BPTR *p_out, BPTR *p_err)
+                      int interactive, const char *cwd,
+                      BPTR *p_in, BPTR *p_out, BPTR *p_err)
 {
     struct AProc *p;
-    struct TagItem tags[9];
+    struct TagItem tags[10];
+    BPTR dirlock = (BPTR)0;
     BPTR c_in = (BPTR)0, c_out = (BPTR)0, c_err = (BPTR)0;
     BPTR nil_in = (BPTR)0, nil_out = (BPTR)0, nil_err = (BPTR)0;
     ULONG seq;
@@ -239,8 +245,14 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
         if (!c_err) { g_last_fail = 5; goto fail; }
     }
 
+    if (cwd && *cwd) {
+        dirlock = Lock((CONST_STRPTR)cwd, SHARED_LOCK);
+        if (!dirlock) { g_last_fail = 8; goto fail; }
+    }
+
     me->pr_WindowPtr = oldwin;
 
+    if (dirlock) { tags[nt].ti_Tag = NP_CurrentDir; tags[nt].ti_Data = (IPTR)dirlock; nt++; }
     if (c_in)  { tags[nt].ti_Tag = SYS_Input;  tags[nt].ti_Data = (IPTR)c_in;  nt++; }
     if (c_out) { tags[nt].ti_Tag = SYS_Output; tags[nt].ti_Data = (IPTR)c_out; nt++; }
     if (c_err) { tags[nt].ti_Tag = SYS_Error;  tags[nt].ti_Data = (IPTR)c_err; nt++; }
@@ -261,16 +273,20 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
         if (c_in) Close(c_in);
         if (c_out) Close(c_out);
         if (c_err) Close(c_err);
+        /* The shell never started, so it never took the directory either. */
+        if (dirlock) { UnLock(dirlock); dirlock = (BPTR)0; }
         goto fail_after_win;
     }
 
-    /* From here the child owns c_in/c_out/c_err and closes them on exit. */
+    /* From here the child owns c_in/c_out/c_err and the directory lock, and
+     * releases them when it exits. */
     return (void *)p;
 
 fail:
     if (!g_last_fail) g_last_fail = 7;
     g_last_ioerr = IoErr();
     me->pr_WindowPtr = oldwin;
+    if (dirlock) UnLock(dirlock);
     if (c_in) Close(c_in);
     if (c_out) Close(c_out);
     if (c_err) Close(c_err);
