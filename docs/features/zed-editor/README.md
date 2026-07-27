@@ -501,6 +501,30 @@ sat in the buffer. The same reasoning is why there was no prompt. See
 Set `AROS_TTY_TRACE` to watch the bytes arrive (`MacRW:zed-tty.log`) if the
 screen ever stays empty again.
 
+## Where the log is, and what it is currently saying
+
+`SYS:.config/zed/logs/Zed.log` -- on the host, **inside the AROS tree**
+(`bin/darwin-aarch64/AROS/.config/zed/logs/`), not under any host-shared
+directory. A stale `zeddata/logs/` under the host share reads as the editor not
+logging at all; it is not the live one. Worth knowing before debugging anything:
+a running instance does log, and the file answers most questions faster than a
+rebuild does. `AROS_ZED_BOOT_TRACE` covers the startup before logging exists.
+
+**Open, from the log: AROS operations that fail without saying why.** Two sites
+so far, both reported to Rust as `Os { code: 0, kind: Uncategorized, message:
+"No error" }`:
+
+- `Failed to create file at "T:/.tmpXXXXXX/CASE_SENSITIVITY_TEST.TMP"`. Note the
+  `/` after the colon: this is a path built by joining onto a bare volume, and
+  `T:/x` is not `T:x` to AROS. So this one may be a path-joining bug on our side
+  rather than an errno one -- untested either way.
+- `walkdir error scanning MacRW:lsptest/target/debug/incremental/.../*-working`,
+  which the file watcher then reports as a watch error. This one has an ordinary
+  path, so it is the handler failing without setting `IoErr`.
+
+The second is the more interesting: the watcher erroring part-way through a scan
+is a candidate for the watch latency that the poll interval does not explain.
+
 ## OS capabilities requested (handoff to the AROS side)
 
 The IDE features that need real OS primitives (networking/async, live child

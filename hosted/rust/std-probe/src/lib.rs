@@ -1178,6 +1178,39 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
 
     let mut fails = 0;
 
+    // What a log file is opened with: create it if absent, append if not. The
+    // editor's log never appeared on AROS, and this is the call that makes it.
+    {
+        let path = "MacRW:append-probe.txt";
+        let _ = std::fs::remove_file(path);
+        for round in 1..=2 {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    match f.write_all(b"line\n") {
+                        Ok(()) => println!("[BULK] create+append round {round}: opened and wrote"),
+                        Err(e) => {
+                            println!("[BULK] FAIL create+append round {round}: write: {e}");
+                            fails += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[BULK] FAIL create+append round {round}: {e}");
+                    fails += 1;
+                }
+            }
+        }
+        match std::fs::read_to_string(path) {
+            Ok(text) => println!("[BULK] append file holds {:?}", text),
+            Err(e) => {
+                println!("[BULK] FAIL reading back the append file: {e}");
+                fails += 1;
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
     // A file whose length is known exactly, so a short read is unambiguous.
     const LINES: usize = 4000;
     let path = "MacRW:bulk-probe.txt";
