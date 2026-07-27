@@ -490,19 +490,16 @@ to reflow to), no job control or interrupt key, and no prompt, the shell not
 knowing it is interactive. See
 [os-requirements.md](os-requirements.md) item 3.
 
-**An external command's output is held until the shell next flushes.** `Echo`
-appears at once; `Dir` shows nothing, even for a four-entry directory, until the
-next command is typed. Echo is a shell built-in, so its output goes out with the
-shell's own; `Dir` is a separate command whose output sits in a dos buffer. AROS
-buffers a pipe fully and a console by line (a console being interactive), and
-nothing flushes the buffer in between, because this shell prints no prompt.
-Nothing is lost, and closing the shell's input flushes everything -- which is
-why a probe that counts bytes after closing stdin sees the whole listing and
-concludes, wrongly, that the pipe is fine.
+**The shell prints a prompt and its output appears as it is written**, since the
+AROS-side pipe fix (2026-07-27). Before it, `Echo` appeared at once but `Dir`
+showed nothing until the next command: dos line-buffers an interactive handle
+and fully buffers everything else, and nothing marked a pipe as a stream, so a
+shell built-in went out with the shell's own output while a separate command's
+sat in the buffer. The same reasoning is why there was no prompt. See
+[os-requirements.md](os-requirements.md) item 3.
 
-The fix is on the OS side: a pipe wants the flush behaviour an interactive
-stream gets, or the shell should flush after each command. Set `AROS_TTY_TRACE`
-to watch the bytes arrive (`MacRW:zed-tty.log`).
+Set `AROS_TTY_TRACE` to watch the bytes arrive (`MacRW:zed-tty.log`) if the
+screen ever stays empty again.
 
 ## OS capabilities requested (handoff to the AROS side)
 

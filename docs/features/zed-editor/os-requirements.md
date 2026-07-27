@@ -174,14 +174,16 @@ starts a new CLI that goes on reading its input, which is. See
    programs have nothing to reflow to.
 2. **No line discipline in the OS.** No job control, and no interrupt key: a
    running command cannot be stopped from the terminal.
-3. **The shell does not know it is interactive**, so it prints no prompt.
+3. **No terminal size for the shell either**, so `Prompt` cannot show anything
+   width-dependent and the shell cannot lay out in columns.
 
-**A smaller ask that would help now: flush a pipe like an interactive stream.**
-AROS buffers writes to a pipe fully and writes to a console by line. In a
-terminal that means a separate command's output (`Dir`) is held until the shell
-next flushes, i.e. until the next command is typed, while a shell built-in
-(`Echo`) appears at once. Either flushing a pipe per line, or having the shell
-flush after each command, would fix it. Nothing is lost today, only late.
+**Pipe buffering: fixed on the AROS side (2026-07-27).** dos line-buffers a
+handle it considers interactive and fully buffers every other one, and only
+con-handler ever set `fh_Interactive`. So a shell on a pipe had its output held
+until the buffer filled, and printed no prompt, having concluded from its input
+that nobody was there. The pipe handler now marks its filehandles as the streams
+they are (`workbench/fs/pipe/pipecreate.c`), which gives the terminal both live
+output and a prompt.
 
 **Contract, if a PTY is ever added.**
 1. **A master/slave terminal pair.** A shell spawned on the slave end behaves as
