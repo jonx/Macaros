@@ -529,8 +529,20 @@ so far, both reported to Rust as `Os { code: 0, kind: Uncategorized, message:
   previously took upwards of a minute -- one sample at 10 s resolution, so treat
   it as a direction rather than a number.
 
-The `T:/` one is still open, and still suspected to be a path-joining bug on our
-side rather than an errno one.
+The `T:/` one **now reports a reason** (`open` goes through the glue too, with
+the same `IoErr()` recovery), and the reason is `NotFound` on the file: the temp
+directory `.tmpXXXXXX` is not there when the file inside it is created. Its
+cause is still unknown, but three plausible ones are ruled out, each tested:
+
+| suspected | verdict |
+|---|---|
+| `Path::join` inserting `/` after a volume (`T:` + `x` -> `T:/x`) | not it -- AROS accepts `T:/x` and `T:x` alike |
+| names beginning with a dot | not it -- `T:.name` and `MacRW:.name` both create, stat as directories, and take files |
+| the two combined, `T:/.name` | not it -- `makedir T:/.dotslash` succeeds |
+
+So it is something about how the temp directory is made rather than what it is
+called. Benign in practice: the check falls back to case-sensitive, which is
+right for the host. `C:RustBulk` covers all three shapes as a regression guard.
 
 ## OS capabilities requested (handoff to the AROS side)
 

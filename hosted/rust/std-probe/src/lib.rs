@@ -1274,6 +1274,30 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
         }
     }
 
+    // Names beginning with a dot. The editor's case-sensitivity check makes a
+    // temp directory called ".tmpXXXXXX" and then fails to create a file in
+    // it, so the directory is not being made. Dot names matter well beyond
+    // that check -- .gitignore, .zed, .config.
+    for dir in ["T:.tmpdot-probe", "MacRW:.dot-probe"] {
+        let _ = std::fs::remove_dir_all(dir);
+        match std::fs::create_dir(dir) {
+            Ok(()) => {
+                let seen = std::fs::metadata(dir).map(|m| m.is_dir()).unwrap_or(false);
+                let inner = format!("{dir}/inside.txt");
+                let wrote = std::fs::write(&inner, b"x").is_ok();
+                println!("[BULK] create_dir({dir}) ok, stat-as-dir {seen}, file inside {wrote}");
+                if !seen || !wrote {
+                    fails += 1;
+                }
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            Err(e) => {
+                println!("[BULK] FAIL create_dir({dir}) -> {:?} ({e})", e.kind());
+                fails += 1;
+            }
+        }
+    }
+
     // What a log file is opened with: create it if absent, append if not. The
     // editor's log never appeared on AROS, and this is the call that makes it.
     {
