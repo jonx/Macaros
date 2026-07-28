@@ -529,20 +529,30 @@ so far, both reported to Rust as `Os { code: 0, kind: Uncategorized, message:
   previously took upwards of a minute -- one sample at 10 s resolution, so treat
   it as a direction rather than a number.
 
-The `T:/` one **now reports a reason** (`open` goes through the glue too, with
-the same `IoErr()` recovery), and the reason is `NotFound` on the file: the temp
-directory `.tmpXXXXXX` is not there when the file inside it is created. Its
-cause is still unknown, but three plausible ones are ruled out, each tested:
+The `T:/` one is **found and fixed (2026-07-28)**, and the cause was none of
+the suspects. The check creates `case_sensitivity_test.tmp`, then the same name
+in uppercase with `create_new`, and reads `AlreadyExists` as its answer -- that
+collision IS the test. The RAM disk is case-insensitive, so the collision
+happens; posixc `open` reports it through `IoErr()` without setting errno; and
+the recovery table then in the glue knew four codes and defaulted the rest to
+`ENOENT` -- turning "already exists" into "not found" for the one caller whose
+entire question was "does this already exist". The glue now uses stdc's own
+`__stdc_ioerr2errno`, and the check completes with no error and the right
+verdict. `C:RustBulk` runs the exact shape.
 
-| suspected | verdict |
-|---|---|
-| `Path::join` inserting `/` after a volume (`T:` + `x` -> `T:/x`) | not it -- AROS accepts `T:/x` and `T:x` alike |
-| names beginning with a dot | not it -- `T:.name` and `MacRW:.name` both create, stat as directories, and take files |
-| the two combined, `T:/.name` | not it -- `makedir T:/.dotslash` succeeds |
+Two side findings from the hunt, recorded so the next person keeps them
+straight:
 
-So it is something about how the temp directory is made rather than what it is
-called. Benign in practice: the check falls back to case-sensitive, which is
-right for the host. `C:RustBulk` covers all three shapes as a regression guard.
+- At the **dos** level, `T:/x` does not name `T:x`: a `/` after the colon means
+  *parent*, and since `T:` is an assign into `RAM:`, `makedir T:/probeX`
+  succeeds but creates `RAM:probeX`. A shell test of these shapes therefore
+  says nothing about Rust behaviour --
+- -- because the **Rust fs layer already normalizes** this: `cstr()` in
+  `sys/fs/aros.rs` drops one `/` after the volume colon, so a `join` onto a
+  bare volume names the child, as Rust callers mean. The earlier "AROS accepts
+  `T:/x`" verdict was a false pass (the probe created and removed through the
+  same path), but the conclusion happens to hold at the Rust level for this
+  different reason.
 
 ## OS capabilities requested (handoff to the AROS side)
 
