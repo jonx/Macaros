@@ -1178,6 +1178,35 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
 
     let mut fails = 0;
 
+    // A stat of something that is not there must say NotFound, not
+    // "Uncategorized". A directory scan racing a file that is being removed
+    // turns on it: as a hard error the scan is abandoned, as "gone" it steps
+    // over the entry. The editor's file watcher was hitting exactly this on
+    // cargo's incremental directories.
+    for missing in ["MacRW:definitely-not-here-12345", "MacRW:lsptest/nope/deeper"] {
+        match std::fs::metadata(missing) {
+            Ok(_) => {
+                println!("[BULK] FAIL {missing} unexpectedly exists");
+                fails += 1;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("[BULK] stat of a missing path -> NotFound");
+            }
+            Err(e) => {
+                println!("[BULK] FAIL stat of {missing} -> {:?} ({e})", e.kind());
+                fails += 1;
+            }
+        }
+    }
+    // And `exists` must agree, since it is built on the same call.
+    match std::fs::exists("MacRW:definitely-not-here-12345") {
+        Ok(false) => println!("[BULK] exists() of a missing path -> false"),
+        other => {
+            println!("[BULK] FAIL exists() of a missing path -> {other:?}");
+            fails += 1;
+        }
+    }
+
     // What a log file is opened with: create it if absent, append if not. The
     // editor's log never appeared on AROS, and this is the call that makes it.
     {

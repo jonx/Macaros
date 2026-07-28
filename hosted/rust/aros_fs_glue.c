@@ -13,6 +13,43 @@
 #include <sys/time.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <errno.h>
+#include <proto/dos.h>   /* IoErr() */
+
+/* AmigaDOS error codes (dos/dos.h). Declared here for the reason the other
+ * glues declare what they use: this file compiles against the posixc headers,
+ * and the generated dos/dos.h in the build tree carries no ERROR_* names. The
+ * values are stable ABI. */
+#define AROS_ERROR_OBJECT_IN_USE     202
+#define AROS_ERROR_DIR_NOT_FOUND     204
+#define AROS_ERROR_OBJECT_NOT_FOUND  205
+#define AROS_ERROR_OBJECT_WRONG_TYPE 212
+
+/* A stat that failed without saying why.
+ *
+ * AROS reports failures through IoErr(), and that does not reliably reach
+ * errno: asking about something that is not there returns -1 with errno still
+ * 0. Rust reads errno 0 as `Uncategorized`, so it cannot tell "gone" from
+ * "broken" -- and a directory scan racing a file that is being removed turns
+ * on exactly that. Read as a hard error it abandons the scan; read as "gone"
+ * it steps over the entry and carries on. */
+static int stat_failed(void)
+{
+    if (errno == 0) {
+        switch (IoErr()) {
+        case AROS_ERROR_OBJECT_WRONG_TYPE: errno = ENOTDIR; break;
+        case AROS_ERROR_OBJECT_IN_USE:     errno = EBUSY;   break;
+        case AROS_ERROR_DIR_NOT_FOUND:
+        case AROS_ERROR_OBJECT_NOT_FOUND:
+        default:
+            /* Everything else a stat fails with means the object could not be
+               reached, which to a caller is the same as not being there. */
+            errno = ENOENT;
+            break;
+        }
+    }
+    return -1;
+}
 
 /* Fixed layout the Rust pal mirrors 1:1 (all naturally aligned, 8-byte alignment). */
 struct aros_fileattr {
@@ -39,7 +76,11 @@ static void fill(struct aros_fileattr *o, const struct stat *sb)
 int aros_stat(const char *path, struct aros_fileattr *out)
 {
     struct stat sb;
-    if (!path || !out || stat(path, &sb) != 0) return -1;
+    if (!path || !out) { errno = EINVAL; return -1; }
+    /* Cleared first: a stat that fails without touching errno would otherwise
+       be reported as whatever the last unrelated call left there. */
+    errno = 0;
+    if (stat(path, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
 }
@@ -47,7 +88,11 @@ int aros_stat(const char *path, struct aros_fileattr *out)
 int aros_lstat(const char *path, struct aros_fileattr *out)
 {
     struct stat sb;
-    if (!path || !out || lstat(path, &sb) != 0) return -1;
+    if (!path || !out) { errno = EINVAL; return -1; }
+    /* Cleared first: a stat that fails without touching errno would otherwise
+       be reported as whatever the last unrelated call left there. */
+    errno = 0;
+    if (lstat(path, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
 }
@@ -55,7 +100,11 @@ int aros_lstat(const char *path, struct aros_fileattr *out)
 int aros_fstat(int fd, struct aros_fileattr *out)
 {
     struct stat sb;
-    if (!out || fstat(fd, &sb) != 0) return -1;
+    if (!out) { errno = EINVAL; return -1; }
+    /* Cleared first: a stat that fails without touching errno would otherwise
+       be reported as whatever the last unrelated call left there. */
+    errno = 0;
+    if (fstat(fd, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
 }
