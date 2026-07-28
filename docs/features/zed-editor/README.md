@@ -529,18 +529,36 @@ so far, both reported to Rust as `Os { code: 0, kind: Uncategorized, message:
   previously took upwards of a minute -- one sample at 10 s resolution, so treat
   it as a direction rather than a number.
 
-The `T:/` one is **found and fixed (2026-07-28)**, and the cause was none of
-the suspects. The check creates `case_sensitivity_test.tmp`, then the same name
-in uppercase with `create_new`, and reads `AlreadyExists` as its answer -- that
-collision IS the test. The RAM disk is case-insensitive, so the collision
-happens; posixc `open` reports it through `IoErr()` without setting errno; and
-the recovery table then in the glue knew four codes and defaulted the rest to
-`ENOENT` -- turning "already exists" into "not found" for the one caller whose
-entire question was "does this already exist". The glue now uses stdc's own
-`__stdc_ioerr2errno`, and the check completes with no error and the right
-verdict. `C:RustBulk` runs the exact shape.
+The `T:/` one is **found and fixed (2026-07-28)**, three layers down, and the
+bottom layer is the true root of the whole errno-0 family. The check creates
+`case_sensitivity_test.tmp`, then the same name uppercased with `create_new`,
+and reads `AlreadyExists` as its answer -- the collision IS the test, and the
+RAM disk is case-insensitive so it happens. posixc's open reported it
+correctly. The report just never arrived:
 
-Two side findings from the hunt, recorded so the next person keeps them
+1. **errno has two cells.** `__stdc_geterrnoptr()` is a link-library function,
+   so each image has its own copy and its own errno-pointer hook. pthread
+   installs the per-thread hook in the *application's* copy; stdc.library and
+   posixc.library are separate images with no hook, and write the task's shared
+   `StdCBase` cell. On the main task the two coincide; on a pthread, every
+   error a library set landed in a cell no in-app reader looked at. That is
+   why the whole family only bit on threads -- and the watcher, the case check,
+   and the temp-file paths all run on threads.
+2. The glue's IoErr() recovery then made it worse: finding per-thread errno
+   unset, it wrote a guess derived from stale IoErr() (`ENOENT`) into it,
+   hiding the `EEXIST` sitting in the base cell.
+3. And before any of that, the first recovery table knew four dos codes and
+   defaulted the rest to `ENOENT` -- with `ERROR_OBJECT_EXISTS` as the first
+   arrival.
+
+Fixes, one per layer: std's `errno()` reads the per-thread cell then the base
+cell; the glue clears both cells before a call and consults the base cell
+before deriving anything from IoErr(); the dos mapping is stdc's own
+`__stdc_ioerr2errno`. posixc keeps writing the base cell -- from inside its
+image the hook is unreachable, and `__fdesc.c` now says so. `C:RustBulk` runs
+the check's exact shape on the main task and on a spawned thread.
+
+Two side findings from the huntTwo side findings from the hunt, recorded so the next person keeps them
 straight:
 
 - At the **dos** level, `T:/x` does not name `T:x`: a `/` after the colon means
