@@ -83,6 +83,48 @@ int aros_open(const char *path, int flags, unsigned int mode)
     return fd;
 }
 
+/* The path-taking calls, wrapped for the same reason as open: clear both
+ * errno cells going in, recover a reason coming out. Without the clear, a
+ * failure here reads back whatever stale value the shared cell held -- which
+ * is exactly what happened to mkdir once errno() learned to consult that
+ * cell: create_dir_all on an existing directory read a stale ENOENT instead
+ * of its EEXIST, and concluded the parent was missing. */
+int aros_mkdir(const char *path, unsigned int mode)
+{
+    if (!path) { errno = EINVAL; return -1; }
+    errno_clear();
+    if (mkdir(path, (mode_t)mode) != 0)
+        return errno_from_ioerr(ENOENT);
+    return 0;
+}
+
+int aros_rmdir(const char *path)
+{
+    if (!path) { errno = EINVAL; return -1; }
+    errno_clear();
+    if (rmdir(path) != 0)
+        return errno_from_ioerr(ENOENT);
+    return 0;
+}
+
+int aros_unlink(const char *path)
+{
+    if (!path) { errno = EINVAL; return -1; }
+    errno_clear();
+    if (unlink(path) != 0)
+        return errno_from_ioerr(ENOENT);
+    return 0;
+}
+
+int aros_rename(const char *from, const char *to)
+{
+    if (!from || !to) { errno = EINVAL; return -1; }
+    errno_clear();
+    if (rename(from, to) != 0)
+        return errno_from_ioerr(ENOENT);
+    return 0;
+}
+
 /* A stat that failed without saying why.
  *
  * AROS reports failures through IoErr(), and that does not reliably reach
@@ -160,7 +202,13 @@ int aros_fstat(int fd, struct aros_fileattr *out)
 
 void *aros_opendir(const char *path)
 {
-    return path ? (void *)opendir(path) : (void *)0;
+    void *d;
+    if (!path) { errno = EINVAL; return (void *)0; }
+    errno_clear();
+    d = (void *)opendir(path);
+    if (!d)
+        errno_from_ioerr(ENOENT);
+    return d;
 }
 
 /* Reads the next entry, skipping "." and "..". Copies the name into namebuf and the
