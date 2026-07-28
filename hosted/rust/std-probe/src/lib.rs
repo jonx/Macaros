@@ -1298,6 +1298,53 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
         }
     }
 
+    // The editor's case-sensitivity check, exactly: create a lowercase file,
+    // then create_new an uppercase one in the same directory. On the
+    // case-insensitive RAM disk the second MUST fail AlreadyExists -- that
+    // answer IS the check's result. It came back errno-0, then (one bad
+    // recovery table later) NotFound, and either way the check errored out.
+    {
+        let dir = "T:excl-probe";
+        let _ = std::fs::remove_dir_all(dir);
+        if std::fs::create_dir(dir).is_ok() {
+            let lower = format!("{dir}/case_test.tmp");
+            let upper = format!("{dir}/CASE_TEST.TMP");
+            match std::fs::File::create_new(&lower) {
+                Ok(_) => {
+                    // Same name again: unquestionably a collision.
+                    match std::fs::File::create_new(&lower) {
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            println!("[BULK] create_new collision -> AlreadyExists");
+                        }
+                        other => {
+                            println!("[BULK] FAIL create_new collision -> {other:?}");
+                            fails += 1;
+                        }
+                    }
+                    // Different case: the verdict is the filesystem's own.
+                    match std::fs::File::create_new(&upper) {
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            println!("[BULK] case collision -> AlreadyExists (T: is case-insensitive)");
+                        }
+                        Ok(_) => println!("[BULK] case collision -> created (T: is case-sensitive)"),
+                        Err(e) => {
+                            println!("[BULK] FAIL case collision -> {:?} ({e})", e.kind());
+                            fails += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[BULK] FAIL create_new({lower}): {e}");
+                    fails += 1;
+                }
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        } else {
+            println!("[BULK] FAIL create_dir({dir})");
+            fails += 1;
+        }
+    }
+
     // What a log file is opened with: create it if absent, append if not. The
     // editor's log never appeared on AROS, and this is the call that makes it.
     {

@@ -17,27 +17,21 @@
 #include <fcntl.h>
 #include <proto/dos.h>   /* IoErr() */
 
-/* AmigaDOS error codes (dos/dos.h). Declared here for the reason the other
- * glues declare what they use: this file compiles against the posixc headers,
- * and the generated dos/dos.h in the build tree carries no ERROR_* names. The
- * values are stable ABI. */
-#define AROS_ERROR_OBJECT_IN_USE     202
-#define AROS_ERROR_DIR_NOT_FOUND     204
-#define AROS_ERROR_OBJECT_NOT_FOUND  205
-#define AROS_ERROR_OBJECT_WRONG_TYPE 212
+/* stdc.library's own IoErr()->errno mapping, the one its mkdir and readlink
+ * already use. A hand-kept subset sat here briefly and manufactured a wrong
+ * answer: it defaulted unknown codes to ENOENT, and the first unknown code to
+ * arrive was ERROR_OBJECT_EXISTS -- turning "already exists" into "not found"
+ * for the one caller (the editor's case-sensitivity check) whose whole
+ * question was "does this already exist". The canonical table knows EEXIST. */
+extern int __stdc_ioerr2errno(int ioerr);
 
 /* Recover a reason from IoErr() for a call that failed leaving errno unset.
  * `fallback` is the errno to use when dos will not say either. */
 static int errno_from_ioerr(int fallback)
 {
     if (errno == 0) {
-        switch (IoErr()) {
-        case AROS_ERROR_OBJECT_WRONG_TYPE: errno = ENOTDIR; break;
-        case AROS_ERROR_OBJECT_IN_USE:     errno = EBUSY;   break;
-        case AROS_ERROR_DIR_NOT_FOUND:
-        case AROS_ERROR_OBJECT_NOT_FOUND:  errno = ENOENT;  break;
-        default:                           errno = fallback; break;
-        }
+        int e = __stdc_ioerr2errno(IoErr());
+        errno = e ? e : fallback;
     }
     return -1;
 }
