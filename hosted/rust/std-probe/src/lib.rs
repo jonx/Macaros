@@ -1345,6 +1345,46 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
         }
     }
 
+    // The editor's failing flow, replicated to the letter: temp base from
+    // env::temp_dir(), a dot-random directory, the check's own 25-character
+    // file names, and the creates on a spawned thread (the editor does its
+    // file work on a blocking pool). The simplified probe above passes while
+    // the editor fails, so the difference lives in one of these details.
+    {
+        let base = std::env::temp_dir();
+        println!("[BULK] env::temp_dir() = {:?}", base);
+        let dir = base.join(".tmpPROBEx");
+        let _ = std::fs::remove_dir_all(&dir);
+        let dir2 = dir.clone();
+        let verdict = std::thread::spawn(move || {
+            std::fs::create_dir(&dir2)?;
+            let lower = dir2.join("case_sensitivity_test.tmp");
+            let upper = dir2.join("CASE_SENSITIVITY_TEST.TMP");
+            std::fs::OpenOptions::new().write(true).create_new(true).open(&lower)?;
+            let second = std::fs::OpenOptions::new().write(true).create_new(true).open(&upper);
+            Ok::<_, std::io::Error>(match second {
+                Ok(_) => "created (case-sensitive)".to_string(),
+                Err(e) => format!("{:?} ({e})", e.kind()),
+            })
+        })
+        .join()
+        .expect("joined");
+        let _ = std::fs::remove_dir_all(&dir);
+        match verdict {
+            Ok(v) if v.starts_with("AlreadyExists") => {
+                println!("[BULK] editor-shaped check on a thread -> {v}");
+            }
+            Ok(v) => {
+                println!("[BULK] FAIL editor-shaped check on a thread -> {v}");
+                fails += 1;
+            }
+            Err(e) => {
+                println!("[BULK] FAIL editor-shaped check errored: {:?} ({e})", e.kind());
+                fails += 1;
+            }
+        }
+    }
+
     // What a log file is opened with: create it if absent, append if not. The
     // editor's log never appeared on AROS, and this is the call that makes it.
     {

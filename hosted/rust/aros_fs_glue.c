@@ -16,6 +16,32 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <proto/dos.h>   /* IoErr() */
+#include <libraries/stdc.h>  /* struct StdCBase + __aros_getbase_StdCBase() */
+
+/* The errno cell in the task's shared StdCBase.
+ *
+ * There are two errno cells, an accident of linkage: __stdc_geterrnoptr() is a
+ * link-library function, so each image carries its own copy and its own hook
+ * variable. pthread installs the per-thread hook in the application's copy, so
+ * in-app code gets a per-thread cell -- while stdc.library and posixc.library,
+ * being their own images with a NULL hook, write this base cell. A reader that
+ * only looks at the per-thread cell therefore misses every error a library
+ * set; std's errno() consults this when the per-thread cell says nothing. */
+int aros_libbase_errno(void)
+{
+    struct StdCBase *base = __aros_getbase_StdCBase();
+    return base ? base->_errno : 0;
+}
+
+/* Clear both cells before a call whose failure we intend to attribute; the
+ * shared one holds whatever error some earlier library call left there. */
+static void errno_clear(void)
+{
+    struct StdCBase *base = __aros_getbase_StdCBase();
+    errno = 0;
+    if (base)
+        base->_errno = 0;
+}
 
 /* stdc.library's own IoErr()->errno mapping, the one its mkdir and readlink
  * already use. A hand-kept subset sat here briefly and manufactured a wrong
@@ -30,7 +56,14 @@ extern int __stdc_ioerr2errno(int ioerr);
 static int errno_from_ioerr(int fallback)
 {
     if (errno == 0) {
-        int e = __stdc_ioerr2errno(IoErr());
+        /* The library's own report first: posixc and stdc write the shared
+         * base cell (see aros_libbase_errno above), and an error they set
+         * without a failing dos call -- EEXIST from an O_EXCL check -- exists
+         * nowhere else. Guessing from IoErr() before looking there turned
+         * that EEXIST into a stale-IoErr ENOENT. */
+        int e = aros_libbase_errno();
+        if (!e)
+            e = __stdc_ioerr2errno(IoErr());
         errno = e ? e : fallback;
     }
     return -1;
@@ -43,7 +76,7 @@ int aros_open(const char *path, int flags, unsigned int mode)
 {
     int fd;
     if (!path) { errno = EINVAL; return -1; }
-    errno = 0;
+    errno_clear();
     fd = open(path, flags, mode);
     if (fd < 0)
         return errno_from_ioerr(ENOENT);
@@ -93,7 +126,7 @@ int aros_stat(const char *path, struct aros_fileattr *out)
     if (!path || !out) { errno = EINVAL; return -1; }
     /* Cleared first: a stat that fails without touching errno would otherwise
        be reported as whatever the last unrelated call left there. */
-    errno = 0;
+    errno_clear();
     if (stat(path, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
@@ -105,7 +138,7 @@ int aros_lstat(const char *path, struct aros_fileattr *out)
     if (!path || !out) { errno = EINVAL; return -1; }
     /* Cleared first: a stat that fails without touching errno would otherwise
        be reported as whatever the last unrelated call left there. */
-    errno = 0;
+    errno_clear();
     if (lstat(path, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
@@ -117,7 +150,7 @@ int aros_fstat(int fd, struct aros_fileattr *out)
     if (!out) { errno = EINVAL; return -1; }
     /* Cleared first: a stat that fails without touching errno would otherwise
        be reported as whatever the last unrelated call left there. */
-    errno = 0;
+    errno_clear();
     if (fstat(fd, &sb) != 0) return stat_failed();
     fill(out, &sb);
     return 0;
