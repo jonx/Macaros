@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <proto/dos.h>   /* IoErr() */
 
 /* AmigaDOS error codes (dos/dos.h). Declared here for the reason the other
@@ -25,6 +26,36 @@
 #define AROS_ERROR_OBJECT_NOT_FOUND  205
 #define AROS_ERROR_OBJECT_WRONG_TYPE 212
 
+/* Recover a reason from IoErr() for a call that failed leaving errno unset.
+ * `fallback` is the errno to use when dos will not say either. */
+static int errno_from_ioerr(int fallback)
+{
+    if (errno == 0) {
+        switch (IoErr()) {
+        case AROS_ERROR_OBJECT_WRONG_TYPE: errno = ENOTDIR; break;
+        case AROS_ERROR_OBJECT_IN_USE:     errno = EBUSY;   break;
+        case AROS_ERROR_DIR_NOT_FOUND:
+        case AROS_ERROR_OBJECT_NOT_FOUND:  errno = ENOENT;  break;
+        default:                           errno = fallback; break;
+        }
+    }
+    return -1;
+}
+
+/* open(), which fails the same way: the editor's attempt to work out whether
+ * the filesystem is case sensitive creates a file in a temp directory, and a
+ * failure there came back with errno 0 and so no reason at all. */
+int aros_open(const char *path, int flags, unsigned int mode)
+{
+    int fd;
+    if (!path) { errno = EINVAL; return -1; }
+    errno = 0;
+    fd = open(path, flags, mode);
+    if (fd < 0)
+        return errno_from_ioerr(ENOENT);
+    return fd;
+}
+
 /* A stat that failed without saying why.
  *
  * AROS reports failures through IoErr(), and that does not reliably reach
@@ -35,20 +66,9 @@
  * it steps over the entry and carries on. */
 static int stat_failed(void)
 {
-    if (errno == 0) {
-        switch (IoErr()) {
-        case AROS_ERROR_OBJECT_WRONG_TYPE: errno = ENOTDIR; break;
-        case AROS_ERROR_OBJECT_IN_USE:     errno = EBUSY;   break;
-        case AROS_ERROR_DIR_NOT_FOUND:
-        case AROS_ERROR_OBJECT_NOT_FOUND:
-        default:
-            /* Everything else a stat fails with means the object could not be
-               reached, which to a caller is the same as not being there. */
-            errno = ENOENT;
-            break;
-        }
-    }
-    return -1;
+    /* Everything else a stat fails with means the object could not be reached,
+       which to a caller is the same as not being there. */
+    return errno_from_ioerr(ENOENT);
 }
 
 /* Fixed layout the Rust pal mirrors 1:1 (all naturally aligned, 8-byte alignment). */

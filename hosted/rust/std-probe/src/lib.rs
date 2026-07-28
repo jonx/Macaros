@@ -1207,6 +1207,73 @@ pub extern "C" fn aros_rust_bulk_test() -> u32 {
         }
     }
 
+    // Joining onto a bare volume. AROS reads "T:x" as x on T:, but "T:/x" as x
+    // in the parent of T:'s root, which is not a place. Rust inserts a
+    // separator when pushing onto anything that does not end in one, and a
+    // colon is not one -- so a path built with join() may name the wrong thing.
+    {
+        use std::path::{Path, PathBuf};
+        let joined = Path::new("T:").join("probe-join");
+        println!("[BULK] Path::new(\"T:\").join(\"probe-join\") = {:?}", joined);
+        let from_push = {
+            let mut p = PathBuf::from("MacRW:");
+            p.push("lsptest");
+            p
+        };
+        println!("[BULK] PathBuf::from(\"MacRW:\").push(\"lsptest\") = {:?}", from_push);
+
+        // And whether AROS accepts each shape.
+        for (label, dir) in [("T:probe-plain", "T:probe-plain"), ("T:/probe-slash", "T:/probe-slash")] {
+            let _ = std::fs::remove_dir(dir);
+            match std::fs::create_dir(dir) {
+                Ok(()) => {
+                    println!("[BULK] create_dir({label}) ok");
+                    let _ = std::fs::remove_dir(dir);
+                }
+                Err(e) => println!("[BULK] create_dir({label}) -> {:?} ({e})", e.kind()),
+            }
+        }
+    }
+
+    // The shape the editor's case-sensitivity check uses: a file inside a
+    // freshly made temp directory under T:. It failed with no reason at all,
+    // which is what sent this hunt to the wrong place twice.
+    {
+        let dir = "T:probe-tmpdir";
+        let _ = std::fs::remove_dir_all(dir);
+        match std::fs::create_dir(dir) {
+            Ok(()) => {
+                let inner = format!("{dir}/CASE_TEST.TMP");
+                match std::fs::write(&inner, b"x") {
+                    Ok(()) => println!("[BULK] wrote a file inside a fresh T: temp dir"),
+                    Err(e) => {
+                        println!("[BULK] FAIL writing inside a T: temp dir -> {:?} ({e})", e.kind());
+                        fails += 1;
+                    }
+                }
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            Err(e) => {
+                println!("[BULK] FAIL create_dir({dir}) -> {:?} ({e})", e.kind());
+                fails += 1;
+            }
+        }
+        // An open that cannot succeed must still say why.
+        match std::fs::File::open("T:no-such-file-at-all") {
+            Ok(_) => {
+                println!("[BULK] FAIL opening a missing file succeeded");
+                fails += 1;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("[BULK] open of a missing file -> NotFound")
+            }
+            Err(e) => {
+                println!("[BULK] FAIL open of a missing file -> {:?} ({e})", e.kind());
+                fails += 1;
+            }
+        }
+    }
+
     // What a log file is opened with: create it if absent, append if not. The
     // editor's log never appeared on AROS, and this is the call that makes it.
     {
