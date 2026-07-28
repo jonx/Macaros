@@ -518,12 +518,19 @@ so far, both reported to Rust as `Os { code: 0, kind: Uncategorized, message:
   `/` after the colon: this is a path built by joining onto a bare volume, and
   `T:/x` is not `T:x` to AROS. So this one may be a path-joining bug on our side
   rather than an errno one -- untested either way.
-- `walkdir error scanning MacRW:lsptest/target/debug/incremental/.../*-working`,
-  which the file watcher then reports as a watch error. This one has an ordinary
-  path, so it is the handler failing without setting `IoErr`.
+- ~~`walkdir error scanning .../incremental/*-working`~~ **Fixed 2026-07-28.**
+  Those directories really had gone: rust-analyzer runs `cargo check`, which
+  creates and deletes incremental working directories continuously, and the
+  watcher's scan races them. The stat was right to fail; what was wrong was that
+  it failed without saying why, so the scan could not tell "gone" from "broken"
+  and gave up. `aros_fs_glue.c` now recovers the reason from `IoErr()` when
+  errno is left unset, and those become `NotFound` as they should. Measured
+  afterwards: an external edit reaches an open buffer in 20-30 s where it
+  previously took upwards of a minute -- one sample at 10 s resolution, so treat
+  it as a direction rather than a number.
 
-The second is the more interesting: the watcher erroring part-way through a scan
-is a candidate for the watch latency that the poll interval does not explain.
+The `T:/` one is still open, and still suspected to be a path-joining bug on our
+side rather than an errno one.
 
 ## OS capabilities requested (handoff to the AROS side)
 
