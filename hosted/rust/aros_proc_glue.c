@@ -53,6 +53,9 @@ struct AProc {
     ULONG        waiter_sig;
     volatile LONG exited;
     volatile LONG code;
+    /* The child's CLI number (SYS_CliNumPtr), which is how it can be found
+     * again for a break signal. 0 until the spawn fills it. */
+    LONG          cli_num;
 };
 
 /* Runs in the dying child, before its cleanup. `result` is the process's return
@@ -197,7 +200,7 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
                       BPTR *p_in, BPTR *p_out, BPTR *p_err)
 {
     struct AProc *p;
-    struct TagItem tags[10];
+    struct TagItem tags[11];
     BPTR dirlock = (BPTR)0;
     BPTR c_in = (BPTR)0, c_out = (BPTR)0, c_err = (BPTR)0;
     BPTR nil_in = (BPTR)0, nil_out = (BPTR)0, nil_err = (BPTR)0;
@@ -257,6 +260,7 @@ void *aros_proc_spawn(const char *cmdline, int in_mode, int out_mode, int err_mo
     if (c_out) { tags[nt].ti_Tag = SYS_Output; tags[nt].ti_Data = (IPTR)c_out; nt++; }
     if (c_err) { tags[nt].ti_Tag = SYS_Error;  tags[nt].ti_Data = (IPTR)c_err; nt++; }
     tags[nt].ti_Tag = SYS_Asynch;  tags[nt].ti_Data = (IPTR)TRUE;        nt++;
+    tags[nt].ti_Tag = SYS_CliNumPtr; tags[nt].ti_Data = (IPTR)&p->cli_num; nt++;
     if (interactive) {
         tags[nt].ti_Tag = SYS_Background; tags[nt].ti_Data = (IPTR)FALSE;  nt++;
     }
@@ -296,6 +300,37 @@ fail_after_win:
     if (*p_err) { Close(*p_err); *p_err = (BPTR)0; }
     FreeMem(p, sizeof(struct AProc));
     return (void *)0;
+}
+
+/* Ask the child to stop: the Amiga break convention, SIGBREAKF_CTRL_C to its
+ * process. The shell and its running command are one process, and commands
+ * poll for the break signal, so this is the terminal's interrupt key. It is a
+ * request, not a termination -- a program that never checks will keep running,
+ * which is all the platform offers.
+ *
+ * The child is found again by CLI number rather than by a stored pointer: a
+ * Process that has exited may be freed, and the number lookup plus the exited
+ * flag stay valid under Forbid(), where the exit hook cannot run between the
+ * check and the Signal. */
+int aros_proc_interrupt(void *handle)
+{
+    struct AProc *p = (struct AProc *)handle;
+    struct Process *child;
+    int sent = 0;
+
+    if (!p || !p->cli_num)
+        return 0;
+
+    Forbid();
+    if (!p->exited) {
+        child = FindCliProc(p->cli_num);
+        if (child) {
+            Signal((struct Task *)child, SIGBREAKF_CTRL_C);
+            sent = 1;
+        }
+    }
+    Permit();
+    return sent;
 }
 
 /* 1 and *code set once the child has exited, 0 while it is still running. */
