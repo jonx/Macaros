@@ -185,6 +185,18 @@ that nobody was there. The pipe handler now marks its filehandles as the streams
 they are (`workbench/fs/pipe/pipecreate.c`), which gives the terminal both live
 output and a prompt.
 
+**File-change notification: solved from the host side (2026-07-30), so AROS
+does not need `ACTION_ADD_NOTIFY` for this.** Rather than teach emul-handler to
+report changes, the editor asks the host directly: one `kqueue` `EVFILT_VNODE`
+watch per directory through `hostlib.resource`, drained on a 250 ms timer,
+never a blocking host call (`hosted/rust/aros_fswatch_glue.c`, proven first by
+`C:KqProbe`). Volume-to-host-path mapping arrives in `AROS_FSW_ROOTS` from the
+boot harness; unmapped volumes fall back to polling.
+
+An `ACTION_ADD_NOTIFY` in emul-handler would still be the better answer for
+AROS programs generally -- it would serve everything, not just a program that
+can reach the host -- but it is no longer on this port's critical path.
+
 **Contract, if a PTY is ever added.**
 1. **A master/slave terminal pair.** A shell spawned on the slave end behaves as
    if it has a controlling terminal: interactive line editing and job-control
