@@ -229,6 +229,20 @@ ensure_desktop_payloads() {
     fi
 }
 
+# The volume -> host-directory map the editor's native file watcher reads
+# (AROS_FSW_ROOTS, "Vol:=hostdir;Vol:=hostdir"). It watches host directories
+# through hostlib kqueue, so it needs to know where the mapped volumes live on
+# the host; without the variable it falls back to polling.
+fsw_roots_value() {
+    local mrw=""
+    if [ -n "${AROS_HOST_VOLUME:-}" ]; then
+        mrw="$(printf '%s\n' "$AROS_HOST_VOLUME" | sed -n 's/^MacRW:\(.*\);WRITE$/\1/p' | head -1)"
+        [ -z "$mrw" ] && mrw="$(printf '%s\n' "$AROS_HOST_VOLUME" | sed -n 's/^MacRW:\(.*\)$/\1/p' | head -1)"
+    fi
+    [ -z "$mrw" ] && mrw="${AROS_CTL_HOST_FOLDER:-$HOME/AROS/Shared}"
+    printf 'MacRW:=%s;SYS:=%s' "$mrw" "$AROS"
+}
+
 write_startup_sequence() {
     local startup="$AROS/S/Startup-Sequence"
 
@@ -285,6 +299,7 @@ write_startup_sequence() {
                     'If EXISTS "C:KeymapWatch"' \
                     '    Run <NIL: >NIL: C:KeymapWatch' \
                     'EndIf'
+                printf 'SetEnv AROS_FSW_ROOTS "%s"\n' "$(fsw_roots_value)"
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \
                     'Assign "LIBS:" "SYS:Classes" ADD' \
@@ -375,6 +390,7 @@ write_startup_sequence() {
                     'If EXISTS "C:KeymapWatch"' \
                     '    Run <NIL: >NIL: C:KeymapWatch' \
                     'EndIf'
+                printf 'SetEnv AROS_FSW_ROOTS "%s"\n' "$(fsw_roots_value)"
             } > "$startup"
             ;;
         *)
