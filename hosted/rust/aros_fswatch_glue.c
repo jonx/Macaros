@@ -45,7 +45,9 @@ typedef int (*h_kevent_t)(int, const struct host_kevent *, int,
 typedef int (*h_open_t)(const char *, int, ...);
 typedef int (*h_close_t)(int);
 
-static APTR       HostLibBase;
+/* Not static: proto/hostlib.h declares this exact global for its inline
+ * call stubs, and this file provides it for the whole link. */
+APTR              HostLibBase;
 static void      *g_libc;
 static h_kqueue_t g_kqueue;
 static h_kevent_t g_kevent;
