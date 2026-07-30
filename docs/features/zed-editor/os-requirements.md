@@ -197,6 +197,19 @@ An `ACTION_ADD_NOTIFY` in emul-handler would still be the better answer for
 AROS programs generally -- it would serve everything, not just a program that
 can reach the host -- but it is no longer on this port's critical path.
 
+**Interrupt: done without the PTY (2026-07-30).** The break convention covers
+it: the terminal consumes ^C and signals SIGBREAKF_CTRL_C to the shell's
+process, found by CLI number -- `SYS_CliNumPtr`, which dostags.h had promised
+and dos never implemented until now (fork commit, upstream candidate). Proven
+by `C:BrkProbe`, live in the editor's terminal. `Child::kill` in the Rust
+runtime sends the same signal, so the editor's task-stop buttons work too.
+What break cannot do: stop a program that never polls for it; there is no
+SIGKILL to escalate to.
+
+**Still needing the real PTY:** terminal size and its change notification
+(full-screen programs), raw char-at-a-time input, and a shell that knows it is
+interactive without our pipe-handler patch.
+
 **Contract, if a PTY is ever added.**
 1. **A master/slave terminal pair.** A shell spawned on the slave end behaves as
    if it has a controlling terminal: interactive line editing and job-control
