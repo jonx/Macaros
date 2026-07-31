@@ -17,6 +17,45 @@ graft/make-aros-release.sh    # a SELF-CONTAINED, relocatable Macaros.app (+ --d
 `make-aros-app.sh` is the developer wrapper (points at your `~/aros-build`);
 `make-aros-release.sh` embeds the whole prepared AROS volume so the `.app` boots
 the Wanderer desktop on a clean Mac, ready to Developer-ID sign + notarize.
+`--dmg` wraps it with [`graft/release-README.md`](../../../graft/release-README.md)
+in a disk image.
+
+## What the release desktop carries
+
+Three applications sit on the Wanderer backdrop: the editor
+([Zed](../zed-editor/README.md)), the file manager
+([Ferail](../feraille-gpui/README.md)) and the game (Moonstone). They stay in
+`C:` so they also work as shell commands; the desktop icons come from
+`SYS:.backdrop`, which lists one `:path` per leave-out icon.
+
+The release differs from the dev tree in three ways that the editor depends on:
+`HOME` is `MacRW:` (the embedded volume is inside a signed bundle and must stay
+read-only), `MOONSTONE_ROOT` points at the embedded game assets, and the
+launcher writes `AROS_FSW_ROOTS` into the share as `.macaros-boot` because only
+it knows where the share landed.
+
+### Making an icon
+
+[`graft/make-aros-icon.py`](../../../graft/make-aros-icon.py) turns a Mac PNG
+into a Workbench icon: AROS `icon.library` reads OS4-style PNG icons, so the
+`.info` file *is* a PNG with the Amiga attributes in a private `icOn` chunk.
+The generated icons live in [`graft/icons/`](../../../graft/icons/).
+
+### Two traps when an app is launched by icon
+
+Both cost a full debugging round on 2026-08-01, and neither shows up when the
+same program is started from a shell:
+
+- **The icon's stack is the program's stack.** Workbench passes
+  `do_StackSize` straight to `CreateNewProc`. Ferail needs 8 MB and gives up
+  with "no CLI to relaunch from" below that, because its own big-stack
+  workaround re-enters through the *CLI*, which a Workbench start does not
+  have. Pass `--stack` to the icon generator to match what the program wants.
+- **A dos requester blocks a program that has no one to answer it.** sqlite's
+  VFS probes paths that no volume can satisfy; with the default
+  `pr_WindowPtr` that raises a modal "please insert volume" over the desktop
+  and the launch stops there. A GUI program should set `pr_WindowPtr = -1` in
+  its entry shim and read the error instead.
 
 The Settings window is *generated* from
 [`hosted/cocoametal/settings.json`](../../../hosted/cocoametal/settings.json)

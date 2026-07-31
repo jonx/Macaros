@@ -11,7 +11,9 @@
  */
 
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include <exec/memory.h>
+#include <dos/dosextens.h>
 #include <aros/symbolsets.h>
 
 extern int zed_aros_main(void);
@@ -30,8 +32,24 @@ DECLARESET(INIT_ARRAY)
 
 int main(int argc, char **argv)
 {
+    struct Process *self = (struct Process *)FindTask(NULL);
+
+    /* Every path failure reaches the editor as an error it already handles, so
+     * a modal dos requester can only block it. A Workbench start raises one
+     * before the window is even open. */
+    self->pr_WindowPtr = (APTR)-1;
+
     aros_argc = argc;
     aros_argv = argv;
+
+    /* Started from Workbench: argv is the WBStartup message, not a string array
+     * (compiler/autoinit/fromwb.c), and argc is 0. Give the editor the one
+     * argument it expects instead. */
+    if (argc == 0) {
+        static char *wb_argv[] = { "Zed", 0 };
+        aros_argc = 1;
+        aros_argv = wb_argv;
+    }
 
     APTR lower = AllocMem(ZED_STACK, MEMF_ANY);
     if (!lower) {

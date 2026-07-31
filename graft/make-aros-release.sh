@@ -34,7 +34,17 @@ BSDSOCK="${AROS_CTL_BSDSOCK_DYLIB:-$ROOT/build/libbsdsockhost.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
 ICON="${AROS_CTL_ICON:-$ROOT/hosted/cocoametal/Macaros.icns}"
 APP="${AROS_APP:-$ROOT/build/Macaros.app}"
-MEMORY="${AROS_HOST_MEMORY:-512}"
+# The editor is the memory-hungry payload; 512 MB boots the desktop but cannot
+# hold Zed.
+MEMORY="${AROS_HOST_MEMORY:-1280}"
+
+# Dev-tree binaries that must not ship: the superseded editor shim and the
+# pre-rename Ferail copy.
+EXCLUDE_C="ZedAros Feraille"
+
+# The game reads its assets from one root. The music is 15 MB of OPL streams
+# that nothing plays yet (no AHI backend on AROS), so it stays out.
+MOONSTONE_SRC="${MOONSTONE_SRC:-$HOME/AROS/Shared/Moonstone}"
 
 INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,8 +55,8 @@ INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleExecutable</key><string>Macaros</string>
   <key>CFBundleIconFile</key><string>Macaros</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>0.2</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>NSHumanReadableCopyright</key><string>Copyright © 2026 John Knipper. AROS under the AROS Public License.</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
@@ -78,6 +88,14 @@ if [ -z "${AROS_HOST_VOLUME:-}" ]; then
 MacRW:$SHARE;WRITE"
 fi
 export AROS_HOST_VOLUME
+
+# Native file watching maps AROS paths back to host paths, and only the launcher
+# knows where the share landed. The baked Startup-Sequence cannot be edited (the
+# bundle is sealed), so hand the mapping over through the share itself.
+SHARE="${SHARE:-$(printf "%s\\n" "$AROS_HOST_VOLUME" | sed -n "s/^MacRW:\\([^;]*\\).*$/\\1/p" | head -1)}"
+if [ -n "$SHARE" ] && [ -d "$SHARE" ]; then
+    printf "SetEnv AROS_FSW_ROOTS \"MacRW:=%s\"\\n" "$SHARE" > "$SHARE/.macaros-boot" 2>/dev/null || true
+fi
 
 cd "$BOOTD"
 exec env AROS_DARWIN_THREADED=1 \
@@ -115,6 +133,14 @@ If EXISTS "DEVS:Keymaps"
 EndIf
 If EXISTS "C:LoadKeymap"
     LoadKeymap RESTORE
+EndIf
+If EXISTS "C:KeymapWatch"
+    Run <NIL: >NIL: C:KeymapWatch
+EndIf
+SetEnv HOME "MacRW:"
+SetEnv MOONSTONE_ROOT "SYS:Moonstone"
+If EXISTS "MacRW:.macaros-boot"
+    Execute "MacRW:.macaros-boot"
 EndIf
 Assign "LOCALE:" "SYS:Locale"
 Assign "LIBS:" "SYS:Classes" ADD
@@ -191,6 +217,21 @@ if [ "${1:-}" = "--check" ]; then
     [ -e "$A/Resources/AROS/C/FFViewX" ];               ck $? "FFViewX embedded (C:FFViewX)"
     [ -e "$A/Resources/AROS/Libs/gpufx.library" ];      ck $? "gpufx.library embedded (LIBS:)"
     [ -e "$A/Resources/AROS/C/RustHello" ];             ck $? "RustHello embedded (C:RustHello)"
+    [ -e "$A/Resources/AROS/C/Zed" ];                   ck $? "Zed embedded (C:Zed)"
+    [ -e "$A/Resources/AROS/C/Ferail" ];                ck $? "Ferail embedded (C:Ferail)"
+    [ -e "$A/Resources/AROS/C/Moonstone" ];             ck $? "Moonstone embedded (C:Moonstone)"
+    [ -d "$A/Resources/AROS/Moonstone/extracted/moonahdk" ]; ck $? "Moonstone game assets"
+    [ -d "$A/Resources/AROS/Moonstone/assets/data" ];   ck $? "Moonstone data tables"
+    [ -f "$A/Resources/AROS/C/Zed.info" ];              ck $? "Zed icon"
+    [ -f "$A/Resources/AROS/C/Ferail.info" ];           ck $? "Ferail icon"
+    [ -f "$A/Resources/AROS/C/Moonstone.info" ];        ck $? "Moonstone icon"
+    grep -q '^:C/Zed$'       "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Zed on the desktop (.backdrop)"
+    grep -q '^:C/Ferail$'    "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Ferail on the desktop (.backdrop)"
+    grep -q '^:C/Moonstone$' "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Moonstone on the desktop (.backdrop)"
+    grep -q 'MOONSTONE_ROOT' "$A/Resources/AROS/S/Startup-Sequence" 2>/dev/null; ck $? "MOONSTONE_ROOT set at boot"
+    for x in $EXCLUDE_C; do
+        [ ! -e "$A/Resources/AROS/C/$x" ];              ck $? "dev-only C:$x not shipped"
+    done
     [ -f "$A/Resources/AROS/S/Startup-Sequence" ];      ck $? "desktop Startup-Sequence baked"
     [ -f "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl" ]; ck $? "conf template present"
     # THE self-containment invariant: no path in the template escapes the bundle.
@@ -213,8 +254,11 @@ SRC="$(cd "$BOOTD/../.." && pwd)"   # .../darwin-aarch64/AROS
 [ -f "$DYLIB" ] || { echo "missing $DYLIB (make cocoametal-dylib, or set AROS_CTL_DYLIB)" >&2; exit 1; }
 
 # require the prepared desktop payloads — this script does NOT re-stage them
-for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer Devs/Monitors/Cocoa; do
+for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer Devs/Monitors/Cocoa C/Zed C/Ferail C/Moonstone; do
     [ -e "$SRC/$p" ] || { echo "make-aros-release.sh: $SRC missing $p — boot desktop once via run-window.sh first" >&2; exit 1; }
+done
+for p in extracted/moonahdk assets/data; do
+    [ -d "$MOONSTONE_SRC/$p" ] || { echo "make-aros-release.sh: $MOONSTONE_SRC missing $p (set MOONSTONE_SRC)" >&2; exit 1; }
 done
 
 echo ">> source AROS tree: $SRC ($(du -sh "$SRC" | awk '{print $1}'))"
@@ -226,6 +270,29 @@ echo ">> embedding AROS volume (read-only) ..."
 /usr/bin/ditto "$SRC" "$APP/Contents/Resources/AROS"
 DST="$APP/Contents/Resources/AROS"
 rm -f "$DST/Devs/Monitors/headless" 2>/dev/null || true
+for x in $EXCLUDE_C; do rm -f "$DST/C/$x" "$DST/C/$x.info"; done
+
+# Desktop icons: Wanderer draws a backdrop icon for each `:path` line in the
+# volume's .backdrop, so the two apps land on the desktop without moving them
+# off the command path. The icons themselves ship with this script (made by
+# make-aros-icon.py from each project's own artwork).
+cp -f "$HERE/icons/Zed.info"       "$DST/C/Zed.info"
+cp -f "$HERE/icons/Ferail.info"    "$DST/C/Ferail.info"
+cp -f "$HERE/icons/Moonstone.info" "$DST/C/Moonstone.info"
+printf ':C/Zed\n:C/Ferail\n:C/Moonstone\n' > "$DST/.backdrop"
+
+echo ">> embedding Moonstone assets ..."
+mkdir -p "$DST/Moonstone/assets"
+/usr/bin/ditto "$MOONSTONE_SRC/extracted"   "$DST/Moonstone/extracted"
+/usr/bin/ditto "$MOONSTONE_SRC/assets/data" "$DST/Moonstone/assets/data"
+cp -f "$MOONSTONE_SRC/CH.PIV" "$DST/Moonstone/CH.PIV" 2>/dev/null || true
+: > "$DST/Moonstone/.moonstone-root"
+
+# HOME points at the writable host share, not at SYS: — the embedded volume is
+# inside the signed bundle and must stay untouched.
+mkdir -p "$DST/Prefs/Env-Archive"
+printf 'MacRW:' > "$DST/Prefs/Env-Archive/HOME"
+rm -f "$DST/Prefs/Env-Archive/AROS_FSW_ROOTS"   # dev paths; the launcher writes the real one
 
 # The menu-bar/app binary must be named Macaros; keep it inside the boot dir so
 # cwd-relative host resolution matches run-window.sh.
@@ -278,9 +345,14 @@ echo ">> built $APP ($(du -sh "$APP" | awk '{print $1}'))"
 
 if [ "${1:-}" = "--dmg" ]; then
     DMG="${AROS_DMG:-$ROOT/build/Macaros.dmg}"
-    rm -f "$DMG"
+    STAGE="${AROS_DMG_STAGE:-$ROOT/build/dmg-root}"
+    rm -f "$DMG"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+    echo ">> staging disk image contents ..."
+    /usr/bin/ditto "$APP" "$STAGE/$(basename "$APP")"
+    cp -f "$HERE/release-README.md" "$STAGE/README.md"
     echo ">> building $DMG ..."
-    hdiutil create -quiet -volname "Macaros" -srcfolder "$APP" -ov -format UDZO "$DMG"
+    hdiutil create -quiet -volname "Macaros" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+    rm -rf "$STAGE"
     echo ">> built $DMG ($(du -sh "$DMG" | awk '{print $1}'))"
 fi
 

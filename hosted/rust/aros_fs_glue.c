@@ -252,19 +252,36 @@ void aros_closedir(void *dir)
  * the RS3g probe, 2026-07-18). Canonicalize the DOS way instead: Lock() the
  * path and ask NameFromLock() for the absolute volume-rooted name. No cwd
  * games, no "." components, symlinks resolved by the handler itself. */
+#include <proto/exec.h>
 #include <proto/dos.h>
 #include <dos/dos.h>
+#include <dos/dosextens.h>
+#include <exec/nodes.h>
 #include <errno.h>
 
 int aros_realpath(const char *path, char *buf, unsigned long buflen)
 {
+    struct Process *self;
+    APTR oldwindow = NULL;
+    int quieted = 0;
     BPTR lock;
     LONG ok;
     if (!path || !buf || buflen == 0) {
         errno = EINVAL;
         return -1;
     }
+    /* A path this cannot resolve must come back as an error. Without this,
+     * naming an unmounted volume puts up a modal "please insert volume"
+     * requester and the caller waits on a click that no one is there to make. */
+    self = (struct Process *)FindTask(NULL);
+    if (self && self->pr_Task.tc_Node.ln_Type == NT_PROCESS) {
+        oldwindow = self->pr_WindowPtr;
+        self->pr_WindowPtr = (APTR)-1;
+        quieted = 1;
+    }
     lock = Lock((CONST_STRPTR)path, SHARED_LOCK);
+    if (quieted)
+        self->pr_WindowPtr = oldwindow;
     if (!lock) {
         LONG e = IoErr();
         errno = (e == ERROR_LINE_TOO_LONG)              ? ENAMETOOLONG
