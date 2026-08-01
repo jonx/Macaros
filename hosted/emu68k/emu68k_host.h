@@ -65,6 +65,13 @@ void emu68k_run_free(emu68k_run *r);
 /* Crash-bundle directory for subsequent runs (default: the engine's own). */
 void emu68k_set_crash_dir(const char *dir);
 
+/* [T2a] The static route this image implies, WITHOUT running it: 1 = it needs a
+ * full machine emulator (it drives the Amiga hardware), 0 = it should run under
+ * translation. `detail` receives the reason, suitable for showing a user. The
+ * runtime guard remains the authority; this only routes the predictable cases. */
+int emu68k_scan_image(const void *image, unsigned long imagelen,
+                      char *detail, unsigned detaillen);
+
 const char *emu68k_version(void);
 
 #ifdef __cplusplus

@@ -8,6 +8,7 @@
  * OS: bounded quanta, streaming output, async kill, contained faults. */
 
 #include "emu68k_host.h"
+#include "scan68k.h"
 
 #include "j4_hunk.h"
 #include "j5d_jit68k.h"
@@ -359,6 +360,24 @@ void emu68k_run_free(emu68k_run *r)
 }
 
 void emu68k_set_crash_dir(const char *dir) { g_crash_dir = dir; }
+
+int emu68k_scan_image(const void *image, unsigned long imagelen,
+                      char *detail, unsigned detaillen)
+{
+    scan68k_report rep;
+    char err[128];
+    if (scan68k_image(image, imagelen, &rep, err, sizeof err)) {
+        snprintf(detail, detaillen, "%s", err);
+        return 0;                       /* unscannable: let it try to run       */
+    }
+    if (rep.confidence == SCAN68K_BANGER) {
+        snprintf(detail, detaillen, "%s",
+                 rep.n_evidence ? rep.evidence[0].what : "hits the Amiga hardware");
+        return 1;                       /* FULL                                  */
+    }
+    snprintf(detail, detaillen, "%s", scan68k_confidence_text(rep.confidence));
+    return 0;                           /* JIT                                   */
+}
 
 const char *emu68k_version(void)
 {
