@@ -115,6 +115,16 @@
  * BADDR and got $889000, and the faults landed at addresses derived from it.
  * Every BPTR-typed field handed to the guest goes through this. */
 #define GUEST_MKBADDR(a)  ((a) >> 2)
+/* Guest-visible file handles. A dos handle is a BPTR, and a program is free to
+ * dereference it (to read fh_Type, say), so a handle cannot be an opaque tag -
+ * BADDR of a tag lands nowhere. Each handle is backed by a real, zeroed guest
+ * structure here, and what crosses is MKBADDR of its address. The embedder maps
+ * that slot back to the native BPTR it stands for.
+ * These three constants are mirrored in emu68k_intern.h on the AROS side and
+ * MUST match: that is the whole contract between the two halves. */
+#define GUEST_FH_BASE   0x00223000u
+#define GUEST_FH_SLOT   64u
+#define GUEST_FH_MAX    32u
 #define GUEST_BADDR(b)    ((b) << 2)
 
 /* exec LVOs a program uses to get going (negative offset / 6). */
@@ -986,6 +996,8 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             r->deadline = (double)ts.tv_sec + ts.tv_nsec / 1e9 + secs;
         }
     }
+    memset(j4_sandbox_host(&r->sb, GUEST_FH_BASE), 0,
+           GUEST_FH_SLOT * GUEST_FH_MAX);        /* the guest handle structures */
     r->run_lib   = &r->lib;
     /* the exec heap: everything between the loaded program and the stack, which
      * on a ~10 MiB arena is megabytes - what real Amiga software expects. */
