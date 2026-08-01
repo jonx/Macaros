@@ -80,16 +80,38 @@
  * taking over the machine and must still fault into the [T2b] hardware guard.
  * Read-only gives both behaviours with one mapping. */
 #define GUEST_LOWPAGE   0x00000000u
-#define EXEC_BASE       0x00200000u     /* guest exec.library base              */
-#define LIBBASE_FIRST   0x00201000u     /* opened libraries get bases from here */
+/* The library bases live INSIDE the arena, and must: a program does not only
+ * call through a base, it READS FIELDS from it (ExecBase->AttnFlags, ThisTask,
+ * a library's version...). A base outside the mapped arena faults on the first
+ * such read, which is how this first failed on real software. */
+#define EXEC_BASE       0x00220000u     /* guest exec.library base (in-arena)   */
+#define LIBBASE_FIRST   0x00221000u     /* opened libraries get bases from here */
 #define LIBBASE_STRIDE  0x00001000u
 #define LIBBASE_MAX     8
+
+/* A minimal guest `struct Process`. Startup code universally does
+ * FindTask(NULL) and then reads pr_CLI to decide whether it was launched from
+ * the Shell or from Workbench; with no Process to read, it reads zero, concludes
+ * "Workbench", and goes looking for a startup message that will never come (both
+ * LhA and PPMore stopped at exactly that call). Offsets are the classic 68k
+ * layout: struct Task is 92 bytes, MsgPort 34, and pr_CLI lands at 172. */
+#define GUEST_PROCESS   0x00222000u
+#define GUEST_CLI       0x00222400u
+#define PR_TASK_LN_TYPE 8            /* tc_Node.ln_Type: NT_PROCESS = 13       */
+#define PR_CLI_OFFSET   172
+#define NT_PROCESS      13
 
 /* exec LVOs a program uses to get going (negative offset / 6). */
 #define LVO_OPENLIBRARY   92    /* -552 */
 #define LVO_CLOSELIBRARY  69    /* -414 */
 #define LVO_ALLOCMEM      33    /* -198 */
 #define LVO_FREEMEM       35    /* -210 */
+#define LVO_FORBID        22    /* -132 */
+#define LVO_PERMIT        23    /* -138 */
+#define LVO_DISABLE       27    /* -162 */
+#define LVO_ENABLE        28    /* -168 */
+#define LVO_FINDTASK      49    /* -294 */
+#define LVO_SETSIGNAL     51    /* -306 */
 
 static const char *g_crash_dir = NULL;
 
@@ -117,7 +139,9 @@ struct emu68k_run {
     /* [T3] opened libraries: guest base -> name, for the OS-call callback */
     struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
     int                   nlib;
-    stub_lib             *run_lib;       /* the guest heap, for exec AllocMem   */
+    stub_lib             *run_lib;       /* the corpus stub's small heap        */
+    uint32_t              exec_heap;     /* exec AllocMem cursor (real programs) */
+    uint32_t              exec_heap_end;
 };
 
 /* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
@@ -248,22 +272,38 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;                                        /* bases stay valid    */
     case LVO_ALLOCMEM: {
         /* Memory a 68k program allocates must live in the GUEST arena: the
-         * program will dereference the pointer itself. So this is served here
-         * from the guest heap and never handed out to the embedder, whose
-         * allocator would return an address the program cannot reach. */
-        uint32_t size = (st->d[0] + 3u) & ~3u;
-        stub_lib *L = r->run_lib;
-        if (!L || size == 0 || L->heap_next + size > L->heap_end) {
+         * program dereferences the pointer itself, so it has to be an address
+         * the program can reach. Real software asks for real amounts (DMS wants
+         * hundreds of KB before it will even start), so this comes from a large
+         * region sized to the arena, not from the corpus stub's small heap. */
+        uint32_t size = (st->d[0] + 7u) & ~7u;
+        if (size == 0 || r->exec_heap + size > r->exec_heap_end) {
             st->d[0] = 0;                                /* AmigaOS: NULL       */
             return 0;
         }
-        st->d[0] = L->heap_next;
-        L->heap_next += size;
-        memset(j4_sandbox_host(sb, st->d[0]), 0, size);
+        st->d[0] = r->exec_heap;
+        r->exec_heap += size;
+        memset(j4_sandbox_host(sb, st->d[0]), 0, size);  /* MEMF_CLEAR-safe     */
         return 0;
     }
     case LVO_FREEMEM:
         st->d[0] = 0;                                    /* bump heap: no free  */
+        return 0;
+
+    /* Bookkeeping calls a single-threaded guest can be told the truth about:
+     * there is no other task in its arena to arbitrate against. */
+    case LVO_FORBID: case LVO_PERMIT:
+    case LVO_DISABLE: case LVO_ENABLE:
+        return 0;
+    case LVO_FINDTASK:
+        /* FindTask(NULL) = "me": the guest Process, which exists so that reading
+         * pr_CLI says "launched from the Shell". */
+        st->d[0] = (st->a[1] == 0) ? GUEST_PROCESS : 0;
+        return 0;
+    case LVO_SETSIGNAL:
+        /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
+         * signals a guest task yet, so the honest answer is a clean zero. */
+        st->d[0] = 0;
         return 0;
     default:
         return 1;                                        /* not served here     */
@@ -424,7 +464,24 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     r->diag.quiet_banner = 1;
     if (g_crash_dir) r->diag.crash_dir = g_crash_dir;
 
+    /* plant the guest Process: NT_PROCESS, and a non-NULL pr_CLI so startup
+     * code takes the Shell path instead of waiting for a Workbench message */
+    {
+        uint8_t *pr = j4_sandbox_host(&r->sb, GUEST_PROCESS);
+        memset(pr, 0, 256);
+        pr[PR_TASK_LN_TYPE] = NT_PROCESS;
+        pr[PR_CLI_OFFSET + 0] = (uint8_t)(GUEST_CLI >> 24);
+        pr[PR_CLI_OFFSET + 1] = (uint8_t)(GUEST_CLI >> 16);
+        pr[PR_CLI_OFFSET + 2] = (uint8_t)(GUEST_CLI >> 8);
+        pr[PR_CLI_OFFSET + 3] = (uint8_t)(GUEST_CLI);
+        memset(j4_sandbox_host(&r->sb, GUEST_CLI), 0, 128);
+    }
     r->run_lib   = &r->lib;
+    /* the exec heap: everything between the loaded program and the stack, which
+     * on a ~10 MiB arena is megabytes - what real Amiga software expects. */
+    r->exec_heap     = (r->sb.next_alloc + 0xFFFFu) & ~0xFFFFu;
+    if (r->exec_heap < PROG_ORIGIN) r->exec_heap = PROG_ORIGIN;
+    r->exec_heap_end = (SANDBOX_ORIGIN + (uint32_t)r->arena_size) - 0x00100000u;
     r->sink      = sink;
     r->sink_user = sink_user;
     r->resume_pc = r->seg.entry;

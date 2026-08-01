@@ -337,6 +337,7 @@ static void scan_code(const uint8_t *code, unsigned long len, int hunk,
         if (l <= 0) break;
         i += (unsigned long)l;
     }
+    r->walked_bytes += i;      /* how much of this hunk the walk actually read */
 
     /* (3) hardware-shaped LONGWORDS anywhere in the hunk, WITHOUT instruction
      * context: inline data, a jump table, a computed base. Recorded as weak

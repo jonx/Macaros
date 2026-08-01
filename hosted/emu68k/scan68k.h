@@ -72,7 +72,8 @@ typedef struct {
     int                n_libs;
     int                lvo_off[SCAN68K_MAX_LVOOFF];   /* negative byte offsets  */
     int                n_lvo_off;
-    int                n_lib_calls;                   /* total call sites       */
+    int                n_lib_calls;                   /* at instruction boundaries */
+    unsigned long      walked_bytes;                  /* how far the walk reached  */
 } scan68k_report;
 
 /* Is this library name bridged to a native implementation yet? Returns 2 for

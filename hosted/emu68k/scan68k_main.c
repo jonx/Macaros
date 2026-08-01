@@ -75,14 +75,21 @@ int main(int argc, char **argv)
         }
     }
     if (r.n_libs || r.n_lib_calls) {
-        printf("  os surface : %d library-call site%s", r.n_lib_calls,
-               r.n_lib_calls == 1 ? "" : "s");
+        {   /* Be honest about reach: the instruction walk stops at the first
+             * word it cannot size, so on a large binary these counts describe
+             * the part it read, not the whole program. */
+            int pct = r.code_bytes ? (int)((r.walked_bytes * 100) / r.code_bytes) : 0;
+            printf("  os surface : %d library-call site%s seen in the first %d%% "
+                   "of the code\n               (the instruction walk stops where it "
+                   "cannot size an opcode)\n", r.n_lib_calls,
+                   r.n_lib_calls == 1 ? "" : "s", pct);
+        }
+        printf("             ");
         if (r.n_lvo_off) {
-            printf(" (offsets");
+            printf("offsets");
             for (int i = 0; i < r.n_lvo_off && i < 12; i++)
                 printf(" %d", r.lvo_off[i]);
             if (r.n_lvo_off > 12) printf(" ...");
-            printf(")");
         }
         printf("\n");
         for (int i = 0; i < r.n_libs; i++) {

@@ -274,6 +274,24 @@ static int is_libbase(uint32_t a6, uint32_t entry_base)
     return 0;
 }
 
+/* [T3] Which registered library does this CALL TARGET belong to?
+ * Real programs do not always call through A6: `move.l a6,a0 ; jsr -294(a0)`
+ * is ordinary compiler output, and LhA is full of it. Recognising a library
+ * vector by the address it lands on - a bounded negative offset below a known
+ * base, on a 6-byte boundary - catches those too. Returns the base, or 0. */
+#define J5D_LIB_VECSPAN 0x1000u
+static uint32_t libbase_of_target(uint32_t target, uint32_t entry_base)
+{
+    for (int i = -1; i < g_eng->n_libbase; i++) {
+        uint32_t base = (i < 0) ? entry_base : g_eng->libbase[i];
+        if (!base || target > base) continue;
+        uint32_t delta = base - target;
+        if (delta == 0 || delta > J5D_LIB_VECSPAN || delta % 6u) continue;
+        return base;
+    }
+    return 0;
+}
+
 void j5d_request_stop(void) { g_eng->stop_flag = 1; g_eng->chain_budget = 0; }
 int  j5d_take_stop(void)
 {
@@ -2027,6 +2045,29 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             }
             g_stats.lib_calls++;
             pc = tpc + 4;                            /* jsr d16(A6) is 4 bytes      */
+        }
+        else if ((top & 0xFFF8u) == 0x4EA8u &&
+                 libbase_of_target(st->a[top & 7u] +
+                                   (uint32_t)(int32_t)be16s(thost + 2), a6_libbase)) {
+            /* [T3] a library vector reached through a register other than A6.
+             * The AmigaOS ABI still says the base belongs in A6 for the call, so
+             * present it that way to the bridge and restore afterwards. */
+            uint32_t target = st->a[top & 7u] + (uint32_t)(int32_t)be16s(thost + 2);
+            uint32_t base = libbase_of_target(target, a6_libbase);
+            int n = j3_vector_recognise(base, target);
+            if (n < 0) RFAIL("jsr(An): target not a valid library vector");
+            if (!lvo)  RFAIL("jsr(An): library call but no bridge registered");
+            uint32_t saved_a6 = st->a[6];
+            st->a[6] = base;
+            char e2[160] = {0};
+            int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
+            st->a[6] = saved_a6;
+            if (brc) {
+                if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
+                return 1;
+            }
+            g_stats.lib_calls++;
+            pc = tpc + 4;
         }
         else if ((top & 0xFFF8u) == 0x4EA8u) {       /* jsr (d16,An) -> computed push+jump
              * (includes jsr (d16,a6) when a6 is a frame pointer, not the lib base). */
