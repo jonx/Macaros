@@ -93,7 +93,35 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
 
 Exit criteria: all four proofs PASS, decisions in NOTES.md, corpus green.
 
-## [T1] A 68k process inside AROS - "it runs from the shell" (large)
+## [T1] A 68k process inside AROS - "it runs from the shell" ✅ DONE 2026-08-01
+
+**Real classic-Amiga 68k binaries run from the booted AROS shell**, byte-exact
+against the host engine. Graft commits through `libemu68k.dylib` + the engine
+chain budget; OS-side `7165e883ce` + follow-up on `aarch64-darwin-graft`.
+
+What shipped: `build/libemu68k.dylib` (the engine behind a quantum-run API:
+create from hunk bytes, bounded quanta, streaming output sink, async kill,
+contained faults; smoke `make hosted-emu68k-t1dyl`) · `emu68k.library`
+(`arch/all-darwin/libs/emu68k`, binds the dylib through `hostlib.resource`,
+runs the program as the calling process, console output, CTRL-C between
+quanta, run semaphore) · the real DOS router (`rom/dos/emu68k_route.c`)
+completing the launch context from a source-image stash the hunk loader keeps
+with the registry node (freed at unload) · the `[T1d]` capability-gap ledger
+(per-LVO hit counts + program name; unmarshalled call = classified abort, never
+a guess) · `C:RunSeg` for the created-process path.
+
+Verified live in one boot (`run/darwin-aarch64/t1x-195732`): hardware-FP `j5t`
+(717 bytes) and `fact` byte-exact from the shell; **two translated processes
+interleaved** (background Dhrystone + foreground Mandelbrot, both byte-exact);
+a capability gap reported and survived; a real translated-code SIGSEGV
+contained with a crash bundle, the next 68k program running fine after it; a
+fully-chained infinite loop killed with `Break`; the system alive throughout.
+
+Engine change this forced: the chain-entry safe point now decrements a **chain
+budget** instead of only testing a flag, because a self-chained loop never
+returns to C on its own, so nothing in-OS could poll CTRL-C.
+
+Original plan text follows.
 
 The transparency spine. Depends: T0.
 
