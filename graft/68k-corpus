@@ -33,7 +33,10 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
       m=$(grep -i "^[[:space:]]*$b[[:space:]]*:" "$MANIFEST" | head -1 | sed 's/^[^:]*://')
       [ -n "$m" ] && a="$m"
     fi
-    echo "$b $a >>MacRW:corpus-out.txt"
+    # <NIL: matters: an interactive program (a text viewer, a prompt) otherwise
+    # blocks forever inside a native Read, and a guest blocked in a native call
+    # is past the point where the wall-clock guard can reach it.
+    echo "$b $a <NIL: >>MacRW:corpus-out.txt"
   done
   echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
   echo 'Wait 999999'
