@@ -19,19 +19,19 @@ T0 is no longer a decision list: each item is a working proof, because each
 one, wrong, forces a rework of the loader, engine API or marshaller in T1/T3.
 Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
 
-- **`[T0-P1]` Guest address model + loader representation.** Not an
-  allocation spike: an address-model proof. Upstream's hunk loader
-  hard-requires `MEMF_31BIT` on 64-bit targets
-  ([internalloadseg_aos.c:196](../../../../aros-upstream/rom/dos/internalloadseg_aos.c))
-  and the darwin bootstrap documents that the low 4 GiB is unavailable
-  ([bootstrap/memory.c:57](../../../../aros-upstream/arch/all-unix/bootstrap/memory.c)),
-  so relocations must produce **guest addresses**, not truncated host
-  pointers. Prototype the candidates (parameterized upstream loader / proxy
-  seglist / the engine's `[J4]` sandbox loader promoted to execution loader,
-  per [design §2](design.md)) and pick one, answering seglist identity,
-  lifetime and `UnLoadSeg`. **Exit: a real hunk binary loaded, relocated,
-  identified via `GetSegListInfo`, run, and unloaded** in the chosen
-  representation (host-harness acceptable, representation final).
+- **`[T0-P1]` Guest address model + loader representation.** ✅ **PROVEN
+  2026-08-01** (`make hosted-emu68k-t0p1`, `hosted/emu68k/t0p1_seglist.c`).
+  Representation chosen: the **proxy seglist** — guest payloads relocated
+  with guest addresses by the `[J4]` loader; LoadSeg returns a native
+  `[BPTR next][descriptor]` chain (fast-BPTR identity for `GetSegListInfo`,
+  blind-walk `UnLoadSeg` compatible); the guest arena teardown hangs off the
+  seg-registry removal, so identity and lifetime share one mechanism. Full
+  rationale + alternatives: the NOTES.md entry of the same date. Exit bar
+  met: two real hunk binaries (integer + hardware FP) loaded, relocated,
+  identified (positive + negative), run byte-exact from the proxy chain
+  alone, unloaded leak-free. Byproduct: first-hand confirmation that the
+  engine is single-run-per-process (stale chained blocks in freed JIT memory
+  on a second run), sharpening `[T0-P3]`.
 - **`[T0-P2]` Execution interception + launch context.** Prove the
   execution-boundary divert: `RunCommand`'s existing `GSLI_68KHUNK` check
   ([runcommand.c:77](../../../../aros-upstream/rom/dos/runcommand.c)) routes
@@ -55,9 +55,13 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   opaque handle, callback hook, taglist call. Exit: each case runs under the
   host harness with the generated-thunk + annotation shape, or the vocabulary
   is revised and the design updated.
-- **`[T0a]` Engine-as-library split** (unchanged, enables P3/P4): extract the
-  engine core from the `run68k` CLI behind the existing `jit68k.h` seam; the
-  host tool remains the fast dev harness. Corpus stays green.
+- **`[T0a]` Engine-as-library split** (unchanged, enables P3/P4): ✅ **DONE
+  2026-08-01** — `make libjit68k` builds `build/libjit68k.a` (the exact engine
+  object set; CLI + stub-OS stay with the front-end), `run68k` and the
+  `[T0-P1]` proof both link it. Corpus green (`j5m`/`j5t`/`apps`/`j5l`/`args`
+  byte-exact). Gotcha, documented at the Makefile target: consumers must link
+  `-Wl,-force_load` (weak-default/strong-override pairs across archive
+  members; lazy archive loading silently drops the strong overrides).
 - **`[T0d]` Naming + layout** (unchanged): `emu68k.library`,
   `hosted/emu68k/`, engine stays in `hosted/jit68k/`; compat DB + prefs
   formats versioned from day one (`EMU1` header).

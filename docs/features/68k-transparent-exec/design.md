@@ -121,14 +121,14 @@ hard-requires `MEMF_31BIT` on 64-bit targets
 while the darwin bootstrap documents that `MAP_32BIT` fails, the low 4 GiB
 being unavailable
 ([arch/all-unix/bootstrap/memory.c:57](../../../../aros-upstream/arch/all-unix/bootstrap/memory.c)).
-`[T0-P1]` decides between: parameterizing the upstream loader to allocate
-from (and relocate within) the guest space; returning a proxy seglist whose
-segments live in the sandbox; or promoting the engine's existing `[J4]`
-sandbox hunk loader to be the execution loader, with DOS keeping only
-identity/tracking. Whatever wins must answer seglist identity, lifetime and
-`UnLoadSeg` for the new representation, and its proof is a real hunk loaded,
-relocated, identified, run and unloaded, not merely an allocation below
-4 GiB.
+**Decided and proven 2026-08-01** (`[T0-P1]`, `make hosted-emu68k-t0p1`): the
+**proxy seglist**. The `[J4]` loader loads and relocates payloads with guest
+addresses in a 32-bit arena; LoadSeg returns a chain of small native
+`[BPTR next][descriptor]` nodes the existing DOS machinery handles unchanged
+(fast-BPTR identity for `GetSegListInfo`, blind-walk `UnLoadSeg`); the guest
+arena teardown hangs off seg-registry removal, so identity and lifetime share
+one mechanism. Rationale and rejected alternatives: the NOTES.md decision
+entry of the same date.
 
 ### 3. The routing ladder - `AUTO | JIT | FULL`
 
