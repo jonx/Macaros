@@ -376,6 +376,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->d[0] = 0;
         return 0;
     default:
+        if (getenv("EMU68K_DEBUG_EXEC"))
+            fprintf(stderr, "[exec_call] unhandled lvo=%d (ADDHEAD=%d)\n",
+                    lvo, LVO_ADDHEAD);
         return 1;                                        /* not served here     */
     }
 }
