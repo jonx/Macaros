@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>   /* rename() -- implicit decls are an error on clang 16+ */
 #include <proto/dos.h>   /* IoErr() */
 #include <libraries/stdc.h>  /* struct StdCBase + __aros_getbase_StdCBase() */
 
