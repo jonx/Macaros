@@ -225,8 +225,8 @@ shim, the bridge, or the clipboard write.
 
 | Direction | State |
 |-----------|-------|
-| **Mac → AROS** (⌘C on Mac, **Right-Amiga+V** in the shell) | **verified end-to-end** — pasted text appears at the prompt |
-| **AROS → Mac** (select console text + **Right-Amiga+C**, ⌘V on Mac) | **verified chain** — a real console copy reaches the Mac clipboard (needs a real mouse text-selection) |
+| **Mac → AROS** (⌘C on Mac, **Right-Amiga+V** in the shell) | **verified end-to-end** (2026-08-02) — in the boot console and in a `NewShell` window, pasting once per chord |
+| **AROS → Mac** (select console text + **Right-Amiga+C**, ⌘V on Mac) | **verified end-to-end** (2026-08-02) — a real mouse selection reaches the Mac clipboard, one clipboard write per chord |
 | Echo suppression | in place (self-write tokens both sides) |
 | Latin-1 ↔ UTF-8 | in place and unit-tested in the host shim |
 | Images / non-text flavors | not implemented (text only) |

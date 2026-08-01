@@ -64,7 +64,14 @@ int host_pb_get_text(char **out, size_t *len) {
     if (len) *len = 0;
     @autoreleasepool {
         NSPasteboard *pb = pb_handle();
-        NSString *s = [pb stringForType:NSPasteboardTypeString];
+        /* readObjectsForClasses, not stringForType: it accepts every flavour
+         * NSString declares itself readable from (utf16-external, the legacy
+         * NSStringPboardType, ...), so the shim carries what the Paste menu
+         * item's canReadObjectForClasses check says is there. Reading one
+         * narrow UTI made the menu offer a clip the bridge then dropped. */
+        NSArray *items = [pb readObjectsForClasses:@[[NSString class]]
+                                           options:nil];
+        NSString *s = (items.count > 0) ? items[0] : nil;
         if (s == nil) return 0;                       /* no string-typed item */
 
         /* Explicit UTF-8 length + bytes (UTF8String is NUL-terminated but we want
