@@ -32,15 +32,22 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   alone, unloaded leak-free. Byproduct: first-hand confirmation that the
   engine is single-run-per-process (stale chained blocks in freed JIT memory
   on a second run), sharpening `[T0-P3]`.
-- **`[T0-P2]` Execution interception + launch context.** Prove the
-  execution-boundary divert: `RunCommand`'s existing `GSLI_68KHUNK` check
-  ([runcommand.c:77](../../../../aros-upstream/rom/dos/runcommand.c)) routes
-  to a stub router instead of returning -1; same for the Workbench
-  `CallEntry` path; LoadSeg data consumers (keymap, diskfont) demonstrably
-  untouched. Define the **versioned launch-context record** (pathname,
-  CLI/WB startup args, tooltypes, mode override, console) and carry it
-  end-to-end. Exit: stub router receives correct context from both consumers;
-  keymap/diskfont regression green.
+- **`[T0-P2]` Execution interception + launch context.** ✅ **PROVEN
+  2026-08-01** (OS-side commit `1eb9082854` on `aarch64-darwin-graft`,
+  pushed to the jonx fork; verified on booted AROS). `rom/dos/dos_emu68k.h`
+  defines the versioned `Emu68kLaunchCtx` (origin CLI/PROC, seglist, name,
+  args, process, mode); `rom/dos/emu68k_route.c` is the stub router (reports,
+  declines). Both boundaries wired: `RunCommand` (CLI context incl.
+  `cli_CommandName` + argument string) and `DosEntry` (process context; only
+  when the entry PC was derived from the seglist, so `SystemTagList`'s
+  explicit-entry shell case stays native). Enabler discovered on the way:
+  hunk `LoadSeg` FAILED entirely on darwin (`MEMF_31BIT` unsatisfiable), so
+  64-bit targets now fall back to plain memory for the hunk allocation;
+  nothing interprets the truncated relocations (execution diverts, the
+  keymap loader already declines >4 GiB seglists, and `ReadDiskFont` now
+  declines them the same way). New `C:RunSeg` exercises the created-process
+  path. Verified live: both boundaries log correct context for a real hunk
+  binary, launches fail politely, desktop boot (fonts included) stays clean.
 - **`[T0-P3]` Re-entrant engine, safe points, fault containment.** ✅ **PROVEN
   2026-08-01** (`make hosted-emu68k-t0p3`, `hosted/emu68k/t0p3_engine.c`).
   Landed in the engine itself: per-instance state (`j5d_engine_new/activate/
