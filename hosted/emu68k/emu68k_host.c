@@ -23,6 +23,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <ctype.h>
 #include <unistd.h>
 
 /* The guest memory map (the run68k layout; see run68k.c for the full map).
@@ -147,6 +148,7 @@ struct emu68k_run {
     int                   done;
     volatile int          kill_req;      /* async kill flag (one store)         */
     double                deadline;      /* wall-clock limit, 0 = none          */
+    uint32_t              last_ioerr;    /* what the guest's IoErr() reports    */
     char                  name[64];      /* for ledger/bundle attribution       */
     /* [T3] opened libraries: guest base -> name, for the OS-call callback */
     struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
@@ -271,6 +273,228 @@ static void gwrite32(j4_sandbox *sb, uint32_t a, uint32_t v)
     p = j4_sandbox_host(sb, a);
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+/* =========================== [T3] ReadArgs ==================================
+ * Every modern AmigaDOS CLI tool parses its arguments with ReadArgs, so this
+ * one call decides whether ordinary command-line software does anything useful.
+ *
+ * It is implemented HERE, over guest memory, rather than by calling the native
+ * ReadArgs - because everything it produces is a POINTER THE PROGRAM
+ * DEREFERENCES: the argument strings, the LONG a /N writes, the NULL-terminated
+ * array a /M builds. Those have to live in the guest's own address space, so
+ * the parse happens there and nothing native is involved.
+ *
+ * Template syntax covered (the set real tools use):
+ *   NAME        positional
+ *   /S          switch: present -> DOSTRUE
+ *   /K          keyword: must be named
+ *   /N          number: array slot points to a LONG
+ *   /A          required
+ *   /M          multiple: array slot points to a NULL-terminated string vector
+ *   /F          rest of the line, taken whole
+ *   =ALIAS      alternate name
+ * Unsupported combinations fail the AmigaDOS way (NULL + IoErr), never silently.
+ */
+#define RDA_MAX_ITEMS 32
+#define RDA_MAX_TOK   64
+#define ERROR_REQUIRED_ARG_MISSING_ 116
+#define ERROR_BAD_TEMPLATE_         114
+#define ERROR_TOO_MANY_ARGS_        115
+
+struct rda_item {
+    char name[32], alias[32];
+    int  sw, key, num, req, mult, rest;
+};
+
+/* bump-allocate zeroed guest memory for results the program will dereference */
+static uint32_t guest_alloc(struct emu68k_run *r, uint32_t size)
+{
+    uint32_t a;
+    size = (size + 7u) & ~7u;
+    if (!size || r->exec_heap + size > r->exec_heap_end) return 0;
+    a = r->exec_heap; r->exec_heap += size;
+    memset(j4_sandbox_host(&r->sb, a), 0, size);
+    return a;
+}
+
+static uint32_t guest_strdup(struct emu68k_run *r, const char *s, size_t n)
+{
+    uint32_t a = guest_alloc(r, (uint32_t)n + 1);
+    if (!a) return 0;
+    memcpy(j4_sandbox_host(&r->sb, a), s, n);
+    ((char *)j4_sandbox_host(&r->sb, a))[n] = 0;
+    return a;
+}
+
+static int rda_parse_template(const char *t, struct rda_item *it, int max)
+{
+    int n = 0;
+    while (*t && n < max) {
+        const char *e = strchr(t, ',');
+        size_t len = e ? (size_t)(e - t) : strlen(t);
+        char buf[96];
+        if (len >= sizeof buf) return -1;
+        memcpy(buf, t, len); buf[len] = 0;
+        memset(&it[n], 0, sizeof it[n]);
+        {
+            char *slash = strchr(buf, '/');
+            char *eq;
+            while (slash) {
+                char m = (char)toupper((unsigned char)slash[1]);
+                switch (m) {
+                case 'S': it[n].sw = 1;   break;
+                case 'K': it[n].key = 1;  break;
+                case 'N': it[n].num = 1;  break;
+                case 'A': it[n].req = 1;  break;
+                case 'M': it[n].mult = 1; break;
+                case 'F': it[n].rest = 1; break;
+                case 'T': it[n].sw = 1;   break;   /* toggle: treated as switch */
+                default: break;                    /* unknown: ignored, not fatal */
+                }
+                *slash = 0;
+                slash = strchr(slash + 1, '/');
+            }
+            eq = strchr(buf, '=');
+            if (eq) { *eq = 0; snprintf(it[n].alias, sizeof it[n].alias, "%s", eq + 1); }
+            snprintf(it[n].name, sizeof it[n].name, "%s", buf);
+        }
+        n++;
+        if (!e) break;
+        t = e + 1;
+    }
+    return n;
+}
+
+static int rda_eqname(const char *tok, const struct rda_item *it)
+{
+    return (it->name[0] && !strcasecmp(tok, it->name)) ||
+           (it->alias[0] && !strcasecmp(tok, it->alias));
+}
+
+/* ReadArgs(template D1, array D2, rdargs D3) -> RDArgs* in D0 */
+static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
+                        struct j5d_m68k_state *st, char *e, unsigned el)
+{
+    const char *tmpl = guest_cstr(sb, st->d[1]);
+    uint32_t    arr  = st->d[2];
+    struct rda_item items[RDA_MAX_ITEMS];
+    char  line[1024];
+    char *tok[RDA_MAX_TOK];
+    int   ntok = 0, nit, i;
+    uint32_t used[RDA_MAX_TOK];
+
+    if (!tmpl) { snprintf(e, el, "ReadArgs: bad template pointer"); return 1; }
+    nit = rda_parse_template(tmpl, items, RDA_MAX_ITEMS);
+    if (nit < 0) { r->last_ioerr = ERROR_BAD_TEMPLATE_; st->d[0] = 0; return 0; }
+
+    /* the command line the program was started with, minus the trailing newline */
+    {
+        const char *src = (const char *)j4_sandbox_host(sb, ARGS_BASE);
+        size_t n = 0;
+        while (n < sizeof line - 1 && src[n] && src[n] != '\n') { line[n] = src[n]; n++; }
+        line[n] = 0;
+    }
+
+    /* split into tokens, honouring "quoted strings" */
+    {
+        char *p = line;
+        while (*p && ntok < RDA_MAX_TOK) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (!*p) break;
+            if (*p == '"') {
+                tok[ntok++] = ++p;
+                while (*p && *p != '"') p++;
+                if (*p) *p++ = 0;
+            } else {
+                tok[ntok++] = p;
+                while (*p && *p != ' ' && *p != '\t') p++;
+                if (*p) *p++ = 0;
+            }
+        }
+    }
+    for (i = 0; i < ntok; i++) used[i] = 0;
+
+    /* pass 1: keywords by name (any position) */
+    for (i = 0; i < ntok; i++) {
+        int k;
+        if (used[i]) continue;
+        for (k = 0; k < nit; k++) {
+            if (!rda_eqname(tok[i], &items[k])) continue;
+            used[i] = 1;
+            if (items[k].sw) {
+                gwrite32(sb, arr + 4u * (uint32_t)k, 1u);          /* DOSTRUE-ish */
+            } else if (i + 1 < ntok) {
+                used[i + 1] = 1;
+                if (items[k].num) {
+                    uint32_t cell = guest_alloc(r, 4);
+                    gwrite32(sb, cell, (uint32_t)strtol(tok[i + 1], NULL, 10));
+                    gwrite32(sb, arr + 4u * (uint32_t)k, cell);
+                } else {
+                    gwrite32(sb, arr + 4u * (uint32_t)k,
+                             guest_strdup(r, tok[i + 1], strlen(tok[i + 1])));
+                }
+            }
+            break;
+        }
+    }
+
+    /* pass 2: positionals, in template order */
+    {
+        int t = 0;
+        for (i = 0; i < nit; i++) {
+            if (items[i].sw || items[i].key) continue;
+            if (gread32(sb, arr + 4u * (uint32_t)i)) continue;     /* already set */
+            while (t < ntok && used[t]) t++;
+            if (t >= ntok) continue;
+            if (items[i].rest) {                    /* /F: the rest, joined      */
+                char joined[1024]; size_t n = 0;
+                for (; t < ntok; t++) {
+                    size_t l = strlen(tok[t]);
+                    if (n && n + 1 < sizeof joined) joined[n++] = ' ';
+                    if (n + l >= sizeof joined) break;
+                    memcpy(joined + n, tok[t], l); n += l; used[t] = 1;
+                }
+                joined[n] = 0;
+                gwrite32(sb, arr + 4u * (uint32_t)i, guest_strdup(r, joined, n));
+            } else if (items[i].mult) {             /* /M: a string vector       */
+                uint32_t vec, cnt = 0, j2;
+                for (j2 = (uint32_t)t; j2 < (uint32_t)ntok; j2++) if (!used[j2]) cnt++;
+                vec = guest_alloc(r, (cnt + 1) * 4);
+                cnt = 0;
+                for (j2 = (uint32_t)t; j2 < (uint32_t)ntok; j2++) {
+                    if (used[j2]) continue;
+                    gwrite32(sb, vec + 4 * cnt,
+                             guest_strdup(r, tok[j2], strlen(tok[j2])));
+                    used[j2] = 1; cnt++;
+                }
+                gwrite32(sb, vec + 4 * cnt, 0);     /* NULL terminator           */
+                gwrite32(sb, arr + 4u * (uint32_t)i, vec);
+            } else if (items[i].num) {
+                uint32_t cell = guest_alloc(r, 4);
+                gwrite32(sb, cell, (uint32_t)strtol(tok[t], NULL, 10));
+                gwrite32(sb, arr + 4u * (uint32_t)i, cell);
+                used[t] = 1;
+            } else {
+                gwrite32(sb, arr + 4u * (uint32_t)i,
+                         guest_strdup(r, tok[t], strlen(tok[t])));
+                used[t] = 1;
+            }
+        }
+    }
+
+    /* required arguments must have been satisfied */
+    for (i = 0; i < nit; i++)
+        if (items[i].req && !gread32(sb, arr + 4u * (uint32_t)i)) {
+            r->last_ioerr = ERROR_REQUIRED_ARG_MISSING_;
+            st->d[0] = 0;                            /* the AmigaDOS failure     */
+            return 0;
+        }
+
+    /* a guest RDArgs the program can hold and hand to FreeArgs */
+    st->d[0] = guest_alloc(r, 64);
+    r->last_ioerr = 0;
+    return 0;
 }
 
 /* [T3] exec.library, served here: this is the bootstrap every AmigaOS program
@@ -405,6 +629,16 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
     if (r) {
         for (int i = 0; i < r->nlib; i++) {
             if (r->openlib[i].base != a6) continue;
+            /* [T3] dos calls whose RESULTS are guest pointers are served in the
+             * guest: handing back native pointers would give the program
+             * addresses it cannot dereference. */
+            if (!strcmp(r->openlib[i].name, "dos.library")) {
+                if (lvo == 133) return rda_readargs(r, c->sb, st, e, el);
+                if (lvo == 134) { st->d[0] = 0; return 0; }   /* FreeArgs        */
+                if (lvo == 22) {                              /* IoErr           */
+                    st->d[0] = r->last_ioerr; return 0;
+                }
+            }
             if (g_oscall &&
                 g_oscall(r->openlib[i].name, lvo, st, r->reserve, g_oscall_user,
                          e, el) == 0)
