@@ -157,8 +157,14 @@ int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
             uint32_t bytes = longs * 4u;
             if (curhunk >= numhunks) FAIL("more payload hunks than header declared");
 
-            if (bytes != seglist->hunk_size[curhunk])
-                FAIL("payload size disagrees with header size word");
+            /* The header's size word is the ALLOCATION size; a CODE/DATA hunk
+             * may carry fewer longs of file data than that (the remainder is
+             * allocated-but-unwritten space, which the real loader leaves as the
+             * zeroed memory it allocated). Requiring equality rejected real
+             * programs outright - AutoDoc from Aminet among them - so only a
+             * payload LARGER than its allocation is an error. */
+            if (bytes > seglist->hunk_size[curhunk])
+                FAIL("payload larger than the size the header allocated");
 
             seglist->hunk_type[curhunk] = htype;
 

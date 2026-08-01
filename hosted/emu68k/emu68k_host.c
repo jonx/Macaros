@@ -655,6 +655,20 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
 }
 
+/* EMU68K_TRACE_CALLS: log every library call a program makes. A program that
+ * produces no output and reports no gap has given up somewhere, and the call
+ * sequence is the only thing that says where. */
+static int g_trace = -1;
+static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
+                       struct j5d_m68k_state *st)
+{
+    if (g_trace < 0) g_trace = getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
+    if (!g_trace) return;
+    fprintf(stderr, "[68k] %s LVO %d (%d)  d0=%08x d1=%08x a0=%08x a1=%08x\n",
+            lib, lvo, -6 * lvo, st->d[0], st->d[1], st->a[0], st->a[1]);
+    (void)r;
+}
+
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
@@ -663,6 +677,7 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
 
     /* which library did the program call through? */
     if (r && a6 == EXEC_BASE) {
+        trace_call(r, "exec.library", lvo, st);
         if (el) e[0] = 0;
         if (exec_call(r, c->sb, lvo, st, e, el) == 0) return 0;
         if (e[0]) {          /* exec_call said something specific: do not bury it
@@ -683,6 +698,7 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
     if (r) {
         for (int i = 0; i < r->nlib; i++) {
             if (r->openlib[i].base != a6) continue;
+            trace_call(r, r->openlib[i].name, lvo, st);
             /* [T3] dos calls whose RESULTS are guest pointers are served in the
              * guest: handing back native pointers would give the program
              * addresses it cannot dereference. */
