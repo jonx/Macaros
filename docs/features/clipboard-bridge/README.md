@@ -1,7 +1,7 @@
 # Clipboard bridge — share copy/paste between macOS and AROS
 
-> Status: **working on darwin-aarch64 (2026-06-27)** — host→AROS verified
-> byte-exact end-to-end; AROS→host implemented (symmetric path).
+> Status: **working on darwin-aarch64 (2026-08-02)** — both directions verified
+> end-to-end from a real console, one clipboard operation per chord.
 > This is the practical "what & how". For the design and the
 > implementation spec, see [design.md](design.md) and [spec.md](spec.md).
 
@@ -239,8 +239,8 @@ shim, the bridge, or the clipboard write.
 ### Requires up-to-date console binaries
 
 Shell copy/paste is handled by **`console.device`** + **`con-handler`** (not ConClip —
-ConClip's edit hook only covers string gadgets). The Right-Amiga+C/V detection is a
-recent fix in `rom/devs/console/consoletask.c` + `rom/filesys/console_handler/con_handler.c`;
+ConClip's edit hook only covers string gadgets). The Right-Amiga+C/V detection lives in
+`rom/devs/console/consoletask.c` + `rom/filesys/console_handler/con_handler.c`;
 **if those binaries are stale, paste silently does nothing.** Rebuild them:
 
 ```sh
@@ -249,6 +249,26 @@ make kernel-console-quick kernel-fs-con-quick   # in the AROS build tree
 
 `run-window.sh` / `aros-ctl` then pull the rebuilt `console.device` + `con-handler` into
 the kickstart automatically.
+
+#### One chord, one owner
+
+`console.device`'s rawkey input handler is installed **above** intuition (priority 51
+against 50, deliberately — see the comment in `rom/devs/console/cdinputhandler.c`), so
+it sees Right-Amiga+C/V first and runs the copy or paste. The console window's Edit
+menu therefore carries **no CommKey** on Copy/Paste: binding `"c"`/`"v"` there makes
+intuition deliver a `MENUPICK` for the same chord and the operation runs **twice**
+(one Right-Amiga+V pastes the clipboard twice; one Right-Amiga+C writes it twice).
+Picking Copy/Paste with the mouse still works, because those menu items inject the
+chord straight into `CDInputHandler`, which intuition never sees.
+
+The cost is that the Amiga menu no longer advertises the shortcut. On this port that
+costs nothing: the Macaros **Edit** menu already shows ⌘C/⌘V.
+
+Separately, `con-handler` must recompute its window signal mask **inside** its event
+loop. An `AUTO` console (the boot console is `CON:////AROS/AUTO/CLOSE/SMART/BOOT`)
+opens its window lazily and closes it again at EOF, so a mask captured once is either
+zero forever — no menu item in that window ever works — or left pointing at a freed
+port.
 
 The bridge defaults to sharing enabled. The Settings / Machine menu "Share
 Clipboard" toggle, and `graft/aros-ctl clipboard on|off`, pause/resume the running
