@@ -8,6 +8,11 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 DIR="${1:?usage: 68k-corpus <folder> [out]}"
+CORPUS_ARGS="${CORPUS_ARGS:-}"      # arguments appended to every program
+# CORPUS_MANIFEST: "program : arguments" per line. Running a CLI tool with no
+# arguments proves nothing - it exits immediately and tells you nothing about
+# whether it works. Give each one real work and the result means something.
+MANIFEST="${CORPUS_MANIFEST:-}"
 OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
 SHARE="$HOME/AROS/Shared"; SUB="corpus"
 mkdir -p "$SHARE/$SUB" && rm -f "$SHARE/$SUB"/* 2>/dev/null
@@ -20,7 +25,12 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
   for f in "$SHARE/$SUB"/*; do
     b=$(basename "$f")
     echo "Echo \"##### $b\" >>MacRW:corpus-out.txt"
-    echo "$b >>MacRW:corpus-out.txt"
+    a="$CORPUS_ARGS"
+    if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
+      m=$(grep -i "^[[:space:]]*$b[[:space:]]*:" "$MANIFEST" | head -1 | sed 's/^[^:]*://')
+      [ -n "$m" ] && a="$m"
+    fi
+    echo "$b $a >>MacRW:corpus-out.txt"
   done
   echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
   echo 'Wait 999999'

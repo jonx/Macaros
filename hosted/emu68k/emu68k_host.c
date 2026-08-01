@@ -407,6 +407,25 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
         line[n] = 0;
     }
 
+    /* The AmigaDOS convention: a command line of just "?" means "tell me your
+     * arguments". ReadArgs prints the template and (on a real system) reads the
+     * real arguments from the next input line. Printing it is the part that
+     * matters - it is how a tool documents itself, and it is how you find out
+     * what to give a program you have never run. */
+    {
+        const char *q = line;
+        while (*q == ' ' || *q == '\t') q++;
+        if (q[0] == '?' && (q[1] == 0 || q[1] == ' ')) {
+            if (r->sink) {
+                r->sink(tmpl, (long)strlen(tmpl), r->sink_user);
+                r->sink(": \n", 3, r->sink_user);
+            }
+            r->last_ioerr = 0;
+            st->d[0] = 0;            /* no arguments parsed: the program exits  */
+            return 0;
+        }
+    }
+
     /* split into tokens, honouring "quoted strings" */
     {
         char *p = line;
