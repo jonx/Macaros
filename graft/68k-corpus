@@ -18,6 +18,9 @@ SHARE="$HOME/AROS/Shared"; SUB="corpus"
 mkdir -p "$SHARE/$SUB" && rm -f "$SHARE/$SUB"/* 2>/dev/null
 cp "$DIR"/* "$SHARE/$SUB/" 2>/dev/null
 RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
+# deploy from the repo root before every sweep: a sweep against a stale library
+# silently measures the previous build, which has already cost one wasted round
+( cd "$ROOT" && ./graft/aros-ctl deploy >/dev/null 2>&1 ) || true
 {
   echo 'FailAt 255'
   echo 'CD MacRW:corpus'
@@ -38,7 +41,7 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
 pkill -f Macaros 2>/dev/null; sleep 1
 rm -f "$SHARE/corpus-out.txt"; : > /tmp/aros-window.log
 AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
-  EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$HERE/aros-ctl" run >/dev/null 2>&1
+  EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
 i=0; LIMIT="${CORPUS_TIMEOUT:-900}"
 while [ $i -lt $LIMIT ]; do
   [ -f "$SHARE/corpus-out.txt" ] && grep -q '=== DONE ===' "$SHARE/corpus-out.txt" && break
@@ -46,5 +49,5 @@ while [ $i -lt $LIMIT ]; do
 done
 cp "$SHARE/corpus-out.txt" "$OUT" 2>/dev/null
 cp /tmp/aros-window.log "$OUT.log" 2>/dev/null
-"$HERE/aros-ctl" stop >/dev/null 2>&1
+"$ROOT/graft/aros-ctl" stop >/dev/null 2>&1
 echo "corpus results: $OUT"
