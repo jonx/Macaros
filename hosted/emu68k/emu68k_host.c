@@ -49,11 +49,14 @@
  * With the reservation, every guest address below the arena (the vector page)
  * and above it (CIAs, custom chips) resolves into PROT_NONE and faults. */
 #define SANDBOX_ORIGIN  0x00210000u
-#define SANDBOX_SIZE    0x009ED000u     /* ends at $BFD000, where the CIAs begin;
-                                         * TRIMMED DOWN to a page below, because
-                                         * mprotect rounds a length UP and a
-                                         * 16 KiB page of overshoot would put the
-                                         * CIA registers back inside the arena  */
+/* The arena runs to 32 MiB with the hardware ranges PUNCHED OUT as PROT_NONE
+ * holes, rather than stopping short of them. Stopping short was simpler but it
+ * capped the guest at ~9.9 MiB, and real software wants more than that: PPMore
+ * faulted on a perfectly ordinary access at guest $100C000, just past the old
+ * ceiling. Holes give both - megabytes of guest memory AND a hardware access
+ * that still faults into the classifier. */
+#define GUEST_TOP       0x02000000u
+#define SANDBOX_SIZE    (GUEST_TOP - SANDBOX_ORIGIN)
 
 /* the guest windows the arena deliberately excludes */
 #define HW_CIA_LO       0x00BFD000u
@@ -67,7 +70,7 @@
 #define PROG_ORIGIN     0x00250000u
 #define ARGS_BASE       0x00238000u
 #define ARGS_REGION_END 0x00240000u
-#define GUEST_RESERVE   0x01000000u     /* guest $000000..$1000000 reserved     */
+#define GUEST_RESERVE   GUEST_TOP       /* the whole low guest space reserved   */
 
 /* [T3] The AmigaOS environment a real program expects.
  *
@@ -142,6 +145,7 @@ struct emu68k_run {
     void                 *reserve;       /* the PROT_NONE guest-space reservation */
     uint8_t              *arena;         /* the RW window inside it               */
     unsigned long         arena_size;    /* page-aligned DOWN (see the mapping)   */
+    unsigned long         hole_mask;
     j4_sandbox            sb;
     j4_seglist            seg;
     stub_lib              lib;
@@ -655,6 +659,31 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->d[0] = port;
         return 0;
     }
+    /* Ports and semaphores. A guest has one thread of control in its own
+     * arena, so arbitration is a no-op; what matters is that the STRUCTURES it
+     * initialises look right afterwards, because the program walks them.
+     * struct SignalSemaphore: ss_Link(0,14) ss_NestCount(14) ss_WaitQueue(16,
+     * MinList: head 16, tail 20, tailpred 24) ss_Owner(36) ss_QueueCount(40) */
+    case 93: {               /* InitSemaphore(sigSem A0)                        */
+        uint32_t ss = st->a[0];
+        if (ss) {
+            memset(j4_sandbox_host(sb, ss), 0, 44);
+            gwrite32(sb, ss + 16, ss + 20);      /* mlh_Head = &mlh_Tail        */
+            gwrite32(sb, ss + 20, 0);            /* mlh_Tail = NULL             */
+            gwrite32(sb, ss + 24, ss + 16);      /* mlh_TailPred = &mlh_Head    */
+            gwrite32(sb, ss + 36, 0);            /* ss_Owner = NULL             */
+            j4_sandbox_host(sb, ss)[40] = 0xFF;  /* ss_QueueCount = -1 (WORD)   */
+            j4_sandbox_host(sb, ss)[41] = 0xFF;
+        }
+        return 0;
+    }
+    case 94: case 95: case 97: case 98: case 113:
+        return 0;            /* Obtain/Release[List]/Shared: nothing to contend */
+    case 96:                 /* AttemptSemaphore: always succeeds               */
+        st->d[0] = 1;
+        return 0;
+    case 59: case 60:        /* AddPort / RemPort: no public port list here     */
+        return 0;
     case 65:                 /* FindPort(name A1): a guest has no public ports,
                               * and NULL is the answer callers are written for */
         st->d[0] = 0;
@@ -801,16 +830,24 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         goto fail;
     }
     r->arena = (uint8_t *)r->reserve + SANDBOX_ORIGIN;
-    {   /* round the writable window DOWN to a whole page: mprotect extends a
-         * partial page, which would hand the guest the very hardware addresses
-         * the arena is sized to exclude. */
+    {   /* Open the arena, then punch the hardware windows back out. Page
+         * alignment matters in BOTH directions here: mprotect rounds a length
+         * up, so a hole must be aligned DOWN at its start and UP at its end or
+         * the registers it is meant to exclude stay mapped. */
         long pg = sysconf(_SC_PAGESIZE);
-        unsigned long mask = (pg > 0) ? (unsigned long)pg - 1u : 0x3FFFu;
+        unsigned long psz = (pg > 0) ? (unsigned long)pg : 0x4000u;
+        unsigned long mask = psz - 1u;
+        struct { uint32_t lo, hi; } hole[2] = {
+            { HW_CIA_LO,    HW_CIA_HI    },
+            { HW_CUSTOM_LO, HW_CUSTOM_HI },
+        };
+        int i;
         r->arena_size = SANDBOX_SIZE & ~mask;
         if (mprotect(r->arena, r->arena_size, PROT_READ | PROT_WRITE) != 0) {
             snprintf(err, errlen, "cannot map the guest arena");
             goto fail;
         }
+        r->hole_mask = mask;      /* punched after the arena is zeroed, below */
     }
     /* [T3] the low page: readable so `move.l 4.w,a6` finds SysBase, NOT writable
      * so installing an exception vector still faults into the hardware guard. */
@@ -833,6 +870,23 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     r->imagelen = imagelen;
 
     j4_sandbox_init(&r->sb, r->arena, SANDBOX_ORIGIN, r->arena_size);
+    {   /* NOW punch the hardware windows out. It has to happen after the arena
+         * is initialised, because initialising it zeroes the whole range - and
+         * memset walking into a PROT_NONE hole faults in OUR code, where there
+         * is no 68k program to blame and no recovery target registered. */
+        long pg = sysconf(_SC_PAGESIZE);
+        unsigned long psz = (pg > 0) ? (unsigned long)pg : 0x4000u;
+        unsigned long mask = psz - 1u;
+        struct { uint32_t lo, hi; } hole[2] = {
+            { HW_CIA_LO, HW_CIA_HI }, { HW_CUSTOM_LO, HW_CUSTOM_HI },
+        };
+        int i;
+        for (i = 0; i < 2; i++) {
+            unsigned long lo = hole[i].lo & ~mask;
+            unsigned long hi = (hole[i].hi + psz) & ~mask;
+            mprotect((uint8_t *)r->reserve + lo, hi - lo, PROT_NONE);
+        }
+    }
     r->sb.next_alloc = PROG_ORIGIN;
     if (j4_load_hunks(&r->sb, r->image, imagelen, 0, &r->seg, err, errlen))
         goto fail;
@@ -923,7 +977,8 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
      * on a ~10 MiB arena is megabytes - what real Amiga software expects. */
     r->exec_heap     = (r->sb.next_alloc + 0xFFFFu) & ~0xFFFFu;
     if (r->exec_heap < PROG_ORIGIN) r->exec_heap = PROG_ORIGIN;
-    r->exec_heap_end = (SANDBOX_ORIGIN + (uint32_t)r->arena_size) - 0x00100000u;
+    /* allocate below the first hardware hole, so a big allocation never spans it */
+    r->exec_heap_end = HW_CIA_LO - 0x00010000u;
     r->sink      = sink;
     r->sink_user = sink_user;
     r->resume_pc = r->seg.entry;
