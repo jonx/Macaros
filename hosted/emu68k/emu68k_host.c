@@ -89,7 +89,7 @@
 #define EXEC_BASE       0x00220000u     /* guest exec.library base (in-arena)   */
 #define LIBBASE_FIRST   0x00221000u     /* opened libraries get bases from here */
 #define LIBBASE_STRIDE  0x00001000u
-#define LIBBASE_MAX     8
+#define LIBBASE_MAX     16   /* real programs open more than a handful */
 
 /* A minimal guest `struct Process`. Startup code universally does
  * FindTask(NULL) and then reads pr_CLI to decide whether it was launched from
@@ -120,6 +120,14 @@
 #define LVO_FREEVEC      115    /* -690 */
 #define LVO_ALLOCENTRY    37    /* -222 */
 #define EXECBASE_THISTASK 276   /* ExecBase->ThisTask, the classic offset      */
+/* struct Library: ln(14) lib_Flags(14) lib_pad(15) lib_NegSize(16)
+ * lib_PosSize(18) lib_Version(20) lib_Revision(22). Programs written for
+ * AmigaOS 2.0 and later routinely check lib_Version before doing anything and
+ * quit silently if it is too low - which a zeroed base always is. */
+#define LIB_VERSION_OFF   20
+#define LIB_REVISION_OFF  22
+#define GUEST_LIB_VERSION 39    /* what an OS 3.0 program expects to find      */
+#define GUEST_LIB_REV     106
 #define LVO_ALLOCATE      31    /* -186: allocate from a specific MemHeader     */
 #define LVO_CREATEMSGPORT 111   /* -666 */
 #define LVO_DELETEMSGPORT 112   /* -672 */
@@ -528,6 +536,14 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         r->openlib[r->nlib].base = base;
         r->nlib++;
         j5d_register_libbase(base);
+        {   /* give the handed-out base a version, for the same reason */
+            uint8_t *lb = j4_sandbox_host(sb, base);
+            memset(lb, 0, 64);
+            lb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
+            lb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
+            lb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
+            lb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
+        }
         st->d[0] = base;
         return 0;
     }
@@ -620,6 +636,10 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->d[0] = port;
         return 0;
     }
+    case 65:                 /* FindPort(name A1): a guest has no public ports,
+                              * and NULL is the answer callers are written for */
+        st->d[0] = 0;
+        return 0;
     case LVO_DELETEMSGPORT:
         return 0;                                    /* bump heap: nothing to do */
     case LVO_SETSIGNAL:
@@ -643,7 +663,13 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
 
     /* which library did the program call through? */
     if (r && a6 == EXEC_BASE) {
+        if (el) e[0] = 0;
         if (exec_call(r, c->sb, lvo, st, e, el) == 0) return 0;
+        if (e[0]) {          /* exec_call said something specific: do not bury it
+                              * under a generic "capability gap" message */
+            ledger_record(lvo, r->name[0] ? r->name : NULL);
+            return 1;
+        }
         /* fall through to the OS callback: the embedder may serve more of exec */
         if (g_oscall &&
             g_oscall("exec.library", lvo, st, r->reserve, g_oscall_user,
@@ -829,6 +855,10 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         {
             uint8_t *eb = j4_sandbox_host(&r->sb, EXEC_BASE);
             memset(eb, 0, 512);
+            eb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
+            eb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
+            eb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
+            eb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
             eb[EXECBASE_THISTASK + 0] = (uint8_t)(GUEST_PROCESS >> 24);
             eb[EXECBASE_THISTASK + 1] = (uint8_t)(GUEST_PROCESS >> 16);
             eb[EXECBASE_THISTASK + 2] = (uint8_t)(GUEST_PROCESS >> 8);
