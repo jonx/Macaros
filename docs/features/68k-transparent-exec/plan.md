@@ -161,7 +161,34 @@ Exit criteria (the review's five, plus the originals):
 - `C:` native commands unaffected (boot smoke green); keymap/diskfont
   loading unaffected; gap ledger records a deliberate unknown-LVO probe.
 
-## [T2] Routing ladder + failure UX (medium)
+## [T2] Routing ladder + failure UX — **`[T2a]`+`[T2b]` DONE 2026-08-01**
+
+The detection half of the ladder is live and verified on booted AROS: a program
+that drives the Amiga hardware is routed away with a sentence naming the exact
+register, by the static scan when it can be seen and by the runtime guard when
+it cannot. `[T2c]`/`[T2d]`/`[T2e]` (the requester, the compat database and
+tooltype, crash bundle v2) are still open.
+
+- **`[T2a]` static scanner + `scan68k` CLI** ✅ (`make hosted-emu68k-t2scan`).
+  Confidence-graded, and the calibration work was the substance: a naive 2-byte
+  sweep reads operands as opcodes and flagged *every* real program, so the scan
+  walks true instruction boundaries with a length table and stops rather than
+  guessing a resync; with exact lengths the absolute operand is located instead
+  of guessed; and relocation sites are excluded, because `move.l #0,$64`
+  initialising a global is not an exception-vector write. Zero false positives
+  across the whole corpus. `RTE` is deliberately NOT a banger signal: the engine
+  implements 68k exception dispatch, so a program with a handler must not be
+  routed away.
+- **`[T2b]` runtime guard** ✅ (`make hosted-emu68k-t2guard`). Implemented as
+  absence rather than checking: the low 16 MiB of guest space is reserved
+  PROT_NONE and only the arena window inside it is writable, so the hardware
+  genuinely is not there and a touch faults; the classifier turns the faulting
+  host address back into the guest address and reports the register. Zero hot-path
+  cost. Two traps had to be fixed first: a malloc'd arena does not fault past its
+  end (so the arena became a real mapping), and `mprotect` rounds a length UP,
+  which put the CIA registers back inside the writable window.
+
+Original plan text follows.
 
 Make failure excellent before scaling coverage. Depends: T1.
 
