@@ -51,13 +51,61 @@ struct emu68k_run {
     int                   started;
     int                   done;
     volatile int          kill_req;      /* async kill flag (one store)         */
+    char                  name[64];      /* for ledger/bundle attribution       */
 };
 
-struct bctx { stub_lib *lib; j4_sandbox *sb; };
+void emu68k_run_set_name(struct emu68k_run *r, const char *name)
+{
+    if (r) snprintf(r->name, sizeof r->name, "%s", name ? name : "");
+}
+
+/* ---- [T1d] the capability-gap ledger: every library call the bridge cannot
+ * marshal is RECORDED (lvo + count + last program) and the run aborts with a
+ * classified message — the design's no-guessing rule, and the data that drives
+ * which function gets marshalled next. Also mirrored to stderr, which hosted
+ * AROS forwards to the host log, so the gap is visible without tooling. ---- */
+#define EMU68K_LEDGER_MAX 64
+static struct { int lvo; unsigned long count; char prog[64]; } g_ledger[EMU68K_LEDGER_MAX];
+static int g_ledger_n = 0;
+
+static void ledger_record(int lvo, const char *prog)
+{
+    int i;
+    for (i = 0; i < g_ledger_n; i++)
+        if (g_ledger[i].lvo == lvo) break;
+    if (i == g_ledger_n && g_ledger_n < EMU68K_LEDGER_MAX) {
+        g_ledger_n++;
+        g_ledger[i].lvo = lvo;
+        g_ledger[i].count = 0;
+    }
+    if (i < EMU68K_LEDGER_MAX) {
+        g_ledger[i].count++;
+        snprintf(g_ledger[i].prog, sizeof g_ledger[i].prog, "%s", prog ? prog : "");
+    }
+    fprintf(stderr, "[emu68k] capability gap: LVO %d (offset %d) prog=\"%s\" hits=%lu\n",
+            lvo, -6 * lvo, prog ? prog : "", i < EMU68K_LEDGER_MAX ? g_ledger[i].count : 0);
+}
+
+int emu68k_ledger_get(int idx, int *lvo, unsigned long *count)
+{
+    if (idx < 0 || idx >= g_ledger_n) return 0;
+    if (lvo) *lvo = g_ledger[idx].lvo;
+    if (count) *count = g_ledger[idx].count;
+    return 1;
+}
+
+struct bctx { stub_lib *lib; j4_sandbox *sb; struct emu68k_run *run; };
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
-    return stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
+    int rc = stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
+    if (rc) {
+        /* the stub could not marshal this call: a classified capability gap */
+        ledger_record(lvo, c->run && c->run->name[0] ? c->run->name : NULL);
+        snprintf(e, el, "capability gap: library function LVO %d (offset %d) "
+                        "is not marshalled yet", lvo, -6 * lvo);
+    }
+    return rc;
 }
 
 /* the per-quantum poll: yield when the roundtrip budget is spent, kill when a
@@ -162,7 +210,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
      * per-block flight recorder is the price; the bundle still carries state). */
     j5n_signal_install(&r->diag);
 
-    struct bctx c = { &r->lib, &r->sb };
+    struct bctx c = { &r->lib, &r->sb, r };
     j5d_sandbox j5sb = { r->sb.host_mem, r->sb.sandbox_origin, r->sb.size };
     uint32_t d0 = 0;
     char lerr[256] = {0};

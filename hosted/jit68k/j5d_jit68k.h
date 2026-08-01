@@ -335,6 +335,10 @@ int         j5d_take_stop(void);         /* consume a pending stop (the oracle p
 typedef enum { J5D_POLL_CONTINUE = 0, J5D_POLL_YIELD, J5D_POLL_KILL } j5d_poll_action;
 typedef j5d_poll_action (*j5d_poll_fn)(void *user);
 void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips);
+/* Blocks a CHAIN may execute before returning to the C dispatcher. Bounds how
+ * long fully-chained code (a self-chained loop reaches C never) can run without
+ * a safe point, so a kill or quantum always lands. 0 = the engine default. */
+void j5d_set_chain_quantum(uint32_t blocks);
 #define J5D_RC_YIELD  100   /* j5d_run returned at a safe point; resume from st->pc  */
 #define J5D_RC_KILLED 101   /* run terminated at a safe point by stop/KILL           */
 

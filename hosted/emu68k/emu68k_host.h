@@ -50,6 +50,13 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
 /* Async kill: the run stops at its next safe point (chained loops included). */
 void emu68k_run_kill(emu68k_run *r);
 
+/* Attribution for the gap ledger and crash bundles (optional). */
+void emu68k_run_set_name(emu68k_run *r, const char *name);
+
+/* [T1d] the capability-gap ledger: every unmarshalled library call is recorded
+ * (and the run aborts with a classified error). Returns 1 while idx is valid. */
+int emu68k_ledger_get(int idx, int *lvo, unsigned long *count);
+
 void emu68k_run_free(emu68k_run *r);
 
 /* Crash-bundle directory for subsequent runs (default: the engine's own). */

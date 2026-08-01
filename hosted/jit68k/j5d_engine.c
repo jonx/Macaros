@@ -165,13 +165,19 @@ typedef struct {
 } j5d_cached_block;
 
 struct j5d_engine_state {
-    /* THE SAFE-POINT FLAGS — first, adjacent, 8 bytes apart: the emitted chain-entry
-     * check materializes &stop_flag and reaches yield_word at [+8] with one str64.
-     * stop_flag: nonzero = a stop/poll is requested (set async by j5d_request_stop).
+    /* THE SAFE-POINT WORDS — first, adjacent, 8 bytes apart: the emitted chain-entry
+     * check materializes &chain_budget and reaches yield_word at [+8] with one str64.
+     * chain_budget: blocks a CHAIN may still execute before it must return to the C
+     *   dispatcher. The emitted check decrements it and parks at zero, so even a fully
+     *   self-chained loop (which never reaches C on its own) comes back — that is what
+     *   makes an in-OS kill or quantum land. j5d_request_stop zeroes it, so a stop
+     *   takes effect at the very next block and ONE emitted test serves both purposes.
      * yield_word: written by the emitted check when it fires — (1<<32) | entry_pc of
-     * the block that parked, so the dispatcher knows a yield happened AND where. */
-    volatile uint64_t stop_flag;
+     *   the block that parked, so the dispatcher knows a yield happened AND where. */
+    volatile int64_t  chain_budget;
     volatile uint64_t yield_word;
+    volatile uint64_t stop_flag;      /* C-side: a stop/kill was requested        */
+    int64_t           chain_quantum;  /* budget reloaded at each C roundtrip      */
     /* [T0P3] cooperative poll (C-side safe point), run every `poll_interval`
      * dispatcher roundtrips and on every stop request. */
     j5d_poll_fn poll_fn;
@@ -215,8 +221,13 @@ static struct j5d_engine_state *g_eng = &g_default_eng;
 #define g_cache_n             (g_eng->cache_n)
 
 _Static_assert(offsetof(struct j5d_engine_state, yield_word)
-               - offsetof(struct j5d_engine_state, stop_flag) == 8,
-               "the emitted safe-point check assumes yield_word == stop_flag + 8");
+               - offsetof(struct j5d_engine_state, chain_budget) == 8,
+               "the emitted safe-point check assumes yield_word == chain_budget + 8");
+
+/* Blocks a chain may run before returning to C when the caller sets no quantum.
+ * Big enough that chaining stays the hot path, small enough that a runaway loop
+ * is interruptible in well under a millisecond. */
+#define J5D_CHAIN_QUANTUM_DEFAULT 16384
 
 /* ---- the instance API ([T0P3], declared in j5d_jit68k.h) ---- */
 j5d_engine *j5d_engine_new(void)
@@ -237,7 +248,9 @@ void j5d_engine_free(j5d_engine *ep)
         if (e->cache[i].live) jit_region_free(&e->cache[i].region);
     free(e);
 }
-void j5d_request_stop(void) { g_eng->stop_flag = 1; }   /* async-signal-safe: one store */
+/* async-signal-safe: two plain stores. Zeroing the budget makes the NEXT
+ * chain-entry safe point park, so even fully-chained code stops promptly. */
+void j5d_request_stop(void) { g_eng->stop_flag = 1; g_eng->chain_budget = 0; }
 int  j5d_take_stop(void)
 {
     if (!g_eng->stop_flag) return 0;
@@ -248,6 +261,11 @@ void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips)
 {
     g_eng->poll_fn = fn; g_eng->poll_user = user;
     g_eng->poll_interval = interval_roundtrips; g_eng->poll_countdown = 0;
+}
+
+void j5d_set_chain_quantum(uint32_t blocks)
+{
+    g_eng->chain_quantum = blocks ? (int64_t)blocks : J5D_CHAIN_QUANTUM_DEFAULT;
 }
 
 uint64_t j5d_diag_insn_number(void) { return g_insn_number; }
@@ -1353,13 +1371,17 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         uint32_t n_fp = 0;
         for (int i = 0; i < 8; i++) if (fp_park & (1u << i)) n_fp++;
 
-        uint64_t fa = (uint64_t)(uintptr_t)&g_eng->stop_flag;   /* yield_word == +8 */
+        uint64_t fa = (uint64_t)(uintptr_t)&g_eng->chain_budget; /* yield_word == +8 */
         *ptr++ = mov64_immed_u16 (J5K_T0, (uint16_t)(fa        & 0xffff), 0);
         *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 16) & 0xffff), 1);
         *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 32) & 0xffff), 2);
         *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 48) & 0xffff), 3);
-        *ptr++ = ldr64_offset(J5K_T0, J5K_T1, 0);               /* T1 = stop_flag        */
-        *ptr++ = cbz(J5K_T1, 6 + n_fp);                         /* clear -> skip the park */
+        *ptr++ = ldr64_offset(J5K_T0, J5K_T1, 0);               /* T1 = chain_budget     */
+        *ptr++ = subs64_immed(J5K_T1, J5K_T1, 1);               /* T1 -= 1, set flags    */
+        *ptr++ = str64_offset(J5K_T0, J5K_T1, 0);               /* store it back         */
+        /* budget left (signed >0) -> skip the park stub: n_fp FP loads + 3 immediate
+         * words + the yield_word store + the branch, then one past it. */
+        *ptr++ = b_cc(12 /*GT*/, (int32_t)(n_fp + 6));
         for (int i = 0; i < 8; i++)                             /* value-preserving loads */
             if (fp_park & (1u << i))
                 *ptr++ = fldd((uint8_t)(J5O_FP0 + i), 1,
@@ -1683,6 +1705,10 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
          * The optional poll callback also runs every poll_interval roundtrips, turning
          * this into a cooperative quantum hook. KILL and YIELD both leave st->pc = the
          * next PC to execute, so a YIELDed run resumes with j5d_run(entry_pc = st->pc). */
+        /* reload the chained-execution budget for the run we are about to enter */
+        g_eng->chain_budget = g_eng->chain_quantum ? g_eng->chain_quantum
+                                                   : J5D_CHAIN_QUANTUM_DEFAULT;
+
         if (g_eng->stop_flag ||
             (g_eng->poll_interval && ++g_eng->poll_countdown >= g_eng->poll_interval)) {
             int was_stop = (g_eng->stop_flag != 0);

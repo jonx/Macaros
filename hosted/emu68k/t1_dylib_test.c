@@ -95,11 +95,16 @@ int main(int argc, char **argv)
     uint8_t lb[64]; size_t llen = mk_loop_hunk(lb);
     g_loop_run = p_new(lb, llen, "", 0, NULL, NULL, err, sizeof err);
     CHECK(g_loop_run != NULL, err);
+    /* drive quanta the way emu68k.library does: the chain budget brings even a
+     * fully self-chained loop back every quantum, and the kill lands there. */
     signal(SIGALRM, on_alarm);
     alarm(1);
-    rc = p_quantum(g_loop_run, 1u << 30, &d0, err, sizeof err);
+    int spins = 0;
+    while ((rc = p_quantum(g_loop_run, 4096, &d0, err, sizeof err)) == EMU68K_RC_YIELD)
+        spins++;
     alarm(0);
     CHECK(rc == EMU68K_RC_KILLED, "chained loop killed through the dylib API");
+    CHECK(spins > 0, "the chained loop really did yield per quantum (budget works)");
     p_free(g_loop_run);
 
     printf("[T1DYL] PASS: dylib service drives the engine end-to-end — j5t byte-exact "
