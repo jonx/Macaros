@@ -120,6 +120,9 @@
 #define LVO_FREEVEC      115    /* -690 */
 #define LVO_ALLOCENTRY    37    /* -222 */
 #define EXECBASE_THISTASK 276   /* ExecBase->ThisTask, the classic offset      */
+#define LVO_ALLOCATE      31    /* -186: allocate from a specific MemHeader     */
+#define LVO_CREATEMSGPORT 111   /* -666 */
+#define LVO_DELETEMSGPORT 112   /* -672 */
 #define LVO_INSERT        39    /* -234 */
 #define LVO_ADDHEAD       40    /* -240 */
 #define LVO_ADDTAIL       41    /* -246 */
@@ -508,7 +511,12 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_OLDOPENLIB:      /* same thing, older entry point: A1 = name     */
     case LVO_OPENLIBRARY: {
         const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
-        if (!nm) { snprintf(e, el, "OpenLibrary: bad name pointer"); return 1; }
+        if (!nm) {
+            snprintf(e, el, "OpenLibrary: name pointer A1=%08x is outside the "
+                     "guest arena %08x..%08x", st->a[1], sb->sandbox_origin,
+                     sb->sandbox_origin + sb->size);
+            return 1;
+        }
         for (int i = 0; i < r->nlib; i++)                 /* already open?       */
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
         if (r->nlib >= LIBBASE_MAX) { snprintf(e, el, "too many open libraries"); return 1; }
@@ -533,6 +541,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_FREEVEC:
         st->d[0] = 0;                                    /* bump heap: no free  */
         return 0;
+    case LVO_ALLOCATE:       /* Allocate(MemHeader A0, size D0): the header is
+                              * the guest's idea of where memory comes from; in
+                              * this arena there is one place, so serve it. */
     case LVO_ALLOCVEC:       /* the single most-called allocation in real code */
     case LVO_ALLOCMEM: {
         /* Memory a 68k program allocates must live in the GUEST arena: the
@@ -594,6 +605,23 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         gwrite32(sb, succ + 4, pred);
         return 0;
     }
+    case LVO_CREATEMSGPORT: {
+        /* A guest MsgPort: the program holds it and may put it in structures,
+         * so it is built in guest memory with a properly initialised (empty)
+         * message list. Nothing signals a guest task, so it stays empty.
+         * Layout: mp_Node(14) mp_Flags(1) mp_SigBit(1) mp_SigTask(4)
+         *         mp_MsgList at 20 { lh_Head 20, lh_Tail 24, lh_TailPred 28 } */
+        uint32_t port = guest_alloc(r, 34);
+        if (!port) { st->d[0] = 0; return 0; }
+        j4_sandbox_host(sb, port)[8] = 4;            /* ln_Type = NT_MSGPORT   */
+        gwrite32(sb, port + 20, port + 24);          /* lh_Head = &lh_Tail     */
+        gwrite32(sb, port + 24, 0);                  /* lh_Tail = NULL         */
+        gwrite32(sb, port + 28, port + 20);          /* lh_TailPred = &lh_Head */
+        st->d[0] = port;
+        return 0;
+    }
+    case LVO_DELETEMSGPORT:
+        return 0;                                    /* bump heap: nothing to do */
     case LVO_SETSIGNAL:
         /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
          * signals a guest task yet, so the honest answer is a clean zero. */
@@ -638,6 +666,14 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                 if (lvo == 22) {                              /* IoErr           */
                     st->d[0] = r->last_ioerr; return 0;
                 }
+                if (lvo == 38) {          /* AllocDosObject(type D1, tags D2)   */
+                    /* The program walks and fills these itself (a FileInfoBlock
+                     * is 260 bytes and the largest of the family), so hand back
+                     * zeroed GUEST memory rather than a native structure. */
+                    st->d[0] = guest_alloc(r, 512);
+                    return 0;
+                }
+                if (lvo == 39) { st->d[0] = 0; return 0; }   /* FreeDosObject   */
             }
             if (g_oscall &&
                 g_oscall(r->openlib[i].name, lvo, st, r->reserve, g_oscall_user,
