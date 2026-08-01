@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The guest memory map (the run68k layout; see run68k.c for the full map).
@@ -112,6 +113,16 @@
 #define LVO_ENABLE        28    /* -168 */
 #define LVO_FINDTASK      49    /* -294 */
 #define LVO_SETSIGNAL     51    /* -306 */
+#define LVO_OLDOPENLIB    68    /* -408: what pre-2.0 programs still call      */
+#define LVO_AVAILMEM      36    /* -216 */
+#define LVO_ALLOCVEC     114    /* -684: the most-wanted call in the corpus    */
+#define LVO_FREEVEC      115    /* -690 */
+#define LVO_ALLOCENTRY    37    /* -222 */
+#define EXECBASE_THISTASK 276   /* ExecBase->ThisTask, the classic offset      */
+#define LVO_INSERT        39    /* -234 */
+#define LVO_ADDHEAD       40    /* -240 */
+#define LVO_ADDTAIL       41    /* -246 */
+#define LVO_REMOVE        42    /* -252 */
 
 static const char *g_crash_dir = NULL;
 
@@ -135,6 +146,7 @@ struct emu68k_run {
     int                   started;
     int                   done;
     volatile int          kill_req;      /* async kill flag (one store)         */
+    double                deadline;      /* wall-clock limit, 0 = none          */
     char                  name[64];      /* for ledger/bundle attribution       */
     /* [T3] opened libraries: guest base -> name, for the OS-call callback */
     struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
@@ -242,6 +254,25 @@ static const char *guest_cstr(j4_sandbox *sb, uint32_t addr)
     return p;
 }
 
+/* Guest memory accessors: 68k memory is big-endian, so a pointer written for
+ * the guest must be written as big-endian regardless of the host. */
+static uint32_t gread32(j4_sandbox *sb, uint32_t a)
+{
+    const uint8_t *p;
+    if (a < sb->sandbox_origin || a + 4 > sb->sandbox_origin + sb->size) return 0;
+    p = j4_sandbox_host(sb, a);
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+static void gwrite32(j4_sandbox *sb, uint32_t a, uint32_t v)
+{
+    uint8_t *p;
+    if (a < sb->sandbox_origin || a + 4 > sb->sandbox_origin + sb->size) return;
+    p = j4_sandbox_host(sb, a);
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
 /* [T3] exec.library, served here: this is the bootstrap every AmigaOS program
  * performs before it can do anything else. OpenLibrary hands back a guest base
  * that the engine then recognises, so calls through it arrive at the bridge
@@ -250,6 +281,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      struct j5d_m68k_state *st, char *e, unsigned el)
 {
     switch (lvo) {
+    case LVO_OLDOPENLIB:      /* same thing, older entry point: A1 = name     */
     case LVO_OPENLIBRARY: {
         const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
         if (!nm) { snprintf(e, el, "OpenLibrary: bad name pointer"); return 1; }
@@ -270,6 +302,14 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_CLOSELIBRARY:
         st->d[0] = 0;
         return 0;                                        /* bases stay valid    */
+    case LVO_AVAILMEM:
+        st->d[0] = (r->exec_heap_end > r->exec_heap)
+                 ? (r->exec_heap_end - r->exec_heap) : 0;
+        return 0;
+    case LVO_FREEVEC:
+        st->d[0] = 0;                                    /* bump heap: no free  */
+        return 0;
+    case LVO_ALLOCVEC:       /* the single most-called allocation in real code */
     case LVO_ALLOCMEM: {
         /* Memory a 68k program allocates must live in the GUEST arena: the
          * program dereferences the pointer itself, so it has to be an address
@@ -300,6 +340,36 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * pr_CLI says "launched from the Shell". */
         st->d[0] = (st->a[1] == 0) ? GUEST_PROCESS : 0;
         return 0;
+    /* Exec list handling operates on GUEST structures, so it is performed in
+     * guest memory here rather than handed to the native AROS AddHead, which
+     * would manipulate host pointers in a list the program cannot address.
+     * (struct Node: ln_Succ at 0, ln_Pred at 4; struct List: lh_Head 0,
+     * lh_Tail 4, lh_TailPred 8.) */
+    case LVO_ADDHEAD: {
+        uint32_t list = st->a[0], node = st->a[1];
+        uint32_t head = gread32(sb, list);
+        gwrite32(sb, node, head);              /* node->ln_Succ = list->lh_Head */
+        gwrite32(sb, node + 4, list);          /* node->ln_Pred = &lh_Head      */
+        gwrite32(sb, head + 4, node);          /* head->ln_Pred = node          */
+        gwrite32(sb, list, node);              /* list->lh_Head = node          */
+        return 0;
+    }
+    case LVO_ADDTAIL: {
+        uint32_t list = st->a[0], node = st->a[1];
+        uint32_t tailpred = gread32(sb, list + 8);
+        gwrite32(sb, node, list + 4);          /* node->ln_Succ = &lh_Tail      */
+        gwrite32(sb, node + 4, tailpred);      /* node->ln_Pred = lh_TailPred   */
+        gwrite32(sb, tailpred, node);          /* tailpred->ln_Succ = node      */
+        gwrite32(sb, list + 8, node);          /* list->lh_TailPred = node      */
+        return 0;
+    }
+    case LVO_REMOVE: {
+        uint32_t node = st->a[1];
+        uint32_t succ = gread32(sb, node), pred = gread32(sb, node + 4);
+        gwrite32(sb, pred, succ);
+        gwrite32(sb, succ + 4, pred);
+        return 0;
+    }
     case LVO_SETSIGNAL:
         /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
          * signals a guest task yet, so the honest answer is a clean zero. */
@@ -359,6 +429,14 @@ static j5d_poll_action quantum_poll(void *user)
 {
     struct emu68k_run *r = user;
     if (r->kill_req) return J5D_POLL_KILL;
+    if (r->deadline > 0.0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        if ((double)ts.tv_sec + ts.tv_nsec / 1e9 > r->deadline) {
+            r->kill_req = 1;
+            return J5D_POLL_KILL;
+        }
+    }
     return J5D_POLL_YIELD;                      /* interval expiry = quantum end */
 }
 
@@ -470,11 +548,37 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         uint8_t *pr = j4_sandbox_host(&r->sb, GUEST_PROCESS);
         memset(pr, 0, 256);
         pr[PR_TASK_LN_TYPE] = NT_PROCESS;
+        /* Startup code usually reads ExecBase->ThisTask rather than calling
+         * FindTask; with that zero it walks into address 0, reads pr_CLI as
+         * zero, decides "launched from Workbench" and waits for a message that
+         * never arrives. Pointing it at the guest Process is what puts real
+         * programs on the Shell path. */
+        {
+            uint8_t *eb = j4_sandbox_host(&r->sb, EXEC_BASE);
+            memset(eb, 0, 512);
+            eb[EXECBASE_THISTASK + 0] = (uint8_t)(GUEST_PROCESS >> 24);
+            eb[EXECBASE_THISTASK + 1] = (uint8_t)(GUEST_PROCESS >> 16);
+            eb[EXECBASE_THISTASK + 2] = (uint8_t)(GUEST_PROCESS >> 8);
+            eb[EXECBASE_THISTASK + 3] = (uint8_t)(GUEST_PROCESS);
+        }
         pr[PR_CLI_OFFSET + 0] = (uint8_t)(GUEST_CLI >> 24);
         pr[PR_CLI_OFFSET + 1] = (uint8_t)(GUEST_CLI >> 16);
         pr[PR_CLI_OFFSET + 2] = (uint8_t)(GUEST_CLI >> 8);
         pr[PR_CLI_OFFSET + 3] = (uint8_t)(GUEST_CLI);
         memset(j4_sandbox_host(&r->sb, GUEST_CLI), 0, 128);
+    }
+    /* EMU68K_MAX_SECONDS: a wall-clock limit per run. Off by default; a sweep
+     * over unknown software sets it so one program that waits forever cannot
+     * stall the batch. Enforced at quantum boundaries, so it lands even inside
+     * a chained loop. */
+    {
+        const char *lim = getenv("EMU68K_MAX_SECONDS");
+        double secs = lim && *lim ? atof(lim) : 0.0;
+        if (secs > 0.0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            r->deadline = (double)ts.tv_sec + ts.tv_nsec / 1e9 + secs;
+        }
     }
     r->run_lib   = &r->lib;
     /* the exec heap: everything between the loaded program and the stack, which

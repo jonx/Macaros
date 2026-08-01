@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""68k-corpus-summary - turn a corpus sweep into a verdict table + a ranked list
+of what to implement next. The ranking is the point: it says which single
+missing call would unblock the most real programs."""
+import sys, re, os, subprocess
+
+path = sys.argv[1] if len(sys.argv) > 1 else None
+if not path:
+    runs = sorted([f for f in os.listdir('run/darwin-aarch64') if f.startswith('corpus-') and f.endswith('.txt')])
+    path = 'run/darwin-aarch64/' + runs[-1]
+
+# authoritative exec LVO names, from the generated AROS headers
+lvonames = {}          # (library, lvo) -> function name, from the AROS headers
+gendir = os.path.expanduser('~/aros-build/bin/darwin-aarch64/gen/include/defines')
+for lib, base in (('exec','ExecBase'), ('dos','DosLibrary'), ('icon','IconBase'),
+                  ('intuition','IntuitionBase'), ('graphics','GfxBase'),
+                  ('utility','UtilityBase'), ('gadtools','Library'),
+                  ('layers','LayersBase'), ('diskfont','DiskfontBase')):
+    f = os.path.join(gendir, lib + '.h')
+    if not os.path.exists(f): continue
+    t = open(f).read()
+    for m in re.finditer(r'AROS_LC\d*\((?:[^,]+),\s*(\w+),.*?\(__\w+\), (\d+), \w+\)', t, re.S):
+        lvonames[(lib, int(m.group(2)))] = m.group(1)
+
+raw = open(path, 'rb').read().decode('latin-1')
+rows, tally, gaps = [], {}, {}
+for part in re.split(r'##### ', raw)[1:]:
+    lines = part.split('\n')
+    name, body = lines[0].strip(), '\n'.join(lines[1:]).strip()
+    g = re.search(r'(\S+)\.library function LVO (\d+) \(offset (-\d+)\)', body)
+    if g:
+        lib, n, off = g.group(1), int(g.group(2)), g.group(3)
+        fn = lvonames.get((lib, n), '?')
+        v = f"GAP {lib}.{fn}({off})"
+        gaps[(lib, n, fn, off)] = gaps.get((lib, n, fn, off), 0) + 1
+        k = 'capability gap'
+    elif not body:                          v, k = "(exited quietly)", 'quiet'
+    elif 'full Amiga emulator' in body:     v, k = "HARDWARE -> FULL", 'hardware'
+    elif 'host fault' in body:              v, k = "engine fault", 'fault'
+    elif 'exception:' in body:              v, k = "engine: " + body.split('exception:')[1].strip()[:40], 'engine'
+    elif 'killed' in body or '***Break' in body: v, k = "timed out", 'timeout'
+    elif 'emu68k:' in body:                 v, k = "err: " + body.split('emu68k:')[1].strip()[:44], 'other'
+    else:                                   v, k = "RAN: " + re.sub(r'\s+', ' ', body)[:52], 'ran'
+    rows.append((name, v)); tally[k] = tally.get(k, 0) + 1
+
+print(f"{'program':<26} verdict")
+print('-' * 78)
+for n, v in rows: print(f"{n:<26} {v}")
+print(f"\n=== {len(rows)} programs ===")
+for k, v in sorted(tally.items(), key=lambda x: -x[1]): print(f"  {v:3d}  {k}")
+if gaps:
+    print("\n=== what to implement next (most programs unblocked first) ===")
+    for (lib, n, fn, off), c in sorted(gaps.items(), key=lambda x: -x[1]):
+        print(f"  {c:3d} programs  {lib}.library  {fn} (LVO {n}, offset {off})")

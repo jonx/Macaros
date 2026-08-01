@@ -1,0 +1,40 @@
+#!/bin/sh
+# 68k-corpus - run a folder of 68k executables on booted AROS, one boot, and
+# write a result line per program. Used to harden the translation layer against
+# real software: each run names what stopped a program, and the summary says
+# which gap is worth fixing next.
+#
+#   graft/68k-corpus <host-folder-of-68k-programs> [outfile]
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+DIR="${1:?usage: 68k-corpus <folder> [out]}"
+OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
+SHARE="$HOME/AROS/Shared"; SUB="corpus"
+mkdir -p "$SHARE/$SUB" && rm -f "$SHARE/$SUB"/* 2>/dev/null
+cp "$DIR"/* "$SHARE/$SUB/" 2>/dev/null
+RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
+{
+  echo 'FailAt 255'
+  echo 'CD MacRW:corpus'
+  echo 'Echo "=== CORPUS ===" >MacRW:corpus-out.txt'
+  for f in "$SHARE/$SUB"/*; do
+    b=$(basename "$f")
+    echo "Echo \"##### $b\" >>MacRW:corpus-out.txt"
+    echo "$b >>MacRW:corpus-out.txt"
+  done
+  echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
+  echo 'Wait 999999'
+} > "$RUN/startup"
+pkill -f Macaros 2>/dev/null; sleep 1
+rm -f "$SHARE/corpus-out.txt"; : > /tmp/aros-window.log
+AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
+  EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$HERE/aros-ctl" run >/dev/null 2>&1
+i=0; LIMIT="${CORPUS_TIMEOUT:-900}"
+while [ $i -lt $LIMIT ]; do
+  [ -f "$SHARE/corpus-out.txt" ] && grep -q '=== DONE ===' "$SHARE/corpus-out.txt" && break
+  sleep 3; i=$((i+3))
+done
+cp "$SHARE/corpus-out.txt" "$OUT" 2>/dev/null
+cp /tmp/aros-window.log "$OUT.log" 2>/dev/null
+"$HERE/aros-ctl" stop >/dev/null 2>&1
+echo "corpus results: $OUT"
