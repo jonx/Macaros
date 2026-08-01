@@ -106,6 +106,17 @@
 #define PR_CLI_OFFSET   172
 #define NT_PROCESS      13
 
+/* A 68k program is a CLASSIC AmigaOS program, and there a BPTR is the address
+ * DIVIDED BY FOUR: BADDR(x) is x<<2. Native AROS on this target is built with
+ * AROS_FAST_BPTR, where a BPTR is just a pointer, so it is easy to plant a raw
+ * address in a guest structure and be wrong in a way nothing complains about -
+ * the program shifts it left by two and reads somewhere else entirely. That is
+ * exactly what happened: pr_CLI was planted as $222400, the program computed
+ * BADDR and got $889000, and the faults landed at addresses derived from it.
+ * Every BPTR-typed field handed to the guest goes through this. */
+#define GUEST_MKBADDR(a)  ((a) >> 2)
+#define GUEST_BADDR(b)    ((b) << 2)
+
 /* exec LVOs a program uses to get going (negative offset / 6). */
 #define LVO_OPENLIBRARY   92    /* -552 */
 #define LVO_CLOSELIBRARY  69    /* -414 */
@@ -953,10 +964,13 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             eb[EXECBASE_THISTASK + 2] = (uint8_t)(GUEST_PROCESS >> 8);
             eb[EXECBASE_THISTASK + 3] = (uint8_t)(GUEST_PROCESS);
         }
-        pr[PR_CLI_OFFSET + 0] = (uint8_t)(GUEST_CLI >> 24);
-        pr[PR_CLI_OFFSET + 1] = (uint8_t)(GUEST_CLI >> 16);
-        pr[PR_CLI_OFFSET + 2] = (uint8_t)(GUEST_CLI >> 8);
-        pr[PR_CLI_OFFSET + 3] = (uint8_t)(GUEST_CLI);
+        {   /* pr_CLI is a BPTR: the program will BADDR it */
+            uint32_t cli_b = GUEST_MKBADDR(GUEST_CLI);
+            pr[PR_CLI_OFFSET + 0] = (uint8_t)(cli_b >> 24);
+            pr[PR_CLI_OFFSET + 1] = (uint8_t)(cli_b >> 16);
+            pr[PR_CLI_OFFSET + 2] = (uint8_t)(cli_b >> 8);
+            pr[PR_CLI_OFFSET + 3] = (uint8_t)(cli_b);
+        }
         memset(j4_sandbox_host(&r->sb, GUEST_CLI), 0, 128);
     }
     /* EMU68K_MAX_SECONDS: a wall-clock limit per run. Off by default; a sweep
