@@ -230,7 +230,23 @@ Exit criteria: each `T2a` test binary is caught (statically or at runtime) and
 routed per the ladder; verdicts persist across reboots; a forced engine fault
 produces a v2 bundle and a live system; `aros-ctl` script covers all paths.
 
-## [T3] Generated marshalling at scale (large, the long pole)
+## [T3] Generated marshalling at scale — STARTED 2026-08-01 (the bootstrap slice works)
+
+The AmigaOS library bootstrap runs end to end on booted AROS: a 68k program
+reads SysBase from absolute address 4, opens `dos.library` through exec's
+`OpenLibrary`, and its `Output()`/`Write()` calls are performed by the REAL
+native dos.library. Pieces: multi-libbase recognition in the engine, a guest
+exec (read-only low page + OpenLibrary serving per-library bases, AllocMem from
+the guest heap), the `oscall` seam where the embedder performs native calls,
+and `emu68k_oscall.c` in-OS with the first hand-marshalled set
+(dos I/O: Input/Output/Open/Close/Read/Write/Seek/Delay). File handles cross
+the boundary as opaque TOKENS (a native BPTR is 64-bit and a 68k register is
+32; truncation was the first live failure, exactly as `[T0-P4]` predicted).
+`make hosted-emu68k-t3hello` is the host regression. Still ahead here: the
+generated `[T3a]` tables replacing hand marshalling, printf-class varargs,
+intuition/graphics, callbacks.
+
+Original plan text follows.
 
 Depends: T1; informed continuously by the `T1d` ledger.
 
