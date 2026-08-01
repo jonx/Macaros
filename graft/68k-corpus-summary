@@ -6,8 +6,10 @@ import sys, re, os, subprocess
 
 path = sys.argv[1] if len(sys.argv) > 1 else None
 if not path:
-    runs = sorted([f for f in os.listdir('run/darwin-aarch64') if f.startswith('corpus-') and f.endswith('.txt')])
-    path = 'run/darwin-aarch64/' + runs[-1]
+    d = 'run/darwin-aarch64'
+    runs = [os.path.join(d, f) for f in os.listdir(d)
+            if f.startswith('corpus-') and f.endswith('.txt')]
+    path = max(runs, key=os.path.getmtime)      # newest by time, not by name
 
 # authoritative exec LVO names, from the generated AROS headers
 lvonames = {}          # (library, lvo) -> function name, from the AROS headers
