@@ -2117,6 +2117,34 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc += 2; continue;
         }
 
+        /* addq.b/subq.b #d,Dn : the byte forms of the quick pair above (size bits 00;
+         * there is no ADDQ.B to An on the 68k). Byte op on the low 8, rest preserved,
+         * CCR per byte-size add/sub. vbcc emits subq.b #1,d0 for boolean munging.
+         *   addq.b #d,Dn : 0101 ddd 0 00 000 DDD = 0x5000 | d<<9 | Dn
+         *   subq.b #d,Dn : 0101 ddd 1 00 000 DDD = 0x5100 | d<<9 | Dn */
+        if ((op & 0xF1F8u) == 0x5000u) {                 /* addq.b #d,Dn */
+            unsigned q = (op >> 9) & 7u, imm = (q == 0) ? 8u : q, dn = op & 7u;
+            uint8_t a = (uint8_t)st->d[dn]; uint32_t s = (uint32_t)a + imm;
+            uint8_t res = (uint8_t)s; uint32_t cc = 0;
+            if (s & 0x100u) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ res) & (imm ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            if (res == 0) cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res; st->ccr = cc;
+            pc += 2; continue;
+        }
+        if ((op & 0xF1F8u) == 0x5100u) {                 /* subq.b #d,Dn */
+            unsigned q = (op >> 9) & 7u, imm = (q == 0) ? 8u : q, dn = op & 7u;
+            uint8_t a = (uint8_t)st->d[dn]; uint8_t res = (uint8_t)(a - imm);
+            uint32_t cc = 0;
+            if (imm > a) cc |= J5D_CCR_C | J5D_CCR_X;
+            if (((a ^ imm) & (a ^ res)) & 0x80u) cc |= J5D_CCR_V;
+            if (res == 0) cc |= J5D_CCR_Z;
+            if (res & 0x80u) cc |= J5D_CCR_N;
+            st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | res; st->ccr = cc;
+            pc += 2; continue;
+        }
+
         /* ============================ [J5m] extb.l Dn ===============================
          * 0100 1001 11 000 rrr = 0x49C0 | Dn : sign-extend BYTE->LONG. N,Z from result;
          * V=C=0; X kept. (68020 EXTB.L.) */

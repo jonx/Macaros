@@ -1,0 +1,129 @@
+--- a/src/dhry.h
++++ b/src/dhry.h
+@@ -347,17 +347,13 @@
+ 
+ /* Compiler and system dependent definitions: */
+ 
+-#ifndef TIME
+-#define TIMES
+-#endif
++/* freestanding 68k (AROS jit68k bench): no host timing */
++#undef TIME
++#undef TIMES
+                 /* Use times(2) time function unless    */
+                 /* explicitly defined otherwise         */
+ 
+-#ifdef TIMES
+-#include <sys/types.h>
+-#include <sys/times.h>
+-                /* for "times" */
+-#endif
++
+ 
+ #define Mic_secs_Per_Second     1000000.0
+                 /* Berkeley UNIX C returns process times in seconds/HZ */
+@@ -383,8 +379,14 @@
+ 
+ /* General definitions: */
+ 
+-#include <stdio.h>
+-                /* for strcpy, strcmp */
++/* freestanding 68k: the glue (dhry_glue.c) provides these */
++#define printf dhry_printf
++extern int  dhry_printf();
++extern char *strcpy();
++extern int  strcmp();
++#ifndef DHRY_RUNS
++#define DHRY_RUNS 20000
++#endif
+ 
+ #define Null 0 
+                 /* Value of a Null pointer */
+--- a/src/dhry_1.c
++++ b/src/dhry_1.c
+@@ -28,7 +28,6 @@
+ int             Arr_1_Glob [50];
+ int             Arr_2_Glob [50] [50];
+ 
+-extern char     *malloc ();
+ Enumeration     Func_1 ();
+   /* forward declaration necessary since Enumeration may not simply be int */
+ 
+@@ -66,7 +65,7 @@
+ /* end of variables for time measurement */
+ 
+ 
+-main ()
++int main ()
+ /*****/
+ 
+   /* main program, corresponds to procedures        */
+@@ -84,8 +83,11 @@
+ 
+   /* Initializations */
+ 
+-  Next_Ptr_Glob = (Rec_Pointer) malloc (sizeof (Rec_Type));
+-  Ptr_Glob = (Rec_Pointer) malloc (sizeof (Rec_Type));
++  {
++    static Rec_Type Rec_A, Rec_B;
++    Next_Ptr_Glob = &Rec_A;
++    Ptr_Glob = &Rec_B;
++  }
+ 
+   Ptr_Glob->Ptr_Comp                    = Next_Ptr_Glob;
+   Ptr_Glob->Discr                       = Ident_1;
+@@ -114,13 +116,7 @@
+     printf ("Program compiled without 'register' attribute\n");
+     printf ("\n");
+   }
+-  printf ("Please give the number of runs through the benchmark: ");
+-  {
+-    int n;
+-    scanf ("%d", &n);
+-    Number_Of_Runs = n;
+-  }
+-  printf ("\n");
++  Number_Of_Runs = DHRY_RUNS;
+ 
+   printf ("Execution starts, %d runs through Dhrystone\n", Number_Of_Runs);
+ 
+@@ -247,33 +243,12 @@
+   printf ("        should be:   DHRYSTONE PROGRAM, 2'ND STRING\n");
+   printf ("\n");
+ 
+-  User_Time = End_Time - Begin_Time;
+-
+-  if (User_Time < Too_Small_Time)
+-  {
+-    printf ("Measured time too small to obtain meaningful results\n");
+-    printf ("Please increase number of runs\n");
+-    printf ("\n");
+-  }
+-  else
+-  {
+-#ifdef TIME
+-    Microseconds = (float) User_Time * Mic_secs_Per_Second 
+-                        / (float) Number_Of_Runs;
+-    Dhrystones_Per_Second = (float) Number_Of_Runs / (float) User_Time;
+-#else
+-    Microseconds = (float) User_Time * Mic_secs_Per_Second 
+-                        / ((float) HZ * ((float) Number_Of_Runs));
+-    Dhrystones_Per_Second = ((float) HZ * (float) Number_Of_Runs)
+-                        / (float) User_Time;
+-#endif
+-    printf ("Microseconds for one run through Dhrystone: ");
+-    printf ("%6.1f \n", Microseconds);
+-    printf ("Dhrystones per Second:                      ");
+-    printf ("%6.1f \n", Dhrystones_Per_Second);
+-    printf ("\n");
+-  }
+-  
++  /* freestanding 68k: wall time is measured OUTSIDE the program; the exit
++   * code reports integrity (0 = the canonical final values held). */
++  return (Int_Glob == 5 && Bool_Glob == 1 && Ch_1_Glob == 'A' &&
++          Ch_2_Glob == 'B' && Arr_1_Glob[8] == 7 &&
++          Arr_2_Glob[8][7] == Number_Of_Runs + 10 &&
++          Int_1_Loc == 5 && Int_2_Loc == 13 && Int_3_Loc == 7) ? 0 : 1;
+ }
+ 
+ 

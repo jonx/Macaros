@@ -41,8 +41,8 @@ set -e
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"      # .../apps68k
 DEST="$HERE/.toolchain"
-VBCC_URL="http://www.ibaug.de/vbcc/vbcc.tar.gz"
-VLINK_URL="http://sun.hasenbraten.de/vlink/release/vlink.tar.gz"
+VBCC_URL="https://www.ibaug.de/vbcc/vbcc.tar.gz"
+VLINK_URL="https://sun.hasenbraten.de/vlink/release/vlink.tar.gz"
 
 mkdir -p "$DEST"
 if [ -x "$DEST/vbccm68k" ] && [ -x "$DEST/vlink" ]; then
@@ -56,12 +56,20 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- vbcc (the C compiler) -------------------------------------------------------
-echo ">> fetching vbcc source from $VBCC_URL"
-curl -fsSL -o "$WORK/vbcc.tar.gz" "$VBCC_URL"
+# VBCC_TARBALL / VLINK_TARBALL: pre-fetched source tarballs (official or github
+# mirrors) instead of the network — the release sites are intermittently down.
+if [ -n "${VBCC_TARBALL:-}" ]; then
+    echo ">> using local vbcc tarball $VBCC_TARBALL"
+    cp "$VBCC_TARBALL" "$WORK/vbcc.tar.gz"
+else
+    echo ">> fetching vbcc source from $VBCC_URL"
+    curl -fsSL -o "$WORK/vbcc.tar.gz" "$VBCC_URL"
+fi
 # vbcc's tarball carries self-referential hardlinks for shared machine files; the
 # warnings are benign (tar still extracts the real file content).
 tar xzf "$WORK/vbcc.tar.gz" -C "$WORK" 2>/dev/null || true
 VBCCSRC="$WORK/vbcc"
+[ -d "$VBCCSRC" ] || { mv "$WORK"/vbcc-* "$VBCCSRC" 2>/dev/null || true; }
 [ -d "$VBCCSRC" ] || { echo "!! vbcc source not extracted"; exit 1; }
 
 echo ">> generating m68k target datatypes (dtgen, answering cross=y) + building vbccm68k"
@@ -94,10 +102,16 @@ if [ -f "$VBCCSRC/doc/vbcc.texi" ]; then
 fi
 
 # ---- vlink (the linker) ----------------------------------------------------------
-echo ">> fetching vlink source from $VLINK_URL"
-curl -fsSL -o "$WORK/vlink.tar.gz" "$VLINK_URL"
+if [ -n "${VLINK_TARBALL:-}" ]; then
+    echo ">> using local vlink tarball $VLINK_TARBALL"
+    cp "$VLINK_TARBALL" "$WORK/vlink.tar.gz"
+else
+    echo ">> fetching vlink source from $VLINK_URL"
+    curl -fsSL -o "$WORK/vlink.tar.gz" "$VLINK_URL"
+fi
 tar xzf "$WORK/vlink.tar.gz" -C "$WORK" 2>/dev/null || true
 VLINKSRC="$WORK/vlink"
+[ -d "$VLINKSRC" ] || { mv "$WORK"/vlink-* "$VLINKSRC" 2>/dev/null || true; }
 [ -d "$VLINKSRC" ] || { echo "!! vlink source not extracted"; exit 1; }
 echo ">> building vlink (-bamigahunk target included)"
 mkdir -p "$VLINKSRC/objects"

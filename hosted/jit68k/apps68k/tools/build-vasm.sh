@@ -14,7 +14,7 @@ set -e
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"      # .../apps68k
 DEST="$HERE/.toolchain"
-URL="http://sun.hasenbraten.de/vasm/release/vasm.tar.gz"
+URL="https://sun.hasenbraten.de/vasm/release/vasm.tar.gz"
 
 mkdir -p "$DEST"
 if [ -x "$DEST/vasmm68k_mot" ]; then
@@ -25,9 +25,18 @@ fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-echo ">> fetching vasm source from $URL"
-curl -fsSL -o "$WORK/vasm.tar.gz" "$URL"
+# VASM_TARBALL: use a pre-fetched source tarball (official or a github mirror)
+# instead of the network — the release site is intermittently unreachable.
+if [ -n "${VASM_TARBALL:-}" ]; then
+    echo ">> using local vasm tarball $VASM_TARBALL"
+    cp "$VASM_TARBALL" "$WORK/vasm.tar.gz"
+else
+    echo ">> fetching vasm source from $URL"
+    curl -fsSL -o "$WORK/vasm.tar.gz" "$URL"
+fi
 tar xzf "$WORK/vasm.tar.gz" -C "$WORK"
+# mirror tarballs unpack as vasm-<something>/ — normalize to vasm/
+[ -d "$WORK/vasm" ] || mv "$WORK"/vasm-* "$WORK/vasm"
 
 echo ">> building vasmm68k_mot (CPU=m68k SYNTAX=mot)"
 make -C "$WORK/vasm" CPU=m68k SYNTAX=mot >/dev/null 2>"$WORK/build.log" || {
