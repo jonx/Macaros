@@ -55,7 +55,8 @@ one-look summary. Verified against the code, not just the docs.)
 [arexx-host-port](arexx-host-port/README.md) ·
 [dotnet-native](dotnet-native/README.md) ·
 [seamless-windows](seamless-windows/README.md) ·
-[68k-marshalling](68k-marshalling/README.md) (design; the boundary itself is realized inside the JIT).
+[68k-marshalling](68k-marshalling/README.md) (design; the boundary itself is realized inside the JIT) ·
+[68k-transparent-exec](68k-transparent-exec/README.md) (design + staged plan).
 
 > Provenance note: everything above is independent clean-room work **except** the
 > [68k-jit](68k-jit/design.md), which adopts **Emu68** (MPL-2.0) as vendored files —
@@ -90,6 +91,7 @@ one-look summary. Verified against the code, not just the docs.)
 |---|---|---|
 | 68k-jit | Host 68k→AArch64 translator to run classic Amiga binaries natively | [README](68k-jit/README.md) |
 | 68k-marshalling | The big-endian-on-LE library-call marshalling boundary for the JIT | [README](68k-marshalling/README.md) |
+| 68k-transparent-exec | Launch classic 68k programs transparently: execution-boundary dispatch, AUTO/JIT/FULL routing, crash-as-fuel | [README](68k-transparent-exec/README.md) |
 | cocoa-metal-display | Live macOS Metal window as the AROS display | [README](cocoa-metal-display/README.md) |
 | host-app-shell | Make the window a first-class Mac app (menu/About/icon/Settings) | [README](host-app-shell/README.md) |
 | clipboard-bridge | Two-way macOS NSPasteboard ↔ AROS `clipboard.device` | [README](clipboard-bridge/README.md) |

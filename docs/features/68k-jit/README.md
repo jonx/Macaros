@@ -32,5 +32,7 @@ and OS bridge link to them but copy no Emu68 code. Full disclosure:
 - [INTERFACE.md](INTERFACE.md) — the engine/host API
 - [68k-marshalling](../68k-marshalling/README.md) — the big-endian-on-LE
   library-call boundary
+- [68k-transparent-exec](../68k-transparent-exec/README.md) — the plan to move
+  this engine in-OS: transparent launch, AUTO/JIT/FULL routing, crash telemetry
 - CLI + sample programs: [hosted/jit68k/run68k.md](../../../hosted/jit68k/run68k.md) ·
   [apps68k](../../../hosted/jit68k/apps68k/README.md)

@@ -3,6 +3,8 @@
 > Status: design + rationale (drafted 2026-06-29) · Companion to the engine docs in
 > [../68k-jit/](../68k-jit/) — [design.md](../68k-jit/design.md),
 > [INTERFACE.md](../68k-jit/INTERFACE.md), [spec.md](../68k-jit/spec.md).
+> Consumed by the integration design in
+> [../68k-transparent-exec/](../68k-transparent-exec/README.md).
 > Process: [../CLEANROOM.md](../CLEANROOM.md).
 
 **The split.** [68k-jit/](../68k-jit/) is the **engine**: a host-proven 68k→AArch64
