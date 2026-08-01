@@ -134,6 +134,7 @@ typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
  *
  * The block-cache typedefs live here (moved up from the ICache section) because the
  * instance embeds the cache. */
+#define J5D_MAX_LIBBASES 16
 #define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
 #define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
@@ -199,6 +200,13 @@ struct j5d_engine_state {
     uint32_t          resume_initial_sp;
     uint32_t          resume_depth;
     uint8_t           resume_valid;
+    /* [T3] registered library bases. A real AmigaOS program opens libraries at
+     * run time and calls each through its OWN base in A6, so the bridge has to
+     * recognise any of them - not just the single base the run started with.
+     * The bridge callback reads A6 itself to know WHICH library was called, so
+     * the callback signature is unchanged. */
+    uint32_t          libbase[J5D_MAX_LIBBASES];
+    int               n_libbase;
     /* the [J5d] per-PC block ICache */
     int               cache_n;
     j5d_cached_block  cache[J5D_MAX_BLOCKS];
@@ -250,6 +258,22 @@ void j5d_engine_free(j5d_engine *ep)
 }
 /* async-signal-safe: two plain stores. Zeroing the budget makes the NEXT
  * chain-entry safe point park, so even fully-chained code stops promptly. */
+void j5d_register_libbase(uint32_t base)
+{
+    for (int i = 0; i < g_eng->n_libbase; i++)
+        if (g_eng->libbase[i] == base) return;
+    if (g_eng->n_libbase < J5D_MAX_LIBBASES)
+        g_eng->libbase[g_eng->n_libbase++] = base;
+}
+void j5d_clear_libbases(void) { g_eng->n_libbase = 0; }
+static int is_libbase(uint32_t a6, uint32_t entry_base)
+{
+    if (a6 == entry_base && entry_base) return 1;
+    for (int i = 0; i < g_eng->n_libbase; i++)
+        if (g_eng->libbase[i] == a6) return 1;
+    return 0;
+}
+
 void j5d_request_stop(void) { g_eng->stop_flag = 1; g_eng->chain_budget = 0; }
 int  j5d_take_stop(void)
 {
@@ -1980,7 +2004,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         else if (top == 0x4E71u) {                   /* nop                          */
             pc = tpc + 2;
         }
-        else if (top == 0x4EAEu && st->a[6] == a6_libbase) {  /* jsr d16(A6) -> [J3] bridge
+        else if (top == 0x4EAEu && is_libbase(st->a[6], a6_libbase)) {  /* jsr d16(A6) -> [J3] bridge
              * ONLY when A6 actually holds the library base. Compiler-generated code
              * (LLVM/gcc) uses A6 as a FRAME POINTER, so `jsr -N(a6)` is usually an
              * indirect call through a frame slot, not a library vector; that case

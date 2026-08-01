@@ -26,6 +26,15 @@ extern "C" {
 
 typedef struct emu68k_run emu68k_run;
 
+/* [T3] The OS-call callback: a library call the host cannot serve itself is
+ * handed to the embedder, which performs the real native call. `regs` is the
+ * live 68k register file (struct j5d_m68k_state) and `guest0` is the host
+ * pointer for guest address 0, so guest pointers translate as guest0 + addr.
+ * Return 0 if served, nonzero to make it a classified capability gap. */
+typedef int (*emu68k_oscall_fn)(const char *libname, int lvo, void *regs,
+                                void *guest0, void *user, char *err, unsigned errlen);
+void emu68k_set_oscall(emu68k_oscall_fn fn, void *user);
+
 /* output sink: called with program output bytes as they appear (quantum end) */
 typedef void (*emu68k_sink_fn)(const char *buf, long len, void *user);
 

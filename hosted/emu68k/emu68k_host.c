@@ -67,6 +67,30 @@
 #define ARGS_REGION_END 0x00240000u
 #define GUEST_RESERVE   0x01000000u     /* guest $000000..$1000000 reserved     */
 
+/* [T3] The AmigaOS environment a real program expects.
+ *
+ * A 68k program does not receive a library base: it reads SysBase from ABSOLUTE
+ * ADDRESS 4 (`move.l 4.w,a6`), then calls exec's OpenLibrary through it. So the
+ * guest needs a readable low page with a pointer at offset 4, an exec base, and
+ * a base per opened library - each recognised by the engine so `jsr -N(A6)`
+ * reaches the bridge.
+ *
+ * The low page is mapped READ-ONLY on purpose: reading SysBase at 4 is the
+ * standard idiom and must work, while WRITING an exception vector is a program
+ * taking over the machine and must still fault into the [T2b] hardware guard.
+ * Read-only gives both behaviours with one mapping. */
+#define GUEST_LOWPAGE   0x00000000u
+#define EXEC_BASE       0x00200000u     /* guest exec.library base              */
+#define LIBBASE_FIRST   0x00201000u     /* opened libraries get bases from here */
+#define LIBBASE_STRIDE  0x00001000u
+#define LIBBASE_MAX     8
+
+/* exec LVOs a program uses to get going (negative offset / 6). */
+#define LVO_OPENLIBRARY   92    /* -552 */
+#define LVO_CLOSELIBRARY  69    /* -414 */
+#define LVO_ALLOCMEM      33    /* -198 */
+#define LVO_FREEMEM       35    /* -210 */
+
 static const char *g_crash_dir = NULL;
 
 struct emu68k_run {
@@ -90,7 +114,27 @@ struct emu68k_run {
     int                   done;
     volatile int          kill_req;      /* async kill flag (one store)         */
     char                  name[64];      /* for ledger/bundle attribution       */
+    /* [T3] opened libraries: guest base -> name, for the OS-call callback */
+    struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
+    int                   nlib;
+    stub_lib             *run_lib;       /* the guest heap, for exec AllocMem   */
 };
+
+/* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
+ * live in AROS. So a library call the stub does not implement is handed OUT to
+ * the embedder (emu68k.library), which marshals the guest registers into a real
+ * native call and writes the result back. The host stays OS-agnostic: it knows
+ * about guest memory and registers, nothing about AROS.
+ *
+ *   libname : which library the program called (its own OpenLibrary name)
+ *   lvo     : the vector index (negative offset / 6)
+ *   regs    : the live 68k register file, marshalled in and out by the callback
+ *   base    : host pointer to guest address 0, for translating guest pointers
+ * Returns 0 if the call was served, nonzero if not (-> capability gap). */
+static emu68k_oscall_fn g_oscall = NULL;
+static void            *g_oscall_user = NULL;
+void emu68k_set_oscall(emu68k_oscall_fn fn, void *user)
+{ g_oscall = fn; g_oscall_user = user; }
 
 /* [T2b] the hardware-access classifier. The signal handler hands us the faulting
  * HOST address; subtracting the sandbox base-adjust recovers the guest address
@@ -162,13 +206,107 @@ int emu68k_ledger_get(int idx, int *lvo, unsigned long *count)
 }
 
 struct bctx { stub_lib *lib; j4_sandbox *sb; struct emu68k_run *run; };
+
+/* read a NUL-terminated guest string (bounded by the arena) */
+static const char *guest_cstr(j4_sandbox *sb, uint32_t addr)
+{
+    if (addr < sb->sandbox_origin ||
+        addr >= sb->sandbox_origin + sb->size) return NULL;
+    const char *p = (const char *)j4_sandbox_host(sb, addr);
+    unsigned long max = sb->sandbox_origin + sb->size - addr;
+    if (!memchr(p, 0, max)) return NULL;
+    return p;
+}
+
+/* [T3] exec.library, served here: this is the bootstrap every AmigaOS program
+ * performs before it can do anything else. OpenLibrary hands back a guest base
+ * that the engine then recognises, so calls through it arrive at the bridge
+ * with A6 naming the library. */
+static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
+                     struct j5d_m68k_state *st, char *e, unsigned el)
+{
+    switch (lvo) {
+    case LVO_OPENLIBRARY: {
+        const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
+        if (!nm) { snprintf(e, el, "OpenLibrary: bad name pointer"); return 1; }
+        for (int i = 0; i < r->nlib; i++)                 /* already open?       */
+            if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
+        if (r->nlib >= LIBBASE_MAX) { snprintf(e, el, "too many open libraries"); return 1; }
+        /* Only offer what the embedder can actually serve; anything else fails
+         * the AmigaOS way (D0 = 0), which programs are written to handle. */
+        if (!g_oscall) { st->d[0] = 0; return 0; }
+        uint32_t base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
+        snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name, "%s", nm);
+        r->openlib[r->nlib].base = base;
+        r->nlib++;
+        j5d_register_libbase(base);
+        st->d[0] = base;
+        return 0;
+    }
+    case LVO_CLOSELIBRARY:
+        st->d[0] = 0;
+        return 0;                                        /* bases stay valid    */
+    case LVO_ALLOCMEM: {
+        /* Memory a 68k program allocates must live in the GUEST arena: the
+         * program will dereference the pointer itself. So this is served here
+         * from the guest heap and never handed out to the embedder, whose
+         * allocator would return an address the program cannot reach. */
+        uint32_t size = (st->d[0] + 3u) & ~3u;
+        stub_lib *L = r->run_lib;
+        if (!L || size == 0 || L->heap_next + size > L->heap_end) {
+            st->d[0] = 0;                                /* AmigaOS: NULL       */
+            return 0;
+        }
+        st->d[0] = L->heap_next;
+        L->heap_next += size;
+        memset(j4_sandbox_host(sb, st->d[0]), 0, size);
+        return 0;
+    }
+    case LVO_FREEMEM:
+        st->d[0] = 0;                                    /* bump heap: no free  */
+        return 0;
+    default:
+        return 1;                                        /* not served here     */
+    }
+}
+
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
+    struct emu68k_run *r = c->run;
+    uint32_t a6 = st->a[6];
+
+    /* which library did the program call through? */
+    if (r && a6 == EXEC_BASE) {
+        if (exec_call(r, c->sb, lvo, st, e, el) == 0) return 0;
+        /* fall through to the OS callback: the embedder may serve more of exec */
+        if (g_oscall &&
+            g_oscall("exec.library", lvo, st, r->reserve, g_oscall_user,
+                     e, el) == 0)
+            return 0;
+        ledger_record(lvo, r->name[0] ? r->name : NULL);
+        snprintf(e, el, "capability gap: exec.library function LVO %d (offset %d) "
+                        "is not available yet", lvo, -6 * lvo);
+        return 1;
+    }
+    if (r) {
+        for (int i = 0; i < r->nlib; i++) {
+            if (r->openlib[i].base != a6) continue;
+            if (g_oscall &&
+                g_oscall(r->openlib[i].name, lvo, st, r->reserve, g_oscall_user,
+                         e, el) == 0)
+                return 0;
+            ledger_record(lvo, r->name[0] ? r->name : NULL);
+            snprintf(e, el, "capability gap: %s function LVO %d (offset %d) "
+                            "is not available yet", r->openlib[i].name, lvo, -6 * lvo);
+            return 1;
+        }
+    }
+
+    /* the built-in stub OS (the corpus path: PutChar/AllocMem/FreeMem) */
     int rc = stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
     if (rc) {
-        /* the stub could not marshal this call: a classified capability gap */
-        ledger_record(lvo, c->run && c->run->name[0] ? c->run->name : NULL);
+        ledger_record(lvo, r && r->name[0] ? r->name : NULL);
         snprintf(e, el, "capability gap: library function LVO %d (offset %d) "
                         "is not marshalled yet", lvo, -6 * lvo);
     }
@@ -222,6 +360,18 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             goto fail;
         }
     }
+    /* [T3] the low page: readable so `move.l 4.w,a6` finds SysBase, NOT writable
+     * so installing an exception vector still faults into the hardware guard. */
+    {
+        long pg = sysconf(_SC_PAGESIZE);
+        unsigned long pgsz = (pg > 0) ? (unsigned long)pg : 0x4000u;
+        uint8_t *low = (uint8_t *)r->reserve + GUEST_LOWPAGE;
+        if (mprotect(low, pgsz, PROT_READ | PROT_WRITE) == 0) {
+            low[4] = (uint8_t)(EXEC_BASE >> 24); low[5] = (uint8_t)(EXEC_BASE >> 16);
+            low[6] = (uint8_t)(EXEC_BASE >> 8);  low[7] = (uint8_t)EXEC_BASE;
+            mprotect(low, pgsz, PROT_READ);          /* freeze it read-only     */
+        }
+    }
     r->image = malloc(imagelen ? imagelen : 1);
     if (!r->image) {
         snprintf(err, errlen, "out of memory (image)");
@@ -257,6 +407,13 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
 
     r->eng = j5d_engine_new();
     if (!r->eng) { snprintf(err, errlen, "engine instance alloc failed"); goto fail; }
+    {   /* the exec base must be recognised on THIS run's engine instance */
+        j5d_engine *prev = j5d_engine_active();
+        j5d_engine_activate(r->eng);
+        j5d_clear_libbases();
+        j5d_register_libbase(EXEC_BASE);
+        j5d_engine_activate(prev);
+    }
 
     j5n_symbols_parse(r->image, imagelen, &r->seg, &r->symtab);
     {
@@ -267,6 +424,7 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     r->diag.quiet_banner = 1;
     if (g_crash_dir) r->diag.crash_dir = g_crash_dir;
 
+    r->run_lib   = &r->lib;
     r->sink      = sink;
     r->sink_user = sink_user;
     r->resume_pc = r->seg.entry;
