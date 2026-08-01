@@ -319,6 +319,20 @@ static void scan_code(const uint8_t *code, unsigned long len, int hunk,
             check_abs_operand(code, len, i, w, hunk, rs, r);
         }
 
+        /* [T3] a library-call site: jsr d16(a6) with a negative displacement.
+         * (A6 as a frame pointer gives positive/zero displacements.) */
+        if (w == 0x4EAEu && i + 4 <= len) {
+            int16_t d16 = (int16_t)be16at(code + i + 2);
+            if (d16 < 0) {
+                r->n_lib_calls++;
+                int seen = 0;
+                for (int k = 0; k < r->n_lvo_off; k++)
+                    if (r->lvo_off[k] == d16) { seen = 1; break; }
+                if (!seen && r->n_lvo_off < SCAN68K_MAX_LVOOFF)
+                    r->lvo_off[r->n_lvo_off++] = d16;
+            }
+        }
+
         int l = insn_len(w, next);
         if (l <= 0) break;
         i += (unsigned long)l;
@@ -440,6 +454,56 @@ int scan68k_image(const void *image, unsigned long len,
         return 1;
     }
 
+    /* [T3] harvest "<name>.library" strings anywhere in the image: the set of
+     * libraries the program can OpenLibrary by name. */
+    {
+        const uint8_t *q = image;
+        unsigned long k;
+        for (k = 0; k + 8 < len; k++) {
+            if (memcmp(q + k, ".library", 8) != 0) continue;
+            unsigned long s0 = k;
+            while (s0 > 0 && (q[s0-1] == '.' || q[s0-1] == '-' || q[s0-1] == '_' ||
+                   (q[s0-1] >= 'a' && q[s0-1] <= 'z') ||
+                   (q[s0-1] >= 'A' && q[s0-1] <= 'Z') ||
+                   (q[s0-1] >= '0' && q[s0-1] <= '9')))
+                s0--;
+            unsigned long nl = k + 8 - s0;
+            if (nl < 9 || nl >= 31) { k += 7; continue; }
+            if (k + 8 < len && q[k+8] != 0) { k += 7; continue; }  /* want NUL */
+            char nm[32];
+            memcpy(nm, q + s0, nl); nm[nl] = 0;
+            /* The backward walk cannot tell a name's first byte from a
+             * preceding opcode byte that happens to be a letter ("rts" ends in
+             * 0x75 = 'u'). If a KNOWN classic library name is a suffix of what
+             * we grabbed, that is the name. */
+            {
+                static const char *const known[] = {
+                    "exec.library", "dos.library", "intuition.library",
+                    "graphics.library", "gadtools.library", "asl.library",
+                    "icon.library", "workbench.library", "expansion.library",
+                    "utility.library", "layers.library", "diskfont.library",
+                    "commodities.library", "keymap.library", "locale.library",
+                    "rexxsyslib.library", "translator.library",
+                    "datatypes.library", "iffparse.library", "mathffp.library",
+                    NULL
+                };
+                for (int j3 = 0; known[j3]; j3++) {
+                    unsigned long kl = strlen(known[j3]);
+                    if (nl >= kl && !strcmp(nm + (nl - kl), known[j3])) {
+                        memmove(nm, nm + (nl - kl), kl + 1);
+                        break;
+                    }
+                }
+            }
+            int dup = 0;
+            for (int j2 = 0; j2 < out->n_libs; j2++)
+                if (!strcmp(out->libs[j2], nm)) { dup = 1; break; }
+            if (!dup && out->n_libs < SCAN68K_MAX_LIBS)
+                snprintf(out->libs[out->n_libs++], 32, "%s", nm);
+            k += 7;
+        }
+    }
+
     /* grade: any in-context evidence is a banger; weak evidence only is suspect */
     {
         int j;
@@ -448,6 +512,14 @@ int scan68k_image(const void *image, unsigned long len,
             out->confidence = SCAN68K_SUSPECT;
         }
     }
+    return 0;
+}
+
+/* what the oscall bridge serves today; grows with emu68k_oscall.c */
+int scan68k_lib_bridged(const char *name)
+{
+    if (!strcmp(name, "exec.library")) return 1;   /* bootstrap + AllocMem      */
+    if (!strcmp(name, "dos.library"))  return 1;   /* console + file I/O        */
     return 0;
 }
 

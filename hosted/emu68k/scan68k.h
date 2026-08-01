@@ -53,6 +53,9 @@ typedef struct {
     char           what[64];    /* human-readable, e.g. "move.w to $DFF180"    */
 } scan68k_evidence;
 
+#define SCAN68K_MAX_LIBS    16
+#define SCAN68K_MAX_LVOOFF  48
+
 typedef struct {
     scan68k_confidence confidence;
     int                n_evidence;
@@ -60,7 +63,21 @@ typedef struct {
     int                n_code_hunks;
     unsigned long      code_bytes;
     int                truncated;   /* more evidence existed than we recorded  */
+
+    /* [T3] the OS surface the program wants, for capability-gap prediction:
+     * library name strings found in the image, and the negative offsets of its
+     * `jsr d16(a6)` library-call sites (which library each call goes through is
+     * a runtime fact - the offsets and the names together are the prediction). */
+    char               libs[SCAN68K_MAX_LIBS][32];
+    int                n_libs;
+    int                lvo_off[SCAN68K_MAX_LVOOFF];   /* negative byte offsets  */
+    int                n_lvo_off;
+    int                n_lib_calls;                   /* total call sites       */
 } scan68k_report;
+
+/* Is this library name bridged to a native implementation yet? Returns 2 for
+ * fully, 1 for partially (the common case while coverage grows), 0 for not. */
+int scan68k_lib_bridged(const char *name);
 
 /* Scan a raw AmigaOS hunk image. Returns 0 on success, nonzero if the image is
  * not a parseable hunk file (err is set). */

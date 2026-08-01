@@ -74,6 +74,25 @@ int main(int argc, char **argv)
                    e->in_context ? "" : "  [weak]");
         }
     }
+    if (r.n_libs || r.n_lib_calls) {
+        printf("  os surface : %d library-call site%s", r.n_lib_calls,
+               r.n_lib_calls == 1 ? "" : "s");
+        if (r.n_lvo_off) {
+            printf(" (offsets");
+            for (int i = 0; i < r.n_lvo_off && i < 12; i++)
+                printf(" %d", r.lvo_off[i]);
+            if (r.n_lvo_off > 12) printf(" ...");
+            printf(")");
+        }
+        printf("\n");
+        for (int i = 0; i < r.n_libs; i++) {
+            int b = scan68k_lib_bridged(r.libs[i]);
+            printf("    opens      %-24s %s\n", r.libs[i],
+                   b ? "bridged (partial coverage)"
+                     : "NOT bridged yet -> will report a capability gap");
+        }
+    }
+
     printf("\n");
     if (r.confidence == SCAN68K_BANGER)
         printf("  This program drives the Amiga hardware, which translation cannot\n"
