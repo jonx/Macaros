@@ -2283,6 +2283,8 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
  * above): without j5n_diag.c there is no signal net, so recovery is a no-op. */
 __attribute__((weak)) sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env)
 { (void)env; return NULL; }
+__attribute__((weak)) void j5n_signal_set_classifier(j5n_classify_fn fn, void *user)
+{ (void)fn; (void)user; }
 
 /* [T0P3] the public j5d_run: the inner dispatcher wrapped in a host-fault recovery
  * scope. A genuine SIGSEGV/SIGBUS/SIGILL inside translated code — after the [J5n]
@@ -2299,9 +2301,17 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
     sigjmp_buf env;
     sigjmp_buf *volatile prev = j5n_signal_set_recover(&env);  /* volatile: read after
                                                                 * a siglongjmp landing */
-    if (sigsetjmp(env, 1)) {
-        /* longjmp'd from the signal handler: bundle written, program dead, we live. */
+    int jv = sigsetjmp(env, 1);
+    if (jv) {
+        /* longjmp'd from the signal handler. jv==2: a CLASSIFIED event (the
+         * [T2b] hardware window) - no bundle, a distinct result. Otherwise a
+         * genuine fault: bundle written, program dead, we live. */
         j5n_signal_set_recover(prev);
+        if (jv == 2) {
+            if (errbuf) snprintf(errbuf, errlen,
+                "program touched the Amiga hardware, which translation cannot serve");
+            return J5D_RC_HARDWARE;
+        }
         if (errbuf) snprintf(errbuf, errlen,
             "host fault in translated code (diagnosed + bundled); program terminated");
         return 1;

@@ -735,6 +735,10 @@ static void fill_hostregs_from_uc(j5n_hostregs *h, void *ucv)
 
 /* [T0P3] the registered fault-recovery target (see j5n_diag.h). */
 static sigjmp_buf *g_recover = NULL;
+static j5n_classify_fn g_classify = NULL;
+static void           *g_classify_user = NULL;
+void j5n_signal_set_classifier(j5n_classify_fn fn, void *user)
+{ g_classify = fn; g_classify_user = user; }
 sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env)
 {
     sigjmp_buf *prev = g_recover;
@@ -776,6 +780,15 @@ static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
         st = &synth; sb = &synth_sb;
     }
     (void)g_sig_diag;
+    /* [T2b] classified event? Then it is not a crash: unwind without bundling.
+     * siglongjmp value 2 tells j5d_run to report it as a hardware event. */
+    if (g_classify && g_recover &&
+        g_classify(info ? info->si_addr : NULL, g_classify_user)) {
+        sigjmp_buf *r = g_recover;
+        g_recover = NULL;
+        siglongjmp(*r, 2);
+    }
+
     j5d_fault(kind, detail, st, sb, &h);
 
     /* [T0P3] containment: a registered recovery target means an embedder (j5d_run) wants

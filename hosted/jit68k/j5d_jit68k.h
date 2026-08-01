@@ -341,6 +341,8 @@ void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips);
 void j5d_set_chain_quantum(uint32_t blocks);
 #define J5D_RC_YIELD  100   /* j5d_run returned at a safe point; resume from st->pc  */
 #define J5D_RC_KILLED 101   /* run terminated at a safe point by stop/KILL           */
+#define J5D_RC_HARDWARE 102 /* [T2b] the program touched an unmapped hardware window:
+                             * a classified ROUTING event, no crash bundle written   */
 
 /* Engine stats for the test's assertion that blocks really went through the JIT. */
 typedef struct j5d_stats {

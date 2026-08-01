@@ -157,7 +157,17 @@ void j5n_signal_remove(void);
  * recovery) restores the bundle-then-die behavior. j5d_run registers/clears this
  * around each run; a weak no-op in the engine keeps diagnostics-less builds linking. */
 #include <setjmp.h>
-sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env);   /* returns the PREVIOUS target so
+sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env);
+
+/* [T2b] fault CLASSIFIER: called with the faulting host address before anything
+ * is bundled. Returning nonzero says "this is an expected, classified event, not
+ * a crash" - the handler then unwinds to the recovery target WITHOUT writing a
+ * crash bundle, and j5d_run reports it distinctly. The 68k execution service
+ * uses this to turn a touch of an unmapped hardware window into a routing
+ * event: the program wanted the Amiga hardware, which is a fact about the
+ * program, not a bug. */
+typedef int (*j5n_classify_fn)(void *fault_addr, void *user);
+void j5n_signal_set_classifier(j5n_classify_fn fn, void *user);   /* returns the PREVIOUS target so
                                                         * nested runs (a native->68k hook
                                                         * re-entering j5d_run) restore it */
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);

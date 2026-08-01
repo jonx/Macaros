@@ -20,21 +20,58 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
-/* the run68k sandbox runtime layout (see run68k.c for the map) */
+/* The guest memory map (the run68k layout; see run68k.c for the full map).
+ *
+ * [T2b] THE RUNTIME HARDWARE GUARD. The arena deliberately STOPS where the Amiga
+ * hardware begins: it spans $210000..$BFD000, so the CIA range ($BFDxxx-$BFExxx)
+ * and the custom chips ($DFFxxx) sit just ABOVE it and the exception-vector page
+ * sits below it. A guest access to any of them therefore resolves to a host
+ * address outside the mapping and faults, and the classifier below turns that
+ * fault back into the guest address it came from - which is how "this program
+ * wants the hardware" becomes a routing EVENT rather than a crash.
+ *
+ * This costs nothing on the hot path: no bounds compare is emitted, the hardware
+ * simply is not there. It is also why the arena is ~9.9 MiB rather than the 16
+ * MiB run68k uses standalone - a 16 MiB arena would swallow $DFF000 and let a
+ * hardware write silently corrupt guest memory instead of announcing itself.
+ *
+ * "Not there" has to be literally true, so the whole low 16 MiB of GUEST space is
+ * RESERVED as one PROT_NONE mapping and only the arena window inside it is made
+ * readable/writable. A malloc'd arena would not do: reading a few KiB past the
+ * end of a 10 MiB malloc block usually lands in the allocator's own pages and
+ * quietly succeeds, which is exactly the silent-corruption case this prevents.
+ * With the reservation, every guest address below the arena (the vector page)
+ * and above it (CIAs, custom chips) resolves into PROT_NONE and faults. */
 #define SANDBOX_ORIGIN  0x00210000u
-#define SANDBOX_SIZE    0x01000000u
+#define SANDBOX_SIZE    0x009ED000u     /* ends at $BFD000, where the CIAs begin;
+                                         * TRIMMED DOWN to a page below, because
+                                         * mprotect rounds a length UP and a
+                                         * 16 KiB page of overshoot would put the
+                                         * CIA registers back inside the arena  */
+
+/* the guest windows the arena deliberately excludes */
+#define HW_CIA_LO       0x00BFD000u
+#define HW_CIA_HI       0x00BFEFFFu
+#define HW_CUSTOM_LO    0x00DFF000u
+#define HW_CUSTOM_HI    0x00DFFFFFu
+#define HW_VECTOR_HI    0x000003FFu
 #define LIBBASE         0x00230000u
 #define HEAP_BASE       0x00231000u
 #define HEAP_END        0x00238000u
 #define PROG_ORIGIN     0x00250000u
 #define ARGS_BASE       0x00238000u
 #define ARGS_REGION_END 0x00240000u
+#define GUEST_RESERVE   0x01000000u     /* guest $000000..$1000000 reserved     */
 
 static const char *g_crash_dir = NULL;
 
 struct emu68k_run {
-    uint8_t              *arena;
+    void                 *reserve;       /* the PROT_NONE guest-space reservation */
+    uint8_t              *arena;         /* the RW window inside it               */
+    unsigned long         arena_size;    /* page-aligned DOWN (see the mapping)   */
     j4_sandbox            sb;
     j4_seglist            seg;
     stub_lib              lib;
@@ -53,6 +90,35 @@ struct emu68k_run {
     volatile int          kill_req;      /* async kill flag (one store)         */
     char                  name[64];      /* for ledger/bundle attribution       */
 };
+
+/* [T2b] the hardware-access classifier. The signal handler hands us the faulting
+ * HOST address; subtracting the sandbox base-adjust recovers the guest address
+ * the program actually asked for. If that lands in a hardware window, this was
+ * not a crash: the program wants the Amiga hardware. */
+static char g_hw_detail[96];
+
+static int classify_hardware(void *fault_addr, void *user)
+{
+    struct emu68k_run *r = user;
+    unsigned long long host = (unsigned long long)(uintptr_t)fault_addr;
+    unsigned long long base = (unsigned long long)(uintptr_t)r->sb.host_mem;
+    unsigned long long guest;
+
+    if (host < base - 0x10000000ull || host > base + 0x10000000ull) return 0;
+    guest = host - base + r->sb.sandbox_origin;
+
+    if (guest >= HW_CUSTOM_LO && guest <= HW_CUSTOM_HI)
+        snprintf(g_hw_detail, sizeof g_hw_detail,
+                 "custom chip register $%06llX", guest);
+    else if (guest >= HW_CIA_LO && guest <= HW_CIA_HI)
+        snprintf(g_hw_detail, sizeof g_hw_detail, "CIA register $%06llX", guest);
+    else if (guest <= HW_VECTOR_HI)
+        snprintf(g_hw_detail, sizeof g_hw_detail,
+                 "exception vector page $%03llX", guest);
+    else
+        return 0;                                  /* a genuine wild access     */
+    return 1;
+}
 
 void emu68k_run_set_name(struct emu68k_run *r, const char *name)
 {
@@ -135,16 +201,35 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     struct emu68k_run *r = calloc(1, sizeof *r);
     if (!r) { snprintf(err, errlen, "out of memory (run)"); return NULL; }
 
-    r->arena = calloc(1, SANDBOX_SIZE);
+    /* reserve the guest address range, then open ONLY the arena window in it */
+    r->reserve = mmap(NULL, GUEST_RESERVE, PROT_NONE,
+                      MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (r->reserve == MAP_FAILED) {
+        r->reserve = NULL;
+        snprintf(err, errlen, "cannot reserve the guest address range");
+        goto fail;
+    }
+    r->arena = (uint8_t *)r->reserve + SANDBOX_ORIGIN;
+    {   /* round the writable window DOWN to a whole page: mprotect extends a
+         * partial page, which would hand the guest the very hardware addresses
+         * the arena is sized to exclude. */
+        long pg = sysconf(_SC_PAGESIZE);
+        unsigned long mask = (pg > 0) ? (unsigned long)pg - 1u : 0x3FFFu;
+        r->arena_size = SANDBOX_SIZE & ~mask;
+        if (mprotect(r->arena, r->arena_size, PROT_READ | PROT_WRITE) != 0) {
+            snprintf(err, errlen, "cannot map the guest arena");
+            goto fail;
+        }
+    }
     r->image = malloc(imagelen ? imagelen : 1);
-    if (!r->arena || !r->image) {
-        snprintf(err, errlen, "out of memory (arena)");
+    if (!r->image) {
+        snprintf(err, errlen, "out of memory (image)");
         goto fail;
     }
     memcpy(r->image, image, imagelen);
     r->imagelen = imagelen;
 
-    j4_sandbox_init(&r->sb, r->arena, SANDBOX_ORIGIN, SANDBOX_SIZE);
+    j4_sandbox_init(&r->sb, r->arena, SANDBOX_ORIGIN, r->arena_size);
     r->sb.next_alloc = PROG_ORIGIN;
     if (j4_load_hunks(&r->sb, r->image, imagelen, 0, &r->seg, err, errlen))
         goto fail;
@@ -187,7 +272,8 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     return r;
 
 fail:
-    free(r->arena); free(r->image); free(r);
+    if (r->reserve) munmap(r->reserve, GUEST_RESERVE);
+    free(r->image); free(r);
     return NULL;
 }
 
@@ -209,6 +295,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
      * contained + bundled, while block CHAINING stays ON (the hot path — the
      * per-block flight recorder is the price; the bundle still carries state). */
     j5n_signal_install(&r->diag);
+    j5n_signal_set_classifier(classify_hardware, r);
 
     struct bctx c = { &r->lib, &r->sb, r };
     j5d_sandbox j5sb = { r->sb.host_mem, r->sb.sandbox_origin, r->sb.size };
@@ -220,6 +307,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     r->resume_pc = r->st.pc;
 
     j5n_signal_remove();
+    j5n_signal_set_classifier(NULL, NULL);
     j5d_engine_activate(NULL);
 
     flush_output(r);
@@ -235,6 +323,12 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
         r->done = 1;
         snprintf(err, errlen, "%s", lerr[0] ? lerr : "killed");
         return EMU68K_RC_KILLED;
+    }
+    if (rc == J5D_RC_HARDWARE) {
+        r->done = 1;
+        snprintf(err, errlen, "needs the Amiga hardware (%s)",
+                 g_hw_detail[0] ? g_hw_detail : "unmapped hardware window");
+        return EMU68K_RC_HARDWARE;
     }
     r->done = 1;
     if (r->diag.bundles_written > 0)
@@ -259,7 +353,7 @@ void emu68k_run_free(emu68k_run *r)
 {
     if (!r) return;
     j5d_engine_free(r->eng);
-    free(r->arena);
+    if (r->reserve) munmap(r->reserve, GUEST_RESERVE);
     free(r->image);
     free(r);
 }
