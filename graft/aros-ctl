@@ -429,6 +429,9 @@ deploy_boot_artifacts() {
     # bsdsocket.library host pump shim. The AROS-side library loads it by bare
     # name through hostlib.resource for kqueue readiness and async DNS.
     copy_if_changed "$ROOT/build/libbsdsockhost.dylib" "$HOME/lib/libbsdsockhost.dylib" "libbsdsockhost.dylib" || true
+    # 68k execution service. emu68k.library loads it by bare name through
+    # hostlib.resource; DOS routes 68k hunk launches through it.
+    copy_if_changed "$ROOT/build/libemu68k.dylib" "$HOME/lib/libemu68k.dylib" "libemu68k.dylib" || true
     copy_if_changed "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" "settings.json" || true
 
     mkdir -p "$AROS/Devs/Monitors"
