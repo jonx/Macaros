@@ -735,7 +735,12 @@ static void fill_hostregs_from_uc(j5n_hostregs *h, void *ucv)
 
 /* [T0P3] the registered fault-recovery target (see j5n_diag.h). */
 static sigjmp_buf *g_recover = NULL;
-void j5n_signal_set_recover(sigjmp_buf *env) { g_recover = env; }
+sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env)
+{
+    sigjmp_buf *prev = g_recover;
+    g_recover = env;
+    return prev;
+}
 
 static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
 {

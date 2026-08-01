@@ -157,7 +157,9 @@ void j5n_signal_remove(void);
  * recovery) restores the bundle-then-die behavior. j5d_run registers/clears this
  * around each run; a weak no-op in the engine keeps diagnostics-less builds linking. */
 #include <setjmp.h>
-void j5n_signal_set_recover(sigjmp_buf *env);
+sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env);   /* returns the PREVIOUS target so
+                                                        * nested runs (a native->68k hook
+                                                        * re-entering j5d_run) restore it */
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);
 
 /* ----- the per-instruction diagnostics hook (the interp oracle calls it at its loop top).

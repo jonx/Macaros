@@ -57,12 +57,22 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   killed from a signal handler; a real translated-code SIGSEGV unwound to a
   clean error with a bundle and a reusable process. Corpus + diagnostics
   regression green with safe points emitted in every block.
-- **`[T0-P4]` Marshalling schema spike.** Prove the annotation vocabulary of
-  [design §4](design.md) on five representative cases: buffer + length
-  (`Read`), natively-traversed structure (`PutMsg`-class, via shadow/proxy),
-  opaque handle, callback hook, taglist call. Exit: each case runs under the
-  host harness with the generated-thunk + annotation shape, or the vocabulary
-  is revised and the design updated.
+- **`[T0-P4]` Marshalling schema spike.** ✅ **PROVEN 2026-08-01**
+  (`make hosted-emu68k-t0p4`, `hosted/emu68k/t0p4_marshal.c`). The annotation
+  vocabulary (`ARG_U32 / PTR_IN / PTR_OUT+len / CSTR / HANDLE / SHADOW /
+  HOOK / TAGLIST` + per-field shadow maps + per-domain tag kinds) survives
+  all five cases, driven by one generic descriptor-driven marshaller: buffer
+  writes land in guest memory with clean bounds faults; a natively-traversed
+  struct works via a host-layout shadow with big-endian OUT-field copy-back;
+  handles validate against a table; a native→68k hook re-enters the engine
+  NESTED and returns its D0 end-to-end through the real jsr-d16(A6) LVO
+  bridge; unknown tags and unknown LVOs abort as ledger-recorded capability
+  gaps (the design §4 no-guessing rule, executed). Vocabulary revision the
+  spike forced: **marshalling is two-pass** — scalars (lengths) first, then
+  pointer kinds — because a buffer's length can be declared after the buffer,
+  and single-pass order bounds-checks against length 0 (caught as a real
+  64-byte heap overwrite). Nested-run prerequisite landed in the engine: the
+  fault-recovery registration is a save/restore pair.
 - **`[T0a]` Engine-as-library split** (unchanged, enables P3/P4): ✅ **DONE
   2026-08-01** — `make libjit68k` builds `build/libjit68k.a` (the exact engine
   object set; CLI + stub-OS stay with the front-end), `run68k` and the
@@ -123,7 +133,13 @@ Make failure excellent before scaling coverage. Depends: T1.
 - **`[T2a]` Static scanner, with confidence semantics.** One pass over
   relocated segments: chipset/CIA absolute refs, privileged opcodes,
   vector-page stores. Emits a confidence-graded hint, not a boolean
-  ([design §3](design.md)). Test corpus, positives *and* negatives: new
+  ([design §3](design.md)). **Deliverable includes a standalone diagnosis
+  CLI** (`scan68k <binary>`, host tool first): the same scanner core exposed
+  as "how would this run here", reporting the predicted route + the evidence,
+  plus (once `[T3a]` tables exist) the static LVO list checked against
+  marshal coverage — predicted capability gaps BEFORE running. Run-and-see
+  stays the authority (the runtime guard is exact); the tool is the
+  inspectable prediction, and `C:Emu68kWhy` (`[T4c]`) reuses its core. Test corpus, positives *and* negatives: new
   `apps68k` members `chipbang.s` (writes `$DFF180`), `ciapeek.s`,
   `vecwrite.s`, `superviolate.s`, plus `datadecoy.s` (hardware-looking
   constants in data hunks), `opdecoy.s` (opcode-looking constants),

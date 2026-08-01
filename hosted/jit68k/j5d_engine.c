@@ -2255,7 +2255,8 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
 
 /* [T0P3] weak fallback so diagnostics-less builds link (same pattern as the j5n hooks
  * above): without j5n_diag.c there is no signal net, so recovery is a no-op. */
-__attribute__((weak)) void j5n_signal_set_recover(sigjmp_buf *env) { (void)env; }
+__attribute__((weak)) sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env)
+{ (void)env; return NULL; }
 
 /* [T0P3] the public j5d_run: the inner dispatcher wrapped in a host-fault recovery
  * scope. A genuine SIGSEGV/SIGBUS/SIGILL inside translated code — after the [J5n]
@@ -2266,17 +2267,21 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             struct j5d_m68k_state *st, uint32_t *exit_d0,
             j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
 {
+    /* NESTING: a native->68k hook re-enters j5d_run from inside the library bridge, so
+     * the recovery registration is a save/restore pair, not a set/clear — the outer run
+     * keeps its containment after the inner run returns. */
     sigjmp_buf env;
+    sigjmp_buf *volatile prev = j5n_signal_set_recover(&env);  /* volatile: read after
+                                                                * a siglongjmp landing */
     if (sigsetjmp(env, 1)) {
         /* longjmp'd from the signal handler: bundle written, program dead, we live. */
-        j5n_signal_set_recover(NULL);
+        j5n_signal_set_recover(prev);
         if (errbuf) snprintf(errbuf, errlen,
             "host fault in translated code (diagnosed + bundled); program terminated");
         return 1;
     }
-    j5n_signal_set_recover(&env);
     int rc = j5d_run_inner(sb, entry_pc, a6_libbase, st, exit_d0, lvo, user, errbuf, errlen);
-    j5n_signal_set_recover(NULL);
+    j5n_signal_set_recover(prev);
     return rc;
 }
 
