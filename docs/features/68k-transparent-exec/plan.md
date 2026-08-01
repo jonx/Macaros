@@ -41,14 +41,22 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   CLI/WB startup args, tooltypes, mode override, console) and carry it
   end-to-end. Exit: stub router receives correct context from both consumers;
   keymap/diskfont regression green.
-- **`[T0-P3]` Re-entrant engine, safe points, fault containment.** The engine
-  refactor spike: per-instance context (today the cache and counters are
-  globals, [j5d_engine.c:255](../../../hosted/jit68k/j5d_engine.c)), back-edge
-  safe-point polling that covers **chained** loops, and fault unwind to the
-  run entry. Exit (host harness): two engine instances interleaved on one
-  thread; an infinite-loop guest interrupted via the safe-point flag; a
-  forced translated-code fault unwound cleanly; corpus still byte-exact with
-  safe points enabled.
+- **`[T0-P3]` Re-entrant engine, safe points, fault containment.** ✅ **PROVEN
+  2026-08-01** (`make hosted-emu68k-t0p3`, `hosted/emu68k/t0p3_engine.c`).
+  Landed in the engine itself: per-instance state (`j5d_engine_new/activate/
+  free`; the historical globals are `#define` views of the active instance, so
+  translated blocks bake the OWNING instance's addresses), an emitted safe
+  point at every block **chain entry** (covers fully-chained loops; C-side
+  poll covers the rest), `j5d_request_stop()` (async-signal-safe) +
+  poll/YIELD/KILL with resumable yields (`J5D_RC_YIELD`, resume from
+  `st->pc`; the run's SP baseline + call depth survive in the instance), and
+  host-fault containment (`sigsetjmp` in `j5d_run`, `siglongjmp` from the
+  `[J5n]` handler after bundling — program dies, embedder lives). Exit bar
+  met: two instances interleaved on one thread byte-exact; two sequential
+  same-process runs (the old single-run crasher); a chained infinite loop
+  killed from a signal handler; a real translated-code SIGSEGV unwound to a
+  clean error with a bundle and a reusable process. Corpus + diagnostics
+  regression green with safe points emitted in every block.
 - **`[T0-P4]` Marshalling schema spike.** Prove the annotation vocabulary of
   [design §4](design.md) on five representative cases: buffer + length
   (`Read`), natively-traversed structure (`PutMsg`-class, via shadow/proxy),

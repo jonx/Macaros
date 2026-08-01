@@ -101,11 +101,6 @@
         }                                                                      \
     } while (0)
 
-/* [J5n] the deterministic GLOBAL 68k instruction number — bumped by each block's decoded
- * instruction count as the block executes. It is the crash coordinate #N. Kept OUTSIDE
- * struct j5d_m68k_state (the frozen seam); a private engine global. Reset per run. */
-static uint64_t g_insn_number = 0;
-
 /* [J5n] WEAK fallbacks for the diagnostics hooks the engine calls. The diagnostics subsystem
  * (j5n_diag.c) provides the STRONG definitions; when a [J5*] test links the engine WITHOUT
  * j5n_diag.c (the whole existing corpus + j1..j5m), these weak no-ops satisfy the linker and
@@ -126,8 +121,135 @@ __attribute__((weak)) void j5n_diag_record_block(j5n_diag *d, j5d_sandbox *sb, u
  * STOP the run (divergence found + bundled, or a replay-to-N landing). NULL by default. */
 typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
                                struct j5d_m68k_state *st, uint32_t next_pc);
-static j5d_boundary_cb g_block_boundary_cb = NULL;
-static void           *g_block_boundary_user = NULL;
+
+/* ===================== [T0P3] THE ENGINE INSTANCE ==================================
+ * ALL run-scoped engine state lives in ONE struct so several translated processes can
+ * each own an engine (docs/features/68k-transparent-exec/plan.md [T0-P3]). A process-
+ * wide ACTIVE-instance pointer (g_eng) selects the one the translator/dispatcher use;
+ * the built-in default instance keeps every existing caller byte-for-byte unchanged.
+ * The historical g_* names are #define'd onto the active instance below, so the ~60
+ * existing use sites read exactly as before — and, load-bearingly, the translate-time
+ * `&g_xxx` address bakes resolve to THE OWNING INSTANCE's fields, so cached blocks
+ * stay correct across instance switches.
+ *
+ * The block-cache typedefs live here (moved up from the ICache section) because the
+ * instance embeds the cache. */
+#define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
+#define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
+typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
+
+/* [J5k] one chainable tail-branch slot inside a translated block. At translate time the
+ * slot holds a fall-back sequence that returns to the C dispatcher (st->pc = target_pc);
+ * once the target block is translated the slot's `b` word is BACKPATCHED to jump straight
+ * into the target's chain entry. `taken` distinguishes the two Bcc outcomes for stats. */
+typedef struct {
+    uint32_t  target_pc;    /* the 68k PC this tail transfers to (statically known)        */
+    uint32_t  slot_word;    /* word index into region.base of the BACKPATCHABLE `b` slot   */
+    uint8_t   linked;       /* 1 once backpatched to the target's chain entry             */
+} j5k_link;
+
+typedef struct {
+    uint32_t   pc;          /* entry PC of this block         */
+    uint32_t   end_pc;      /* PC of the terminator opcode    */
+    uint32_t   body_insns;  /* [J5n] decoded BODY instructions (excl. the terminator) — the
+                             * per-block contribution to the deterministic global insn count */
+    jit_region region;      /* the MAP_JIT code               */
+    uint32_t   chain_off;   /* word offset of the CHAIN ENTRY (regs already live)         */
+    uint16_t   dirty_mask;  /* [J5k] which 68k regs this block writes (for spill accounting)*/
+    uint8_t    fpu_block;   /* [J5s] 1 if this block contains FP arithmetic (drives the    */
+                            /*       per-block fenv exception model around the native run)  */
+    uint8_t    fp_dirty;    /* [J5s] FP0..FP7 written by this block (for single-prec re-round)*/
+    uint8_t    nlinks;      /* number of chainable tail slots (0,1,2)                      */
+    j5k_link   link[J5K_MAX_LINKS];
+    int        live;
+} j5d_cached_block;
+
+struct j5d_engine_state {
+    /* THE SAFE-POINT FLAGS — first, adjacent, 8 bytes apart: the emitted chain-entry
+     * check materializes &stop_flag and reaches yield_word at [+8] with one str64.
+     * stop_flag: nonzero = a stop/poll is requested (set async by j5d_request_stop).
+     * yield_word: written by the emitted check when it fires — (1<<32) | entry_pc of
+     * the block that parked, so the dispatcher knows a yield happened AND where. */
+    volatile uint64_t stop_flag;
+    volatile uint64_t yield_word;
+    /* [T0P3] cooperative poll (C-side safe point), run every `poll_interval`
+     * dispatcher roundtrips and on every stop request. */
+    j5d_poll_fn poll_fn;
+    void       *poll_user;
+    uint32_t    poll_interval;
+    uint32_t    poll_countdown;
+    /* the historical run-scoped globals, one per field */
+    j5d_stats         stats;
+    volatile uint64_t block_exec_count;   /* [J5k] chain-entry exec bump (baked addr)  */
+    volatile uint32_t chain_terminal_idx; /* [J5k] terminal block idx   (baked addr)  */
+    uint64_t          insn_number;        /* [J5n] deterministic global insn #N        */
+    j5d_boundary_cb   boundary_cb;        /* [J5n] lockstep block-boundary callback    */
+    void             *boundary_user;
+    j5i_exc_log      *exc_log;            /* [J5i] per-run exception log (or NULL)     */
+    /* [T0P3] yield/resume continuation: the program-exit condition is "an RTS pops
+     * back to the INITIAL SP", so that baseline (and the call-depth counter) must
+     * survive a YIELD — a resumed j5d_run would otherwise re-capture the mid-run SP
+     * as the baseline and treat the next same-level RTS as program exit. */
+    uint32_t          resume_initial_sp;
+    uint32_t          resume_depth;
+    uint8_t           resume_valid;
+    /* the [J5d] per-PC block ICache */
+    int               cache_n;
+    j5d_cached_block  cache[J5D_MAX_BLOCKS];
+};
+
+static struct j5d_engine_state  g_default_eng;
+static struct j5d_engine_state *g_eng = &g_default_eng;
+
+/* The historical names, now views of the ACTIVE instance. Every existing use site —
+ * including the translate-time `&g_block_exec_count` / `&g_chain_terminal_idx` bakes —
+ * compiles unchanged and resolves per-instance. */
+#define g_insn_number         (g_eng->insn_number)
+#define g_block_boundary_cb   (g_eng->boundary_cb)
+#define g_block_boundary_user (g_eng->boundary_user)
+#define g_stats               (g_eng->stats)
+#define g_block_exec_count    (g_eng->block_exec_count)
+#define g_chain_terminal_idx  (g_eng->chain_terminal_idx)
+#define g_exc_log             (g_eng->exc_log)
+#define g_cache               (g_eng->cache)
+#define g_cache_n             (g_eng->cache_n)
+
+_Static_assert(offsetof(struct j5d_engine_state, yield_word)
+               - offsetof(struct j5d_engine_state, stop_flag) == 8,
+               "the emitted safe-point check assumes yield_word == stop_flag + 8");
+
+/* ---- the instance API ([T0P3], declared in j5d_jit68k.h) ---- */
+j5d_engine *j5d_engine_new(void)
+{
+    return (j5d_engine *)calloc(1, sizeof(struct j5d_engine_state));
+}
+void j5d_engine_activate(j5d_engine *e)
+{
+    g_eng = e ? (struct j5d_engine_state *)e : &g_default_eng;
+}
+j5d_engine *j5d_engine_active(void) { return (j5d_engine *)g_eng; }
+void j5d_engine_free(j5d_engine *ep)
+{
+    struct j5d_engine_state *e = (struct j5d_engine_state *)ep;
+    if (!e || e == &g_default_eng) return;
+    if (e == g_eng) g_eng = &g_default_eng;
+    for (int i = 0; i < e->cache_n; i++)
+        if (e->cache[i].live) jit_region_free(&e->cache[i].region);
+    free(e);
+}
+void j5d_request_stop(void) { g_eng->stop_flag = 1; }   /* async-signal-safe: one store */
+int  j5d_take_stop(void)
+{
+    if (!g_eng->stop_flag) return 0;
+    g_eng->stop_flag = 0;
+    return 1;
+}
+void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips)
+{
+    g_eng->poll_fn = fn; g_eng->poll_user = user;
+    g_eng->poll_interval = interval_roundtrips; g_eng->poll_countdown = 0;
+}
+
 uint64_t j5d_diag_insn_number(void) { return g_insn_number; }
 
 /* ---- the REAL Emu68 line-decoder entry points (linked decoder objects) ---- */
@@ -202,23 +324,10 @@ _Static_assert(offsetof(struct j5d_m68k_state, fpsr) == 148u, "[J5o] fpsr offset
 #define J5K_T6  10u  /* extra scratch: holds the CCR source for emit_cond_bool (must NOT
                       * alias the V/C/Z/N/T/ONE regs that emit_cond_bool overwrites) */
 
-/* ================================ stats / trace ================================ */
-static j5d_stats g_stats;
-
-/* [J5k] total block-execution counter, bumped by an emitted ldr/add/str at EVERY block's
- * CHAIN ENTRY (reached by both the cold fall-through and a chained `b` from a predecessor).
- * So it counts total block runs; chain_branches_taken = this - dispatcher_roundtrips. Kept
- * OUTSIDE struct j5d_m68k_state (the frozen seam) — a private engine global addressed by an
- * immediate baked into the block. */
-static volatile uint64_t g_block_exec_count;
-
-/* [J5k] which cached block a chain actually ENDED at. When the C dispatcher calls block A
- * and A's tail is linked to B (and B's to C, ...), the JIT'd code runs the whole chain past
- * the dispatcher and only re-enters C at the first UNLINKED tail's epilogue. That terminal
- * block's epilogue writes its own cache index here (an immediate baked at translate time), so
- * the dispatcher decodes the TERMINAL block's terminator — not block A's. Without this the
- * dispatcher would mis-handle the wrong terminator (the head's, not the tail's). */
-static volatile uint32_t g_chain_terminal_idx;
+/* ================================ stats / trace ================================
+ * g_stats / g_block_exec_count (the [J5k] chain-entry exec bump) /
+ * g_chain_terminal_idx (the [J5k] terminal-block index) all live in the [T0P3]
+ * engine instance above; the names are active-instance views. */
 
 void j5d_get_stats(j5d_stats *out) { *out = g_stats; }
 
@@ -256,38 +365,9 @@ static uint32_t *emit_counter_bump(uint32_t *p, uint64_t addr, uint8_t ra, uint8
 /* One MAP_JIT region per distinct entry PC. The compiled block is a C function
  * `void block(struct j5d_m68k_state *st, uint64_t base_adjust)` entered at its OUTER
  * entry (offset 0). [J5k] adds a second entry point — the CHAIN ENTRY — that a chaining
- * predecessor branches to directly (see translate_block for the layout). */
-#define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
-#define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
-typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
-
-/* [J5k] one chainable tail-branch slot inside a translated block. At translate time the
- * slot holds a fall-back sequence that returns to the C dispatcher (st->pc = target_pc);
- * once the target block is translated the slot's `b` word is BACKPATCHED to jump straight
- * into the target's chain entry. `taken` distinguishes the two Bcc outcomes for stats. */
-typedef struct {
-    uint32_t  target_pc;    /* the 68k PC this tail transfers to (statically known)        */
-    uint32_t  slot_word;    /* word index into region.base of the BACKPATCHABLE `b` slot   */
-    uint8_t   linked;       /* 1 once backpatched to the target's chain entry             */
-} j5k_link;
-
-typedef struct {
-    uint32_t   pc;          /* entry PC of this block         */
-    uint32_t   end_pc;      /* PC of the terminator opcode    */
-    uint32_t   body_insns;  /* [J5n] decoded BODY instructions (excl. the terminator) — the
-                             * per-block contribution to the deterministic global insn count */
-    jit_region region;      /* the MAP_JIT code               */
-    uint32_t   chain_off;   /* word offset of the CHAIN ENTRY (regs already live)         */
-    uint16_t   dirty_mask;  /* [J5k] which 68k regs this block writes (for spill accounting)*/
-    uint8_t    fpu_block;   /* [J5s] 1 if this block contains FP arithmetic (drives the    */
-                            /*       per-block fenv exception model around the native run)  */
-    uint8_t    fp_dirty;    /* [J5s] FP0..FP7 written by this block (for single-prec re-round)*/
-    uint8_t    nlinks;      /* number of chainable tail slots (0,1,2)                      */
-    j5k_link   link[J5K_MAX_LINKS];
-    int        live;
-} j5d_cached_block;
-static j5d_cached_block g_cache[J5D_MAX_BLOCKS];
-static int              g_cache_n = 0;
+ * predecessor branches to directly (see translate_block for the layout).
+ * The cache typedefs + storage live in the [T0P3] engine instance above;
+ * g_cache/g_cache_n are active-instance views. */
 
 void j5d_run_free(void)
 {
@@ -430,8 +510,8 @@ static void j5d_unpack_sr(struct j5d_m68k_state *st, uint16_t sr)
     st->sr_high = (uint16_t)((sr >> 8) & 0xFFu);
 }
 
-/* The per-run exception log (the test's bookkeeping; NULL when a program raises none). */
-static j5i_exc_log *g_exc_log = NULL;
+/* The per-run exception log (the test's bookkeeping; NULL when a program raises none).
+ * Storage: the [T0P3] engine instance; g_exc_log is the active-instance view. */
 void j5d_set_exc_log(j5i_exc_log *log) { g_exc_log = log; }
 
 /* Read the handler address for vector `vnum` from the sandbox vector table (big-endian
@@ -1252,6 +1332,47 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     cb->chain_off = (uint32_t)(ptr - out);
     ptr = emit_counter_bump(ptr, (uint64_t)(uintptr_t)&g_block_exec_count, J5K_T0, J5K_T1);
 
+    /* ---- [T0P3] SAFE POINT: the one spot chained block->block execution passes through
+     * without the C dispatcher. Check the OWNING instance's stop flag; when set, park:
+     * write yield_word = (1<<32) | this block's entry PC (so the dispatcher knows a yield
+     * happened and where), then take the epilogue — which spills the full live register
+     * file to the state (the regs are architecturally UNCHANGED: the body has not run) and
+     * returns to the C dispatcher. x2/x3 (J5K_T0/T1) are dead here, same as the bump above.
+     *
+     * FP subtlety: the epilogue stores every fp_dirty reg to st->fp[], but the prologue
+     * loaded only fp_live regs — a dirty-but-not-live d-reg still holds the CALLER's saved
+     * value at this point. On the park path (body did NOT run) that store would corrupt
+     * st->fp[]. So the park stub first loads (fp_dirty & ~fp_live) from st, making every
+     * epilogue FP store write back the identical value. (Chained predecessors never land
+     * on an FP block's chain entry — FP blocks are chain-excluded — so the park stub is
+     * the only extra path and the loads cost nothing when not parking.)
+     * The `b EPI` word is backpatched with the link slots once epi_word is known. */
+    uint32_t t0p3_slot_word;
+    {
+        uint8_t fp_park = (uint8_t)(fp_dirty & (uint8_t)~fp_live);
+        uint32_t n_fp = 0;
+        for (int i = 0; i < 8; i++) if (fp_park & (1u << i)) n_fp++;
+
+        uint64_t fa = (uint64_t)(uintptr_t)&g_eng->stop_flag;   /* yield_word == +8 */
+        *ptr++ = mov64_immed_u16 (J5K_T0, (uint16_t)(fa        & 0xffff), 0);
+        *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 16) & 0xffff), 1);
+        *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 32) & 0xffff), 2);
+        *ptr++ = movk64_immed_u16(J5K_T0, (uint16_t)((fa >> 48) & 0xffff), 3);
+        *ptr++ = ldr64_offset(J5K_T0, J5K_T1, 0);               /* T1 = stop_flag        */
+        *ptr++ = cbz(J5K_T1, 6 + n_fp);                         /* clear -> skip the park */
+        for (int i = 0; i < 8; i++)                             /* value-preserving loads */
+            if (fp_park & (1u << i))
+                *ptr++ = fldd((uint8_t)(J5O_FP0 + i), 1,
+                              (int16_t)offsetof(struct j5d_m68k_state, fp[i]));
+        *ptr++ = mov64_immed_u16 (J5K_T1, (uint16_t)(pc & 0xffff), 0);       /* entry PC:
+                 * the FUNCTION PARAMETER — cb (the caller's tmp) has .pc unset here */
+        *ptr++ = movk64_immed_u16(J5K_T1, (uint16_t)((pc >> 16) & 0xffff), 1);
+        *ptr++ = movk64_immed_u16(J5K_T1, 1u, 2);               /* T1 = (1<<32) | pc     */
+        *ptr++ = str64_offset(J5K_T0, J5K_T1, 8);               /* yield_word = T1 (+8B) */
+        t0p3_slot_word = (uint32_t)(ptr - out);
+        *ptr++ = b(0);                                          /* patched to `b EPI`    */
+    }
+
     /* The decoder body (every register/ALU/flag/move/memory opcode, REAL Emu68 decoders). */
     memcpy(ptr, body, body_words * sizeof(uint32_t));
     ptr += body_words;
@@ -1347,6 +1468,11 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     for (unsigned k = 0; k < cb->nlinks; k++) {
         int32_t d = (int32_t)epi_word - (int32_t)cb->link[k].slot_word;
         out[cb->link[k].slot_word] = b((uint32_t)d & 0x3ffffffu);
+    }
+    /* [T0P3] resolve the safe-point park branch the same way (it is never re-patched). */
+    {
+        int32_t d = (int32_t)epi_word - (int32_t)t0p3_slot_word;
+        out[t0p3_slot_word] = b((uint32_t)d & 0x3ffffffu);
     }
 
     /* [J5e] metrics: per-block state-struct traffic (the dirty-store half is what survives;
@@ -1497,7 +1623,7 @@ static int sp_pop(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t *out,
  * top-level RTS (which pops back to that initial SP) is the program exit — so the
  * existing flat-PC corpus (which never pushes) hits its first RTS at the initial SP and
  * exits exactly as before. A subroutine program pushes/pops in between. */
-int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
+static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             struct j5d_m68k_state *st, uint32_t *exit_d0,
             j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
 {
@@ -1519,17 +1645,28 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
     /* Seed the return stack: a7 = top of sandbox (16-byte aligned), recorded as the
      * initial SP. A top-level RTS returns to here = program exit. A caller may preset
      * st->a[7] to an explicit SP (nonzero); we honour it but still record it as the
-     * top-of-stack baseline. */
-    uint32_t initial_sp = st->a[7];
-    if (initial_sp == 0)
-        initial_sp = (sb->origin + sb->size) & ~0xFu;   /* default: top of sandbox */
-    st->a[7] = initial_sp;
-    st->pc   = entry_pc;
+     * top-of-stack baseline.
+     * [T0P3] RESUME: after a J5D_RC_YIELD the caller re-enters with entry_pc = st->pc;
+     * the run's ORIGINAL baseline + call depth are restored from the instance — the
+     * mid-run a7 is NOT a baseline (it is deep inside nested calls). */
+    uint32_t initial_sp;
+    uint32_t depth;                                  /* current nested-call depth   */
+    if (g_eng->resume_valid) {
+        initial_sp = g_eng->resume_initial_sp;
+        depth      = g_eng->resume_depth;
+        g_eng->resume_valid = 0;                     /* consumed                     */
+    } else {
+        initial_sp = st->a[7];
+        if (initial_sp == 0)
+            initial_sp = (sb->origin + sb->size) & ~0xFu;   /* default: sandbox top */
+        st->a[7] = initial_sp;
+        depth = 0;
+    }
+    st->pc = entry_pc;
 
     uint64_t base_adjust = (uint64_t)(uintptr_t)sb->host_mem - (uint64_t)sb->origin;
     uint32_t pc = entry_pc;
     uint64_t steps = 0;
-    uint32_t depth = 0;                              /* current nested-call depth   */
 
     /* Runaway guard: bound dispatcher steps so a corrupt/looping program can't hang the
      * unattended harness. Default 2,000,000 (≈9M instructions). A legitimate long run — a
@@ -1540,6 +1677,36 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 
     for (;;) {
         if (++steps > step_cap) RFAIL("dispatcher step cap (runaway)");
+
+        /* ---- [T0P3] C-SIDE SAFE POINT: every dispatcher roundtrip sees the stop flag
+         * (the emitted chain-entry check covers chained runs that never come back here).
+         * The optional poll callback also runs every poll_interval roundtrips, turning
+         * this into a cooperative quantum hook. KILL and YIELD both leave st->pc = the
+         * next PC to execute, so a YIELDed run resumes with j5d_run(entry_pc = st->pc). */
+        if (g_eng->stop_flag ||
+            (g_eng->poll_interval && ++g_eng->poll_countdown >= g_eng->poll_interval)) {
+            int was_stop = (g_eng->stop_flag != 0);
+            g_eng->stop_flag = 0;
+            g_eng->poll_countdown = 0;
+            j5d_poll_action act = g_eng->poll_fn
+                ? g_eng->poll_fn(g_eng->poll_user)
+                : (was_stop ? J5D_POLL_KILL : J5D_POLL_CONTINUE);
+            if (act == J5D_POLL_YIELD) {
+                st->pc = pc;
+                g_eng->resume_initial_sp = initial_sp;   /* continuation state       */
+                g_eng->resume_depth      = depth;
+                g_eng->resume_valid      = 1;
+                finalize_stats();
+                return J5D_RC_YIELD;
+            }
+            if (act == J5D_POLL_KILL) {
+                st->pc = pc;
+                finalize_stats();
+                if (errbuf) snprintf(errbuf, errlen,
+                    "killed at safe point (pc=%08x)", pc);
+                return J5D_RC_KILLED;
+            }
+        }
 
         /* [J5i] ADDRESS / BUS error: a jump/return to a PC OUTSIDE the sandbox (a corrupt
          * return address, a wild computed jmp/jsr(An), a bad branch target) is the hosted
@@ -1624,6 +1791,20 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
         g_stats.dispatcher_roundtrips++;             /* [J5k] one C-dispatcher round-trip      */
+
+        /* ---- [T0P3] a chained (or just-called) block PARKED at its chain-entry safe point:
+         * nothing of its body ran; the epilogue spilled the unchanged register file. Restore
+         * the loop PC to the parked block's entry and go back to the loop top, where the
+         * C-side safe point above decides (poll / kill / continue). The [J5s] FP pre-work is
+         * undone here because the block's FP ops never executed — the post-walk below must
+         * not run. */
+        if (g_eng->yield_word >> 32) {
+            pc = (uint32_t)g_eng->yield_word;
+            g_eng->yield_word = 0;
+            st->pc = pc;
+            if (j5s_fp) fesetround(j5s_prev_round);
+            continue;
+        }
 
         if (j5s_fp) {
             /* single-precision rounding: re-round the FP regs this block wrote through float
@@ -2070,6 +2251,33 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
         link_if_resolved(sb, b, pc);
     }
 #undef RFAIL
+}
+
+/* [T0P3] weak fallback so diagnostics-less builds link (same pattern as the j5n hooks
+ * above): without j5n_diag.c there is no signal net, so recovery is a no-op. */
+__attribute__((weak)) void j5n_signal_set_recover(sigjmp_buf *env) { (void)env; }
+
+/* [T0P3] the public j5d_run: the inner dispatcher wrapped in a host-fault recovery
+ * scope. A genuine SIGSEGV/SIGBUS/SIGILL inside translated code — after the [J5n]
+ * handler has written its crash bundle — unwinds HERE instead of killing the process,
+ * and the run returns a clean error. This is the fault-containment contract the in-OS
+ * RunSeg68k needs: the 68k program dies, the embedder survives. */
+int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
+            struct j5d_m68k_state *st, uint32_t *exit_d0,
+            j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
+{
+    sigjmp_buf env;
+    if (sigsetjmp(env, 1)) {
+        /* longjmp'd from the signal handler: bundle written, program dead, we live. */
+        j5n_signal_set_recover(NULL);
+        if (errbuf) snprintf(errbuf, errlen,
+            "host fault in translated code (diagnosed + bundled); program terminated");
+        return 1;
+    }
+    j5n_signal_set_recover(&env);
+    int rc = j5d_run_inner(sb, entry_pc, a6_libbase, st, exit_d0, lvo, user, errbuf, errlen);
+    j5n_signal_set_recover(NULL);
+    return rc;
 }
 
 /* ============================ [J5n] THE DIFFERENTIAL (LOCKSTEP) DRIVER ============================

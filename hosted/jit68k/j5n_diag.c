@@ -733,6 +733,10 @@ static void fill_hostregs_from_uc(j5n_hostregs *h, void *ucv)
 #endif
 }
 
+/* [T0P3] the registered fault-recovery target (see j5n_diag.h). */
+static sigjmp_buf *g_recover = NULL;
+void j5n_signal_set_recover(sigjmp_buf *env) { g_recover = env; }
+
 static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
 {
     j5n_fault_kind kind;
@@ -768,6 +772,16 @@ static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
     }
     (void)g_sig_diag;
     j5d_fault(kind, detail, st, sb, &h);
+
+    /* [T0P3] containment: a registered recovery target means an embedder (j5d_run) wants
+     * to SURVIVE this fault — unwind there (the bundle is already written; sigsetjmp(.,1)
+     * restores the signal mask). One-shot: cleared before the jump so a second fault with
+     * no fresh registration still dies loudly below. */
+    if (g_recover) {
+        sigjmp_buf *r = g_recover;
+        g_recover = NULL;
+        siglongjmp(*r, 1);
+    }
 
     /* We have bundled the fault — do not loop. Restore the default handler and re-raise so
      * the process dies with the original signal disposition (the host crash is now diagnosed,

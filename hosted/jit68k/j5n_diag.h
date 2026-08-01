@@ -149,6 +149,15 @@ void j5n_diag_record_block(j5n_diag *d, j5d_sandbox *sb, uint32_t pc, uint32_t e
  * sets the "current 68k state" via j5n_signal_set_context before entering a block. ----- */
 void j5n_signal_install(j5n_diag *d);
 void j5n_signal_remove(void);
+
+/* [T0P3] fault CONTAINMENT: when a recovery target is registered, the host-signal
+ * handler — after writing the crash bundle — siglongjmps there instead of re-raising,
+ * so the embedding process SURVIVES a fault in translated code (j5d_run returns an
+ * error; only the 68k program dies). NULL (the default, and the state after every
+ * recovery) restores the bundle-then-die behavior. j5d_run registers/clears this
+ * around each run; a weak no-op in the engine keeps diagnostics-less builds linking. */
+#include <setjmp.h>
+void j5n_signal_set_recover(sigjmp_buf *env);
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);
 
 /* ----- the per-instruction diagnostics hook (the interp oracle calls it at its loop top).

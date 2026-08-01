@@ -414,6 +414,13 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 
     for (;;) {
         if (++steps > STEP_CAP) IFAIL("step cap exceeded (runaway/mis-decode)");
+        /* [T0P3] safe point (mirror of the engine dispatcher's; per-insn here — the
+         * oracle has no chained code, so the C check alone covers every loop). */
+        if ((steps & 0x3ffu) == 0 && j5d_take_stop()) {
+            st->pc = pc;
+            if (errbuf) snprintf(errbuf, errlen, "killed at safe point (pc=%08x)", pc);
+            return J5D_RC_KILLED;
+        }
         /* [J5i] address/bus error from a bad PC (mirror of the engine dispatcher). */
         if ((pc & 1u) && (pc >= sb->origin) && ((uint64_t)pc + 2 <= (uint64_t)sb->origin + sb->size)) {
             uint32_t h; if (iraise(sb, st, J5I_VEC_ADDRESS_ERROR, pc, &h, errbuf, errlen)) return 1;

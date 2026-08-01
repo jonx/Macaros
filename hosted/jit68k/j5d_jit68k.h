@@ -307,6 +307,37 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
 /* Free every MAP_JIT region the engine allocated (the per-PC block cache). */
 void j5d_run_free(void);
 
+/* ===================== [T0P3] ENGINE INSTANCES + SAFE POINTS =======================
+ * (docs/features/68k-transparent-exec/plan.md [T0-P3].) The engine's run-scoped state
+ * (block cache, stats, counters, the flags below) lives in an INSTANCE; a process-wide
+ * ACTIVE-instance pointer selects which one the translator/dispatcher use. The default
+ * instance is built in and auto-active, so every existing caller is unchanged.
+ * Translated blocks bake the OWNING instance's flag/counter addresses at translate
+ * time, so cached code stays correct across instance switches.
+ *
+ * SAFE POINTS: translated code checks the active instance's stop flag at every block
+ * CHAIN ENTRY (the one spot chained block->block execution passes through without the
+ * C dispatcher), and the dispatcher checks it every roundtrip. So j5d_request_stop()
+ * — async-signal-safe, callable from a signal handler or another thread — interrupts
+ * even a fully-chained tight loop. The optional poll callback turns the safe points
+ * into a cooperative scheduler hook: it runs every `interval_roundtrips` dispatcher
+ * roundtrips (and on every stop request) and answers CONTINUE, YIELD (j5d_run returns
+ * J5D_RC_YIELD with st->pc set; call j5d_run again with entry_pc = st->pc to resume —
+ * the 68k stack is real, in-sandbox, so the state round-trips), or KILL
+ * (J5D_RC_KILLED). With no callback, a stop request means KILL. */
+typedef struct j5d_engine_state j5d_engine;
+j5d_engine *j5d_engine_new(void);        /* fresh instance (caller frees)             */
+void        j5d_engine_free(j5d_engine *e);   /* frees its MAP_JIT regions too        */
+void        j5d_engine_activate(j5d_engine *e);   /* NULL = the built-in default      */
+j5d_engine *j5d_engine_active(void);
+void        j5d_request_stop(void);      /* async-signal-safe stop/kill request       */
+int         j5d_take_stop(void);         /* consume a pending stop (the oracle polls) */
+typedef enum { J5D_POLL_CONTINUE = 0, J5D_POLL_YIELD, J5D_POLL_KILL } j5d_poll_action;
+typedef j5d_poll_action (*j5d_poll_fn)(void *user);
+void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips);
+#define J5D_RC_YIELD  100   /* j5d_run returned at a safe point; resume from st->pc  */
+#define J5D_RC_KILLED 101   /* run terminated at a safe point by stop/KILL           */
+
 /* Engine stats for the test's assertion that blocks really went through the JIT. */
 typedef struct j5d_stats {
     uint32_t blocks_translated;   /* distinct basic blocks emitted to AArch64        */
