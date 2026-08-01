@@ -246,6 +246,13 @@ the boundary as opaque TOKENS (a native BPTR is 64-bit and a 68k register is
 generated `[T3a]` tables replacing hand marshalling, printf-class varargs,
 intuition/graphics, callbacks.
 
+**The standing rule** (see NOTES.md, 2026-08-02): bridge to AROS's own
+implementation by default; implement in the guest ONLY when the result cannot
+cross the boundary (a guest base, guest-arena memory, a structure the program
+walks). MatchFirst therefore calls the native MatchFirst into a native
+AnchorPath and copies back the fields the program reads - it does NOT
+reimplement AmigaDOS pattern matching.
+
 Original plan text follows.
 
 Depends: T1; informed continuously by the `T1d` ledger.
