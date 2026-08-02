@@ -137,6 +137,52 @@ extracts byte-exact under `make hosted-emu68k-t3lha`.
 | the policy schema (per-type class) | designed, not built |
 | conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
 
+### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
+
+This is the piece that makes the system general rather than a list of handled
+cases. AROS's own libraries are bounded and the generators cover them; the
+third-party surface is not bounded and never will be, so it must not be
+bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
+
+Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
+stop *politely* because OpenLibrary now refuses what it cannot serve.
+
+The mechanism, in the order it has to happen:
+
+1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
+   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
+   (and the program's own directory, which is where Amiga software often keeps
+   its libraries). No file, no library: keep returning 0.
+2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
+   sandbox's own bump allocator - the same path a program takes. The library
+   becomes ordinary guest memory at an ordinary guest address.
+3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
+   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
+   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
+4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
+   init routine is 68k code, so it runs through the engine like any other, with
+   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
+   result in `D0` being the library base - a GUEST address, which is exactly
+   what the program needs and exactly what a native base could never be.
+5. **Register the base** with `j5d_register_libbase`, and the vectors below it
+   are then reached by the engine's existing recognition. Nothing is bridged:
+   the program calls guest code through a guest base, and only the calls that
+   library itself makes into AROS cross the boundary, through the machinery
+   that already exists.
+
+What makes this tractable is that steps 2 and 5 are already built and proven,
+and step 4 is the engine doing its normal job. The new work is 1 and 3.
+
+Known hazards, worth stating before anyone starts: a library's `rt_Init` may
+open other libraries (recursion through the same path, so the depth needs a
+bound); `MEMF_31BIT`-style allocation inside the guest must come from the
+sandbox, never from AROS; and a library that fails init must be unloaded and
+its base never registered, or a later call reaches free memory.
+
+**Testing it needs a real 68k `.library`, and there is none on this machine** -
+which is the same evidence gap as the corpus, and the reason this is written
+down rather than half-built.
+
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
 programs, not about legacy 68k software as a class. Scaling the corpus and
@@ -233,6 +279,52 @@ extracts byte-exact under `make hosted-emu68k-t3lha`.
 | the policy schema (per-type class) | designed, not built |
 | conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
 
+### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
+
+This is the piece that makes the system general rather than a list of handled
+cases. AROS's own libraries are bounded and the generators cover them; the
+third-party surface is not bounded and never will be, so it must not be
+bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
+
+Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
+stop *politely* because OpenLibrary now refuses what it cannot serve.
+
+The mechanism, in the order it has to happen:
+
+1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
+   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
+   (and the program's own directory, which is where Amiga software often keeps
+   its libraries). No file, no library: keep returning 0.
+2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
+   sandbox's own bump allocator - the same path a program takes. The library
+   becomes ordinary guest memory at an ordinary guest address.
+3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
+   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
+   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
+4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
+   init routine is 68k code, so it runs through the engine like any other, with
+   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
+   result in `D0` being the library base - a GUEST address, which is exactly
+   what the program needs and exactly what a native base could never be.
+5. **Register the base** with `j5d_register_libbase`, and the vectors below it
+   are then reached by the engine's existing recognition. Nothing is bridged:
+   the program calls guest code through a guest base, and only the calls that
+   library itself makes into AROS cross the boundary, through the machinery
+   that already exists.
+
+What makes this tractable is that steps 2 and 5 are already built and proven,
+and step 4 is the engine doing its normal job. The new work is 1 and 3.
+
+Known hazards, worth stating before anyone starts: a library's `rt_Init` may
+open other libraries (recursion through the same path, so the depth needs a
+bound); `MEMF_31BIT`-style allocation inside the guest must come from the
+sandbox, never from AROS; and a library that fails init must be unloaded and
+its base never registered, or a later call reaches free memory.
+
+**Testing it needs a real 68k `.library`, and there is none on this machine** -
+which is the same evidence gap as the corpus, and the reason this is written
+down rather than half-built.
+
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
 programs, not about legacy 68k software as a class. Scaling the corpus and
@@ -328,6 +420,52 @@ extracts byte-exact under `make hosted-emu68k-t3lha`.
 | tier 2b generation from the field tables | designed, not built |
 | the policy schema (per-type class) | designed, not built |
 | conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
+
+### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
+
+This is the piece that makes the system general rather than a list of handled
+cases. AROS's own libraries are bounded and the generators cover them; the
+third-party surface is not bounded and never will be, so it must not be
+bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
+
+Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
+stop *politely* because OpenLibrary now refuses what it cannot serve.
+
+The mechanism, in the order it has to happen:
+
+1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
+   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
+   (and the program's own directory, which is where Amiga software often keeps
+   its libraries). No file, no library: keep returning 0.
+2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
+   sandbox's own bump allocator - the same path a program takes. The library
+   becomes ordinary guest memory at an ordinary guest address.
+3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
+   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
+   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
+4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
+   init routine is 68k code, so it runs through the engine like any other, with
+   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
+   result in `D0` being the library base - a GUEST address, which is exactly
+   what the program needs and exactly what a native base could never be.
+5. **Register the base** with `j5d_register_libbase`, and the vectors below it
+   are then reached by the engine's existing recognition. Nothing is bridged:
+   the program calls guest code through a guest base, and only the calls that
+   library itself makes into AROS cross the boundary, through the machinery
+   that already exists.
+
+What makes this tractable is that steps 2 and 5 are already built and proven,
+and step 4 is the engine doing its normal job. The new work is 1 and 3.
+
+Known hazards, worth stating before anyone starts: a library's `rt_Init` may
+open other libraries (recursion through the same path, so the depth needs a
+bound); `MEMF_31BIT`-style allocation inside the guest must come from the
+sandbox, never from AROS; and a library that fails init must be unloaded and
+its base never registered, or a later call reaches free memory.
+
+**Testing it needs a real 68k `.library`, and there is none on this machine** -
+which is the same evidence gap as the corpus, and the reason this is written
+down rather than half-built.
 
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
