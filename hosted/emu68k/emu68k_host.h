@@ -69,6 +69,11 @@ void emu68k_run_set_name(emu68k_run *r, const char *name);
  * (and the run aborts with a classified error). Returns 1 while idx is valid. */
 int emu68k_ledger_get(int idx, int *lvo, unsigned long *count);
 
+/* The run's guest-address-0 base. It is what the OS-call bridge keys its
+ * per-run state on (handles, open scans), so the embedder needs it to say
+ * "this run is over". */
+void *emu68k_run_guest0(emu68k_run *r);
+
 void emu68k_run_free(emu68k_run *r);
 
 /* Crash-bundle directory for subsequent runs (default: the engine's own). */

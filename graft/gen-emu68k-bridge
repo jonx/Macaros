@@ -499,7 +499,7 @@ def reg_expr(reg):
 def arg_expr(t, reg):
     """The C expression that turns one 68k register into one native argument."""
     if classify(t) == "bptr":
-        return "EMU_HANDLE(%s)" % reg_expr(reg)
+        return "EMU_HANDLE(guest0, %s)" % reg_expr(reg)
     return _arg_expr(t, reg)
 
 
@@ -559,7 +559,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         if classify(f.ret) == "void":
             w("        %s;" % call)
         elif classify(f.ret) == "bptr":
-            w("        r->d[0] = EMU_TOKEN(%s);   /* a BPTR crosses as a token */"
+            w("        r->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
               % call)
         else:
             note = ""
@@ -604,10 +604,10 @@ struct Emu68kRegs
 /* A BPTR cannot cross as itself: a native one is 64-bit and a 68k register is
  * not. These map between the guest's 32-bit token and the native BPTR it
  * stands for; both live in emu68k_oscall.c, which owns the table. */
-BPTR  emu68k_handle_bptr(ULONG token);
-ULONG emu68k_handle_token(BPTR b);
-#define EMU_HANDLE(t)  emu68k_handle_bptr((ULONG)(t))
-#define EMU_TOKEN(b)   emu68k_handle_token(b)
+BPTR  emu68k_handle_bptr(APTR guest0, ULONG token);
+ULONG emu68k_handle_token(APTR guest0, BPTR b);
+#define EMU_HANDLE(g0, t)  emu68k_handle_bptr((g0), (ULONG)(t))
+#define EMU_TOKEN(g0, b)   emu68k_handle_token((g0), (b))
 
 %s
 #endif /* EMU68K_GEN_H */

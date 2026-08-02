@@ -1188,6 +1188,8 @@ void emu68k_run_kill(emu68k_run *r)
     j5d_request_stop();
 }
 
+void *emu68k_run_guest0(emu68k_run *r) { return r ? r->reserve : NULL; }
+
 void emu68k_run_free(emu68k_run *r)
 {
     if (!r) return;
