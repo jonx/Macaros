@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "tag_domains": {
+    "graphics.best_mode": {
+      "headers": ["graphics/modeid.h"],
+      "max_items": 32,
+      "tags": [
+        {"name": "BIDTAG_DIPFMustHave", "kind": "u32"},
+        {"name": "BIDTAG_DIPFMustNotHave", "kind": "u32"},
+        {"name": "BIDTAG_ViewPort", "kind": "refuse"},
+        {"name": "BIDTAG_NominalWidth", "kind": "u32"},
+        {"name": "BIDTAG_NominalHeight", "kind": "u32"},
+        {"name": "BIDTAG_DesiredWidth", "kind": "u32"},
+        {"name": "BIDTAG_DesiredHeight", "kind": "u32"},
+        {"name": "BIDTAG_Depth", "kind": "u32"},
+        {"name": "BIDTAG_MonitorID", "kind": "u32"},
+        {"name": "BIDTAG_SourceID", "kind": "u32"},
+        {"name": "BIDTAG_RedBits", "kind": "u32"},
+        {"name": "BIDTAG_BlueBits", "kind": "u32"},
+        {"name": "BIDTAG_GreenBits", "kind": "u32"}
+      ]
+    },
+    "cybergraphics.best_mode": {
+      "headers": ["cybergraphx/cybergraphics.h"],
+      "max_items": 16,
+      "tags": [
+        {"name": "CYBRBIDTG_Depth", "kind": "u32"},
+        {"name": "CYBRBIDTG_NominalWidth", "kind": "u32"},
+        {"name": "CYBRBIDTG_NominalHeight", "kind": "u32"},
+        {"name": "CYBRBIDTG_MonitorID", "kind": "u32"},
+        {"name": "CYBRBIDTG_BoardName", "kind": "cstr"}
+      ]
+    }
+  },
+  "functions": {
+    "dos.library.DateStamp": {
+      "structs": {
+        "date": {"type": "DateStamp", "direction": "out"}
+      },
+      "result": {"kind": "guest_arg", "arg": "date"}
+    },
+    "dos.library.CompareDates": {
+      "structs": {
+        "date1": {"type": "DateStamp", "direction": "in"},
+        "date2": {"type": "DateStamp", "direction": "in"}
+      }
+    },
+    "graphics.library.BestModeIDA": {
+      "taglists": {"TagItems": "graphics.best_mode"}
+    },
+    "cybergraphics.library.BestCModeIDTagList": {
+      "taglists": {"tags": "cybergraphics.best_mode"}
+    }
+  }
+}

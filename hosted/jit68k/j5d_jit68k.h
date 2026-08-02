@@ -354,10 +354,17 @@ void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips);
  * a safe point, so a kill or quantum always lands. 0 = the engine default. */
 void j5d_set_chain_quantum(uint32_t blocks);
 
-/* [T3] Register a guest address as a library base, so `jsr d16(A6)` through it
- * reaches the LVO bridge. A program that opens libraries at run time calls each
- * through its own base; the bridge reads A6 to know which one. */
+/* [T3] Register a guest address as a BRIDGED native-library facade, so
+ * `jsr d16(A6)` through it reaches the LVO bridge. A program that opens
+ * libraries at run time calls each through its own base; the bridge reads A6
+ * to know which one. */
 void j5d_register_libbase(uint32_t base);
+/* [T3e] A disk-loaded 68k library is the opposite kind: its base lives in the
+ * guest too, but calls through it must execute the six-byte guest vector and
+ * 68k implementation normally, never enter the native LVO bridge. */
+void j5d_register_guest_libbase(uint32_t base);
+/* Remove either kind before its backing guest memory becomes invalid. */
+void j5d_unregister_libbase(uint32_t base);
 void j5d_clear_libbases(void);
 #define J5D_RC_YIELD  100   /* j5d_run returned at a safe point; resume from st->pc  */
 #define J5D_RC_KILLED 101   /* run terminated at a safe point by stop/KILL           */

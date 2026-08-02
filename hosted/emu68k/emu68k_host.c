@@ -9,6 +9,7 @@
 
 #include "emu68k_host.h"
 #include "scan68k.h"
+#include "guestlib68k.h"
 
 #include "j4_hunk.h"
 #include "j5d_jit68k.h"
@@ -24,6 +25,7 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <ctype.h>
+#include <limits.h>
 #include <unistd.h>
 
 #include "nativelib/rawdofmt_blob.h"
@@ -66,7 +68,7 @@
 #define HW_CUSTOM_LO    0x00DFF000u
 #define HW_CUSTOM_HI    0x00DFFFFFu
 #define HW_VECTOR_HI    0x000003FFu
-#define LIBBASE         0x00230000u
+#define LIBBASE         0x0021E000u
 #define HEAP_BASE       0x00231000u
 #define HEAP_END        0x00238000u
 #define PROG_ORIGIN     0x00250000u
@@ -78,6 +80,7 @@
 #define OSCODE_BASE     0x00240000u
 #define OSCODE_END      0x00250000u
 #define OSCODE_RAWDOFMT OSCODE_BASE
+#define OSCODE_RETURN   (OSCODE_END - 2u) /* permanent RTS for reclaim redirects */
 #define GUEST_RESERVE   GUEST_TOP       /* the whole low guest space reserved   */
 
 /* [T3] The AmigaOS environment a real program expects.
@@ -108,10 +111,12 @@
  * "Workbench", and goes looking for a startup message that will never come (both
  * LhA and PPMore stopped at exactly that call). Offsets are the classic 68k
  * layout: struct Task is 92 bytes, MsgPort 34, and pr_CLI lands at 172. */
-#define GUEST_PROCESS   0x00222000u
-#define GUEST_CLI       0x00222400u
+#define GUEST_PROCESS   0x00210000u
+#define GUEST_CLI       0x00211000u
+#define GUEST_COMMAND   (GUEST_CLI + 64u)
 #define PR_TASK_LN_TYPE 8            /* tc_Node.ln_Type: NT_PROCESS = 13       */
 #define PR_CLI_OFFSET   172
+#define CLI_COMMAND_OFF 16           /* BPTR to a BSTR command name            */
 #define NT_PROCESS      13
 
 /* A 68k program is a CLASSIC AmigaOS program, and there a BPTR is the address
@@ -130,7 +135,7 @@
  * that slot back to the native BPTR it stands for.
  * These three constants are mirrored in emu68k_intern.h on the AROS side and
  * MUST match: that is the whole contract between the two halves. */
-#define GUEST_FH_BASE   0x00223000u
+#define GUEST_FH_BASE   0x00212000u
 #define GUEST_FH_SLOT   64u
 #define GUEST_FH_MAX    32u
 #define GUEST_BADDR(b)    ((b) << 2)
@@ -173,6 +178,44 @@
 #define LVO_REMHEAD       43    /* -258 */
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
+#define LVO_STACKSWAP    122    /* -732 */
+#define TASK_SPREG_OFF    56
+#define TASK_SPLOWER_OFF  60
+#define TASK_SPUPPER_OFF  64
+
+/* Private exec vectors used only by synthesized guest loader continuations.
+ * They are inside the engine's vector-recognition window but beyond Exec's
+ * public table. */
+#define LVO_GL_INIT_DONE  650   /* -3900 */
+#define LVO_GL_OPEN_DONE  651   /* -3906 */
+#define LVO_GL_CLOSE_DONE 652   /* -3912 */
+#define LVO_GL_RECLAIM    653   /* -3918 */
+
+#define GUESTLIB_MAX 16
+enum guestlib_state {
+    GL_EMPTY = 0, GL_LOADING, GL_OPENING, GL_READY, GL_FAILED, GL_UNLOADED
+};
+
+struct guestlib_live {
+    enum guestlib_state state;
+    char                name[64];
+    char                path[PATH_MAX];
+    j4_seglist          seg;
+    gl68_resident       resident;
+    gl68_init           init;
+    uint32_t            base;
+    uint32_t            requested_version;
+    uint32_t            init_trampoline;
+    uint32_t            open_trampoline;
+    uint32_t            close_trampoline;
+    uint32_t            mem_start;
+    uint32_t            mem_end;
+    int                 open_count;
+    int                 parent;
+    int                 reclaim_pending;
+    uint32_t            saved_d[6];       /* ABI-preserved D2-D7 around exec */
+    uint32_t            saved_a[5];       /* ABI-preserved A2-A6 around exec */
+};
 
 static const char *g_crash_dir = NULL;
 
@@ -199,13 +242,18 @@ struct emu68k_run {
     volatile int          kill_req;      /* async kill flag (one store)         */
     double                deadline;      /* wall-clock limit, 0 = none          */
     uint32_t              last_ioerr;    /* what the guest's IoErr() reports    */
-    char                  name[64];      /* for ledger/bundle attribution       */
-    /* [T3] opened libraries: guest base -> name, for the OS-call callback */
+    char                  name[PATH_MAX];/* attribution + PROGDIR host fallback */
+    /* [T3] native facades: guest base -> name, for the OS-call callback */
     struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
     int                   nlib;
+    /* [T3e] disk-loaded libraries execute inside this run's guest arena. */
+    struct guestlib_live  guestlib[GUESTLIB_MAX];
+    int                   active_loader;
     stub_lib             *run_lib;       /* the corpus stub's small heap        */
     uint32_t              exec_heap;     /* exec AllocMem cursor (real programs) */
     uint32_t              exec_heap_end;
+    uint32_t              stack_lower;
+    uint32_t              stack_upper;
 };
 
 /* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
@@ -394,6 +442,10 @@ static uint32_t guest_alloc(struct emu68k_run *r, uint32_t size)
     size = (size + 7u) & ~7u;
     if (!size || r->exec_heap + size > r->exec_heap_end) return 0;
     a = r->exec_heap; r->exec_heap += size;
+    /* Runtime hunk loads and Exec allocations share one monotonic cursor. A
+     * separate stale j4 cursor would let the next library overwrite memory the
+     * program already received from AllocMem. */
+    if (r->sb.next_alloc < r->exec_heap) r->sb.next_alloc = r->exec_heap;
     memset(j4_sandbox_host(&r->sb, a), 0, size);
     return a;
 }
@@ -596,6 +648,459 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
     return 0;
 }
 
+/* =========================== [T3e] guest libraries ========================= */
+
+static void put_be16(j4_sandbox *sb, uint32_t at, uint16_t v)
+{
+    uint8_t *p = j4_sandbox_host(sb, at);
+    p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
+}
+
+static void put_be32(j4_sandbox *sb, uint32_t at, uint32_t v)
+{
+    uint8_t *p = j4_sandbox_host(sb, at);
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+
+static void emit_word(j4_sandbox *sb, uint32_t *pc, uint16_t v)
+{
+    put_be16(sb, *pc, v); *pc += 2u;
+}
+
+static void emit_long(j4_sandbox *sb, uint32_t *pc, uint32_t v)
+{
+    put_be32(sb, *pc, v); *pc += 4u;
+}
+
+static void emit_move_d1(j4_sandbox *sb, uint32_t *pc, uint32_t v)
+{
+    emit_word(sb, pc, 0x223cu); emit_long(sb, pc, v); /* move.l #v,d1 */
+}
+
+static void emit_move_a6(j4_sandbox *sb, uint32_t *pc, uint32_t v)
+{
+    emit_word(sb, pc, 0x2c7cu); emit_long(sb, pc, v); /* movea.l #v,a6 */
+}
+
+static void emit_jsr_a6(j4_sandbox *sb, uint32_t *pc, int lvo)
+{
+    emit_word(sb, pc, 0x4eaeu);
+    emit_word(sb, pc, (uint16_t)(int16_t)(-6 * lvo));
+}
+
+static void emit_jmp_a6(j4_sandbox *sb, uint32_t *pc, int lvo)
+{
+    emit_word(sb, pc, 0x4eeeu);
+    emit_word(sb, pc, (uint16_t)(int16_t)(-6 * lvo));
+}
+
+static uint32_t make_open_trampoline(struct emu68k_run *r, int idx,
+                                     uint32_t initpc, int call_init)
+{
+    uint32_t start = guest_alloc(r, call_init ? 40u : 34u), pc = start;
+    if (!start) return 0;
+    if (call_init) {
+        emit_word(&r->sb, &pc, 0x4eb9u);             /* jsr abs.l initpc */
+        emit_long(&r->sb, &pc, initpc);
+    }
+    emit_move_d1(&r->sb, &pc, (uint32_t)idx);
+    emit_move_a6(&r->sb, &pc, EXEC_BASE);
+    emit_jsr_a6(&r->sb, &pc, LVO_GL_INIT_DONE);
+    emit_move_d1(&r->sb, &pc, (uint32_t)idx);
+    emit_move_a6(&r->sb, &pc, EXEC_BASE);
+    emit_jsr_a6(&r->sb, &pc, LVO_GL_OPEN_DONE);
+    emit_word(&r->sb, &pc, 0x4e75u);                 /* rts */
+    return start;
+}
+
+static uint32_t make_close_trampoline(struct emu68k_run *r, int idx, uint32_t base)
+{
+    uint32_t start = guest_alloc(r, 32u), pc = start;
+    if (!start) return 0;
+    emit_move_a6(&r->sb, &pc, base);
+    emit_jsr_a6(&r->sb, &pc, 2);                    /* library Close, -12 */
+    emit_move_d1(&r->sb, &pc, (uint32_t)idx);
+    emit_move_a6(&r->sb, &pc, EXEC_BASE);
+    emit_jsr_a6(&r->sb, &pc, LVO_GL_CLOSE_DONE);
+    /* Tail-call the reclaim safe point. If Close caused Expunge, the library
+     * image and this trampoline are about to disappear, so an RTS here would
+     * fetch its opcode from released/reused memory. The private vector clears
+     * stale translated blocks and redirects to OSCODE_RETURN instead. */
+    emit_jmp_a6(&r->sb, &pc, LVO_GL_RECLAIM);
+    return start;
+}
+
+static uint8_t *read_host_file(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    uint8_t *p;
+    long n;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) || (n = ftell(f)) <= 0 ||
+        fseek(f, 0, SEEK_SET)) { fclose(f); return NULL; }
+    p = malloc((size_t)n);
+    if (!p || fread(p, 1, (size_t)n, f) != (size_t)n) {
+        free(p); fclose(f); return NULL;
+    }
+    fclose(f); *len = (size_t)n; return p;
+}
+
+static uint8_t *try_library_at(const char *dir, size_t dirlen, const char *leaf,
+                               char *found, size_t foundlen, size_t *imagelen)
+{
+    char path[PATH_MAX];
+    int n;
+    if (!dirlen) n = snprintf(path, sizeof path, "%s", leaf);
+    else n = snprintf(path, sizeof path, "%.*s/%s", (int)dirlen, dir, leaf);
+    if (n < 0 || (size_t)n >= sizeof path) return NULL;
+    uint8_t *p = read_host_file(path, imagelen);
+    if (p) snprintf(found, foundlen, "%s", path);
+    return p;
+}
+
+static int loader_dos_call(struct emu68k_run *r, int lvo,
+                           struct j5d_m68k_state *st)
+{
+    char err[160] = {0};
+    if (!g_oscall) return 1;
+    return g_oscall("dos.library", lvo, st, r->reserve, g_oscall_user,
+                    err, sizeof err);
+}
+
+/* Read through native AROS dos.library so LIBS: and PROGDIR: retain their real
+ * assign/current-directory semantics. The existing OS bridge's BPTR token table
+ * owns the native handle; bytes cross through one bounded guest scratch buffer. */
+static uint8_t *read_aros_file(struct emu68k_run *r, const char *path,
+                               size_t *imagelen)
+{
+    enum { DOS_OPEN = 5, DOS_CLOSE = 6, DOS_READ = 7, DOS_SEEK = 11 };
+    struct j5d_m68k_state st;
+    uint32_t guest_path, handle, scratch;
+    uint8_t *image = NULL;
+    uint32_t size, done = 0;
+    size_t pathlen = strlen(path);
+
+    guest_path = guest_strdup(r, path, pathlen);
+    if (!guest_path) return NULL;
+    memset(&st, 0, sizeof st);
+    st.d[1] = guest_path; st.d[2] = 1005u;            /* MODE_OLDFILE */
+    if (loader_dos_call(r, DOS_OPEN, &st) || !(handle = st.d[0])) return NULL;
+
+    st.d[1] = handle; st.d[2] = 0; st.d[3] = 1;      /* OFFSET_END */
+    if (loader_dos_call(r, DOS_SEEK, &st) || st.d[0] == 0xffffffffu) goto close;
+    st.d[1] = handle; st.d[2] = 0; st.d[3] = 0;      /* OFFSET_CURRENT */
+    if (loader_dos_call(r, DOS_SEEK, &st) || st.d[0] == 0xffffffffu) goto close;
+    size = st.d[0];
+    st.d[1] = handle; st.d[2] = 0; st.d[3] = 0xffffffffu; /* OFFSET_BEGINNING */
+    if (!size || size > r->exec_heap_end - r->exec_heap ||
+        loader_dos_call(r, DOS_SEEK, &st) || st.d[0] == 0xffffffffu)
+        goto close;
+
+    image = malloc(size);
+    scratch = guest_alloc(r, size < 65536u ? size : 65536u);
+    if (!image || !scratch) { free(image); image = NULL; goto close; }
+    while (done < size) {
+        uint32_t want = size - done;
+        if (want > 65536u) want = 65536u;
+        memset(&st, 0, sizeof st);
+        st.d[1] = handle; st.d[2] = scratch; st.d[3] = want;
+        if (loader_dos_call(r, DOS_READ, &st) || !st.d[0] || st.d[0] > want) {
+            free(image); image = NULL; goto close;
+        }
+        memcpy(image + done, j4_sandbox_host(&r->sb, scratch), st.d[0]);
+        done += st.d[0];
+    }
+    *imagelen = size;
+
+close:
+    memset(&st, 0, sizeof st); st.d[1] = handle;
+    loader_dos_call(r, DOS_CLOSE, &st);
+    return image;
+}
+
+/* Host-side equivalent of LIBS: plus PROGDIR fallback. The installed AROS seam
+ * can provide its host-visible LIBS directories through EMU68K_LIBS_PATH; a
+ * standalone run also searches beside the launched program and ./Libs. */
+static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
+                                      char *found, size_t foundlen, size_t *imagelen)
+{
+    const char *leaf = name, *paths, *slash;
+    int progdir_only = 0;
+    uint8_t *p;
+    if (g_oscall) {
+        char dospath[PATH_MAX];
+        if (strchr(name, ':')) {
+            if ((p = read_aros_file(r, name, imagelen))) {
+                snprintf(found, foundlen, "%s", name); return p;
+            }
+        } else {
+            snprintf(dospath, sizeof dospath, "LIBS:%s", name);
+            if ((p = read_aros_file(r, dospath, imagelen))) {
+                snprintf(found, foundlen, "%s", dospath); return p;
+            }
+            snprintf(dospath, sizeof dospath, "PROGDIR:%s", name);
+            if ((p = read_aros_file(r, dospath, imagelen))) {
+                snprintf(found, foundlen, "%s", dospath); return p;
+            }
+        }
+    }
+    if (!strncmp(leaf, "PROGDIR:", 8)) { leaf += 8; progdir_only = 1; }
+    else if (!strncmp(leaf, "LIBS:", 5)) leaf += 5;
+    if (!*leaf || strstr(leaf, "..") || strchr(leaf, '/') || strchr(leaf, ':'))
+        return NULL;
+
+    slash = strrchr(r->name, '/');
+    if (progdir_only) {
+        if (!slash) return NULL;
+        return try_library_at(r->name, (size_t)(slash - r->name), leaf,
+                              found, foundlen, imagelen);
+    }
+
+    paths = getenv("EMU68K_LIBS_PATH");
+    while (paths && *paths) {
+        const char *end = strchr(paths, ':');
+        size_t n = end ? (size_t)(end - paths) : strlen(paths);
+        if ((p = try_library_at(paths, n, leaf, found, foundlen, imagelen))) return p;
+        paths = end ? end + 1 : NULL;
+    }
+    if (slash) {
+        size_t n = (size_t)(slash - r->name);
+        char dir[PATH_MAX];
+        if (n + 6u < sizeof dir) {
+            memcpy(dir, r->name, n); memcpy(dir + n, "/Libs", 6); n += 5u;
+            if ((p = try_library_at(dir, n, leaf, found, foundlen, imagelen))) return p;
+        }
+        if ((p = try_library_at(r->name, (size_t)(slash - r->name), leaf,
+                                found, foundlen, imagelen))) return p;
+    }
+    if ((p = try_library_at("Libs", 4, leaf, found, foundlen, imagelen))) return p;
+    return try_library_at("", 0, leaf, found, foundlen, imagelen);
+}
+
+static int find_guestlib_name(struct emu68k_run *r, const char *name)
+{
+    for (int i = 0; i < GUESTLIB_MAX; i++)
+        if (r->guestlib[i].state != GL_EMPTY &&
+            r->guestlib[i].state != GL_UNLOADED &&
+            !strcmp(r->guestlib[i].name, name)) return i;
+    return -1;
+}
+
+static int find_guestlib_base(struct emu68k_run *r, uint32_t base)
+{
+    for (int i = 0; i < GUESTLIB_MAX; i++)
+        if (r->guestlib[i].state == GL_READY && r->guestlib[i].base == base)
+            return i;
+    return -1;
+}
+
+static void guestlib_save_preserved(struct guestlib_live *g,
+                                    const struct j5d_m68k_state *st)
+{
+    memcpy(g->saved_d, &st->d[2], sizeof g->saved_d);
+    memcpy(g->saved_a, &st->a[2], sizeof g->saved_a);
+}
+
+static void guestlib_restore_preserved(const struct guestlib_live *g,
+                                       struct j5d_m68k_state *st)
+{
+    memcpy(&st->d[2], g->saved_d, sizeof g->saved_d);
+    memcpy(&st->a[2], g->saved_a, sizeof g->saved_a);
+}
+
+static int alloc_guestlib_slot(struct emu68k_run *r)
+{
+    for (int i = 0; i < GUESTLIB_MAX; i++)
+        if (r->guestlib[i].state == GL_EMPTY || r->guestlib[i].state == GL_UNLOADED)
+            return i;
+    return -1;
+}
+
+static void rollback_unexecuted(struct emu68k_run *r, uint32_t mark)
+{
+    uint32_t end = r->sb.next_alloc > r->exec_heap ? r->sb.next_alloc : r->exec_heap;
+    if (end > mark) memset(j4_sandbox_host(&r->sb, mark), 0, end - mark);
+    r->sb.next_alloc = mark; r->exec_heap = mark;
+}
+
+static int load_guestlib(struct emu68k_run *r, const char *name, uint32_t version,
+                         int *idx_out, char *why, unsigned whylen)
+{
+    size_t imagelen = 0;
+    char path[PATH_MAX] = {0};
+    uint8_t *image = resolve_guest_library(r, name, path, sizeof path, &imagelen);
+    const char *resident_name = name;
+    const char *colon = strrchr(name, ':');
+    const char *slash = strrchr(name, '/');
+    int idx;
+    uint32_t mark;
+    if (colon && colon + 1 > resident_name) resident_name = colon + 1;
+    if (slash && slash + 1 > resident_name) resident_name = slash + 1;
+    if (!image) { snprintf(why, whylen, "%s not found in guest library paths", name); return 1; }
+    idx = alloc_guestlib_slot(r);
+    if (idx < 0) { free(image); snprintf(why, whylen, "too many guest libraries"); return 1; }
+
+    struct guestlib_live *g = &r->guestlib[idx];
+    memset(g, 0, sizeof *g);
+    g->state = GL_LOADING; g->parent = r->active_loader;
+    g->requested_version = version;
+    snprintf(g->name, sizeof g->name, "%s", name);
+    snprintf(g->path, sizeof g->path, "%s", path);
+
+    mark = r->exec_heap > r->sb.next_alloc ? r->exec_heap : r->sb.next_alloc;
+    mark = (mark + 7u) & ~7u;
+    r->exec_heap = r->sb.next_alloc = mark;
+    g->mem_start = mark;
+    if (j4_load_hunks(&r->sb, image, imagelen, 0, &g->seg, why, whylen) ||
+        gl68_find_resident(&r->sb, &g->seg, resident_name, &g->resident, why, whylen) ||
+        g->resident.version < version ||
+        gl68_prepare_init(&r->sb, &g->seg, &g->resident, &g->init, why, whylen)) {
+        if (g->resident.version < version && !why[0])
+            snprintf(why, whylen, "%s version %u is older than requested %u",
+                     name, g->resident.version, version);
+        free(image); rollback_unexecuted(r, mark); g->state = GL_UNLOADED;
+        return 1;
+    }
+    free(image);
+    r->exec_heap = r->sb.next_alloc;
+    g->init_trampoline = make_open_trampoline(r, idx, g->init.init_pc,
+                                               g->init.init_pc != 0);
+    g->open_trampoline = make_open_trampoline(r, idx, 0, 0);
+    if (!g->init_trampoline || !g->open_trampoline) {
+        snprintf(why, whylen, "no guest memory for library continuation");
+        rollback_unexecuted(r, mark); g->state = GL_UNLOADED; return 1;
+    }
+    g->mem_end = r->exec_heap;
+    r->active_loader = idx;
+    *idx_out = idx;
+    return 0;
+}
+
+static int guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+                              char *e, unsigned el)
+{
+    int idx = (int)st->d[1];
+    if (idx < 0 || idx >= GUESTLIB_MAX) { snprintf(e, el, "bad guest-library continuation"); return 1; }
+    struct guestlib_live *g = &r->guestlib[idx];
+    if (g->state == GL_LOADING) {
+        uint32_t base = st->d[0];
+        if (!base) {
+            g->state = GL_FAILED; r->active_loader = g->parent; st->d[0] = 0;
+            return 0;
+        }
+        if (base < r->sb.sandbox_origin + 24u ||
+            (uint64_t)base + 34u > (uint64_t)r->sb.sandbox_origin + r->sb.size) {
+            snprintf(e, el, "%s initializer returned invalid base %08x", g->name, base);
+            g->state = GL_FAILED; r->active_loader = g->parent; return 1;
+        }
+        g->base = base; g->state = GL_OPENING;
+        j5d_register_guest_libbase(base);
+    } else if (g->state != GL_READY) {
+        st->d[0] = 0; return 0;
+    }
+    st->a[6] = g->base;
+    st->pc = g->base - 6u;                         /* library Open vector */
+    return J5D_LVO_REDIRECT;
+}
+
+static int guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+                              char *e, unsigned el)
+{
+    int idx = (int)st->d[1];
+    if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
+    struct guestlib_live *g = &r->guestlib[idx];
+    if (!st->d[0]) {
+        if (g->state == GL_OPENING) {
+            j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
+            r->active_loader = g->parent;
+        }
+        guestlib_restore_preserved(g, st);
+        return 0;
+    }
+    if (st->d[0] != g->base) {
+        if (g->state == GL_OPENING) {
+            j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
+            r->active_loader = g->parent;
+        }
+        snprintf(e, el, "%s returned a per-open base; clone bases are not supported yet",
+                 g->name);
+        st->d[0] = 0;
+        guestlib_restore_preserved(g, st);
+        return 1;
+    }
+    g->open_count++;
+    if (g->state == GL_OPENING) {
+        if (!g->close_trampoline)
+            g->close_trampoline = make_close_trampoline(r, idx, g->base);
+        if (!g->close_trampoline) {
+            j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
+            r->active_loader = g->parent; st->d[0] = 0;
+            snprintf(e, el, "no guest memory for Close continuation");
+            return 1;
+        }
+        g->state = GL_READY;
+        r->active_loader = g->parent;
+    }
+    guestlib_restore_preserved(g, st);
+    return 0;
+}
+
+static int guestlib_close_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+                               char *e, unsigned el)
+{
+    int idx = (int)st->d[1];
+    (void)e; (void)el;
+    if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
+    struct guestlib_live *g = &r->guestlib[idx];
+    if (g->open_count > 0) g->open_count--;
+    if (st->d[0]) {                                 /* Close/Expunge returned seglist */
+        j5d_unregister_libbase(g->base);
+        g->base = 0; g->state = GL_UNLOADED; g->reclaim_pending = 1;
+    }
+    st->d[0] = 0;                                   /* exec CloseLibrary is void */
+    return 0;
+}
+
+static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
+                            char *e, unsigned el)
+{
+    int idx = (int)st->d[1];
+    uint32_t start, end, close, close_end;
+    (void)e; (void)el;
+    if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
+    struct guestlib_live *g = &r->guestlib[idx];
+
+    if (g->reclaim_pending) {
+        start = g->mem_start; end = g->mem_end;
+        close = g->close_trampoline; close_end = close ? close + 32u : 0;
+
+        /* No translated block or backpatched chain may retain an address in
+         * the image before those bytes can be reused. Expunge is cold-path;
+         * dropping the per-run cache is deliberately stronger and safer than
+         * trying to find only direct entries while missing incoming chains. */
+        j5d_run_free();
+        if (end > start)
+            memset(j4_sandbox_host(&r->sb, start), 0, end - start);
+        if (close)
+            memset(j4_sandbox_host(&r->sb, close), 0, close_end - close);
+
+        /* The loader is a bump allocator. Reuse the complete allocation when
+         * no dependency or Exec allocation was interleaved; otherwise the
+         * cleared ranges remain harmless holes until run teardown. */
+        if (close == end && close_end == r->exec_heap &&
+            r->sb.next_alloc == r->exec_heap) {
+            r->exec_heap = r->sb.next_alloc = start;
+        }
+        g->reclaim_pending = 0;
+    }
+
+    st->d[0] = 0;
+    guestlib_restore_preserved(g, st);
+    st->pc = OSCODE_RETURN;
+    return J5D_LVO_REDIRECT;
+}
+
 /* [T3] exec.library, served here: this is the bootstrap every AmigaOS program
  * performs before it can do anything else. OpenLibrary hands back a guest base
  * that the engine then recognises, so calls through it arrive at the bridge
@@ -604,6 +1109,15 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      struct j5d_m68k_state *st, char *e, unsigned el)
 {
     switch (lvo) {
+    case LVO_GL_INIT_DONE:
+        return guestlib_init_done(r, st, e, el);
+    case LVO_GL_OPEN_DONE:
+        return guestlib_open_done(r, st, e, el);
+    case LVO_GL_CLOSE_DONE:
+        return guestlib_close_done(r, st, e, el);
+    case LVO_GL_RECLAIM:
+        return guestlib_reclaim(r, st, e, el);
+
     case LVO_RAWDOFMT:
         /* Not served here: RawDoFmt calls the PROGRAM's PutChProc once per
          * character, so doing it natively would mean re-entering the JIT from
@@ -617,6 +1131,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_OLDOPENLIB:      /* same thing, older entry point: A1 = name     */
     case LVO_OPENLIBRARY: {
         const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
+        uint32_t requested = (lvo == LVO_OLDOPENLIB) ? 0u : st->d[0];
+        int gi;
         if (!nm) {
             snprintf(e, el, "OpenLibrary: name pointer A1=%08x is outside the "
                      "guest arena %08x..%08x", st->a[1], sb->sandbox_origin,
@@ -625,18 +1141,21 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         for (int i = 0; i < r->nlib; i++)                 /* already open?       */
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
-        if (r->nlib >= LIBBASE_MAX) { snprintf(e, el, "too many open libraries"); return 1; }
-        /* Only offer what the embedder can actually serve; anything else fails
-         * the AmigaOS way (D0 = 0), which programs are written to handle.
-         *
-         * Handing out a base for a library we cannot serve is worse than
-         * refusing: the program takes it as success, calls a vector, and either
-         * aborts on a capability gap or - if it never checks - dereferences the
-         * NULL it stored and takes the run down with it. Refusing produces the
-         * message the program was written to print. A third-party 68k library
-         * is a different case entirely: it is 68k code and belongs IN the
-         * guest, which is a separate piece of work. */
-        if (!g_oscall) { st->d[0] = 0; return 0; }
+
+        gi = find_guestlib_name(r, nm);
+        if (gi >= 0) {
+            struct guestlib_live *g = &r->guestlib[gi];
+            if (g->state == GL_READY && g->resident.version >= requested) {
+                guestlib_save_preserved(g, st);
+                st->pc = g->open_trampoline;
+                return J5D_LVO_REDIRECT;
+            }
+            /* LOADING/OPENING is an explicit dependency cycle. FAILED and an
+             * unsatisfied version are ordinary OpenLibrary failure too. */
+            st->d[0] = 0;
+            return 0;
+        }
+
         {
             static const char *const servable[] = {
                 "exec.library", "dos.library", "utility.library",
@@ -650,27 +1169,58 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
                 if (!strcmp(nm, servable[k])) { known = 1; break; }
-            if (!known) { st->d[0] = 0; return 0; }      /* not available here */
+            if (known && g_oscall) {
+                uint32_t base;
+                if (r->nlib >= LIBBASE_MAX) {
+                    snprintf(e, el, "too many native library facades"); return 1;
+                }
+                base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
+                snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
+                         "%s", nm);
+                r->openlib[r->nlib].base = base;
+                r->nlib++;
+                j5d_register_libbase(base);
+                {   /* give the handed-out base a version, for the same reason */
+                    uint8_t *lb = j4_sandbox_host(sb, base);
+                    memset(lb, 0, 64);
+                    lb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
+                    lb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
+                    lb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
+                    lb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
+                }
+                st->d[0] = base;
+                return 0;
+            }
         }
-        uint32_t base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
-        snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name, "%s", nm);
-        r->openlib[r->nlib].base = base;
-        r->nlib++;
-        j5d_register_libbase(base);
-        {   /* give the handed-out base a version, for the same reason */
-            uint8_t *lb = j4_sandbox_host(sb, base);
-            memset(lb, 0, 64);
-            lb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
-            lb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
-            lb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
-            lb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
+
+        {   /* Native-name-wins above; an unknown name is now a disk library. */
+            char why[256] = {0};
+            if (load_guestlib(r, nm, requested, &gi, why, sizeof why)) {
+                if (getenv("EMU68K_TRACE_CALLS"))
+                    fprintf(stderr, "[68k] OpenLibrary guest %s failed: %s\n", nm, why);
+                st->d[0] = 0;
+                return 0;
+            }
+            struct guestlib_live *g = &r->guestlib[gi];
+            guestlib_save_preserved(g, st);
+            st->d[0] = (g->resident.flags & GL68_RTF_AUTOINIT) ? g->init.base : 0;
+            st->a[0] = g->init.seglist;
+            st->a[4] = 0;
+            st->a[6] = EXEC_BASE;
+            st->pc = g->init_trampoline;
+            return J5D_LVO_REDIRECT;
         }
-        st->d[0] = base;
-        return 0;
     }
-    case LVO_CLOSELIBRARY:
+    case LVO_CLOSELIBRARY: {
+        int gi = find_guestlib_base(r, st->a[1]);       /* A1 = library base */
+        if (gi >= 0) {
+            guestlib_save_preserved(&r->guestlib[gi], st);
+            st->pc = r->guestlib[gi].close_trampoline;
+            return J5D_LVO_REDIRECT;
+        }
         st->d[0] = 0;
-        return 0;                                        /* bases stay valid    */
+        return 0;                                        /* native facade stays */
+    }
     case LVO_AVAILMEM:
         st->d[0] = (r->exec_heap_end > r->exec_heap)
                  ? (r->exec_heap_end - r->exec_heap) : 0;
@@ -695,6 +1245,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         st->d[0] = r->exec_heap;
         r->exec_heap += size;
+        if (r->sb.next_alloc < r->exec_heap) r->sb.next_alloc = r->exec_heap;
         memset(j4_sandbox_host(sb, st->d[0]), 0, size);  /* MEMF_CLEAR-safe     */
         return 0;
     }
@@ -855,6 +1406,38 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * signals a guest task yet, so the honest answer is a clean zero. */
         st->d[0] = 0;
         return 0;
+    case LVO_STACKSWAP: {
+        /* struct StackSwapStruct is three guest pointers: lower, upper and
+         * switch-point SP. Swap those values here; a second call restores the
+         * original stack, just like exec.library on a real 68k system. */
+        uint32_t sss = st->a[0];
+        uint32_t new_lower, new_upper, new_sp, old_sp = st->a[7];
+        if (!sss || sss < sb->sandbox_origin ||
+            (uint64_t)sss + 12u > (uint64_t)sb->sandbox_origin + sb->size) {
+            snprintf(e, el, "StackSwap structure A0=%08x is outside guest memory", sss);
+            return 1;
+        }
+        new_lower = gread32(sb, sss);
+        new_upper = gread32(sb, sss + 4u);
+        new_sp = gread32(sb, sss + 8u);
+        if (new_lower < sb->sandbox_origin || new_upper <= new_lower ||
+            new_sp < new_lower || new_sp > new_upper ||
+            (uint64_t)new_upper > (uint64_t)sb->sandbox_origin + sb->size) {
+            snprintf(e, el, "StackSwap requested invalid range %08x..%08x sp=%08x",
+                     new_lower, new_upper, new_sp);
+            return 1;
+        }
+        gwrite32(sb, sss, r->stack_lower);
+        gwrite32(sb, sss + 4u, r->stack_upper);
+        gwrite32(sb, sss + 8u, old_sp);
+        r->stack_lower = new_lower;
+        r->stack_upper = new_upper;
+        st->a[7] = new_sp;
+        gwrite32(sb, GUEST_PROCESS + TASK_SPREG_OFF, new_sp);
+        gwrite32(sb, GUEST_PROCESS + TASK_SPLOWER_OFF, new_lower);
+        gwrite32(sb, GUEST_PROCESS + TASK_SPUPPER_OFF, new_upper);
+        return 0;
+    }
     default:
         if (getenv("EMU68K_DEBUG_EXEC"))
             fprintf(stderr, "[exec_call] unhandled lvo=%d (ADDHEAD=%d)\n",
@@ -875,6 +1458,121 @@ static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
     fprintf(stderr, "[68k] %s LVO %d (%d)  d0=%08x d1=%08x a0=%08x a1=%08x\n",
             lib, lvo, -6 * lvo, st->d[0], st->d[1], st->a[0], st->a[1]);
     (void)r;
+}
+
+/* utility.library tag walkers operate on structures the guest owns and may
+ * return pointers into those structures. Running these over native pointers
+ * would be an ABI error even in the installed AROS bridge, so keep the compact
+ * pointer-sensitive core in guest memory. */
+static uint32_t utility_next_tag(j4_sandbox *sb, uint32_t statep)
+{
+    uint32_t p;
+    unsigned guard = 0;
+    if (!statep || statep < sb->sandbox_origin ||
+        (uint64_t)statep + 4u > (uint64_t)sb->sandbox_origin + sb->size)
+        return 0;
+    p = gread32(sb, statep);
+    while (p && ++guard < 65536u) {
+        uint32_t tag, data;
+        if (p < sb->sandbox_origin ||
+            (uint64_t)p + 8u > (uint64_t)sb->sandbox_origin + sb->size) {
+            gwrite32(sb, statep, 0); return 0;
+        }
+        tag = gread32(sb, p); data = gread32(sb, p + 4u);
+        switch (tag) {
+        case 0:                                           /* TAG_DONE */
+            gwrite32(sb, statep, 0); return 0;
+        case 1:                                           /* TAG_IGNORE */
+            p += 8u; break;
+        case 2:                                           /* TAG_MORE */
+            p = data; break;
+        case 3:                                           /* TAG_SKIP */
+            if (data > 0x1fffffffu) { gwrite32(sb, statep, 0); return 0; }
+            p += 8u * (data + 1u); break;
+        default:
+            gwrite32(sb, statep, p + 8u); return p;
+        }
+    }
+    gwrite32(sb, statep, 0);
+    return 0;
+}
+
+static uint32_t utility_find_tag(j4_sandbox *sb, uint32_t wanted, uint32_t list)
+{
+    unsigned guard = 0;
+    /* Same TAG control semantics as NextTagItem, without allocating a guest
+     * state cell merely to walk a caller-owned list. */
+    while (list && ++guard < 65536u) {
+        uint32_t tag, data;
+        if (list < sb->sandbox_origin ||
+            (uint64_t)list + 8u > (uint64_t)sb->sandbox_origin + sb->size) return 0;
+        tag = gread32(sb, list); data = gread32(sb, list + 4u);
+        if (tag == 0) return 0;
+        if (tag == 1) { list += 8u; continue; }
+        if (tag == 2) { list = data; continue; }
+        if (tag == 3) {
+            if (data > 0x1fffffffu) return 0;
+            list += 8u * (data + 1u); continue;
+        }
+        if (tag == wanted) return list;
+        list += 8u;
+    }
+    return 0;
+}
+
+static int utility_guest_call(j4_sandbox *sb, int lvo,
+                              struct j5d_m68k_state *st)
+{
+    switch (lvo) {
+    case 5:                                             /* FindTagItem */
+        st->d[0] = utility_find_tag(sb, st->d[0], st->a[0]); return 0;
+    case 6: {                                           /* GetTagData */
+        uint32_t tag = utility_find_tag(sb, st->d[0], st->a[0]);
+        st->d[0] = tag ? gread32(sb, tag + 4u) : st->d[1]; return 0;
+    }
+    case 7: {                                           /* PackBoolTags */
+        uint32_t flags = st->d[0], list = st->a[0];
+        unsigned guard = 0;
+        while (list && ++guard < 65536u) {
+            uint32_t item, tag, data;
+            if (list < sb->sandbox_origin ||
+                (uint64_t)list + 8u > (uint64_t)sb->sandbox_origin + sb->size) break;
+            tag = gread32(sb, list); data = gread32(sb, list + 4u);
+            if (tag == 0) break;
+            if (tag <= 3u) { /* Advance control tags with a temporary guest-free walk. */
+                if (tag == 1) list += 8u;
+                else if (tag == 2) list = data;
+                else if (tag == 3) list += 8u * (data + 1u);
+                continue;
+            }
+            item = utility_find_tag(sb, tag, st->a[1]);
+            if (item) {
+                uint32_t mask = gread32(sb, item + 4u);
+                flags = data ? flags | mask : flags & ~mask;
+            }
+            list += 8u;
+        }
+        st->d[0] = flags; return 0;
+    }
+    case 8:                                             /* NextTagItem */
+        st->d[0] = utility_next_tag(sb, st->a[0]); return 0;
+    case 27: case 28: {                                 /* Stricmp / Strnicmp */
+        const char *a = guest_cstr(sb, st->a[0]);
+        const char *b = guest_cstr(sb, st->a[1]);
+        uint32_t n = lvo == 28 ? st->d[0] : 0xffffffffu;
+        int diff = 0;
+        if (!a || !b) { st->d[0] = a ? 1u : b ? 0xffffffffu : 0u; return 0; }
+        while (n--) {
+            unsigned ca = (unsigned char)*a++, cb = (unsigned char)*b++;
+            diff = toupper(ca) - toupper(cb);
+            if (diff || !ca || !cb) break;
+        }
+        st->d[0] = (uint32_t)diff; return 0;
+    }
+    case 29: st->d[0] = (uint32_t)toupper((unsigned char)st->d[0]); return 0;
+    case 30: st->d[0] = (uint32_t)tolower((unsigned char)st->d[0]); return 0;
+    default: return 1;
+    }
 }
 
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
@@ -934,11 +1632,31 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                 }
                 if (lvo == 39) { st->d[0] = 0; return 0; }   /* FreeDosObject   */
             }
+            if (!strcmp(r->openlib[i].name, "utility.library") &&
+                utility_guest_call(c->sb, lvo, st) == 0)
+                return 0;
+            if (el) e[0] = 0;
             if (g_oscall &&
                 g_oscall(r->openlib[i].name, lvo, st, r->reserve, g_oscall_user,
                          e, el) == 0)
                 return 0;
+            /* OpenCatalogA is deliberately allowed to fail: locale clients
+             * are required to keep their built-in strings and use those when
+             * no catalog can be opened.  The native bridge cannot safely hand
+             * a 64-bit Catalog pointer or native TagItem list to this guest,
+             * so until the generated opaque-handle/tag shadow exists, NULL is
+             * the honest compatibility result.  Keep this AFTER g_oscall so an
+             * embedder with a complete catalog crossing still wins. */
+            if (!strcmp(r->openlib[i].name, "locale.library") && lvo == 25) {
+                if (el) e[0] = 0;
+                st->d[0] = 0;
+                return 0;
+            }
             ledger_record(lvo, r->name[0] ? r->name : NULL);
+            /* The type compiler reports the precise missing policy (including
+             * tag and domain). Preserve that instead of replacing it with the
+             * generic LVO-only message below. */
+            if (el && e[0]) return 1;
             snprintf(e, el, "capability gap: %s function LVO %d (offset %d) "
                             "is not available yet", r->openlib[i].name, lvo, -6 * lvo);
             return 1;
@@ -1006,11 +1724,6 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         long pg = sysconf(_SC_PAGESIZE);
         unsigned long psz = (pg > 0) ? (unsigned long)pg : 0x4000u;
         unsigned long mask = psz - 1u;
-        struct { uint32_t lo, hi; } hole[2] = {
-            { HW_CIA_LO,    HW_CIA_HI    },
-            { HW_CUSTOM_LO, HW_CUSTOM_HI },
-        };
-        int i;
         r->arena_size = SANDBOX_SIZE & ~mask;
         if (mprotect(r->arena, r->arena_size, PROT_READ | PROT_WRITE) != 0) {
             snprintf(err, errlen, "cannot map the guest arena");
@@ -1059,12 +1772,13 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     /* [T3] Plant the in-guest OS routines before the program loads. These are
      * the vectors the bridge redirects to rather than serving natively, because
      * they call back into the program's own code. */
-    if (sizeof emu68k_rawdofmt_bin > OSCODE_END - OSCODE_BASE) {
+    if (sizeof emu68k_rawdofmt_bin > OSCODE_RETURN - OSCODE_BASE) {
         snprintf(err, errlen, "in-guest OS code does not fit its region");
         goto fail;
     }
     memcpy(j4_sandbox_host(&r->sb, OSCODE_RAWDOFMT), emu68k_rawdofmt_bin,
            sizeof emu68k_rawdofmt_bin);
+    put_be16(&r->sb, OSCODE_RETURN, 0x4e75u);
 
     r->sb.next_alloc = PROG_ORIGIN;
     if (j4_load_hunks(&r->sb, r->image, imagelen, 0, &r->seg, err, errlen))
@@ -1139,7 +1853,19 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             pr[PR_CLI_OFFSET + 2] = (uint8_t)(cli_b >> 8);
             pr[PR_CLI_OFFSET + 3] = (uint8_t)(cli_b);
         }
-        memset(j4_sandbox_host(&r->sb, GUEST_CLI), 0, 128);
+        {
+            uint8_t *cli = j4_sandbox_host(&r->sb, GUEST_CLI);
+            uint8_t *cmd = j4_sandbox_host(&r->sb, GUEST_COMMAND);
+            uint32_t cmd_b = GUEST_MKBADDR(GUEST_COMMAND);
+            static const char command[] = "program";
+            memset(cli, 0, 128);
+            cli[CLI_COMMAND_OFF + 0] = (uint8_t)(cmd_b >> 24);
+            cli[CLI_COMMAND_OFF + 1] = (uint8_t)(cmd_b >> 16);
+            cli[CLI_COMMAND_OFF + 2] = (uint8_t)(cmd_b >> 8);
+            cli[CLI_COMMAND_OFF + 3] = (uint8_t)cmd_b;
+            cmd[0] = (uint8_t)(sizeof command - 1u); /* Amiga BSTR length byte */
+            memcpy(cmd + 1, command, sizeof command - 1u);
+        }
     }
     /* EMU68K_MAX_SECONDS: a wall-clock limit per run. Off by default; a sweep
      * over unknown software sets it so one program that waits forever cannot
@@ -1163,6 +1889,13 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     if (r->exec_heap < PROG_ORIGIN) r->exec_heap = PROG_ORIGIN;
     /* allocate below the first hardware hole, so a big allocation never spans it */
     r->exec_heap_end = HW_CIA_LO - 0x00010000u;
+    r->sb.next_alloc = r->exec_heap;       /* one cursor for AllocMem + LoadSeg */
+    r->stack_lower = r->exec_heap_end;
+    r->stack_upper = GUEST_TOP;
+    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPREG_OFF, GUEST_TOP);
+    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPLOWER_OFF, r->stack_lower);
+    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPUPPER_OFF, r->stack_upper);
+    r->active_loader = -1;
     r->sink      = sink;
     r->sink_user = sink_user;
     r->resume_pc = r->seg.entry;

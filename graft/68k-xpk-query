@@ -1,0 +1,46 @@
+#!/bin/sh
+# Reproducible, non-vendored T3e real-software regression.
+# Source: https://aminet.net/package/util/pack/xpk_User
+# xpk_User 5.2a is copyrighted and freely distributable for non-commercial use;
+# keeping the archive outside this repository avoids silently relicensing it.
+set -eu
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+ARCHIVE="${EMU68K_XPK_ARCHIVE:-$HOME/68k-corpus/xpk_User.lha}"
+EXPECT="ec48c2820e45e64e1c1970592f06dc32c64546a6c7d545b39c79b469012879f3"
+
+if [ ! -f "$ARCHIVE" ]; then
+    echo "[T3E-REAL] SKIP: no pinned xpk_User.lha at $ARCHIVE"
+    echo "             download https://aminet.net/util/pack/xpk_User.lha and set EMU68K_XPK_ARCHIVE"
+    exit 0
+fi
+if ! command -v lha >/dev/null 2>&1; then
+    echo "[T3E-REAL] FAIL: host lha extractor is required" >&2
+    exit 1
+fi
+
+GOT="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
+if [ "$GOT" != "$EXPECT" ]; then
+    echo "[T3E-REAL] FAIL: xpk_User.lha SHA-256 is $GOT, expected $EXPECT" >&2
+    exit 1
+fi
+
+XPK_WORK_DIR="$(mktemp -d /tmp/emu68k-xpk.XXXXXX)"
+cleanup() {
+    case "$XPK_WORK_DIR" in /tmp/emu68k-xpk.*) rm -rf -- "$XPK_WORK_DIR" ;; esac
+}
+trap cleanup EXIT HUP INT TERM
+(cd "$XPK_WORK_DIR" && lha x "$ARCHIVE" \
+    xpk_User/C/xQuery \
+    xpk_User/Libs/xpkmaster.library \
+    xpk_User/Libs/compressors/xpkNONE.library >/dev/null)
+
+for f in C/xQuery Libs/xpkmaster.library Libs/compressors/xpkNONE.library; do
+    if [ ! -f "$XPK_WORK_DIR/xpk_User/$f" ]; then
+        echo "[T3E-REAL] FAIL: pinned archive did not extract xpk_User/$f" >&2
+        exit 1
+    fi
+done
+
+"$ROOT/build/host-emu68k-t3ereal" "$XPK_WORK_DIR/xpk_User"

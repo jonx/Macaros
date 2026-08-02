@@ -134,7 +134,7 @@ typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
  *
  * The block-cache typedefs live here (moved up from the ICache section) because the
  * instance embeds the cache. */
-#define J5D_MAX_LIBBASES 16
+#define J5D_MAX_LIBBASES 64  /* exec + native facades + per-run disk libraries */
 #define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
 #define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
@@ -200,12 +200,13 @@ struct j5d_engine_state {
     uint32_t          resume_initial_sp;
     uint32_t          resume_depth;
     uint8_t           resume_valid;
-    /* [T3] registered library bases. A real AmigaOS program opens libraries at
-     * run time and calls each through its OWN base in A6, so the bridge has to
-     * recognise any of them - not just the single base the run started with.
-     * The bridge callback reads A6 itself to know WHICH library was called, so
-     * the callback signature is unchanged. */
+    /* [T3]/[T3e] registered library bases. BRIDGED bases are native-library
+     * facades and vector calls through them enter the LVO callback. GUEST bases
+     * belong to disk-loaded 68k libraries and their vector code executes like
+     * ordinary guest code. Conflating the two sends a guest library straight
+     * back to the native bridge. */
     uint32_t          libbase[J5D_MAX_LIBBASES];
+    uint8_t           libbase_guest[J5D_MAX_LIBBASES];
     int               n_libbase;
     /* the [J5d] per-PC block ICache */
     int               cache_n;
@@ -258,19 +259,45 @@ void j5d_engine_free(j5d_engine *ep)
 }
 /* async-signal-safe: two plain stores. Zeroing the budget makes the NEXT
  * chain-entry safe point park, so even fully-chained code stops promptly. */
-void j5d_register_libbase(uint32_t base)
+static void register_libbase_kind(uint32_t base, int guest)
 {
     for (int i = 0; i < g_eng->n_libbase; i++)
-        if (g_eng->libbase[i] == base) return;
-    if (g_eng->n_libbase < J5D_MAX_LIBBASES)
-        g_eng->libbase[g_eng->n_libbase++] = base;
+        if (g_eng->libbase[i] == base) {
+            g_eng->libbase_guest[i] = guest != 0;
+            return;
+        }
+    if (g_eng->n_libbase < J5D_MAX_LIBBASES) {
+        int i = g_eng->n_libbase++;
+        g_eng->libbase[i] = base;
+        g_eng->libbase_guest[i] = guest != 0;
+    }
+}
+void j5d_register_libbase(uint32_t base) { register_libbase_kind(base, 0); }
+void j5d_register_guest_libbase(uint32_t base) { register_libbase_kind(base, 1); }
+void j5d_unregister_libbase(uint32_t base)
+{
+    for (int i = 0; i < g_eng->n_libbase; i++) {
+        if (g_eng->libbase[i] != base) continue;
+        for (int j = i + 1; j < g_eng->n_libbase; j++) {
+            g_eng->libbase[j - 1] = g_eng->libbase[j];
+            g_eng->libbase_guest[j - 1] = g_eng->libbase_guest[j];
+        }
+        g_eng->n_libbase--;
+        return;
+    }
 }
 void j5d_clear_libbases(void) { g_eng->n_libbase = 0; }
+static int is_guest_libbase(uint32_t base)
+{
+    for (int i = 0; i < g_eng->n_libbase; i++)
+        if (g_eng->libbase[i] == base) return g_eng->libbase_guest[i] != 0;
+    return 0;
+}
 static int is_libbase(uint32_t a6, uint32_t entry_base)
 {
-    if (a6 == entry_base && entry_base) return 1;
+    if (a6 == entry_base && entry_base && !is_guest_libbase(entry_base)) return 1;
     for (int i = 0; i < g_eng->n_libbase; i++)
-        if (g_eng->libbase[i] == a6) return 1;
+        if (g_eng->libbase[i] == a6 && !g_eng->libbase_guest[i]) return 1;
     return 0;
 }
 
@@ -284,6 +311,8 @@ static uint32_t libbase_of_target(uint32_t target, uint32_t entry_base)
 {
     for (int i = -1; i < g_eng->n_libbase; i++) {
         uint32_t base = (i < 0) ? entry_base : g_eng->libbase[i];
+        if ((i < 0 && is_guest_libbase(base)) ||
+            (i >= 0 && g_eng->libbase_guest[i])) continue;
         if (!base || target > base) continue;
         uint32_t delta = base - target;
         if (delta == 0 || delta > J5D_LIB_VECSPAN || delta % 6u) continue;

@@ -1,6 +1,7 @@
 # Transparent 68k execution - the staged plan
 
-> Status: plan (drafted 2026-08-01, nothing started). Design and rationale:
+> Status: active implementation (T0-T2 complete; T3a/T3b0/T3e complete;
+> first production T3b/T3c type-policy slice complete, 2026-08-02). Design and rationale:
 > [design.md](design.md). Marker prefix for this feature: **`[T*]`** (greppable,
 > same convention as the engine's `[J*]`). Every phase ends in the unattended
 > loop: build → boot → drive with [aros-ctl](../control-harness/README.md) →
@@ -121,89 +122,6 @@ Engine change this forced: the chain-entry safe point now decrements a **chain
 budget** instead of only testing a flag, because a self-chained loop never
 returns to C on its own, so nothing in-OS could poll CTRL-C.
 
-## STATUS 2026-08-02: the 12-program corpus is fully disposed
-
-9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
-DSPPeek are correctly ROUTED as needing a real machine, which is the right
-answer for a memory scanner rather than a bug. LhA compresses, lists and
-extracts byte-exact under `make hosted-emu68k-t3lha`.
-
-**What is NOT built.** Nothing below should be assumed to exist:
-
-| piece | state |
-|---|---|
-| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
-| tier 2b generation from the field tables | designed, not built |
-| the policy schema (per-type class) | designed, not built |
-| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
-
-### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
-
-This is the piece that makes the system general rather than a list of handled
-cases. AROS's own libraries are bounded and the generators cover them; the
-third-party surface is not bounded and never will be, so it must not be
-bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
-
-Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
-stop *politely* because OpenLibrary now refuses what it cannot serve.
-
-The mechanism, in the order it has to happen:
-
-1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
-   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
-   (and the program's own directory, which is where Amiga software often keeps
-   its libraries). No file, no library: keep returning 0.
-2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
-   sandbox's own bump allocator - the same path a program takes. The library
-   becomes ordinary guest memory at an ordinary guest address.
-3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
-   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
-   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
-4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
-   init routine is 68k code, so it runs through the engine like any other, with
-   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
-   result in `D0` being the library base - a GUEST address, which is exactly
-   what the program needs and exactly what a native base could never be.
-5. **Register the base** with `j5d_register_libbase`, and the vectors below it
-   are then reached by the engine's existing recognition. Nothing is bridged:
-   the program calls guest code through a guest base, and only the calls that
-   library itself makes into AROS cross the boundary, through the machinery
-   that already exists.
-
-What makes this tractable is that steps 2 and 5 are already built and proven,
-and step 4 is the engine doing its normal job. The new work is 1 and 3.
-
-Known hazards, worth stating before anyone starts: a library's `rt_Init` may
-open other libraries (recursion through the same path, so the depth needs a
-bound); `MEMF_31BIT`-style allocation inside the guest must come from the
-sandbox, never from AROS; and a library that fails init must be unloaded and
-its base never registered, or a later call reaches free memory.
-
-**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
-real 240-byte hunk `.library` with a self-referencing resident tag
-(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
-vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
-returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
-not crashing. It deliberately does not call `MakeLibrary`, which would make it
-a test of exec rather than of the loader.
-
-That removes the reason this was written down instead of built. What remains is
-the two new steps (find the file, scan for the tag) either side of three that
-are already proven.
-
-**The evidence gap that matters most.** The corpus is 12 binaries, and there
-are no others on this machine. Everything above is a claim about twelve
-programs, not about legacy 68k software as a class. Scaling the corpus and
-fixing gaps in ledger-FREQUENCY order (rather than one program at a time, which
-is what today was) is the work that would turn it into one.
-
-**A debugging rule this port paid three wrong guesses for in a single day.**
-Never diagnose a 68k fault by inference; print the value. The jump-table
-theory, the size-overrun theory and "my engine change broke GetAsmIncludeIndex"
-were all wrong, and each was settled in one run by an actual number.
-`EMU68K_TRACE_FAULT` names the decoded guest address of an unclassified fault,
-`J5G_TRACE` gives per-block PCs, `EMU68K_TRACE_CALLS` gives library calls.
-
 Original plan text follows.
 
 The transparency spine. Depends: T0.
@@ -270,89 +188,6 @@ tooltype, crash bundle v2) are still open.
   cost. Two traps had to be fixed first: a malloc'd arena does not fault past its
   end (so the arena became a real mapping), and `mprotect` rounds a length UP,
   which put the CIA registers back inside the writable window.
-
-## STATUS 2026-08-02: the 12-program corpus is fully disposed
-
-9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
-DSPPeek are correctly ROUTED as needing a real machine, which is the right
-answer for a memory scanner rather than a bug. LhA compresses, lists and
-extracts byte-exact under `make hosted-emu68k-t3lha`.
-
-**What is NOT built.** Nothing below should be assumed to exist:
-
-| piece | state |
-|---|---|
-| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
-| tier 2b generation from the field tables | designed, not built |
-| the policy schema (per-type class) | designed, not built |
-| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
-
-### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
-
-This is the piece that makes the system general rather than a list of handled
-cases. AROS's own libraries are bounded and the generators cover them; the
-third-party surface is not bounded and never will be, so it must not be
-bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
-
-Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
-stop *politely* because OpenLibrary now refuses what it cannot serve.
-
-The mechanism, in the order it has to happen:
-
-1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
-   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
-   (and the program's own directory, which is where Amiga software often keeps
-   its libraries). No file, no library: keep returning 0.
-2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
-   sandbox's own bump allocator - the same path a program takes. The library
-   becomes ordinary guest memory at an ordinary guest address.
-3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
-   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
-   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
-4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
-   init routine is 68k code, so it runs through the engine like any other, with
-   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
-   result in `D0` being the library base - a GUEST address, which is exactly
-   what the program needs and exactly what a native base could never be.
-5. **Register the base** with `j5d_register_libbase`, and the vectors below it
-   are then reached by the engine's existing recognition. Nothing is bridged:
-   the program calls guest code through a guest base, and only the calls that
-   library itself makes into AROS cross the boundary, through the machinery
-   that already exists.
-
-What makes this tractable is that steps 2 and 5 are already built and proven,
-and step 4 is the engine doing its normal job. The new work is 1 and 3.
-
-Known hazards, worth stating before anyone starts: a library's `rt_Init` may
-open other libraries (recursion through the same path, so the depth needs a
-bound); `MEMF_31BIT`-style allocation inside the guest must come from the
-sandbox, never from AROS; and a library that fails init must be unloaded and
-its base never registered, or a later call reaches free memory.
-
-**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
-real 240-byte hunk `.library` with a self-referencing resident tag
-(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
-vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
-returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
-not crashing. It deliberately does not call `MakeLibrary`, which would make it
-a test of exec rather than of the loader.
-
-That removes the reason this was written down instead of built. What remains is
-the two new steps (find the file, scan for the tag) either side of three that
-are already proven.
-
-**The evidence gap that matters most.** The corpus is 12 binaries, and there
-are no others on this machine. Everything above is a claim about twelve
-programs, not about legacy 68k software as a class. Scaling the corpus and
-fixing gaps in ledger-FREQUENCY order (rather than one program at a time, which
-is what today was) is the work that would turn it into one.
-
-**A debugging rule this port paid three wrong guesses for in a single day.**
-Never diagnose a 68k fault by inference; print the value. The jump-table
-theory, the size-overrun theory and "my engine change broke GetAsmIncludeIndex"
-were all wrong, and each was settled in one run by an actual number.
-`EMU68K_TRACE_FAULT` names the decoded guest address of an unclassified fault,
-`J5G_TRACE` gives per-block PCs, `EMU68K_TRACE_CALLS` gives library calls.
 
 Original plan text follows.
 
@@ -421,75 +256,137 @@ walks). MatchFirst therefore calls the native MatchFirst into a native
 AnchorPath and copies back the fields the program reads - it does NOT
 reimplement AmigaDOS pattern matching.
 
-## STATUS 2026-08-02: the 12-program corpus is fully disposed
+## STATUS 2026-08-02: T3e complete; a real disk-library chain runs unchanged
 
 9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
 DSPPeek are correctly ROUTED as needing a real machine, which is the right
 answer for a memory scanner rather than a bug. LhA compresses, lists and
 extracts byte-exact under `make hosted-emu68k-t3lha`.
 
-**What is NOT built.** Nothing below should be assumed to exist:
+**What remains in T3.** Nothing below should be assumed to exist:
 
 | piece | state |
 |---|---|
-| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
-| tier 2b generation from the field tables | designed, not built |
-| the policy schema (per-type class) | designed, not built |
-| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
+| tier 2b generation from the field tables | first production slice built: generated `DateStamp` IN/OUT shadows and guest-argument pointer result mapping; broaden to more value structures and proxies |
+| the policy schema (per-type class) | schema v1 built and checked; two TagItem domains plus DateStamp direction/result policy compiled, broader domain/object/callback coverage remains |
+| broad integer conformance | shifts, bit operations, MULS/DIVU and unary operations covered; continue from the conformance ledger |
 
-### [T3e] Third-party 68k libraries, run IN the guest (NOT BUILT - design)
+### [T3e] Third-party 68k libraries, run IN the guest — ✅ DONE 2026-08-02
 
 This is the piece that makes the system general rather than a list of handled
 cases. AROS's own libraries are bounded and the generators cover them; the
 third-party surface is not bounded and never will be, so it must not be
 bridged. A `.library` on disk is 68k code, and the JIT already runs 68k code.
 
-Two corpus programs stop here today (`xpkmaster`, `muimaster`), and they only
-stop *politely* because OpenLibrary now refuses what it cannot serve.
+The real proof is the freely redistributable `xpk_User 5.2a` package, pinned by
+archive SHA-256
+`ec48c2820e45e64e1c1970592f06dc32c64546a6c7d545b39c79b469012879f3`.
+Its unmodified `xQuery` program opens the unmodified 68k
+`xpkmaster.library`, which in turn opens the unmodified 68k
+`compressors/xpkNONE.library`. The complete chain reports the packer name,
+description, mode, chunk limits and speed/memory table under both the hosted
+proof and a rebooted AROS system. No third-party binary is checked into this
+repository; `graft/68k-xpk-query` verifies and extracts the pinned archive.
 
-The mechanism, in the order it has to happen:
+This is a resident/autoinit lifecycle, not merely another hunk load. The
+implementation is split into proofs so a synthetic direct initializer cannot
+accidentally stand in for the format real libraries use:
 
-1. **Refusal becomes a lookup.** Where `exec_call`'s `LVO_OPENLIBRARY` returns 0
-   for a name not on the servable list, ask the embedder to read `LIBS:<name>`
-   (and the program's own directory, which is where Amiga software often keeps
-   its libraries). No file, no library: keep returning 0.
-2. **Load its hunks into the guest arena**, with `j4_load_hunks` and the
-   sandbox's own bump allocator - the same path a program takes. The library
-   becomes ordinary guest memory at an ordinary guest address.
-3. **Find the resident tag.** Scan the loaded image for `RTC_MATCHWORD`
-   ($4AFC) whose `rt_MatchTag` points back at itself, which is what makes it a
-   real tag rather than a coincidence. `rt_Type` must be `NT_LIBRARY`.
-4. **Run `rt_Init` IN THE GUEST.** This is the part that has no shortcut: the
-   init routine is 68k code, so it runs through the engine like any other, with
-   the AmigaOS entry contract (`A0` = seglist, `D0` = 0, `A6` = SysBase) and its
-   result in `D0` being the library base - a GUEST address, which is exactly
-   what the program needs and exactly what a native base could never be.
-5. **Register the base** with `j5d_register_libbase`, and the vectors below it
-   are then reached by the engine's existing recognition. Nothing is bridged:
-   the program calls guest code through a guest base, and only the calls that
-   library itself makes into AROS cross the boundary, through the machinery
-   that already exists.
+1. **Two truthful test libraries.** A non-AUTOINIT resident whose `rt_Init` is
+   executable 68k code, and an `RTF_AUTOINIT` resident whose `rt_Init` points to
+   the real four-long construction table (`dataSize`, vectors, structure-init,
+   final init function). The latter must exercise vector construction rather
+   than laying its library base out by hand.
+2. **Find and validate the requested resident.** Scan every loaded CODE/DATA
+   hunk for `RTC_MATCHWORD` (`$4AFC`) plus the self-referencing `rt_MatchTag`;
+   validate `rt_EndSkip`, strings, flags and every pointer against the complete
+   loaded segment set; select `NT_LIBRARY` by the name OpenLibrary requested,
+   not merely the first resident in the file. The self-reference finder and its
+   real-program negative control are built (`scan68k --resident`).
+3. **Construct the library in guest memory.** For AUTOINIT, implement the m68k
+   semantics of `MakeLibrary`/`MakeFunctions`/`InitStruct`: allocate the
+   negative vector area and positive base together inside the sandbox, build
+   six-byte 68k vectors from the absolute or relative function table, apply the
+   structure-init stream, copy the Resident identity fields, then call the
+   final init function with `D0=base`, `A0=seglist`, `A6=SysBase`. For a
+   non-AUTOINIT resident call `rt_Init` with `D0=0`, `A0=seglist`, `A4=0`,
+   `A6=SysBase`; it owns construction itself.
+4. **Distinguish library-base kinds.** A registered native façade means
+   `BRIDGED_NATIVE`: reaching a vector invokes the typed AROS bridge. A disk
+   library means `GUEST_68K`: reaching a vector pushes the ordinary return
+   address and executes the guest vector stub/code. A single untyped base list
+   is wrong because it sends both kinds to the bridge.
+5. **Implement OpenLibrary lifecycle.** Resolve through DOS semantics
+   (`LIBS:`, `PROGDIR:`/the launch directory as applicable), enforce the
+   requested version, maintain `LOADING/READY/FAILED` states so dependency
+   cycles are detected, register only after successful initialization, and
+   invoke the library's Open vector for each successful open.
+6. **Close, expunge and rollback.** Route `CloseLibrary` to guest code, maintain
+   ownership/open state, honour delayed expunge, remove the base before freeing
+   code, unload the seglist returned by Expunge, and unwind every allocation and
+   dependency after a failed init. A recursion-depth bound alone is not enough;
+   cycles need explicit state.
+7. **Real-software proof.** Run a real third-party library and a program using
+   it end to end, then pin the dependency chain as a regression. `xpkmaster`
+   and `muimaster` are the first corpus candidates, not substitutes for a
+   deliberately small lifecycle test.
 
-What makes this tractable is that steps 2 and 5 are already built and proven,
-and step 4 is the engine doing its normal job. The new work is 1 and 3.
+Three regressions divide the evidence cleanly. `make hosted-emu68k-t3guestlib`
+proves resident selection, direct and AUTOINIT construction, relative and
+absolute MakeFunctions tables, InitStruct and `GUEST_68K` vector dispatch in
+isolation. `make hosted-emu68k-t3guestlive` drives a real program through the
+live exec seam: native AROS DOS resolves `LIBS:`/`PROGDIR:`, synthesized guest
+continuations finalize init/Open/Close only after their 68k routines return,
+requested versions are enforced, Expunge unregisters before reload, and an
+A→B→A initializer dependency fails without publishing either base. A later
+valid open proves the failure path restored the loader state.
+`EMU68K_XPK_ARCHIVE=/path/xpk_User.lha make hosted-emu68k-t3ereal` supplies the
+real program/library dependency proof and asserts the full metadata output,
+not just successful process exit.
 
-Known hazards, worth stating before anyone starts: a library's `rt_Init` may
-open other libraries (recursion through the same path, so the depth needs a
-bound); `MEMF_31BIT`-style allocation inside the guest must come from the
-sandbox, never from AROS; and a library that fails init must be unloaded and
-its base never registered, or a later call reaches free memory.
+Expunge now reaches a permanent safe-point trampoline only after the guest
+Close/Expunge routine has returned, unregisters the base, invalidates the
+run's entire translated-block cache (including incoming cross-block chains),
+clears the old guest image and trampolines, and then redirects through a
+permanent RTS. If the allocation is at the bump allocator's tail, its guest
+address range is immediately reusable; interleaved allocations become cleared
+holes rather than being unsafely reused. A reload regression proves the next
+open constructs a fresh library and no stale translation survives.
 
-**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
-real 240-byte hunk `.library` with a self-referencing resident tag
-(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
-vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
-returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
-not crashing. It deliberately does not call `MakeLibrary`, which would make it
-a test of exec rather than of the loader.
+The final multi-library regression also exposed and removed a fixed-address
+collision that the earlier one-library tests could hide: the second and third
+native library facades overlapped the planted Process/CLI/file-handle records,
+and the sixteenth facade overlapped the callback stub library. The low guest
+map is now disjoint by construction: runtime records occupy `$210000` through
+`$2127ff`, the stub facade is based at `$21e000`, Exec at `$220000`, all 16
+native facades span `$221000` through `$230000`, and allocator space starts at
+`$231000`. The generated bridge, XPK dependency chain, LhA roundtrip, guest
+library lifecycle/reload and broad JIT suite all pass with this layout.
 
-That removes the reason this was written down instead of built. What remains is
-the two new steps (find the file, scan for the tag) either side of three that
-are already proven.
+The real package found four compatibility defects that the synthetic fixtures
+did not: `exec/StackSwap`, the Shell `cli_CommandName` BSTR, preservation of
+the 68k ABI's D2-D7/A2-A6 registers across asynchronous guest library
+continuations, and basename selection for residents reached through a path
+containing `/`. It also required guest-memory implementations of the
+pointer-sensitive core utility tag/string walkers. These are generalized
+runtime fixes, not XPK-specific vector stubs.
+
+`locale.library/OpenCatalogA` remains intentionally fail-closed until the type
+compiler can generate a TagItem shadow plus opaque Catalog handle. The bridge
+first offers the call to the native crossing; if that crossing is unavailable,
+it returns NULL, the API's normal "no catalog" result, so clients use their
+built-in strings without receiving an invalid native pointer.
+
+The engine and library registry are per run. v1 deliberately does not promise
+that a disk library's globals are shared between separate translated processes;
+libraries that create tasks, devices or interrupt servers remain classified
+gaps until those guest services exist.
+
+Exit criteria: **met.** Both resident forms construct and return a guest base; public
+vectors run as guest code without touching the native bridge; dependency
+failure and A→B→A cycles roll back cleanly; Open/Close/Expunge leave no live
+base pointing into released memory; and one real third-party library works
+through a rebooted AROS corpus run.
 
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
@@ -547,7 +444,8 @@ Depends: T1; informed continuously by the `T1d` ledger.
   it needs the per-tag kind table of `[T3c]` rather than a layout alone.
   `struct Hook *` (28) is the callback class, `[T3d]`.
 
-  Code is emitted for the 20 application-facing libraries (99 crossings); the
+  Code is emitted for the 20 application-facing libraries (126 crossings after
+  the first policy-compiled type slice); the
   rest are classified but not compiled, since nothing links the bridge against
   HIDDs and internal modules. Adding a library is one name on `GEN_LIBS`: the
   base name and type come from its generated proto header, whose presence is
@@ -571,10 +469,10 @@ Depends: T1; informed continuously by the `T1d` ledger.
     `dos.MakeLink`'s `dest` is a string or a lock depending on another
     argument. Both are refused by name, with the reason recorded.
 
-  Still ahead: the tier-2 type descriptions (see `[T3b]`), the `[T0-P4]`
-  semantic-annotation layer for direction/length/copy policy, printf-class
-  varargs, callbacks. A function without annotations stays unsupported, never
-  best-effort ([design §4](design.md)).
+  The first tier-2 type descriptions and semantic annotations are now compiled
+  by `[T3b]`/`[T3c]`; broadening those policies, printf-class varargs and
+  production callbacks remain. A function without annotations stays
+  unsupported, never best-effort ([design §4](design.md)).
 
   One vector deserves an implementation rather than a refusal:
   **`exec.CacheClearU`** means "I have just modified code, forget what you
@@ -718,37 +616,77 @@ Depends: T1; informed continuously by the `T1d` ledger.
   fault-driven shadow of the design notes becomes necessary - per type, and
   later.
 
-- **`[T3b]` Core libraries wired.** exec, dos, utility first; then intuition,
-  graphics, gadtools, asl, icon, workbench, each as thunks + curated
-  annotations, ledger-prioritized. Hand-written `T1c` stubs retire as
-  generated coverage lands. Structure-traversing calls (`PutMsg`-class) get
-  shadow/proxy objects, not raw guest pointers.
-- **`[T3c]` Taglist kind tables** for the core attribute domains. Unknown
+- **`[T3b]` The bridge compiler + core libraries. FIRST PRODUCTION SLICE DONE
+  2026-08-02.** Discover the bounded AROS
+  surface up front rather than adding functions when a program happens to hit
+  them. `.conf` remains the authority for LVO order, prototypes and m68k source
+  registers; Clang parses the AROS headers under BOTH the m68k Amiga ABI and the
+  native target to emit canonical type graphs (sizes, signedness, fields,
+  arrays, nested records and pointer targets). A small policy schema supplies
+  what C types cannot say: direction/length, retention, ownership, object-proxy
+  class, tag domain, callback ABI, guest redirect and explicit refusal.
+
+  The output is precompiled, type-checked C thunks plus tables, not a runtime C
+  parser and initially not an untyped AAPCS call gate. Runtime work is only
+  `(library,LVO)` lookup, marshalling and cached object identity. Automatic
+  classes are scalars/strings, byte buffers with a proven length, BPTR handles,
+  value-structure field maps and declared callbacks. `Window`/`RastPort`-class
+  OS objects use per-run proxies; types the guest reads get a guest façade, not
+  merely an opaque token. `TagItem`, `APTR`, retained pointers, multi-register
+  returns and process-affecting calls require policy and otherwise fail closed.
+
+  Generate the complete report/table every build; an unclassified public
+  vector is visible in the report and unavailable at runtime, never guessed.
+  Wire exec, dos and utility first, then intuition, graphics, gadtools, asl,
+  icon and workbench. Hand-written `T1c` cases retire only after generated
+  equivalents pass the same end-to-end regression.
+
+  `graft/emu68k-bridge-policy.json` is now schema v1 and is validated against
+  the parsed `.conf` functions on every emit/check: a stale function or argument
+  name, missing domain, invalid direction, unsupported residual argument/result,
+  repeated tag, or unknown value kind fails generation. It compiles two real
+  value-structure functions without per-vector C: `dos.DateStamp` (`DateStamp`
+  OUT plus its returned pointer mapped back to the guest argument) and
+  `dos.CompareDates` (two `DateStamp` IN shadows). Guest ranges are checked
+  before conversion; generated field tables provide every offset and width.
+
+  The rebooted regression drives both functions through native dos.library and
+  verifies pointer identity, OUT copy-back and the AmigaOS CompareDates ordering.
+  This is the reusable direction/result machinery; adding another plain value
+  structure is policy data, provided its generated field table has no unresolved
+  pointer field.
+- **`[T3c]` Taglist kind tables. FIRST TWO DOMAINS DONE 2026-08-02** for the
+  core attribute domains. Unknown
   tags: ledger entry + **abort the call as a classified capability gap**.
   Never pass-as-scalar (that guess is exactly what the risk register
   forbids; this supersedes the earlier draft of this line).
+
+  The generic guest→native walker now reads packed big-endian 8-byte TagItems,
+  emits native-layout TagItems, bounds-checks every guest read/string, flattens
+  `TAG_MORE`, implements `TAG_IGNORE`/`TAG_SKIP`, caps traversal, and rejects
+  cycles, overlong lists, unknown tags and explicitly refused pointer tags.
+  Policy domains cover `graphics.BestModeIDA` (scalar BIDTAGs; ViewPort refused
+  until its proxy exists) and `cybergraphics.BestCModeIDTagList` (scalar tags
+  plus CSTR BoardName). The generated dispatcher preserves the exact tag/domain
+  reason through both bridge layers.
+
+  `make hosted-emu68k-t3gen` proves all of this inside rebooted AROS: a real
+  BestModeIDA succeeds through a `TAG_IGNORE`/`TAG_SKIP`/`TAG_MORE` chain, a
+  string-valued cybergraphics tag reaches native code, and an unknown-tag 68k
+  negative control terminates with `unknown tag 8fffffff in
+  graphics.best_mode` rather than reaching graphics.library.
 - **`[T3d]` Callbacks (native→68k re-entry).** Hooks detected by
   sandbox-address test; symmetric marshal through the same descriptors;
   re-entrancy held across the nested crossing.
 - **`[T3f]` Real-software corpus.** A curated set of system-friendly classic
   programs (CLI tools, a text viewer, a simple Workbench app) run headlessly;
-  each new success is pinned as a regression test. v1 scope: **native
-  libraries only**; a 68k disk library with no native equivalent is a
-  capability gap.
+  each new success is pinned as a regression test. Native-name-wins; a 68k
+  disk library with no native equivalent follows `[T3e]`, and still fails as a
+  classified capability gap until that lifecycle accepts it.
 
 Exit criteria: the curated corpus runs; ledger top entries trend to zero for
 that corpus; callbacks proven by a boopsi/hook-using test app; a
 `PutMsg`-class shadow-structure call proven both directions.
-
-## [T3x] 68k disk libraries in-sandbox (medium, after T3d)
-
-Split out of T3 after review: library loading is resident/autoinit lifecycle,
-bases, dependency opening and expunge semantics, not "more 68k code". Load a
-68k disk library into the sandbox, native-name-wins rule, in-sandbox LVO
-calls (no marshalling), mixed-chain guard rails (68k app → native lib → 68k
-callback). Depends on T3d (callbacks) and the `[T0-P4]` proxy machinery.
-Exit: a classic app that ships its own 68k library runs; expunge verified
-leak-free.
 
 ## [T4] Customization tools and widgets (medium)
 

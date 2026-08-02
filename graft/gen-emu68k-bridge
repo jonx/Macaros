@@ -30,8 +30,13 @@ This script emits tier 1 and reports the rest as the work queue.
 import os
 import re
 import sys
+import json
 
 AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
+POLICY_PATH = os.environ.get(
+    "EMU68K_BRIDGE_POLICY",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "emu68k-bridge-policy.json"))
 
 # Where the BUILD put the generated proto headers. They are the authority on how
 # a library's base is named and typed (the .conf does not always say), and a
@@ -51,6 +56,23 @@ GEN_LIBS = [
     "datatypes", "expansion", "cybergraphics", "mathffp", "mathieeesingbas",
     "mathieeedoubbas",
 ]
+
+
+def load_policy():
+    """Load the semantic facts C prototypes cannot carry. This file is small
+    on purpose: it describes TYPES/domains once, while the .conf remains the
+    authority for function names, LVOs, registers and C signatures."""
+    try:
+        with open(POLICY_PATH, encoding="utf-8") as fh:
+            p = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise SystemExit("cannot load bridge policy %s: %s" % (POLICY_PATH, e))
+    if p.get("schema") != 1:
+        raise SystemExit("bridge policy schema must be 1")
+    return p
+
+
+POLICY = load_policy()
 
 
 def find_confs():
@@ -431,6 +453,112 @@ def parse_conf(path):
 
 
 # ---------------------------------------------------------------------------
+# semantic policy validation
+# ---------------------------------------------------------------------------
+
+TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
+             "refuse": "EMU_TAG_REFUSE"}
+
+
+def policy_key(lib, f):
+    return "%s.%s" % (lib, f.name)
+
+
+def function_policy(lib, f):
+    return POLICY.get("functions", {}).get(policy_key(lib, f))
+
+
+def c_ident(s):
+    return re.sub(r"[^A-Za-z0-9_]", "_", s)
+
+
+def validate_policy(targets):
+    """Refuse stale names and unsafe shapes before emitting any C. A policy
+    typo must fail the build, not quietly leave the intended vector uncovered."""
+    domains = POLICY.get("tag_domains", {})
+    errors = []
+    bykey = {}
+    for lib, rel, _base, _btype, _hdr in targets:
+        for f in parse_conf(os.path.join(AROS, rel)) or []:
+            bykey[policy_key(lib, f)] = f
+
+    for name, d in domains.items():
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            errors.append("tag domain %r has an invalid name" % name)
+        cap = d.get("max_items")
+        if not isinstance(cap, int) or cap < 1 or cap > 256:
+            errors.append("tag domain %s max_items must be 1..256" % name)
+        tags = d.get("tags")
+        if not isinstance(tags, list) or not tags:
+            errors.append("tag domain %s has no tags" % name)
+            continue
+        seen = set()
+        for t in tags:
+            macro, kind = t.get("name"), t.get("kind")
+            if not isinstance(macro, str) or not re.fullmatch(r"[A-Za-z_]\w*", macro):
+                errors.append("tag domain %s has invalid macro %r" % (name, macro))
+            elif macro in seen:
+                errors.append("tag domain %s repeats %s" % (name, macro))
+            seen.add(macro)
+            if kind not in TAG_KINDS:
+                errors.append("tag domain %s tag %s has unknown kind %r"
+                              % (name, macro, kind))
+
+    for key, p in POLICY.get("functions", {}).items():
+        f = bykey.get(key)
+        if not f:
+            errors.append("function policy %s does not name a public .conf vector" % key)
+            continue
+        if f.private:
+            errors.append("function policy %s names a private vector" % key)
+        taglists = p.get("taglists", {})
+        structs = p.get("structs", {})
+        args = {n: t for t, n in f.args}
+        for arg, domain in taglists.items():
+            if arg not in args:
+                errors.append("function policy %s names missing argument %s" % (key, arg))
+            elif "TagItem" not in args[arg] or "*" not in args[arg]:
+                errors.append("function policy %s argument %s is not a TagItem pointer"
+                              % (key, arg))
+            if domain not in domains:
+                errors.append("function policy %s uses missing tag domain %s"
+                              % (key, domain))
+        for arg, sp in structs.items():
+            stype, direction = sp.get("type"), sp.get("direction")
+            if arg not in args:
+                errors.append("function policy %s names missing argument %s" % (key, arg))
+            elif (not isinstance(stype, str) or
+                  "struct %s" % stype not in norm(args[arg]) or
+                  "*" not in args[arg]):
+                errors.append("function policy %s argument %s is not struct %s *"
+                              % (key, arg, stype))
+            if direction not in ("in", "out", "inout"):
+                errors.append("function policy %s struct %s has invalid direction %r"
+                              % (key, arg, direction))
+            if arg in taglists:
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
+        result = p.get("result")
+        if result:
+            if result.get("kind") != "guest_arg" or result.get("arg") not in args:
+                errors.append("function policy %s has invalid guest_arg result" % key)
+            elif result.get("arg") not in structs:
+                errors.append("function policy %s result argument is not a struct shadow" % key)
+        blockers = []
+        for t, n in f.args:
+            if n in taglists or n in structs:
+                continue
+            if classify(t) not in ("scalar", "widen", "string"):
+                blockers.append("%s %s" % (t, n))
+        if not result and classify(f.ret) not in ("scalar", "widen", "void"):
+            blockers.append("result %s" % f.ret)
+        if blockers:
+            errors.append("function policy %s still needs policy for %s"
+                          % (key, ", ".join(blockers)))
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # self-check: LVO assignment must reproduce offsets known from the 68k ABI
 # ---------------------------------------------------------------------------
 
@@ -519,57 +647,150 @@ def _arg_expr(t, reg):
 
 def emit_lib(lib, rel, base, btype, hdr, funcs):
     short = lib.split(".")[0]
+    domains = POLICY.get("tag_domains", {})
+    used_domains = []
+    for f in funcs:
+        p = function_policy(lib, f)
+        if not p:
+            continue
+        for d in p.get("taglists", {}).values():
+            if d not in used_domains:
+                used_domains.append(d)
+    uses_structs = any(function_policy(lib, f) and
+                       function_policy(lib, f).get("structs") for f in funcs)
     out = []
     w = out.append
     w("/* GENERATED by graft/gen-emu68k-bridge from %s - do not edit." % rel)
     w(" *")
-    w(" * Tier 1 crossings for %s: every argument is a scalar or a pointer to" % lib)
-    w(" * bytes, and the result is a scalar, so the crossing follows entirely from")
-    w(" * the vector's declared prototype and register mapping. Anything needing a")
-    w(" * structure rebuilt, a BPTR mapped, or a callback into the guest is NOT")
-    w(" * here: those are hand-written in emu68k_oscall.c.")
+    w(" * Derived crossings for %s. Tier-1 scalar/string calls come straight" % lib)
+    w(" * from the .conf prototype and register map; type-sensitive calls additionally")
+    w(" * consume the checked semantic policy in graft/emu68k-bridge-policy.json.")
+    w(" * Anything still lacking policy remains unavailable rather than guessed.")
     w(" */")
     w("")
     w("#include <exec/types.h>")
     w("#include <%s>" % hdr)
+    if uses_structs:
+        w("#include <string.h>")
+    for d in used_domains:
+        for h in domains[d].get("headers", []):
+            w("#include <%s>" % h)
     w("")
     w('#include "emu68k_gen.h"')
+    if uses_structs:
+        w('#include "emu68k_layouts.h"')
     w("")
-    w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base)" % short)
+    for d in used_domains:
+        ident = c_ident(d)
+        w("static const struct EmuTagDesc emu_tagdesc_%s[] =" % ident)
+        w("{")
+        for tag in domains[d]["tags"]:
+            w('    { %s, %s, "%s" },' %
+              (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
+        w("};")
+        w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
+        w("{")
+        w('    emu_tagdesc_%s, (UWORD)(sizeof(emu_tagdesc_%s) / sizeof(emu_tagdesc_%s[0])), "%s"'
+          % (ident, ident, ident, d))
+        w("};")
+        w("")
+    w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base," % short)
+    w("                  char *err, ULONG errlen)")
     w("{")
     w("    %s *%s = base;" % (btype, base))
-    w("    (void)r; (void)guest0; (void)%s;" % base)
+    w("    (void)r; (void)guest0; (void)%s; (void)err; (void)errlen;" % base)
     w("")
     w("    switch (lvo)")
     w("    {")
     n = 0
     for f in funcs:
         t = f.tier(lib)[0]
-        if t not in (1, 2):
+        policy = function_policy(lib, f)
+        if t not in (1, 2) and not policy:
             continue
         regs = [reg_expr(x) for x in f.regs]
         if any(x is None for x in regs):
             continue
-        args = ",\n              ".join(
-            arg_expr(t, reg) for (t, _), reg in zip(f.args, f.regs))
         sig = ", ".join("%s %s" % (norm(t), nm) for t, nm in f.args) or "void"
         w("    case %d:  /* %s(%s) -> %s  [%d] */" % (f.lvo, f.name, sig,
                                                       norm(f.ret), f.offset))
+        taglists = policy.get("taglists", {}) if policy else {}
+        structs = policy.get("structs", {}) if policy else {}
+        if policy:
+            w("    {")
+        call_args = []
+        post = []
+        for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
+            src = reg_expr(reg)
+            if aname in structs:
+                sp = structs[aname]
+                stype, direction = sp["type"], sp["direction"]
+                w("        struct %s emu_struct_%d;" % (stype, ai))
+                w("        if (emu68k_require_guest_range(%s, M68K_%s_SIZEOF,"
+                  % (src, stype))
+                w('                                         "%s.%s", err, errlen) < 0)'
+                  % (f.name, aname))
+                w("            return 1;")
+                w("        memset(&emu_struct_%d, 0, sizeof(emu_struct_%d));" % (ai, ai))
+                if direction in ("in", "inout"):
+                    w("        emu68k_from_guest(guest0, %s, &emu_struct_%d,"
+                      % (src, ai))
+                    w("                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s));"
+                      % (stype, stype))
+                if direction in ("out", "inout"):
+                    post.append("        emu68k_to_guest(guest0, %s, &emu_struct_%d,\n"
+                                "                           emu_fields_%s, EMU_NFIELDS(emu_fields_%s));"
+                                % (src, ai, stype, stype))
+                call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
+                continue
+            if aname not in taglists:
+                call_args.append(arg_expr(atype, reg))
+                continue
+            dname = taglists[aname]
+            cap = domains[dname]["max_items"]
+            ident = c_ident(dname)
+            w("        struct TagItem emu_tags_%d[%d];" % (ai, cap + 1))
+            w("        if (emu68k_tags_to_native(guest0, %s, &emu_tagdomain_%s,"
+              % (src, ident))
+            w("                                     emu_tags_%d, %d, err, errlen) < 0)"
+              % (ai, cap + 1))
+            w("            return 1;")
+            call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
+                             % (norm(atype), src, ai))
+        args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
-        if classify(f.ret) == "void":
-            w("        %s;" % call)
+        result_policy = policy.get("result") if policy else None
+        if result_policy:
+            result_arg = result_policy["arg"]
+            result_index = [n for _t, n in f.args].index(result_arg)
+            result_src = reg_expr(f.regs[result_index])
+            w("        APTR emu_result = (APTR)%s;" % call)
+            for line in post:
+                w(line)
+            w("        r->d[0] = emu_result ? %s : 0;" % result_src)
+        elif classify(f.ret) == "void":
+            w("        %s%s;" % ("    " if policy else "", call))
+            for line in post:
+                w(line)
         elif classify(f.ret) == "bptr":
-            w("        r->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
-              % call)
+            w("        %sr->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
+              % ("    " if policy else "", call))
+            for line in post:
+                w(line)
         else:
             note = ""
             if classify(f.ret) == "widen":
                 note = "   /* narrowed: an integer, never an address */"
-            w("        r->d[0] = (ULONG)%s;%s" % (call, note))
-        w("        return 0;")
+            w("        %sr->d[0] = (ULONG)%s;%s" %
+              ("    " if policy else "", call, note))
+            for line in post:
+                w(line)
+        w("        %sreturn 0;" % ("    " if policy else ""))
+        if policy:
+            w("    }")
         n += 1
     w("    }")
-    w("    return 1;   /* not a tier-1 vector of this library */")
+    w("    return 1;   /* no safe generated crossing for this vector */")
     w("}")
     w("")
     return "\n".join(out), n
@@ -588,6 +809,9 @@ HEADER = '''/* GENERATED by graft/gen-emu68k-bridge - do not edit.
 
 #include <exec/types.h>
 #include <dos/dos.h>          /* BPTR, for the handle table below */
+
+struct TagItem;
+struct EmuField;
 
 /* The leading, stable part of the engine's 68k register file. The engine owns
  * the full struct; only these two arrays are contractual here. */
@@ -609,6 +833,37 @@ ULONG emu68k_handle_token(APTR guest0, BPTR b);
 #define EMU_HANDLE(g0, t)  emu68k_handle_bptr((g0), (ULONG)(t))
 #define EMU_TOKEN(g0, b)   emu68k_handle_token((g0), (b))
 
+/* Policy-compiled TagItem values. A domain names every accepted tag and the
+ * type of ti_Data. Unknown/refused tags fail the crossing; they are never
+ * forwarded as if every IPTR were a scalar. */
+#define EMU_TAG_U32     0
+#define EMU_TAG_CSTR    1
+#define EMU_TAG_REFUSE  2
+struct EmuTagDesc
+{
+    ULONG tag;
+    UBYTE kind;
+    const char *name;
+};
+struct EmuTagDomain
+{
+    const struct EmuTagDesc *tags;
+    UWORD count;
+    const char *name;
+};
+LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
+                           const struct EmuTagDomain *domain,
+                           struct TagItem *native_tags, ULONG capacity,
+                           char *err, ULONG errlen);
+
+LONG emu68k_require_guest_range(ULONG guest_addr, ULONG length,
+                                const char *what, char *err, ULONG errlen);
+void emu68k_to_guest(APTR guest0, ULONG gbase, const void *native,
+                     const struct EmuField *fields, int count);
+void emu68k_from_guest(APTR guest0, ULONG gbase, void *native,
+                       const struct EmuField *fields, int count);
+#define EMU_NFIELDS(a) ((int)(sizeof(a) / sizeof((a)[0])))
+
 %s
 #endif /* EMU68K_GEN_H */
 '''
@@ -620,9 +875,16 @@ def emit(outdir, check=False):
     the OS tree builds without python, which makes drift possible: a hand edit
     to a generated file, or a .conf change upstream that nobody regenerated
     for. This is what catches both."""
+    targets = gen_targets()
+    errors = validate_policy(targets)
+    if errors:
+        print("BRIDGE POLICY INVALID:")
+        for e in errors:
+            print("  ! %s" % e)
+        return 1
     protos, total = [], 0
     stale = []
-    for lib, rel, base, btype, hdr in gen_targets():
+    for lib, rel, base, btype, hdr in targets:
         funcs = parse_conf(os.path.join(AROS, rel))
         if funcs is None:
             continue
@@ -637,7 +899,8 @@ def emit(outdir, check=False):
             with open(path, "w") as fh:
                 fh.write(src)
         protos.append("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r,\n"
-                      "                  APTR guest0, APTR base);" % short)
+                      "                  APTR guest0, APTR base,\n"
+                      "                  char *err, ULONG errlen);" % short)
         print("  %-28s %3d crossings" % (os.path.basename(path), n))
         total += n
     hpath = os.path.join(outdir, "emu68k_gen.h")
@@ -702,6 +965,12 @@ def report_all():
 
 
 def main():
+    errors = validate_policy(gen_targets())
+    if errors:
+        print("BRIDGE POLICY INVALID:")
+        for e in errors:
+            print("  ! %s" % e)
+        return 1
     if "--emit" in sys.argv:
         i = sys.argv.index("--emit")
         return emit(sys.argv[i + 1])

@@ -11,8 +11,8 @@
 ;   - RTC_MATCHWORD ($4AFC) whose rt_MatchTag points AT ITSELF (that self-
 ;     reference is what distinguishes a tag from the same two bytes appearing
 ;     in code by accident - $4AFC is the ILLEGAL instruction and turns up)
-;   - rt_Type = NT_LIBRARY (9)
-;   - rt_Init, entered with A0 = seglist, D0 = 0, A6 = SysBase, returning the
+;   - rt_Type = NT_LIBRARY (9), rt_Flags = 0 (direct initialization)
+;   - rt_Init, entered with A0 = seglist, D0 = 0, A4 = 0, A6 = SysBase, returning the
 ;     library base in D0 - a GUEST address, which is the whole point: a native
 ;     base could never be handed to a 68k program
 ;
@@ -27,8 +27,6 @@
 
 RTC_MATCHWORD   equ $4AFC
 NT_LIBRARY      equ 9
-RTF_AUTOINIT    equ $80
-
 ; ---- hunk entry. A library loaded with LoadSeg starts with a MOVEQ #-1 so
 ; that anyone who mistakenly RUNS it exits with an error instead of executing
 ; the resident structure as code. This is the standard first word of every
@@ -42,7 +40,7 @@ romtag:
         dc.w    RTC_MATCHWORD           ; rt_MatchWord
         dc.l    romtag                  ; rt_MatchTag -> ITSELF
         dc.l    endskip                 ; rt_EndSkip
-        dc.b    RTF_AUTOINIT            ; rt_Flags
+        dc.b    0                       ; rt_Flags: rt_Init is executable code
         dc.b    1                       ; rt_Version
         dc.b    NT_LIBRARY              ; rt_Type
         dc.b    0                       ; rt_Pri
@@ -69,8 +67,26 @@ vectors:
         dc.w    0
         jmp     testadd(pc)             ; base-30
         dc.w    0
+        jmp     libreserved(pc)         ; base-24
+        dc.w    0
+        jmp     libexpunge(pc)          ; base-18
+        dc.w    0
+        jmp     libclose(pc)            ; base-12
+        dc.w    0
+        jmp     libopen(pc)             ; base-6
+        dc.w    0
 libbase:
         ds.b    64                      ; a minimal struct Library area
+
+libopen:
+        move.l  a6,d0
+        rts
+
+libclose:
+libexpunge:
+libreserved:
+        moveq   #0,d0
+        rts
 
 testadd:
         add.l   d1,d0
