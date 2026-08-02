@@ -389,6 +389,27 @@ static int j5s_bsun(j5d_sandbox *sb, struct j5d_m68k_state *st, unsigned pred,
     return 0;
 }
 
+/* The 68k BRIEF extension word, shared by the (d8,An,Xn) and (d8,PC,Xn) modes.
+ * The oracle needs these because they are what a compiler emits for a jump
+ * table and for indexed data, and a mode the oracle cannot decode is a mode the
+ * conformance suite cannot check - which is how the PC-indexed bug survived.
+ * Returns the effective address; *ok is 0 for the 68020 FULL format, which is a
+ * different layout and is not decoded here. */
+static uint32_t brief_ea_i(const struct j5d_m68k_state *st, uint16_t ext,
+                           uint32_t base, int *ok)
+{
+    unsigned rn = (ext >> 12) & 7u;
+    uint32_t xn;
+
+    if (ext & 0x0100u) { *ok = 0; return 0; }        /* 68020 full format */
+    *ok = 1;
+    xn = (ext & 0x8000u) ? st->a[rn] : st->d[rn];
+    if (!(ext & 0x0800u))                            /* .W: sign-extend low word */
+        xn = (uint32_t)(int32_t)(int16_t)(uint16_t)xn;
+    xn <<= ((ext >> 9) & 3u);                        /* scale 1/2/4/8 */
+    return base + (uint32_t)(int32_t)(int8_t)(uint8_t)(ext & 0xFFu) + xn;
+}
+
 int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                    struct j5d_m68k_state *st, uint32_t *exit_d0,
                    j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
@@ -1614,6 +1635,13 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                 uint32_t pcbase = pc + (uint32_t)(ext - ip);
                 int16_t d16 = be16s(ext); ext += 2;
                 srcval = mem_rd32(sb, pcbase + (uint32_t)(int32_t)d16, &oob);
+            }
+            else if (src_mode == 7 && src_reg == 3) {  /* (d8,PC,Xn) */
+                uint32_t pcbase = pc + (uint32_t)(ext - ip);
+                int okx; uint32_t a = brief_ea_i(st, be16(ext), pcbase, &okx);
+                ext += 2;
+                if (okx) srcval = mem_rd32(sb, a, &oob);
+                else { handled = 0; srcval = 0; }
             }
             else if (src_mode == 7 && src_reg == 4) {  /* #imm32 */
                 srcval = be32(ext); ext += 4;
