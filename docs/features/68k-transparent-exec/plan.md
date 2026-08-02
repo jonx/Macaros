@@ -392,6 +392,15 @@ Depends: T1; informed continuously by the `T1d` ledger.
     MUST precede its plain counterpart, or it never fires and the symptom is
     identical to not having written it.
 
+  **The PC-relative bug was producing FALSE "needs a full emulator" verdicts,
+  so any recorded before 2026-08-02 is suspect.** `AddText` was routed as
+  needing the Amiga hardware because it "touched the exception vector page
+  $000". It does not: a garbage PC-relative read sent it to a low address and
+  the [T2b] runtime guard faithfully reported what it saw. With the read fixed
+  it runs clean, and the static scanner agrees ("no hardware use found, route:
+  JIT"). When the runtime guard and `scan68k` disagree, believe the scanner and
+  look for a translation bug.
+
   **On measuring this with the corpus:** a sweep is NOT a reliable regression
   signal on its own. Two programs (`ADhelp`, `PPMore`) can hang past the
   wall-clock guard, because a guest blocked inside a *native* call is past the
