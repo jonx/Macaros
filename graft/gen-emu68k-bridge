@@ -522,7 +522,7 @@ def validate_policy(targets):
         df = bykey.get(destructor)
         if not destructor or not df:
             errors.append("object type %s has missing destructor %r" % (name, destructor))
-        elif (classify(df.ret) != "void" or len(df.args) != 1 or
+        elif (classify(df.ret) not in ("void", "scalar") or len(df.args) != 1 or
               object_canon(df.args[0][0]) != object_canon(ctype)):
             errors.append("object type %s destructor %s has incompatible signature"
                           % (name, destructor))
@@ -534,8 +534,8 @@ def validate_policy(targets):
         if not isinstance(cap, int) or cap < 1 or cap > 256:
             errors.append("tag domain %s max_items must be 1..256" % name)
         tags = d.get("tags")
-        if not isinstance(tags, list) or not tags:
-            errors.append("tag domain %s has no tags" % name)
+        if not isinstance(tags, list):
+            errors.append("tag domain %s tags must be a list" % name)
             continue
         seen = set()
         for t in tags:
@@ -559,6 +559,10 @@ def validate_policy(targets):
         taglists = p.get("taglists", {})
         structs = p.get("structs", {})
         objects = p.get("objects", {})
+        callbacks = p.get("callbacks", {})
+        guest_values = p.get("guest_values", [])
+        strings = p.get("strings", [])
+        boopsi = p.get("boopsi")
         args = {n: t for t, n in f.args}
         for arg, domain in taglists.items():
             if arg not in args:
@@ -609,6 +613,35 @@ def validate_policy(targets):
                               % (key, arg))
             if arg in taglists or arg in structs:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, cb in callbacks.items():
+            if arg not in args:
+                errors.append("function policy %s names missing callback %s" % (key, arg))
+            elif "struct Hook" not in args[arg] or "*" not in args[arg]:
+                errors.append("function policy %s callback %s is not struct Hook *"
+                              % (key, arg))
+            if cb.get("kind") != "hook":
+                errors.append("function policy %s callback %s kind must be hook"
+                              % (key, arg))
+            for role in ("object_arg", "message_arg"):
+                if cb.get(role) not in args:
+                    errors.append("function policy %s callback %s has missing %s"
+                                  % (key, arg, role))
+            if arg in taglists or arg in structs or arg in objects:
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
+        if not isinstance(guest_values, list) or any(a not in args for a in guest_values):
+            errors.append("function policy %s has invalid guest_values" % key)
+        else:
+            for arg in guest_values:
+                if classify(args[arg]) != "aptr":
+                    errors.append("function policy %s guest value %s is not APTR"
+                                  % (key, arg))
+        if not isinstance(strings, list) or any(a not in args for a in strings):
+            errors.append("function policy %s has invalid strings" % key)
+        if boopsi:
+            class_arg = boopsi.get("class_arg")
+            if class_arg not in objects or objects[class_arg].get("type") != "Class":
+                errors.append("function policy %s BOOPSI class_arg is not a Class object"
+                              % key)
         result = p.get("result")
         if result:
             if result.get("kind") == "guest_arg":
@@ -631,7 +664,8 @@ def validate_policy(targets):
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
         for t, n in f.args:
-            if n in taglists or n in structs or n in objects:
+            if (n in taglists or n in structs or n in objects or n in callbacks or
+                    n in guest_values or n in strings):
                 continue
             if classify(t) not in ("scalar", "widen", "string", "bptr"):
                 blockers.append("%s %s" % (t, n))
@@ -802,14 +836,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         ident = c_ident(d)
         w("static const struct EmuTagDesc emu_tagdesc_%s[] =" % ident)
         w("{")
-        for tag in domains[d]["tags"]:
+        tags = domains[d]["tags"]
+        for tag in tags:
             w('    { %s, %s, "%s" },' %
               (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
+        if not tags:
+            w("    { 0, EMU_TAG_REFUSE, NULL },")
         w("};")
         w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
         w("{")
-        w('    emu_tagdesc_%s, (UWORD)(sizeof(emu_tagdesc_%s) / sizeof(emu_tagdesc_%s[0])), "%s"'
-          % (ident, ident, ident, d))
+        w('    emu_tagdesc_%s, %d, "%s"' % (ident, len(tags), d))
         w("};")
         w("")
     for oname in used_objects:
@@ -847,10 +883,15 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
+        callbacks = policy.get("callbacks", {}) if policy else {}
+        guest_values = policy.get("guest_values", []) if policy else []
+        strings = policy.get("strings", []) if policy else []
+        boopsi = policy.get("boopsi") if policy else None
         if policy:
             w("    {")
         call_args = []
         post = []
+        precall = []
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
             if aname in objects:
@@ -863,9 +904,27 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                   % (oname, ai))
                 w("            return 1;")
                 call_args.append("(%s)emu_object_%d" % (norm(atype), ai))
+                if boopsi and boopsi.get("class_arg") == aname:
+                    w("        struct Emu68kBoopsiBridge emu_boopsi_%d;" % ai)
+                    precall.extend([
+                        "        if (emu68k_boopsi_prepare(guest0, %s, emu_object_%d," % (src, ai),
+                        "                                   &emu_boopsi_%d, err, errlen) < 0)" % ai,
+                        "            return 1;",
+                    ])
+                    post.append((["if (emu68k_boopsi_finish(&emu_boopsi_%d, err, errlen) < 0)" % ai,
+                                  "    return 1;"], "always"))
                 if op.get("release", False):
                     post.append((["emu68k_object_release(guest0, %s, EMU_OBJ_%s);"
                                   % (src, c_ident(oname))], "always"))
+                continue
+            if aname in callbacks:
+                w("        struct Emu68kHookBridge emu_hook_%d;" % ai)
+                w("        if (emu68k_hook_prepare(guest0, %s, &emu_hook_%d, err, errlen) < 0)"
+                  % (src, ai))
+                w("            return 1;")
+                call_args.append("(%s)&emu_hook_%d.native" % (norm(atype), ai))
+                post.append((["if (emu68k_hook_finish(&emu_hook_%d, err, errlen) < 0)" % ai,
+                              "    return 1;"], "always"))
                 continue
             if aname in structs:
                 sp = structs[aname]
@@ -890,6 +949,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   % (stype, stype)], sp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
                 continue
+            if aname in guest_values:
+                call_args.append("(%s)(IPTR)%s" % (norm(atype), src))
+                continue
+            if aname in strings:
+                call_args.append("(%s)EMU_GPTR(guest0, %s)" % (norm(atype), src))
+                continue
             if aname not in taglists:
                 call_args.append(arg_expr(atype, reg))
                 continue
@@ -904,6 +969,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("            return 1;")
             call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
                              % (norm(atype), src, ai))
+        for line in precall:
+            w(line)
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         result_policy = policy.get("result") if policy else None
@@ -976,9 +1043,32 @@ HEADER = '''/* GENERATED by graft/gen-emu68k-bridge - do not edit.
 
 #include <exec/types.h>
 #include <dos/dos.h>          /* BPTR, for the handle table below */
+#include <utility/hooks.h>
+#include <intuition/classes.h>
 
 struct TagItem;
 struct EmuField;
+
+struct Emu68kHookBridge
+{
+    struct Hook native;
+    APTR state;
+    ULONG guest_hook;
+    ULONG entry;
+    LONG failed;
+    char error[160];
+};
+
+struct Emu68kBoopsiBridge
+{
+    struct Hook saved_dispatcher;
+    APTR native_class;
+    APTR state;
+    ULONG guest_class;
+    ULONG entry;
+    LONG failed;
+    char error[160];
+};
 
 /* The leading, stable part of the engine's 68k register file. The engine owns
  * the full struct; only these two arrays are contractual here. */
@@ -1017,6 +1107,16 @@ LONG emu68k_object_to_guest_facade(APTR guest0, APTR native, UWORD type,
                                    const struct EmuField *fields, int field_count,
                                    ULONG *token, char *err, ULONG errlen);
 void emu68k_object_release(APTR guest0, ULONG token, UWORD type);
+LONG emu68k_hook_prepare(APTR guest0, ULONG guest_hook,
+                         struct Emu68kHookBridge *bridge,
+                         char *err, ULONG errlen);
+LONG emu68k_hook_finish(const struct Emu68kHookBridge *bridge,
+                        char *err, ULONG errlen);
+LONG emu68k_boopsi_prepare(APTR guest0, ULONG guest_class, APTR native_class,
+                           struct Emu68kBoopsiBridge *bridge,
+                           char *err, ULONG errlen);
+LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
+                          char *err, ULONG errlen);
 
 /* Policy-compiled TagItem values. A domain names every accepted tag and the
  * type of ti_Data. Unknown/refused tags fail the crossing; they are never
@@ -1210,7 +1310,8 @@ def main():
             print("      ! %s" % b)
         for f in pub:
             if f.tier(lib)[0] != 1:
-                reasons.setdefault(f.tier(lib)[1], []).append("%s.%s" % (lib.split(".")[0], f.name))
+                reason = f.tier(lib)[1] or "generated semantic policy"
+                reasons.setdefault(reason, []).append("%s.%s" % (lib.split(".")[0], f.name))
 
     print("\ntotal: %d of %d public vectors are tier 1 (%.0f%%)"
           % (total1, total, 100.0 * total1 / max(1, total)))

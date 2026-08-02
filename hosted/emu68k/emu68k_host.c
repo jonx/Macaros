@@ -254,6 +254,8 @@ struct emu68k_run {
     uint32_t              exec_heap_end;
     uint32_t              stack_lower;
     uint32_t              stack_upper;
+    uint32_t              callback_stack_top;
+    uint32_t              poll_quantum;
 };
 
 /* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
@@ -1679,6 +1681,59 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
     return rc;
 }
 
+static j5d_poll_action quantum_poll(void *user);
+
+int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
+                         unsigned long hook, unsigned long object,
+                         unsigned long message, unsigned int *result,
+                         char *err, unsigned errlen)
+{
+    struct j5d_m68k_state st;
+    j5d_sandbox sb;
+    struct bctx c;
+    uint32_t d0 = 0;
+    uint32_t stack;
+
+    if (!r || entry > UINT32_MAX || hook > UINT32_MAX ||
+        object > UINT32_MAX || message > UINT32_MAX)
+    {
+        if (err && errlen) snprintf(err, errlen, "invalid 68k Hook callback context");
+        return 1;
+    }
+    if (!r->callback_stack_top)
+    {
+        stack = guest_alloc(r, 16384);
+        if (!stack)
+        {
+            if (err && errlen) snprintf(err, errlen, "guest memory exhausted for Hook stack");
+            return 1;
+        }
+        r->callback_stack_top = (stack + 16384u) & ~15u;
+    }
+    memset(&st, 0, sizeof st);
+    st.a[0] = (uint32_t)hook;
+    st.a[1] = (uint32_t)message;
+    st.a[2] = (uint32_t)object;
+    st.a[7] = r->callback_stack_top;
+    sb.host_mem = r->sb.host_mem;
+    sb.origin = r->sb.sandbox_origin;
+    sb.size = r->sb.size;
+    c.lib = &r->lib;
+    c.sb = &r->sb;
+    c.run = r;
+    j5d_engine_activate(r->eng);
+    /* A nested callback must complete as part of the native call; yielding it
+     * would strand the native stack. Restore the outer quantum immediately. */
+    j5d_set_poll(NULL, NULL, 0);
+    int rc = j5d_run(&sb, (uint32_t)entry, LIBBASE, &st, &d0,
+                     bridge, &c, err, errlen);
+    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    if (rc != 0)
+        return 1;
+    if (result) *result = d0;
+    return 0;
+}
+
 /* the per-quantum poll: yield when the roundtrip budget is spent, kill when a
  * kill request landed. Registered on the run's own engine instance. */
 static j5d_poll_action quantum_poll(void *user)
@@ -1925,6 +1980,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     {
         uint32_t q = max_roundtrips ? (uint32_t)max_roundtrips : 4096u;
         if (q > 32768u) q = 32768u;
+        r->poll_quantum = q;
         j5d_set_poll(quantum_poll, r, q);
     }
     /* The [J5n] signal net WITHOUT the engine-side diag registration: faults are

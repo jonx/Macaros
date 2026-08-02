@@ -79,6 +79,13 @@ void *emu68k_run_guest0(emu68k_run *r);
  * address, never a host pointer. Serialized by the same caller contract. */
 unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size);
 
+/* Re-enter this run at a guest Hook entry point using the Amiga Hook ABI:
+ * A0=Hook, A2=object, A1=message, result=D0. */
+int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
+                         unsigned long hook, unsigned long object,
+                         unsigned long message, unsigned int *result,
+                         char *err, unsigned errlen);
+
 void emu68k_run_free(emu68k_run *r);
 
 /* Crash-bundle directory for subsequent runs (default: the engine's own). */

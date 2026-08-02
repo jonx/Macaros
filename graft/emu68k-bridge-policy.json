@@ -19,6 +19,19 @@
       "kind": "facade",
       "facade_struct": "DiskObject",
       "destructor": "icon.library.FreeDiskObject"
+    },
+    "Class": {
+      "id": 4,
+      "c_type": "struct IClass *",
+      "kind": "facade",
+      "facade_struct": "IClass",
+      "destructor": "intuition.library.FreeClass"
+    },
+    "Object": {
+      "id": 5,
+      "c_type": "APTR",
+      "kind": "opaque",
+      "destructor": "intuition.library.DisposeObject"
     }
   },
   "tag_domains": {
@@ -74,6 +87,11 @@
         {"name": "ICONDUPA_DuplicateToolWindow", "kind": "u32"},
         {"name": "ICONDUPA_ActivateImageData", "kind": "u32"}
       ]
+    },
+    "intuition.new_object": {
+      "headers": ["intuition/classes.h"],
+      "max_items": 1,
+      "tags": []
     }
   },
   "functions": {
@@ -102,6 +120,32 @@
     "dos.library.Info": {
       "structs": {
         "parameterBlock": {"type": "InfoData", "direction": "out", "copy_on": "nonzero"}
+      }
+    },
+    "utility.library.CallHookPkt": {
+      "callbacks": {
+        "hook": {"kind": "hook", "object_arg": "object", "message_arg": "paramPacket"}
+      },
+      "guest_values": ["object", "paramPacket"]
+    },
+    "intuition.library.MakeClass": {
+      "strings": ["classID", "superClassID"],
+      "objects": {
+        "superClassPtr": {"type": "Class", "nullable": true}
+      },
+      "result": {"kind": "object", "type": "Class"}
+    },
+    "intuition.library.NewObjectA": {
+      "objects": {
+        "classPtr": {"type": "Class", "nullable": false}
+      },
+      "taglists": {"tagList": "intuition.new_object"},
+      "boopsi": {"class_arg": "classPtr"},
+      "result": {"kind": "object", "type": "Object"}
+    },
+    "intuition.library.DisposeObject": {
+      "objects": {
+        "object": {"type": "Object", "nullable": true, "release": true}
       }
     },
     "graphics.library.BestModeIDA": {
