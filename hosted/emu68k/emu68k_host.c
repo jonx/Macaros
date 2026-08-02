@@ -248,6 +248,21 @@ static int classify_hardware(void *fault_addr, void *user)
     else if (guest <= HW_VECTOR_HI)
         snprintf(g_hw_detail, sizeof g_hw_detail,
                  "exception vector page $%03llX", guest);
+    else if (guest < r->sb.sandbox_origin)
+        /* Everything below the arena is reserved and unmapped on purpose: it is
+         * machine address space this sandbox does not provide (ROM, chip RAM
+         * the program did not allocate, the autoconfig area). A program reading
+         * or writing there is ADDRESSING THE MACHINE, which is a routing
+         * verdict - it needs a full emulator - and not a wild pointer.
+         *
+         * Only the vector page and the chip windows were recognised before, so
+         * a memory tool that pokes anywhere else was reported as a crash. That
+         * is the wrong answer twice over: it blames the program for a fault the
+         * sandbox created deliberately, and it hides the one thing worth
+         * knowing, which is that this program wants the real machine. */
+        snprintf(g_hw_detail, sizeof g_hw_detail,
+                 "machine address $%06llX, below the memory this sandbox provides",
+                 guest);
     else
         return 0;                                  /* a genuine wild access     */
     return 1;
