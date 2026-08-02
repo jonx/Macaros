@@ -77,6 +77,244 @@ static void on_alarm(int sig){ (void)sig; g_alarmed = 1;
 
 static int g_fail = 0;
 
+/* PhotoDemo's pgsdemo.library uses the ordinary copied-base spelling
+ *
+ *     movea.l a3,a6
+ *     jsr     -30(a6)
+ *
+ * after keeping dos.library in A3.  A stale A6 here changes dos.Open into
+ * exec.Supervisor: the LVO number is identical and only the base identifies
+ * the library.  Keep this exact pair as a regression at the dispatcher seam. */
+#define EXEC_BASE_TEST 0x00220000u
+#define DOS_BASE_TEST  0x00223000u
+static const uint8_t COPIED_BASE_CALL[] = {
+    0x2c,0x4b,                         /* movea.l a3,a6       */
+    0x4e,0xae,0xff,0xe2,               /* jsr -30(a6), LVO 5 */
+    0x4e,0x75                          /* rts                  */
+};
+
+struct copied_base_seen {
+    unsigned calls;
+    int lvo;
+    uint32_t a3;
+    uint32_t a6;
+};
+
+static int copied_base_bridge(int lvo, struct j5d_m68k_state *st, void *user,
+                              char *err, unsigned errlen)
+{
+    struct copied_base_seen *seen = user;
+    (void)err; (void)errlen;
+    seen->calls++;
+    seen->lvo = lvo;
+    seen->a3 = st->a[3];
+    seen->a6 = st->a[6];
+    st->d[0] = 0x68c00005u;
+    return 0;
+}
+
+static void run_copied_base_call(void)
+{
+    uint8_t *mem = calloc(1, SZ);
+    memcpy(mem, COPIED_BASE_CALL, sizeof COPIED_BASE_CALL);
+    j5d_sandbox sb = { mem, ORG, SZ };
+    struct j5d_m68k_state st; memset(&st, 0, sizeof st);
+    struct copied_base_seen seen; memset(&seen, 0, sizeof seen);
+    uint32_t d0 = 0; char err[200] = {0};
+
+    st.a[3] = DOS_BASE_TEST;
+    j5d_clear_libbases();
+    j5d_register_libbase(EXEC_BASE_TEST);
+    j5d_register_libbase(DOS_BASE_TEST);
+    int rc = j5d_run(&sb, ORG, EXEC_BASE_TEST, &st, &d0,
+                     copied_base_bridge, &seen, err, sizeof err);
+
+    int ok = rc == 0 && seen.calls == 1 && seen.lvo == 5 &&
+             seen.a3 == DOS_BASE_TEST && seen.a6 == DOS_BASE_TEST &&
+             d0 == 0x68c00005u;
+    printf("  copied-base PhotoDemo seam: A3=%08x, bridge A6=%08x, LVO=%d, calls=%u -> %s\n",
+           seen.a3, seen.a6, seen.lvo, seen.calls, ok ? "PASS" : "FAIL");
+    if (rc) printf("    run error: %s\n", err);
+    if (!ok) g_fail = 1;
+
+    j5d_run_free();
+    j5d_clear_libbases();
+    free(mem);
+}
+
+/* exec.Supervisor is a bridge call with an unusual return convention: the
+ * bridge redirects into the caller's 68k routine with S set, and that routine
+ * returns with RTE.  Exercise all three vector spellings the dispatcher accepts
+ * so the saved SR, restored A6 and tail-call stack balance stay one contract. */
+static const uint8_t SUP_DIRECT[] = {
+    0x4b,0xfa,0x00,0x0a,              /* lea supervisor(pc),a5 (off 12) */
+    0x4e,0xae,0xff,0xe2,              /* jsr -30(a6)                    */
+    0x40,0xc1,                         /* move.w sr,d1 (after RTE)       */
+    0x4e,0x75,                         /* rts                            */
+    0x40,0xc0,                         /* supervisor: move.w sr,d0      */
+    0x4e,0x73                          /* rte                            */
+};
+
+static const uint8_t SUP_COPIED[] = {
+    0x26,0x4e,                         /* movea.l a6,a3                  */
+    0x2c,0x7c,0x12,0x34,0x56,0x78,    /* movea.l #$12345678,a6         */
+    0x4b,0xfa,0x00,0x0a,              /* lea supervisor(pc),a5 (off 20) */
+    0x4e,0xab,0xff,0xe2,              /* jsr -30(a3)                    */
+    0x40,0xc1,                         /* move.w sr,d1                   */
+    0x4e,0x75,                         /* rts                            */
+    0x24,0x0e,                         /* supervisor: move.l a6,d2      */
+    0x40,0xc0,                         /* move.w sr,d0                   */
+    0x4e,0x73                          /* rte                            */
+};
+
+static const uint8_t SUP_TAIL[] = {
+    0x4e,0xba,0x00,0x06,              /* jsr wrapper(pc) (off 8)        */
+    0x40,0xc1,                         /* move.w sr,d1 (after RTE)       */
+    0x4e,0x75,                         /* rts                            */
+    0x4b,0xfa,0x00,0x06,              /* wrapper: lea supervisor(pc),a5 */
+    0x4e,0xee,0xff,0xe2,              /* jmp -30(a6)                    */
+    0x40,0xc0,                         /* supervisor: move.w sr,d0      */
+    0x4e,0x73                          /* rte                            */
+};
+
+struct supervisor_seen {
+    unsigned calls;
+    uint32_t bridge_a6;
+};
+
+static int supervisor_bridge(int lvo, struct j5d_m68k_state *st, void *user,
+                             char *err, unsigned errlen)
+{
+    struct supervisor_seen *seen = user;
+    (void)err; (void)errlen;
+    if (lvo != 5 || !st->a[5]) return 1;
+    seen->calls++;
+    seen->bridge_a6 = st->a[6];
+    st->pc = st->a[5];
+    return J5D_LVO_REDIRECT_RTE;
+}
+
+static void run_supervisor_case(const char *name, const uint8_t *code,
+                                size_t code_len, int copied)
+{
+    uint8_t *mem = calloc(1, SZ);
+    memcpy(mem, code, code_len);
+    j5d_sandbox sb = { mem, ORG, SZ };
+    struct j5d_m68k_state st; memset(&st, 0, sizeof st);
+    struct supervisor_seen seen; memset(&seen, 0, sizeof seen);
+    uint32_t d0 = 0; char err[200] = {0};
+    const uint32_t initial_sp = (ORG + SZ) & ~0xFu;
+    const uint16_t caller_sr = 0x0500u | 0x14u; /* I=5, X+Z; user mode */
+    /* The copied-base routine first executes move.l a6,d2, which (correctly)
+     * clears Z before sampling SR.  RTE must still restore the saved caller Z. */
+    const uint16_t supervisor_sr = (caller_sr | 0x2000u) &
+                                   (uint16_t)(copied ? ~0x0004u : 0xffffu);
+
+    st.sr_high = 0x05u;
+    st.ccr = J5D_CCR_X | J5D_CCR_Z;
+    j5d_clear_libbases();
+    j5d_register_libbase(EXEC_BASE_TEST);
+    int rc = j5d_run(&sb, ORG, EXEC_BASE_TEST, &st, &d0,
+                     supervisor_bridge, &seen, err, sizeof err);
+
+    int ok = rc == 0 && seen.calls == 1 && seen.bridge_a6 == EXEC_BASE_TEST &&
+             (uint16_t)st.d[0] == supervisor_sr &&
+             (uint16_t)st.d[1] == caller_sr && st.sr_high == 0x05u &&
+             st.ccr == (J5D_CCR_X | J5D_CCR_Z) && st.a[7] == initial_sp;
+    if (copied)
+        ok = ok && st.a[6] == 0x12345678u && st.d[2] == 0x12345678u;
+    printf("  Supervisor %-11s: in=%04x after=%04x A6=%08x SP=%08x -> %s\n",
+           name, (unsigned)(uint16_t)st.d[0], (unsigned)(uint16_t)st.d[1],
+           st.a[6], st.a[7], ok ? "PASS" : "FAIL");
+    if (rc) printf("    run error: %s\n", err);
+    if (!ok) g_fail = 1;
+
+    j5d_run_free();
+    j5d_clear_libbases();
+    free(mem);
+}
+
+static void run_supervisor_redirects(void)
+{
+    run_supervisor_case("direct", SUP_DIRECT, sizeof SUP_DIRECT, 0);
+    run_supervisor_case("copied-base", SUP_COPIED, sizeof SUP_COPIED, 1);
+    run_supervisor_case("tail wrapper", SUP_TAIL, sizeof SUP_TAIL, 0);
+}
+
+/* DIVS.W must detect quotient overflow without first performing an overflowing
+ * 32-bit C division.  INT32_MIN / -1 is the sharp edge: the 68k sets V and
+ * leaves D0 unchanged, whereas the same expression in int32_t C is undefined. */
+static const uint8_t DIVS_MIN_NEG1[] = {
+    0x81,0xfc,0xff,0xff,            /* divs.w #-1,d0       */
+    0x4e,0x75                       /* rts                  */
+};
+
+static void run_divs_overflow_edge(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    memcpy(mem, DIVS_MIN_NEG1, sizeof DIVS_MIN_NEG1);
+    memcpy(mem2, DIVS_MIN_NEG1, sizeof DIVS_MIN_NEG1);
+    j5d_sandbox sb = { mem, ORG, SZ }, sb2 = { mem2, ORG, SZ };
+    struct j5d_m68k_state jit, ref;
+    uint32_t d0 = 0, rd0 = 0;
+    char err[200] = {0}, e2[200] = {0};
+
+    memset(&jit, 0, sizeof jit);
+    memset(&ref, 0, sizeof ref);
+    jit.d[0] = ref.d[0] = 0x80000000u;
+    jit.ccr = ref.ccr = J5D_CCR_X | J5D_CCR_N | J5D_CCR_Z | J5D_CCR_C;
+    int rc = j5d_run(&sb, ORG, 0, &jit, &d0, NULL, NULL, err, sizeof err);
+    int irc = j5d_interp_run(&sb2, ORG, 0, &ref, &rd0,
+                             NULL, NULL, e2, sizeof e2);
+    int ok = rc == 0 && irc == 0 && d0 == 0x80000000u &&
+             rd0 == d0 && jit.d[0] == d0 && ref.d[0] == d0 &&
+             jit.ccr == (J5D_CCR_X | J5D_CCR_V) && ref.ccr == jit.ccr;
+
+    printf("  DIVS edge INT32_MIN/-1: D0=%08x CCR=%02x oracle=%08x/%02x -> %s\n",
+           d0, jit.ccr, rd0, ref.ccr, ok ? "PASS" : "FAIL");
+    if (rc) printf("    run error: %s\n", err);
+    if (irc) printf("    interp error: %s\n", e2);
+    if (!ok) g_fail = 1;
+    j5d_run_free();
+    free(mem); free(mem2);
+}
+
+/* MOVE writes NZVC but not X.  The hosted SR-mask shim once returned all CCR
+ * bits for every instruction, which made a perfectly ordinary MOVE erase X. */
+static const uint8_t MOVE_PRESERVES_X[] = {
+    0x20,0x3c,0x00,0x00,0x00,0x01,   /* move.l #1,d0         */
+    0x4e,0x75                          /* rts                  */
+};
+
+static void run_move_preserves_x(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    memcpy(mem, MOVE_PRESERVES_X, sizeof MOVE_PRESERVES_X);
+    memcpy(mem2, MOVE_PRESERVES_X, sizeof MOVE_PRESERVES_X);
+    j5d_sandbox sb = { mem, ORG, SZ }, sb2 = { mem2, ORG, SZ };
+    struct j5d_m68k_state jit, ref;
+    uint32_t d0 = 0, rd0 = 0;
+    char err[200] = {0}, e2[200] = {0};
+
+    memset(&jit, 0, sizeof jit);
+    memset(&ref, 0, sizeof ref);
+    jit.ccr = ref.ccr = J5D_CCR_X | J5D_CCR_N | J5D_CCR_Z |
+                          J5D_CCR_V | J5D_CCR_C;
+    int rc = j5d_run(&sb, ORG, 0, &jit, &d0, NULL, NULL, err, sizeof err);
+    int irc = j5d_interp_run(&sb2, ORG, 0, &ref, &rd0,
+                             NULL, NULL, e2, sizeof e2);
+    int ok = rc == 0 && irc == 0 && d0 == 1 && rd0 == d0 &&
+             jit.ccr == J5D_CCR_X && ref.ccr == jit.ccr;
+
+    printf("  MOVE preserves X: D0=%08x CCR=%02x oracle=%08x/%02x -> %s\n",
+           d0, jit.ccr, rd0, ref.ccr, ok ? "PASS" : "FAIL");
+    if (rc) printf("    run error: %s\n", err);
+    if (irc) printf("    interp error: %s\n", e2);
+    if (!ok) g_fail = 1;
+    j5d_run_free();
+    free(mem); free(mem2);
+}
+
 static int eq_regs(const struct j5d_m68k_state *a, const struct j5d_m68k_state *b)
 {
     for (int i = 0; i < 8; i++) if (a->d[i] != b->d[i]) return 0;
@@ -217,6 +455,10 @@ int main(void)
     printf("      are asserted byte-exact vs an independent from-scratch interpreter.\n\n");
 
     run_sumsq();
+    run_copied_base_call();
+    run_supervisor_redirects();
+    run_move_preserves_x();
+    run_divs_overflow_edge();
     neg_corrupt_return();
     neg_wild_computed();
 

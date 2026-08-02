@@ -304,6 +304,16 @@ typedef int (*j5d_lvo_fn)(int lvo, struct j5d_m68k_state *st, void *user,
  * 68k code in one address space. */
 #define J5D_LVO_REDIRECT 2
 
+/* The same, for a routine that returns with RTE rather than RTS.
+ *
+ * exec's Supervisor() is the case: it runs the caller's own routine with the S
+ * bit set, and that routine ends in RTE because on real hardware it was entered
+ * through an exception. There is no supervisor mode to enter here, but the
+ * RETURN is still an RTE, so the frame it pops has to be there. The dispatcher
+ * builds it - a 68000 [SR][PC] frame with S set - because the frame format is
+ * the engine's business and the return address is only known here. */
+#define J5D_LVO_REDIRECT_RTE 3
+
 /* ----- The engine (j5d_engine.c) --------------------------------------------------
  * Run the 68k program from `entry_pc` through the JIT: translate each basic block via
  * the REAL Emu68 decoders into a MAP_JIT region, run it under W^X, then decode the

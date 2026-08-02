@@ -517,6 +517,71 @@ static int brief_ea(const struct j5d_m68k_state *st, uint16_t ext,
     return 0;
 }
 
+/* ---- THE WORD SOURCE OF A DIVIDE ------------------------------------------
+ * DIVU/DIVS are computed in C rather than emitted, so that a zero divisor can
+ * take the 68k exception path. That made the SOURCE this function's problem,
+ * and it started life understanding only the two forms the tests used. A real
+ * compiler emits the rest: a divisor is usually a variable, so it arrives from
+ * a stack frame or a structure, not from a register.
+ *
+ * Every data-addressing mode is decoded here. An (mode 1) is not one: the 68k
+ * does not allow an address register as a divide source, so it is refused
+ * rather than read. Postincrement and predecrement update An, as they must,
+ * which is why this cannot be a pure address computation.
+ *
+ * Returns 0 with the divisor and the address of the next instruction, or 1 if
+ * the mode is one this does not decode - a clean refusal, never a guess. */
+static int div_word_source(j5d_sandbox *sb, struct j5d_m68k_state *st,
+                           uint32_t tpc, uint16_t op,
+                           uint32_t *divisor, uint32_t *after)
+{
+    const uint8_t *ih = sb->host_mem + (tpc - sb->origin);
+    unsigned mode = (op >> 3) & 7u, reg = op & 7u;
+    uint32_t addr;
+    unsigned len = 2;                    /* the opcode word itself */
+
+    switch (mode) {
+    case 0:                                            /* Dn                  */
+        *divisor = st->d[reg] & 0xFFFFu;
+        *after = tpc + 2;
+        return 0;
+    case 2:  addr = st->a[reg];                    break;   /* (An)            */
+    case 3:  addr = st->a[reg]; st->a[reg] += 2;   break;   /* (An)+           */
+    case 4:  st->a[reg] -= 2; addr = st->a[reg];   break;   /* -(An)           */
+    case 5:  addr = st->a[reg] + (uint32_t)(int32_t)be16s(ih + 2);
+             len = 4;                              break;   /* (d16,An)        */
+    case 6:
+        if (brief_ea(st, be16(ih + 2), st->a[reg], &addr)) return 1;
+        len = 4;
+        break;
+    case 7:
+        switch (reg) {
+        case 0: addr = (uint32_t)(int32_t)be16s(ih + 2); len = 4; break; /* (xxx).W */
+        case 1: addr = ((uint32_t)be16(ih + 2) << 16) | be16(ih + 4);
+                len = 6; break;                                          /* (xxx).L */
+        case 2: addr = (tpc + 2u) + (uint32_t)(int32_t)be16s(ih + 2);
+                len = 4; break;                                          /* (d16,PC) */
+        case 3:
+            if (brief_ea(st, be16(ih + 2), tpc + 2u, &addr)) return 1;   /* (d8,PC,Xn) */
+            len = 4;
+            break;
+        case 4:                                                          /* #imm.w  */
+            *divisor = be16(ih + 2);
+            *after = tpc + 4;
+            return 0;
+        default: return 1;
+        }
+        break;
+    default: return 1;                     /* mode 1 (An) is not a divide source */
+    }
+
+    if (addr < sb->origin || (uint64_t)addr + 2 > (uint64_t)sb->origin + sb->size)
+        return 1;
+    *divisor = be16(sb->host_mem + (addr - sb->origin));
+    *after = tpc + len;
+    return 0;
+}
+
 /* ---- PC-RELATIVE SOURCE OPERANDS ------------------------------------------
  * Emu68 computes a PC-relative EA from REG_PC, which on the bare metal is a
  * host pointer into mapped code. In this re-host it is x18 - the one AArch64
@@ -546,6 +611,11 @@ static int has_pcrel_src(uint16_t op)
 
     if (mode != 7u || (reg != 2u && reg != 3u)) return 0;   /* (d16,PC)/(d8,PC,Xn) */
 
+    /* The divides read their own source, PC-relative forms included, because
+     * they are already executed in C for the divide-by-zero vector. Claiming
+     * them here would send them to a helper that does not know how to divide. */
+    if ((op & 0xF1C0u) == 0x80C0u || (op & 0xF1C0u) == 0x81C0u) return 0;
+
     switch (line) {
     case 0x0:                                  /* ORI..CMPI, BTST: low 6 = EA    */
     case 0x1: case 0x2: case 0x3:              /* MOVE.b/.l/.w  : low 6 = src EA */
@@ -558,6 +628,28 @@ static int has_pcrel_src(uint16_t op)
     default:
         return 0;
     }
+}
+
+/* `jsr/jmp (d16,An)` is the library-call spelling where An holds a COPY of the
+ * base: `move.l a6,a0 ; jsr -294(a0)`, which LhA is full of. That makes the
+ * recognition exact - the register either holds a registered library base or it
+ * does not - and exactness matters, because the alternative is asking whether
+ * the TARGET lands somewhere below a base, which every ordinary indirect call
+ * through a nearby pointer also does. One such call in a real program was
+ * turned into a call on a library it never opened, and the program died on a
+ * capability gap for a function it had not asked for.
+ *
+ * The displacement-free forms `jsr/jmp (An)` keep the address test: there the
+ * register holds the target itself, so there is nothing else to ask. */
+static uint32_t libbase_in_reg(const struct j5d_m68k_state *st, unsigned n,
+                               uint32_t entry_base)
+{
+    uint32_t v = st->a[n & 7u];
+    if (!v) return 0;
+    if (v == entry_base && !is_guest_libbase(v)) return v;
+    for (int i = 0; i < g_eng->n_libbase; i++)
+        if (g_eng->libbase[i] == v && !g_eng->libbase_guest[i]) return v;
+    return 0;
 }
 
 static int is_terminator(uint16_t op)
@@ -597,8 +689,8 @@ static int is_terminator(uint16_t op)
     if ((op & 0xFFC0u) == 0x40C0u) return 1;     /* move from SR                   */
     if ((op & 0xFFC0u) == 0x42C0u) return 1;     /* move from CCR                  */
     if ((op & 0xFFC0u) == 0x44C0u) return 1;     /* move to CCR                    */
-    if ((op & 0xFFC0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
-    if ((op & 0xFFC0u) == 0x81C0u) return 1;     /* divs.w  ([J5i] vector 5 on /0) */
+    if ((op & 0xF1C0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
+    if ((op & 0xF1C0u) == 0x81C0u) return 1;     /* divs.w  ([J5i] vector 5 on /0) */
     if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
     if ((op & 0xF0F8u) == 0x50C8u) return 1;     /* [J5u] DBcc Dn,disp16 (decrement-and-branch loop) */
     if ((op & 0xF1FFu) == 0x41F9u) return 1;     /* lea abs.l,An (dispatcher-decoded)*/
@@ -1794,6 +1886,33 @@ static int sp_push(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t value,
     st->a[7] = sp;
     return 0;
 }
+/* The 68000 exception frame an rte pops: [SR.w][PC.l], six bytes, and the S bit
+ * set because that is what the routine believes it was entered with. Written
+ * here rather than by whoever asked for it, so it stays the same shape as the
+ * one rte reads a few hundred lines below. */
+static int push_rte_frame(j5d_sandbox *sb, struct j5d_m68k_state *st,
+                          uint32_t ret_pc, char *errbuf, unsigned errlen)
+{
+    uint32_t sp = st->a[7] - 6u;
+    uint16_t sr;
+    uint8_t *p;
+
+    if (sp < sb->origin || (uint64_t)sp + 6 > (uint64_t)sb->origin + sb->size) {
+        if (errbuf) snprintf(errbuf, errlen, "rte frame push: a7=%08x out of sandbox", sp);
+        return 1;
+    }
+    /* The frame contains the CALLER'S SR.  Only the live state gets S while
+     * the routine runs; rte must restore exactly the mode that called us. */
+    sr = j5d_pack_sr(st);
+    st->sr_high |= 0x20u;                            /* S: supervisor            */
+    p = sb->host_mem + (sp - sb->origin);
+    p[0] = (uint8_t)(sr >> 8);      p[1] = (uint8_t)sr;
+    p[2] = (uint8_t)(ret_pc >> 24); p[3] = (uint8_t)(ret_pc >> 16);
+    p[4] = (uint8_t)(ret_pc >> 8);  p[5] = (uint8_t)ret_pc;
+    st->a[7] = sp;
+    return 0;
+}
+
 static int sp_pop(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t *out,
                   char *errbuf, unsigned errlen)
 {
@@ -1845,12 +1964,14 @@ static int call_vector_by_target(uint32_t target, uint32_t base,
     saved_a6 = st->a[6];
     st->a[6] = base;
     brc = lvo(n, st, user, e2, sizeof e2);
-    if (brc != J5D_LVO_REDIRECT)                 /* a redirect KEEPS the base in
-                                                  * A6: the 68k routine about to
-                                                  * run is the library's own */
+    if (brc != J5D_LVO_REDIRECT)                 /* a normal redirect runs the
+                                                  * library's code and keeps its
+                                                  * A6.  An RTE redirect runs the
+                                                  * caller's Supervisor routine,
+                                                  * so restore the caller's A6. */
         st->a[6] = saved_a6;
 
-    if (brc == J5D_LVO_REDIRECT) return J5D_LVO_REDIRECT;
+    if (brc == J5D_LVO_REDIRECT || brc == J5D_LVO_REDIRECT_RTE) return brc;
     if (brc) {
         if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
         return 1;
@@ -2310,22 +2431,17 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
               J5N_UNHANDLED(J5N_FAULT_ILLEGAL, dt, st, sb, handler); }
             pc = handler;
         }
-        else if ((top & 0xFFC0u) == 0x80C0u || (top & 0xFFC0u) == 0x81C0u) {
+        else if ((top & 0xF1C0u) == 0x80C0u || (top & 0xF1C0u) == 0x81C0u) {
             /* [J5i] divu.w/divs.w — the dispatcher computes the (16-bit) division IN C so
              * a ZERO divisor can vector to 5 (Emu68's decoder would emit a branch into the
              * un-rehosted bare-metal EMIT_Exception/VBR path — a no-op stub here). Only the
              * register-direct + #imm source forms the test uses are decoded; an unsupported
              * EA mode is a clean error, not a silent miss. dst = Dn = (top>>9)&7. */
-            int is_signed = ((top & 0xFFC0u) == 0x81C0u);
+            int is_signed = ((top & 0xF1C0u) == 0x81C0u);
             unsigned dn = (top >> 9) & 7u;
-            unsigned mode = (top >> 3) & 7u, srcreg = top & 7u;
             uint32_t divisor; uint32_t after;
-            if (mode == 0) {                         /* Dm direct */
-                divisor = st->d[srcreg] & 0xFFFFu; after = tpc + 2;
-            } else if (mode == 7 && srcreg == 4) {   /* #imm.w     */
-                divisor = be16(thost + 2);           after = tpc + 4;
-            } else {
-                RFAIL("divu/divs: unsupported source EA (only Dm and #imm.w decoded in C)");
+            if (div_word_source(sb, st, tpc, top, &divisor, &after)) {
+                RFAIL("divu/divs: source EA mode not decoded");
             }
             if (divisor == 0) {                      /* -> vector 5 (group 2: save PC after) */
                 uint32_t handler;
@@ -2343,9 +2459,16 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             } else {
                 uint32_t dividend = st->d[dn];       /* 32-bit dividend */
                 uint32_t quot, rem;
+                int signed_ovf = 0;
                 if (is_signed) {
-                    int32_t q = (int32_t)dividend / (int32_t)(int16_t)divisor;
-                    int32_t r = (int32_t)dividend % (int32_t)(int16_t)divisor;
+                    /* Widen before dividing. INT32_MIN / -1 is undefined in
+                     * 32-bit C, but on a 68k it is simply a quotient overflow:
+                     * V is set and the destination register is retained. */
+                    int64_t q = (int64_t)(int32_t)dividend /
+                                (int64_t)(int16_t)divisor;
+                    int64_t r = (int64_t)(int32_t)dividend %
+                                (int64_t)(int16_t)divisor;
+                    signed_ovf = q < -32768 || q > 32767;
                     quot = (uint32_t)q; rem = (uint32_t)r;
                 } else {
                     quot = dividend / divisor; rem = dividend % divisor;
@@ -2353,8 +2476,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
                 /* result = (remainder.w << 16) | (quotient.w); NZ from the quotient word,
                  * V on quotient overflow (>16 bits), C=0, X unaffected (PRM DIVU/DIVS). */
                 uint32_t cc = st->ccr & J5D_CCR_X;
-                int ovf = is_signed ? ((int32_t)quot < -32768 || (int32_t)quot > 32767)
-                                    : (quot > 0xFFFFu);
+                int ovf = is_signed ? signed_ovf : (quot > 0xFFFFu);
                 if (ovf) {
                     cc |= J5D_CCR_V;                 /* overflow: result undefined, regs kept */
                     st->ccr = cc;
@@ -2389,12 +2511,19 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
              * returns immediately — NO return-stack push (the 68k program never sees a
              * pushed frame for a library vector). */
             int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
-            if (brc && brc != J5D_LVO_REDIRECT) {
-                if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
+            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) {
+                /* The PC is worth the space: a bridge failure names the vector,
+                 * but which of the program's hundred call sites reached it is
+                 * what says whether the call was the one it meant to make. */
+                if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s (at PC %08X, A6=%08X)",
+                                     e2, tpc, st->a[6]);
                 return 1;
             }
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT) {           /* run 68k code for it instead */
+            if (brc == J5D_LVO_REDIRECT_RTE) {       /* ...and it returns with rte  */
+                if (push_rte_frame(sb, st, tpc + 4, errbuf, errlen)) return 1;
+                pc = st->pc;
+            } else if (brc == J5D_LVO_REDIRECT) {    /* run 68k code for it instead */
                 if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
                 g_stats.calls_pushed++;
                 if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
@@ -2404,13 +2533,12 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             }
         }
         else if ((top & 0xFFF8u) == 0x4EA8u &&
-                 libbase_of_target(st->a[top & 7u] +
-                                   (uint32_t)(int32_t)be16s(thost + 2), a6_libbase)) {
+                 libbase_in_reg(st, top & 7u, a6_libbase)) {
             /* [T3] a library vector reached through a register other than A6.
              * The AmigaOS ABI still says the base belongs in A6 for the call, so
              * present it that way to the bridge and restore afterwards. */
             uint32_t target = st->a[top & 7u] + (uint32_t)(int32_t)be16s(thost + 2);
-            uint32_t base = libbase_of_target(target, a6_libbase);
+            uint32_t base = st->a[top & 7u];
             int n = j3_vector_recognise(base, target);
             if (n < 0) RFAIL("jsr(An): target not a valid library vector");
             if (!lvo)  RFAIL("jsr(An): library call but no bridge registered");
@@ -2419,12 +2547,15 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             char e2[160] = {0};
             int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
             if (brc != J5D_LVO_REDIRECT) st->a[6] = saved_a6;
-            if (brc && brc != J5D_LVO_REDIRECT) {
+            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) {
                 if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
                 return 1;
             }
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT) {
+            if (brc == J5D_LVO_REDIRECT_RTE) {
+                if (push_rte_frame(sb, st, tpc + 4, errbuf, errlen)) return 1;
+                pc = st->pc;
+            } else if (brc == J5D_LVO_REDIRECT) {
                 if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
                 g_stats.calls_pushed++;
                 if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
@@ -2434,8 +2565,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             }
         }
         else if ((top & 0xFFF8u) == 0x4EE8u &&
-                 libbase_of_target(st->a[top & 7u] +
-                                   (uint32_t)(int32_t)be16s(thost + 2), a6_libbase)) {
+                 libbase_in_reg(st, top & 7u, a6_libbase)) {
             /* jmp (d16,An) onto a vector: the tail-call spelling of jsr (d16,An),
              * emitted for a one-line wrapper that just forwards to the library.
              * MUST precede the plain jmp (d16,An) case below, which would
@@ -2443,10 +2573,18 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             uint32_t target = st->a[top & 7u] + (uint32_t)(int32_t)be16s(thost + 2);
             uint32_t ret;
             int brc;
-            if ((brc = call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+            if ((brc = call_vector_by_target(target, st->a[top & 7u],
                                       st, lvo, user, "jmp(d16,An)", errbuf, errlen)) != 0) {
-                if (brc != J5D_LVO_REDIRECT) return 1;
+                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
                 g_stats.lib_calls++;
+                if (brc == J5D_LVO_REDIRECT_RTE) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(d16,An): Supervisor tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    if (push_rte_frame(sb, st, ret, errbuf, errlen)) return 1;
+                }
                 pc = st->pc;                         /* tail call: no push, no pop */
                 continue;
             }
@@ -2512,9 +2650,12 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int brc = call_vector_by_target(target,
                                             libbase_of_target(target, a6_libbase),
                                             st, lvo, user, "jsr(An)", errbuf, errlen);
-            if (brc && brc != J5D_LVO_REDIRECT) return 1;
+            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT) {
+            if (brc == J5D_LVO_REDIRECT_RTE) {
+                if (push_rte_frame(sb, st, tpc + 2, errbuf, errlen)) return 1;
+                pc = st->pc;
+            } else if (brc == J5D_LVO_REDIRECT) {
                 if (sp_push(sb, st, tpc + 2, errbuf, errlen)) return 1;
                 g_stats.calls_pushed++;
                 if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
@@ -2532,8 +2673,16 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int brc;
             if ((brc = call_vector_by_target(target, libbase_of_target(target, a6_libbase),
                                       st, lvo, user, "jmp(An)", errbuf, errlen)) != 0) {
-                if (brc != J5D_LVO_REDIRECT) return 1;
+                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
                 g_stats.lib_calls++;
+                if (brc == J5D_LVO_REDIRECT_RTE) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(An): Supervisor tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    if (push_rte_frame(sb, st, ret, errbuf, errlen)) return 1;
+                }
                 pc = st->pc;                         /* tail call: no push, no pop */
                 continue;
             }

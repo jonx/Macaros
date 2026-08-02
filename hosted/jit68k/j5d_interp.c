@@ -596,26 +596,64 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             if (iraise(sb, st, J5I_VEC_ILLEGAL, pc, &h, errbuf, errlen)) return 1;
             pc = h; continue;
         }
-        if ((op & 0xFFC0u) == 0x80C0u || (op & 0xFFC0u) == 0x81C0u) { /* divu.w/divs.w */
-            int is_signed = ((op & 0xFFC0u) == 0x81C0u);
+        if ((op & 0xF1C0u) == 0x80C0u || (op & 0xF1C0u) == 0x81C0u) { /* divu.w/divs.w */
+            int is_signed = ((op & 0xF1C0u) == 0x81C0u);
             unsigned dn = (op >> 9) & 7u, mode = (op >> 3) & 7u, srcreg = op & 7u;
             uint32_t divisor; uint32_t after;
+            /* Every data-addressing mode, so this can actually CHECK the JIT's
+             * own divide-source decoding rather than reporting it unchecked.
+             * An (mode 1) is not a legal divide source and stays refused. */
+            uint32_t addr = 0; unsigned len = 2; int have_addr = 0, oob = 0, okx;
             if (mode == 0)                  { divisor = st->d[srcreg] & 0xFFFFu; after = pc + 2; }
             else if (mode == 7 && srcreg==4){ divisor = be16(ip + 2);           after = pc + 4; }
-            else IFAIL("divu/divs: unsupported source EA in oracle");
+            else {
+                switch (mode) {
+                case 2: addr = st->a[srcreg]; have_addr = 1; break;
+                case 3: addr = st->a[srcreg]; st->a[srcreg] += 2; have_addr = 1; break;
+                case 4: st->a[srcreg] -= 2; addr = st->a[srcreg]; have_addr = 1; break;
+                case 5: addr = st->a[srcreg] + (uint32_t)(int32_t)be16s(ip + 2);
+                        len = 4; have_addr = 1; break;
+                case 6: addr = brief_ea_i(st, be16(ip + 2), st->a[srcreg], &okx);
+                        if (!okx) IFAIL("divu/divs: 68020 full extension in oracle");
+                        len = 4; have_addr = 1; break;
+                case 7:
+                    switch (srcreg) {
+                    case 0: addr = (uint32_t)(int32_t)be16s(ip + 2); len = 4; have_addr = 1; break;
+                    case 1: addr = ((uint32_t)be16(ip + 2) << 16) | be16(ip + 4);
+                            len = 6; have_addr = 1; break;
+                    case 2: addr = (pc + 2u) + (uint32_t)(int32_t)be16s(ip + 2);
+                            len = 4; have_addr = 1; break;
+                    case 3: addr = brief_ea_i(st, be16(ip + 2), pc + 2u, &okx);
+                            if (!okx) IFAIL("divu/divs: 68020 full extension in oracle");
+                            len = 4; have_addr = 1; break;
+                    default: break;
+                    }
+                    break;
+                default: break;
+                }
+                if (!have_addr) IFAIL("divu/divs: unsupported source EA in oracle");
+                divisor = mem_rd16(sb, addr, &oob);
+                if (oob) IFAIL("divu/divs: source outside the sandbox");
+                after = pc + len;
+            }
             if (divisor == 0) {
                 uint32_t h;
                 if (iraise(sb, st, J5I_VEC_DIV_BY_ZERO, after, &h, errbuf, errlen)) return 1;
                 pc = h; continue;
             }
             uint32_t dividend = st->d[dn], quot, rem;
+            int signed_ovf = 0;
             if (is_signed) {
-                quot = (uint32_t)((int32_t)dividend / (int32_t)(int16_t)divisor);
-                rem  = (uint32_t)((int32_t)dividend % (int32_t)(int16_t)divisor);
+                int64_t q = (int64_t)(int32_t)dividend /
+                            (int64_t)(int16_t)divisor;
+                int64_t r = (int64_t)(int32_t)dividend %
+                            (int64_t)(int16_t)divisor;
+                signed_ovf = q < -32768 || q > 32767;
+                quot = (uint32_t)q;
+                rem = (uint32_t)r;
             } else { quot = dividend / divisor; rem = dividend % divisor; }
             uint32_t cc = st->ccr & J5D_CCR_X;
-            int ovf = is_signed ? ((int32_t)quot < -32768 || (int32_t)quot > 32767)
-                                : (quot > 0xFFFFu);
+            int ovf = is_signed ? signed_ovf : (quot > 0xFFFFu);
             if (ovf) { st->ccr = cc | J5D_CCR_V; }
             else {
                 st->d[dn] = ((rem & 0xFFFFu) << 16) | (quot & 0xFFFFu);

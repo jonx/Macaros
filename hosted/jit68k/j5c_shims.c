@@ -17,10 +17,10 @@
  *   the PC helpers EMIT_AdvancePC / EMIT_FlushPC / EMIT_GetOffsetPC / EMIT_ResetOffsetPC
  *           — minimal REG_PC bookkeeping (our register block never reads PC, so these
  *           just keep _pc_rel and emit the same add/sub REG_PC the real translator would).
- *   M68K_GetSRMask  — returns SR_CCR (all five CCR bits "set by this opcode"), the
- *           CONSERVATIVE answer that makes every decoder take its full-flag-compute path.
- *           This deliberately severs the M68k_SR.c coupling (which would drag in all 16
- *           GetSR_LineX + M68K_GetLineXLength + M68K_IsBranch). Correct, just not optimal.
+ *   M68K_GetSRMask  — returns the current opcode's architectural flag-write mask from
+ *           the linked GetSR_LineX decoder metadata.  This materialises every flag the
+ *           instruction changes while preserving flags it does not (notably MOVE's X).
+ *           It still severs the M68k_SR.c look-ahead/length/branch-analysis coupling.
  *   SR_GetEALength  — extension-word count for an EA (our block is register-direct => 0;
  *           the few non-reg modes we never reach are handled conservatively).
  *   EMIT_Exception / EMIT_InjectDebugString  — no-op-ish stubs (only reached on the
@@ -138,10 +138,39 @@ uint32_t *EMIT_GetOffsetPC(uint32_t *ptr, int8_t *offset)
 uint32_t *EMIT_ResetOffsetPC(uint32_t *ptr) { _pc_rel = 0; return ptr; }
 
 /* ===================================================================================
- * M68K_GetSRMask — conservative "this opcode sets all CCR bits". Forces every decoder
- * onto its full-flag path and severs the M68k_SR.c all-16-lines coupling.
+ * M68K_GetSRMask — the original runtime scans forward and can omit flag work whose
+ * result is overwritten before anybody reads it.  Hosted correctness does not need
+ * that optimisation: ask the current line's decoder metadata which flags this opcode
+ * architecturally sets and materialise all of them.  Returning SR_CCR here used to look
+ * conservative, but was not: it made MOVE clear X even though MOVE only sets NZVC.
+ *
+ * Lines 6/A/F are not translated through a decoder that calls this shim in the hosted
+ * engine.  Preserve all flags for them (mask zero), which is the fail-safe behaviour if
+ * that boundary changes later.
  * =================================================================================== */
-uint8_t M68K_GetSRMask(uint16_t *m68k_stream) { (void)m68k_stream; return SR_CCR; }
+uint8_t M68K_GetSRMask(uint16_t *m68k_stream)
+{
+    uint16_t opcode = cache_read_16(ICACHE, (uint32_t)(uintptr_t)m68k_stream);
+    uint32_t sr;
+
+    switch (opcode >> 12) {
+    case 0x0: sr = GetSR_Line0(opcode); break;
+    case 0x1: sr = GetSR_Line1(opcode); break;
+    case 0x2: sr = GetSR_Line2(opcode); break;
+    case 0x3: sr = GetSR_Line3(opcode); break;
+    case 0x4: sr = GetSR_Line4(opcode); break;
+    case 0x5: sr = GetSR_Line5(opcode); break;
+    case 0x7: sr = GetSR_Line7(opcode); break;
+    case 0x8: sr = GetSR_Line8(opcode); break;
+    case 0x9: sr = GetSR_Line9(opcode); break;
+    case 0xb: sr = GetSR_LineB(opcode); break;
+    case 0xc: sr = GetSR_LineC(opcode); break;
+    case 0xd: sr = GetSR_LineD(opcode); break;
+    case 0xe: sr = GetSR_LineE(opcode); break;
+    default: return 0;
+    }
+    return (uint8_t)(sr & SR_CCR);
+}
 
 /* SR_GetEALength — extension words for an EA. Our richer block is register-direct
  * (modes 0/1 => 0 ext words). Non-reg modes are not reached; return 0 conservatively
