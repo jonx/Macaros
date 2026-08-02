@@ -277,13 +277,32 @@ Depends: T1; informed continuously by the `T1d` ledger.
   | 2 | a structure, a BPTR, an untyped APTR | one description per **TYPE**, shared by every function using it |
   | 3 | the callee retains the pointer, or calls back into the guest | hand-written, always |
 
-  Tier 1 is only ~16% of the public vectors, and it is concentrated where
-  console programs live (dos 18%) rather than in the GUI libraries (graphics
-  5%), whose surface is `struct RastPort *` and `struct Window *`. The
-  leverage is therefore tier 2, and it is measurable: 43 vectors want
-  `RastPort`, 30 want `Window`, 35 dos vectors want only the BPTR handle
-  mapping that already exists. Six type descriptions would outrun everything
-  hand-writing has produced.
+  `--report-all` classifies **every** `.conf` in the tree, which is what sizes
+  the remaining work honestly: **175 libraries, 2069 public vectors, of which
+  309 (15%) are tier 1**. The other 1760 are blocked by **283 distinct types**,
+  but those concentrate hard, and that is the whole finding:
+
+  | rank | type | vectors blocked | cumulative |
+  |---|---|---|---|
+  | 1 | `struct TagItem *` | 250 | 250 |
+  | 2 | `void *` | 102 | 352 |
+  | 3 | `struct RastPort *` | 98 | 450 |
+  | 4 | `struct Window *` | 93 | 543 |
+  | 5 | BPTR (the handle table, which already exists) | 78 | 621 |
+  | … | … | … | |
+  | 20 | `struct BitMap *` | 25 | **1093 of 1760** |
+
+  So the remaining work is **a list of types, not a list of functions**: twenty
+  descriptions cover 62% of everything left. `TagItem` is both the largest
+  lever and the hardest, because a tag's VALUE type depends on its tag ID, so
+  it needs the per-tag kind table of `[T3c]` rather than a layout alone.
+  `struct Hook *` (28) is the callback class, `[T3d]`.
+
+  Code is emitted for the 20 application-facing libraries (99 crossings); the
+  rest are classified but not compiled, since nothing links the bridge against
+  HIDDs and internal modules. Adding a library is one name on `GEN_LIBS`: the
+  base name and type come from its generated proto header, whose presence is
+  also the test for whether it can be compiled against at all.
 
   Three lessons the first slice paid for, all of them the same shape (a
   signature that lies):
@@ -315,6 +334,27 @@ Depends: T1; informed continuously by the `T1d` ledger.
   Until it exists, a self-modifying program that calls it stops with a
   classified gap, which is the right failure: no-oping it would let the JIT run
   stale translations of code the program has already rewritten, silently.
+
+  **A vector is not always reached as `jsr -N(a6)`, and missing one is
+  SILENT.** A program copies the base to another register, hoists the vector
+  address out of a loop (`lea -216(a2),a3` … `jsr (a3)`), or tail-calls the
+  vector (`jmp -138(a0)`). The offset is gone by the time the instruction
+  executes, so the only way left to recognise it is from the address it lands
+  on, which is what `libbase_of_target` does. That was wired into
+  `jsr (d16,An)` only; `jsr (An)`, `jmp (An)` and `jmp (d16,An)` fell through
+  to the plain computed-jump handlers, jumped into the library base region, and
+  the decoder translated structure bytes until the runaway guard fired. The
+  reported address (`@pc=00220f28` for lha) is `DOSBase - 216`, which looks like
+  nothing until you know the base. All four forms now reach the bridge; the
+  `jmp` ones are tail calls, so they resume at the return address on the stack.
+
+  Two lessons worth keeping:
+  - **"block decode guard tripped" never means a missing instruction.** It is a
+    runaway: >4000 instructions with no terminator, i.e. the decoder is walking
+    data. Look for where control flow left the program, not for an opcode.
+  - **Case order in the dispatcher is load-bearing.** Each libbase-checking case
+    MUST precede its plain counterpart, or it never fires and the symptom is
+    identical to not having written it.
 
   **On measuring this with the corpus:** a sweep is NOT a reliable regression
   signal on its own. Two programs (`ADhelp`, `PPMore`) can hang past the
