@@ -348,6 +348,42 @@ Depends: T1; informed continuously by the `T1d` ledger.
   nothing until you know the base. All four forms now reach the bridge; the
   `jmp` ones are tail calls, so they resume at the return address on the stack.
 
+  **PC-RELATIVE DATA ACCESS was broken outright, and x18 is why.** Emu68
+  computes a PC-relative EA from `REG_PC`, which is **x18** (`emu68/A64.h`) -
+  the one AArch64 register Darwin reserves. It is never seeded, and the 68k file
+  already occupies x12..x29 (x12 base_adjust, x13-x17 A0-A4, x19-x26 D0-D7,
+  x27-x29 A5-A7) with nothing free to move it to. So emitted code for a
+  PC-relative access read from a garbage base.
+
+  This was *partly* handled, one form at a time (`lea (d16,pc),An`,
+  `jsr/jmp (d16,PC)`, FP immediates), chosen from what the test corpus used. It
+  missed the ordinary case: a **data** access through a PC-relative EA, which is
+  how position-independent code (every Amiga executable) reads its constants and
+  jump tables. Two instructions expose it:
+
+      move.w tbl(pc),d1        faulted
+      move.w tbl(pc,d0.w),d2   faulted
+
+  `has_pcrel_src()` now ends the block on the whole class and
+  `j5d_exec_pcrel()` executes the instruction in C, where the 68k PC is exact:
+  MOVE/MOVEA, LEA, PEA, TST, and CMP/ADD/SUB/AND/OR into Dn. Anything else fails
+  **by name**. Only opcode families whose low six bits are genuinely a source EA
+  are eligible; in lines 5/6/7/A/E that pattern is a Bcc displacement, a MOVEQ
+  immediate or a register shift's type-plus-register.
+
+  The follow-up, if PC-relative code ever shows up hot in a profile: extend the
+  darwinize rewrite pass to rewrite the `REG_PC`-based EA sites the way it
+  already rewrites the `(An)` ones, so they compute `sandbox_base + 68k PC`.
+  That restores full JIT speed and needs a spare register, which today there
+  is not.
+
+  **A guest's dos calls raise the OS's own requesters.** A path the guest cannot
+  resolve produced the usual "please insert volume" requester, and the run
+  blocked inside a native call forever - past where the wall-clock guard can
+  reach, so it presented as a silent hang with an empty log. `emu68k_runseg.c`
+  sets `pr_WindowPtr = -1` for the duration (restored on every exit path). This
+  is very likely the same class as the `ADhelp`/`PPMore` hangs.
+
   Two lessons worth keeping:
   - **"block decode guard tripped" never means a missing instruction.** It is a
     runaway: >4000 instructions with no terminator, i.e. the decoder is walking
