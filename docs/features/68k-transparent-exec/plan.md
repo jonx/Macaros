@@ -268,6 +268,8 @@ extracts byte-exact under `make hosted-emu68k-t3lha`.
 | piece | state |
 |---|---|
 | tier 2b generation from the field tables | first production slice built: generated `DateStamp` IN/OUT shadows and guest-argument pointer result mapping; broaden to more value structures and proxies |
+| structures with structures in them | done: the layout tool flattens nested records to their leaf scalars (taking one member per union, since the members are the same bytes), converts arrays of scalars element by element, and refuses to emit a row whose believed width would reach into the next field. `struct Preferences` crosses whole and is compared against a native oracle |
+| a size argument as a bound | done: a `size_arg` in the policy clamps the crossing to the bytes the caller asked for, on the range check as well as the copy. An element that would cross the bound is not written at all, and an array fills as far as it reaches |
 | the policy schema (per-type class) | schema v1 built and checked; two TagItem domains plus DateStamp direction/result policy compiled, broader domain/object/callback coverage remains |
 | broad integer conformance | shifts, bit operations, MULS/DIVU and unary operations covered; continue from the conformance ledger |
 

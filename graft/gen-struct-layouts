@@ -41,6 +41,7 @@ HEADERS = [
     "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
     "graphics/regions.h", "graphics/rastport.h",
+    "intuition/preferences.h",
 ]
 
 TYPES = [
@@ -48,7 +49,7 @@ TYPES = [
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
-    "Window", "RastPort",
+    "Window", "RastPort", "Preferences",
 ]
 
 # Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
@@ -65,10 +66,22 @@ KNOWN_M68K = {
     "Hook":          (20, {"h_Entry": 8, "h_SubEntry": 12, "h_Data": 16}),
     "Window":        (156, {"LeftEdge": 4, "TopEdge": 6, "Width": 8,
                               "Height": 10, "RPort": 50, "UserPort": 86}),
+    # GetPrefs is a raw CopyMem on the native side, so the guest's idea of this
+    # layout has to be right to the byte. The nested timeval and the pointer
+    # sprite are named here because they are what the flattening and the array
+    # support exist for.
+    "Preferences":   (232, {"FontHeight": 0, "KeyRptSpeed_tv_secs": 4,
+                            "DoubleClick_tv_micro": 24, "PointerMatrix": 28,
+                            "XOffset": 100, "EnableCLI": 124,
+                            "PrinterType": 126, "ext_size": 231}),
 }
 
-LAYOUT_RE = re.compile(r"^\s*(\d+) \| (struct|union) (\w+)$")
-FIELD_RE = re.compile(r"^\s*(\d+) \|   (.+?) (\w+)(\[\d+\])?$")
+# clang indents by two spaces per nesting level, after a single space that even
+# the outermost record carries, so the indent is what says whether a line is the
+# record itself, one of its fields, or a field of a field.
+LINE_RE = re.compile(r"^\s*(\d+) \|(\s+)(.*?)\s*$")
+RECORD_RE = re.compile(r"^(struct|union) (\w+)$")
+NAME_RE = re.compile(r"^(.*\S)\s+(\w+)$")
 SIZE_RE = re.compile(r"^\s*\| \[sizeof=(\d+), align=(\d+)\]$")
 
 
@@ -102,31 +115,116 @@ def resolve(records, name):
     return None, None
 
 
+def split_field(text):
+    """A dumped field line is `<type> <name>`, with the array brackets on the
+    TYPE (`UWORD[36] PointerMatrix`). An anonymous struct or union member has no
+    name at all, which is exactly how `struct timeval`'s two unions appear."""
+    m = NAME_RE.match(text)
+    return (m.group(1), m.group(2)) if m else (text, None)
+
+
+def tree(entries):
+    """The flat (depth, offset, text) lines back into the nesting they describe."""
+    root = []
+    stack = [(0, root)]
+    for depth, off, text in entries:
+        while stack[-1][0] >= depth:
+            stack.pop()
+        ftype, fname = split_field(text)
+        node = {"off": off, "type": ftype, "name": fname, "kids": []}
+        stack[-1][1].append(node)
+        stack.append((depth, node["kids"]))
+    return root
+
+
+def leaves(nodes, prefix, out, in_union):
+    """Flatten to the scalars a marshaller can actually act on.
+
+    A nested structure is not a field, it is a place where more fields live, so
+    `KeyRptSpeed` yields `KeyRptSpeed_tv_secs` and `KeyRptSpeed_tv_micro`. Both
+    targets flatten by the same rule, so the paths line up and the two layouts
+    stay comparable.
+
+    Only the FIRST member of a union is taken: the members are the same bytes,
+    and emitting them all would convert those bytes once per member. struct
+    timeval is two anonymous unions, so without this every timestamp field in
+    the system would be converted twice."""
+    for i, n in enumerate(nodes):
+        if in_union and i > 0:
+            break
+        path = prefix + (n["name"],) if n["name"] else prefix
+        # An ARRAY of structures is dumped as one element layout, so descending
+        # would convert element 0 and silently drop the rest. It stays whole and
+        # is reported as unconverted.
+        if n["kids"] and not ARRAY_RE.match(n["type"]):
+            leaves(n["kids"], path, out, n["type"].startswith("union"))
+        elif path:
+            out.append(("_".join(path), n["off"], n["type"]))
+
+
 def parse(text):
-    """-> {name: {'size': n, 'align': n, 'fields': [(name, offset, typetext)]}}"""
-    out, cur = {}, None
-    for line in text.splitlines():
-        m = LAYOUT_RE.match(line)
-        if m:
-            cur = {"size": None, "align": None, "fields": []}
-            out[m.group(3)] = cur
-            continue
+    """-> {name: {'size': n, 'align': n, 'fields': [(path, offset, typetext)]}}"""
+    out, cur, entries = {}, None, []
+
+    def close(size=None, align=None):
         if cur is None:
-            continue
+            return
+        flat = []
+        leaves(tree(entries), (), flat, False)
+        cur["fields"] = flat
+        cur["size"], cur["align"] = size, align
+
+    for line in text.splitlines():
         m = SIZE_RE.match(line)
         if m:
-            cur["size"], cur["align"] = int(m.group(1)), int(m.group(2))
-            cur = None
+            close(int(m.group(1)), int(m.group(2)))
+            cur, entries = None, []
             continue
-        m = FIELD_RE.match(line)
-        if m:
-            nm = m.group(3) + (m.group(4) or "")
-            cur["fields"].append((m.group(3), int(m.group(1)),
-                                  m.group(2).strip() + (m.group(4) or "")))
+        m = LINE_RE.match(line)
+        if not m:
+            continue
+        depth = (len(m.group(2)) - 1) // 2
+        if depth == 0:                       # the record this dump is about
+            close()
+            cur, entries = {"size": None, "align": None, "fields": []}, []
+            r = RECORD_RE.match(m.group(3))
+            if r:
+                out[r.group(2)] = cur
+        elif cur is not None:
+            entries.append((depth, int(m.group(1)), m.group(3)))
+    close()
     return out
 
 
-def selfcheck(m68k):
+def overlaps(records, native):
+    """No field may be believed wider than the distance to the next one.
+
+    A width comes from a table of type spellings, and a table can be wrong about
+    a spelling (BOOL was), which does not fail loudly: it makes a conversion
+    write over the following field. The record dump already says where the next
+    field starts, so the claim is checkable against the compiler itself, for
+    every type, without knowing which one is wrong."""
+    bad = []
+    for t in TYPES:
+        rn, r = resolve(records, t)
+        if not r:
+            continue
+        rows = sorted(r["fields"], key=lambda x: x[1])
+        for i, (f, o, ty) in enumerate(rows):
+            k = field_kind(t, f, ty, ty)
+            if k is None:
+                continue
+            width = (k[2] if native else k[1]) * k[3]
+            limit = rows[i + 1][1] if i + 1 < len(rows) else r["size"]
+            if limit is not None and o + width > limit:
+                bad.append("%s %s.%s (%s) is taken for %d bytes at %d, but the "
+                           "next field starts at %d"
+                           % ("native" if native else "m68k", t, f, ty,
+                              width, o, limit))
+    return bad
+
+
+def selfcheck(m68k, native):
     bad = []
     for name, (size, fields) in KNOWN_M68K.items():
         _rn, r = resolve(m68k, name)
@@ -141,7 +239,7 @@ def selfcheck(m68k):
             if got.get(f) != o:
                 bad.append("%s.%s: at %s, the AmigaOS ABI says %d"
                            % (name, f, got.get(f), o))
-    return bad
+    return bad + overlaps(m68k, False) + overlaps(native, True)
 
 
 # Scalar spelling -> width.  Guest and native types are inspected separately:
@@ -151,9 +249,14 @@ def selfcheck(m68k):
 WIDTHS = {
     "UBYTE": 1, "BYTE": 1, "char": 1, "TEXT": 1,
     "unsigned char": 1, "signed char": 1,
-    "UWORD": 2, "WORD": 2, "short": 2, "unsigned short": 2,
+    # BOOL is `short`, not `int`: AmigaOS sized it 16 bits and AROS keeps that.
+    # Taking it for 4 wrote over whatever followed it - in struct Preferences,
+    # EnableCLI at 124 would have flattened PrinterType at 126. The overlap
+    # self-check below is the general form of this, and does not need the
+    # spelling of every type to be known in advance.
+    "UWORD": 2, "WORD": 2, "short": 2, "unsigned short": 2, "BOOL": 2,
     "LONG": 4, "ULONG": 4, "int": 4, "unsigned int": 4,
-    "BOOL": 4, "LONGBITS": 4, "ULONGBITS": 4,
+    "LONGBITS": 4, "ULONGBITS": 4,
     "QUAD": 8, "UQUAD": 8, "long long": 8, "unsigned long long": 8,
 }
 
@@ -165,8 +268,8 @@ POINTER_SIZED = {"IPTR", "SIPTR", "APTR", "BPTR", "Tag", "STRPTR",
 # field stays out of the generic table until it has an explicit policy.
 OPAQUE_SCALAR_FIELDS = {
     ("FileInfoBlock", "fib_DiskKey"),
-    ("AnchorPath", "fib_DiskKey"),
-    ("AChain", "fib_DiskKey"),
+    ("AnchorPath", "ap_Info_fib_DiskKey"),
+    ("AChain", "an_Info_fib_DiskKey"),
     ("InfoData", "id_InUse"),
 }
 
@@ -184,17 +287,30 @@ def scalar_width(typetext, native):
 
 def field_kind(struct_name, field_name, guest_type, native_type):
     """-> (kind, guest_width, native_width, count) or None when the field is
-    something this cannot convert and must not pretend to."""
+    something this cannot convert and must not pretend to. The widths are of
+    ONE element; count says how many there are."""
     gt, nt = guest_type.strip(), native_type.strip()
     m = ARRAY_RE.match(gt)
     if m:
         base, n = m.group(1).strip(), int(m.group(2))
         if base in ("UBYTE", "char", "TEXT", "BYTE", "unsigned char"):
-            return ("BYTES", n, n, n)       # a string or a blob: no byte order
+            return ("BYTES", 1, 1, n)       # a string or a blob: no byte order
         nm = ARRAY_RE.match(nt)
+        nbase = nm.group(1).strip() if nm else ""
+        # An array of pointer-sized elements is refused for the same reason a
+        # pointer field is: the values may be guest addresses, and rebasing one
+        # is a decision, not a width.
+        if (base in POINTER_SIZED or nbase in POINTER_SIZED or
+                base.endswith("*") or nbase.endswith("*")):
+            return None
         gw = scalar_width(base, False)
-        nw = scalar_width(nm.group(1).strip(), True) if nm else None
-        return ("ARRAY", gw, nw, n) if gw and nw else None
+        nw = scalar_width(nbase, True) if nm else None
+        if not gw or not nw or int(nm.group(2)) != n:
+            return None
+        # An array of scalars is n scalars, each one byte-swapped. Skipping it
+        # left the guest reading whatever was in its buffer before the call -
+        # for GetPrefs that was the whole 72-byte pointer sprite.
+        return ("ARRAY", gw, nw, n)
     pointer_like = (gt in POINTER_SIZED or nt in POINTER_SIZED or
                     gt.endswith("*") or nt.endswith("*"))
     if pointer_like and (struct_name, field_name) not in OPAQUE_SCALAR_FIELDS:
@@ -224,8 +340,9 @@ HEAD = """/* GENERATED by graft/gen-struct-layouts - do not edit.
 struct EmuField
 {
     unsigned short g_off, n_off;   /* offset in the guest / native structure  */
-    unsigned char  g_w, n_w;       /* width on each side (a guest LONG is 4,
-                                    * a native IPTR is 8)                     */
+    unsigned short count;          /* elements: 1 for a scalar, n for an array */
+    unsigned char  g_w, n_w;       /* width of ONE element on each side (a
+                                    * guest LONG is 4, a native IPTR is 8)    */
     unsigned char  kind;
 };
 
@@ -256,6 +373,7 @@ def emit(m68k, native, out):
     L.append(" * a whole structure, so no per-structure C is written by hand. */")
     L.append("#define EMU_F_SCALAR 0   /* byte-swapped, narrowed to the guest width */")
     L.append("#define EMU_F_BYTES  1   /* copied verbatim: no byte order to change  */")
+    L.append("#define EMU_F_ARRAY  2   /* count scalars, each one byte-swapped       */")
     L.append("")
     for t in TYPES:
         an, a = resolve(m68k, t)
@@ -270,12 +388,13 @@ def emit(m68k, native, out):
                 continue
             no, nty = nb[f]
             k = field_kind(t, f, ty, nty)
-            if k is None or k[0] in ("PTR", "ARRAY"):
+            if k is None or k[0] == "PTR":
                 skipped.append("%s (%s)" % (f, ty))
                 continue
-            kind = "EMU_F_BYTES" if k[0] == "BYTES" else "EMU_F_SCALAR"
-            rows.append("    { %4d, %4d, %d, %d, %s },   /* %-20s %s */"
-                        % (o, no, k[1], k[2], kind, f, ty))
+            kind = {"BYTES": "EMU_F_BYTES", "ARRAY": "EMU_F_ARRAY"}.get(
+                k[0], "EMU_F_SCALAR")
+            rows.append("    { %4d, %4d, %4d, %d, %d, %s },   /* %-24s %s */"
+                        % (o, no, k[3], k[1], k[2], kind, f, ty))
         if not rows:
             continue
         L.append("static const struct EmuField emu_fields_%s[] = {" % t)
@@ -305,7 +424,7 @@ def main():
     m68k = dump("m68k-unknown-elf", ["-fpack-struct=2"])
     native = dump("aarch64-unknown-aros", [])
 
-    bad = selfcheck(m68k)
+    bad = selfcheck(m68k, native)
     if bad:
         print("SELF-CHECK FAILED - the m68k probe is not producing AmigaOS "
               "layouts, so nothing here can be trusted:")

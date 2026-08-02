@@ -55,7 +55,15 @@ done
   echo 'CD MacRW:corpus'
   echo 'Echo "=== CORPUS ===" >MacRW:corpus-out.txt'
   [ -n "$CORPUS_BEFORE" ] && printf '%s\n' "$CORPUS_BEFORE"
-  [ -n "$CORPUS_ORACLE" ] && echo "$CORPUS_ORACLE <NIL: >>MacRW:corpus-out.txt"
+  # one native oracle per line, `\n`-separated so a caller can pass several on a
+  # single line: a sweep often needs to compare what the guest saw against what
+  # the same call answers natively, and more than one crossing can be under test
+  # in a single boot
+  if [ -n "$CORPUS_ORACLE" ]; then
+    printf '%b\n' "$CORPUS_ORACLE" | while IFS= read -r oracle; do
+      [ -n "$oracle" ] && echo "$oracle <NIL: >>MacRW:corpus-out.txt"
+    done
+  fi
   while IFS='|' read -r label display b; do
     [ -n "$label" ] || continue
     echo "CD MacRW:$SUB/$label.d"

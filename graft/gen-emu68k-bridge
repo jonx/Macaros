@@ -167,6 +167,17 @@ WIDENING = {"IPTR", "SIPTR", "APTR_or_IPTR"}
 # directly. This is the only pointer class that is safe to forward as-is.
 STRING = {"STRPTR", "CONST_STRPTR", "CONST_STRPTR_or_NULL"}
 
+# How wide the guest's own value is when a scalar argument says how many bytes
+# of a structure the caller wants touched. The register is 32 bits either way;
+# this is the width the 68k program believes it passed.
+SIZE_WIDTHS = {
+    "BYTE": 1, "UBYTE": 1,
+    "WORD": 2, "UWORD": 2,
+    "LONG": 4, "ULONG": 4, "int": 4, "unsigned int": 4,
+    "LONGBITS": 4, "ULONGBITS": 4, "IPTR": 4, "SIPTR": 4,
+}
+SIZE_CASTS = {1: "(ULONG)(UBYTE)", 2: "(ULONG)(UWORD)", 4: "(ULONG)"}
+
 POINTER_SCALARS = {
     "u8":  ({"UBYTE"}, 1),
     "s8":  ({"BYTE"}, 1),
@@ -603,6 +614,17 @@ def validate_policy(targets):
             elif copy_on == "nonzero" and classify(f.ret) not in ("scalar", "widen"):
                 errors.append("function policy %s struct %s copy_on nonzero needs scalar result"
                               % (key, arg))
+            size_arg = sp.get("size_arg")
+            if size_arg is not None:
+                if size_arg not in args:
+                    errors.append("function policy %s struct %s names missing size argument %s"
+                                  % (key, arg, size_arg))
+                elif norm(args[size_arg]) not in SIZE_WIDTHS:
+                    errors.append("function policy %s size argument %s is %s, not a scalar count"
+                                  % (key, size_arg, norm(args[size_arg])))
+                if size_arg == arg:
+                    errors.append("function policy %s struct %s cannot be its own size"
+                                  % (key, arg))
             if arg in taglists:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, pp in pointers.items():
@@ -941,6 +963,24 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         call_args = []
         post = []
         precall = []
+        # A "how much of this structure do you want" argument is clamped before
+        # anything else: it bounds the guest range check as well as the copy, so
+        # it cannot be computed inside the block that already needs it. The
+        # clamped value is what the native call is told too, so a short buffer
+        # stays short on both sides of the crossing.
+        size_limits, size_args = {}, {}
+        for sname, sp in structs.items():
+            if "size_arg" not in sp:
+                continue
+            si = [n for _t, n in f.args].index(sp["size_arg"])
+            width = SIZE_WIDTHS[norm(f.args[si][0])]
+            var = "emu_limit_%d" % si
+            w("        ULONG %s = %s%s;"
+              % (var, SIZE_CASTS[width], reg_expr(f.regs[si])))
+            w("        if (%s > M68K_%s_SIZEOF) %s = M68K_%s_SIZEOF;"
+              % (var, sp["type"], var, sp["type"]))
+            size_limits[sname] = var
+            size_args[sp["size_arg"]] = var
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
             if aname in objects:
@@ -981,25 +1021,27 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             if aname in structs:
                 sp = structs[aname]
                 stype, direction = sp["type"], sp["direction"]
+                span = size_limits.get(aname, "M68K_%s_SIZEOF" % stype)
                 w("        struct %s emu_struct_%d;" % (stype, ai))
-                w("        if (emu68k_require_guest_range(%s, M68K_%s_SIZEOF,"
-                  % (src, stype))
+                w("        if (emu68k_require_guest_range(%s, %s," % (src, span))
                 w('                                         "%s.%s", err, errlen) < 0)'
                   % (f.name, aname))
                 w("            return 1;")
                 w("        memset(&emu_struct_%d, 0, sizeof(emu_struct_%d));" % (ai, ai))
                 if direction in ("in", "inout"):
-                    w("        emu68k_from_guest(guest0, %s, &emu_struct_%d,"
+                    w("        emu68k_from_guest_sized(guest0, %s, &emu_struct_%d,"
                       % (src, ai))
-                    w("                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s));"
-                      % (stype, stype))
+                    w("                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
+                      % (stype, stype, span))
                 if direction in ("out", "inout"):
-                    post.append((["memset(EMU_GPTR(guest0, %s), 0, M68K_%s_SIZEOF);"
-                                  % (src, stype),
-                                  "emu68k_to_guest(guest0, %s, &emu_struct_%d," % (src, ai),
-                                  "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s));"
-                                  % (stype, stype)], sp.get("copy_on", "always")))
+                    post.append((["memset(EMU_GPTR(guest0, %s), 0, %s);" % (src, span),
+                                  "emu68k_to_guest_sized(guest0, %s, &emu_struct_%d," % (src, ai),
+                                  "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
+                                  % (stype, stype, span)], sp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
+                continue
+            if aname in size_args:
+                call_args.append("(%s)%s" % (norm(atype), size_args[aname]))
                 continue
             if aname in pointers:
                 pp = pointers[aname]
@@ -1222,6 +1264,13 @@ void emu68k_to_guest(APTR guest0, ULONG gbase, const void *native,
                      const struct EmuField *fields, int count);
 void emu68k_from_guest(APTR guest0, ULONG gbase, void *native,
                        const struct EmuField *fields, int count);
+/* The same conversions bounded by how much of the GUEST structure the caller
+ * asked for; a field straddling the bound is left alone rather than clipped. */
+#define EMU_NO_LIMIT 0xffffffffUL
+void emu68k_to_guest_sized(APTR guest0, ULONG gbase, const void *native,
+                           const struct EmuField *fields, int count, ULONG limit);
+void emu68k_from_guest_sized(APTR guest0, ULONG gbase, void *native,
+                             const struct EmuField *fields, int count, ULONG limit);
 #define EMU_NFIELDS(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 %s

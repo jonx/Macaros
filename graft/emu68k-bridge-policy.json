@@ -170,6 +170,18 @@
       },
       "guest_values": ["object", "paramPacket"]
     },
+    "intuition.library.GetPrefs": {
+      "structs": {
+        "prefbuffer": {"type": "Preferences", "direction": "out", "size_arg": "size"}
+      },
+      "result": {"kind": "guest_arg", "arg": "prefbuffer"}
+    },
+    "intuition.library.GetDefPrefs": {
+      "structs": {
+        "prefbuffer": {"type": "Preferences", "direction": "out", "size_arg": "size"}
+      },
+      "result": {"kind": "guest_arg", "arg": "prefbuffer"}
+    },
     "intuition.library.MakeClass": {
       "strings": ["classID", "superClassID"],
       "objects": {
