@@ -204,13 +204,47 @@ int main(void)
         printf("[J4]   NEGATIVE CONTROL load failed: %s\n", err);
     }
 
+    /* ---------- DOS LoadSeg shape: guest BPTR chain + relocated payloads ---------- */
+    j4_sandbox sb3;
+    j4_sandbox_init(&sb3, host_mem, SANDBOX_ORIGIN, SANDBOX_SIZE);
+    j4_seglist seg3;
+    uint32_t seg_bptr = 0;
+    int bptr_ok = 0, atomic_ok = 0;
+    if (j4_load_hunks_bptr(&sb3, bin, binlen, &seg3, &seg_bptr,
+                           err, sizeof err) == 0) {
+        uint32_t node0 = seg_bptr << 2;
+        uint32_t node1 = seg3.hunk_base[1] - 4u;
+        bptr_ok = node0 == seg3.hunk_base[0] - 4u &&
+                  sandbox_be32(&sb3, node0) == (node1 >> 2) &&
+                  sandbox_be32(&sb3, node1) == 0 &&
+                  seg3.entry == node0 + 4u &&
+                  sandbox_be32(&sb3, seg3.hunk_base[1]) ==
+                      seg3.hunk_base[0] + DATA_ADDEND;
+
+        /* A bad follow-on LoadSeg must neither leak the bump cursor nor leave
+         * a partly published BPTR. */
+        uint32_t mark = sb3.next_alloc, bad_bptr = 0xfeedfaceu;
+        uint8_t bad[sizeof bin]; memcpy(bad, bin, binlen); bad[3] ^= 1u;
+        j4_seglist badseg;
+        atomic_ok = j4_load_hunks_bptr(&sb3, bad, binlen, &badseg, &bad_bptr,
+                                       err, sizeof err) != 0 &&
+                    sb3.next_alloc == mark && bad_bptr == 0;
+        printf("[J4]   BPTR SEGCHAIN: seg=%08x node0=%08x next=%08x node1=%08x "
+               "entry=%08x -> %s; failed load atomic=%s\n",
+               seg_bptr, node0, sandbox_be32(&sb3, node0), node1, seg3.entry,
+               bptr_ok ? "MATCH" : "MISMATCH", atomic_ok ? "YES" : "NO");
+    } else {
+        printf("[J4]   BPTR SEGCHAIN load failed: %s\n", err);
+    }
+
     free(host_mem);
 
-    int ok = reloc_ok && d0_ok && ctl_ok;
+    int ok = reloc_ok && d0_ok && ctl_ok && bptr_ok && atomic_ok;
     if (ok) {
         printf("[J4] PASS: load -> relocate -> sandbox -> translate -> run -> return proven for a real "
                "register-only 68k hunk binary. Relocated DATA[0]=0x%08X (byte-exact big-endian) and the "
-               "executed entry returned d0=%u; negative control (skip reloc) is correctly wrong.\n",
+               "executed entry returned d0=%u; negative control (skip reloc) is correctly wrong; "
+               "the guest BPTR chain and failure-atomic loader are exact.\n",
                got_ptr, exit_d0);
     } else {
         printf("[J4] FAIL: %s%s%s\n",

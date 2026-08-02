@@ -80,9 +80,9 @@ static uint32_t sandbox_alloc(j4_sandbox *sb, uint32_t bytes)
 }
 
 /* ----- The loader -------------------------------------------------------------- */
-int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
-                  int skip_reloc, j4_seglist *seglist,
-                  char *errbuf, unsigned errlen)
+static int load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
+                      int skip_reloc, uint32_t prefix,
+                      j4_seglist *seglist, char *errbuf, unsigned errlen)
 {
 #define FAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg)); return 1; } while (0)
 
@@ -125,9 +125,12 @@ int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
         uint32_t longs = v & 0x00FFFFFFu;       /* :179 lcount &= 0xFFFFFF */
         uint32_t bytes = longs * 4u;            /* :180 bytes = lcount*4   */
 
-        uint32_t base = sandbox_alloc(sb, bytes ? bytes : 16u);
+        uint32_t payload = bytes ? bytes : 16u;
+        if (payload > UINT32_MAX - prefix)
+            FAIL("hunk allocation size overflow");
+        uint32_t base = sandbox_alloc(sb, payload + prefix);
         if (base == 0) FAIL("sandbox out of memory for hunk");
-        seglist->hunk_base[i] = base;
+        seglist->hunk_base[i] = base + prefix;
         seglist->hunk_size[i] = bytes;
         seglist->hunk_type[i] = 0;              /* set when the payload arrives */
     }
@@ -272,4 +275,40 @@ int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
     if (!seen_code) FAIL("no HUNK_CODE found (no entry)");
     return 0;
 #undef FAIL
+}
+
+int j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
+                  int skip_reloc, j4_seglist *seglist,
+                  char *errbuf, unsigned errlen)
+{
+    return load_hunks(sb, buf, len, skip_reloc, 0, seglist, errbuf, errlen);
+}
+
+int j4_load_hunks_bptr(j4_sandbox *sb, const uint8_t *buf, size_t len,
+                       j4_seglist *seglist, uint32_t *seglist_bptr,
+                       char *errbuf, unsigned errlen)
+{
+    uint32_t mark;
+
+    if (!sb || !seglist || !seglist_bptr) {
+        if (errbuf) snprintf(errbuf, errlen, "invalid BPTR hunk-load arguments");
+        return 1;
+    }
+    mark = sb->next_alloc;
+    *seglist_bptr = 0;
+    if (load_hunks(sb, buf, len, 0, 4u, seglist, errbuf, errlen)) {
+        if (sb->next_alloc > mark)
+            memset(j4_sandbox_host(sb, mark), 0, sb->next_alloc - mark);
+        sb->next_alloc = mark;
+        return 1;
+    }
+
+    for (int i = 0; i < seglist->numhunks; i++) {
+        uint32_t node = seglist->hunk_base[i] - 4u;
+        uint32_t next = (i + 1 < seglist->numhunks)
+                      ? (seglist->hunk_base[i + 1] - 4u) >> 2 : 0;
+        sb_write_be32(j4_sandbox_host(sb, node), next);
+    }
+    *seglist_bptr = (seglist->hunk_base[0] - 4u) >> 2;
+    return 0;
 }

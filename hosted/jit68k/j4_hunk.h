@@ -127,6 +127,14 @@ int  j4_load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
                    int skip_reloc, j4_seglist *seglist,
                    char *errbuf, unsigned errlen);
 
+/* Load the same image in the classic AmigaDOS in-guest segment shape.  Each
+ * hunk allocation is `[next BPTR][payload]`; relocations still name the payload
+ * address, and *seglist_bptr is the BPTR of the first link word.  This is the
+ * representation a 68k caller of dos.LoadSeg can inspect and pass to UnLoadSeg. */
+int  j4_load_hunks_bptr(j4_sandbox *sb, const uint8_t *buf, size_t len,
+                        j4_seglist *seglist, uint32_t *seglist_bptr,
+                        char *errbuf, unsigned errlen);
+
 /* ----- The 68k machine state at the run boundary (OURS layout) -----------------
  * Same shape as the [J2]/[J3] state; the JITed entry block reads/writes it via
  * 32-bit ldr/str against a base pointer, so field offsets are load-bearing. */
