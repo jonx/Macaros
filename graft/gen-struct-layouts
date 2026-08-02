@@ -39,7 +39,8 @@ CLANG = os.environ.get("AROS_CLANG",
 HEADERS = [
     "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
     "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
-    "workbench/workbench.h", "intuition/classes.h", "graphics/regions.h",
+    "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
+    "graphics/regions.h", "graphics/rastport.h",
 ]
 
 TYPES = [
@@ -47,6 +48,7 @@ TYPES = [
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
+    "Window", "RastPort",
 ]
 
 # Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
@@ -61,6 +63,8 @@ KNOWN_M68K = {
                             "fib_FileName": 8, "fib_Protection": 116,
                             "fib_Size": 124, "fib_NumBlocks": 128}),
     "Hook":          (20, {"h_Entry": 8, "h_SubEntry": 12, "h_Data": 16}),
+    "Window":        (156, {"LeftEdge": 4, "TopEdge": 6, "Width": 8,
+                              "Height": 10, "RPort": 50, "UserPort": 86}),
 }
 
 LAYOUT_RE = re.compile(r"^\s*(\d+) \| (struct|union) (\w+)$")
