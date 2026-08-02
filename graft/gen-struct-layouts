@@ -41,7 +41,7 @@ HEADERS = [
     "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
     "graphics/regions.h", "graphics/rastport.h", "graphics/gfx.h",
-    "graphics/text.h",
+    "graphics/text.h", "graphics/displayinfo.h",
     "intuition/preferences.h",
 ]
 
@@ -52,6 +52,7 @@ TYPES = [
     "Rectangle",
     "Window", "RastPort", "Preferences", "BitMap",
     "TextAttr", "TextFont",
+    "DimensionInfo",
 ]
 
 # NOT here, and the reason matters for every structure added after this one:
@@ -94,6 +95,11 @@ KNOWN_M68K = {
                             "tf_Baseline": 26, "tf_CharData": 34,
                             "tf_Modulo": 38, "tf_CharLoc": 40,
                             "tf_CharSpace": 44, "tf_CharKern": 48}),
+    "DimensionInfo": (88, {"Header_StructID": 0, "Header_DisplayID": 4,
+                            "MaxDepth": 16, "Nominal_MinX": 26,
+                            "MaxOScan_MinX": 34, "VideoOScan_MinX": 42,
+                            "TxtOScan_MinX": 50, "StdOScan_MinX": 58,
+                            "pad": 66, "reserved": 80}),
 }
 
 # clang indents by two spaces per nesting level, after a single space that even

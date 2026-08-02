@@ -341,6 +341,21 @@
     "graphics.library.FindDisplayInfo": {
       "result": {"kind": "object", "type": "DisplayInfoHandle", "owned": false}
     },
+    "graphics.library.GetDisplayInfoData": {
+      "objects": {
+        "handle": {"type": "DisplayInfoHandle", "nullable": true}
+      },
+      "tagged_structs": {
+        "buf": {
+          "direction": "out",
+          "tag_arg": "tagID",
+          "size_arg": "size",
+          "header": "graphics/displayinfo.h",
+          "variants": {"DTAG_DIMS": "DimensionInfo"},
+          "copy_on": "nonzero"
+        }
+      }
+    },
     "graphics.library.InitRastPort": {
       "structs": {
         "rp": {"type": "RastPort", "direction": "out"}

@@ -595,6 +595,7 @@ def validate_policy(targets):
             errors.append("function policy %s names a private vector" % key)
         taglists = p.get("taglists", {})
         structs = p.get("structs", {})
+        tagged_structs = p.get("tagged_structs", {})
         objects = p.get("objects", {})
         callbacks = p.get("callbacks", {})
         pointers = p.get("pointers", {})
@@ -645,6 +646,50 @@ def validate_policy(targets):
                     errors.append("function policy %s struct %s cannot be its own size"
                                   % (key, arg))
             if arg in taglists:
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, sp in tagged_structs.items():
+            tag_arg, size_arg = sp.get("tag_arg"), sp.get("size_arg")
+            variants = sp.get("variants")
+            if arg not in args:
+                errors.append("function policy %s names missing tagged buffer %s" % (key, arg))
+            elif "*" not in args[arg]:
+                errors.append("function policy %s tagged buffer %s is not a pointer" % (key, arg))
+            if tag_arg not in args or (tag_arg in args and
+                                       norm(args[tag_arg]) not in SIZE_WIDTHS):
+                errors.append("function policy %s tagged buffer %s has invalid tag argument %r"
+                              % (key, arg, tag_arg))
+            if size_arg not in args or (size_arg in args and
+                                        norm(args[size_arg]) not in SIZE_WIDTHS):
+                errors.append("function policy %s tagged buffer %s has invalid size argument %r"
+                              % (key, arg, size_arg))
+            if sp.get("direction") != "out":
+                errors.append("function policy %s tagged buffer %s currently requires direction out"
+                              % (key, arg))
+            if not isinstance(variants, dict) or not variants:
+                errors.append("function policy %s tagged buffer %s needs variants"
+                              % (key, arg))
+            else:
+                for macro, stype in variants.items():
+                    if (not re.fullmatch(r"[A-Za-z_]\w*", macro) or
+                            not isinstance(stype, str) or
+                            not re.fullmatch(r"[A-Za-z_]\w*", stype)):
+                        errors.append("function policy %s tagged buffer %s has invalid variant %r"
+                                      % (key, arg, macro))
+            header = sp.get("header")
+            if not isinstance(header, str) or not re.fullmatch(r"[A-Za-z0-9_./-]+\.h", header):
+                errors.append("function policy %s tagged buffer %s needs a valid header"
+                              % (key, arg))
+            if sp.get("clear", True) not in (True, False):
+                errors.append("function policy %s tagged buffer %s clear must be boolean"
+                              % (key, arg))
+            copy_on = sp.get("copy_on", "always")
+            if copy_on not in ("always", "nonzero"):
+                errors.append("function policy %s tagged buffer %s has invalid copy_on %r"
+                              % (key, arg, copy_on))
+            elif copy_on == "nonzero" and classify(f.ret) not in ("scalar", "widen"):
+                errors.append("function policy %s tagged buffer %s copy_on nonzero needs scalar result"
+                              % (key, arg))
+            if arg in taglists or arg in structs or arg in objects or arg in pointers:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, pp in pointers.items():
             kind, direction = pp.get("kind"), pp.get("direction")
@@ -890,6 +935,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     object_types = POLICY.get("object_types", {})
     used_domains = []
     used_objects = []
+    used_headers = []
     for f in funcs:
         p = function_policy(lib, f)
         if not p:
@@ -897,6 +943,9 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         for d in p.get("taglists", {}).values():
             if d not in used_domains:
                 used_domains.append(d)
+        for sp in p.get("tagged_structs", {}).values():
+            if sp.get("header") not in used_headers:
+                used_headers.append(sp.get("header"))
         for op in p.get("objects", {}).values():
             if op.get("type") not in used_objects:
                 used_objects.append(op.get("type"))
@@ -904,7 +953,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         if result.get("kind") == "object" and result.get("type") not in used_objects:
             used_objects.append(result.get("type"))
     uses_structs = (any(function_policy(lib, f) and
-                        function_policy(lib, f).get("structs") for f in funcs) or
+                        (function_policy(lib, f).get("structs") or
+                         function_policy(lib, f).get("tagged_structs")) for f in funcs) or
                     any(object_types[o].get("kind") == "facade" for o in used_objects) or
                     any(t.get("kind") == "struct"
                         for d in used_domains for t in domains[d]["tags"]))
@@ -937,6 +987,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     w("#include <%s>" % hdr)
     if uses_structs:
         w("#include <string.h>")
+    if used_headers:
+        w("#include <stdio.h>")
+    for h in used_headers:
+        w("#include <%s>" % h)
     for d in used_domains:
         for h in domains[d].get("headers", []):
             w("#include <%s>" % h)
@@ -1002,6 +1056,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                                       norm(f.ret), f.offset))
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
+        tagged_structs = policy.get("tagged_structs", {}) if policy else {}
         pointers = policy.get("pointers", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
         callbacks = policy.get("callbacks", {}) if policy else {}
@@ -1031,6 +1086,60 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
               % (var, sp["type"], var, sp["type"]))
             size_limits[sname] = var
             size_args[sp["size_arg"]] = var
+        tagged_size_args = {}
+        for bname, sp in tagged_structs.items():
+            bi = [n for _t, n in f.args].index(bname)
+            ti = [n for _t, n in f.args].index(sp["tag_arg"])
+            si = [n for _t, n in f.args].index(sp["size_arg"])
+            bsrc = reg_expr(f.regs[bi])
+            tsrc = reg_expr(f.regs[ti])
+            ssrc = reg_expr(f.regs[si])
+            for stype in sp["variants"].values():
+                w("        struct %s emu_tagged_%d_%s;" % (stype, bi, stype))
+            w("        APTR emu_tagged_native_%d = NULL;" % bi)
+            w("        const struct EmuField *emu_tagged_fields_%d = NULL;" % bi)
+            w("        ULONG emu_tagged_nfields_%d = 0;" % bi)
+            w("        ULONG emu_tagged_native_size_%d = 0;" % bi)
+            w("        ULONG emu_tagged_guest_size_%d = 0;" % bi)
+            w("        switch ((ULONG)%s)" % tsrc)
+            w("        {")
+            for macro, stype in sp["variants"].items():
+                w("        case %s:" % macro)
+                w("            memset(&emu_tagged_%d_%s, 0, sizeof(emu_tagged_%d_%s));"
+                  % (bi, stype, bi, stype))
+                w("            emu_tagged_native_%d = &emu_tagged_%d_%s;"
+                  % (bi, bi, stype))
+                w("            emu_tagged_fields_%d = emu_fields_%s;" % (bi, stype))
+                w("            emu_tagged_nfields_%d = EMU_NFIELDS(emu_fields_%s);"
+                  % (bi, stype))
+                w("            emu_tagged_native_size_%d = sizeof(struct %s);" % (bi, stype))
+                w("            emu_tagged_guest_size_%d = M68K_%s_SIZEOF;" % (bi, stype))
+                w("            break;")
+            w("        default:")
+            w("            if (err && errlen)")
+            w('                snprintf(err, errlen, "%s.%s: unsupported tag %%08lx",'
+              % (f.name, bname))
+            w("                         (unsigned long)%s);" % tsrc)
+            w("            return 1;")
+            w("        }")
+            w("        ULONG emu_tagged_limit_%d = (ULONG)%s;" % (bi, ssrc))
+            w("        if (emu_tagged_limit_%d > emu_tagged_guest_size_%d)"
+              % (bi, bi))
+            w("            emu_tagged_limit_%d = emu_tagged_guest_size_%d;" % (bi, bi))
+            w("        if (emu68k_require_guest_range(%s, emu_tagged_limit_%d," % (bsrc, bi))
+            w('                                         "%s.%s", err, errlen) < 0)'
+              % (f.name, bname))
+            w("            return 1;")
+            lines = []
+            if sp.get("clear", True):
+                lines.append("memset(EMU_GPTR(guest0, %s), 0, emu_tagged_limit_%d);"
+                             % (bsrc, bi))
+            lines += ["emu68k_to_guest_sized(guest0, %s, emu_tagged_native_%d," % (bsrc, bi),
+                      "                   emu_tagged_fields_%d, emu_tagged_nfields_%d, emu_tagged_limit_%d);"
+                      % (bi, bi, bi),
+                      "r->d[0] = emu_tagged_limit_%d;" % bi]
+            post.append((lines, sp.get("copy_on", "always")))
+            tagged_size_args[sp["size_arg"]] = "emu_tagged_native_size_%d" % bi
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
             if classify(atype) == "double":
@@ -1103,6 +1212,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                               % (stype, stype, span)]
                     post.append((lines, sp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
+                continue
+            if aname in tagged_structs:
+                call_args.append("(%s)emu_tagged_native_%d" % (norm(atype), ai))
+                continue
+            if aname in tagged_size_args:
+                call_args.append("(%s)%s" % (norm(atype), tagged_size_args[aname]))
                 continue
             if aname in size_args:
                 call_args.append("(%s)%s" % (norm(atype), size_args[aname]))
