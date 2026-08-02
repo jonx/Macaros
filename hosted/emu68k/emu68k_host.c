@@ -886,7 +886,12 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
              * addresses it cannot dereference. */
             if (!strcmp(r->openlib[i].name, "dos.library")) {
                 if (lvo == 133) return rda_readargs(r, c->sb, st, e, el);
-                if (lvo == 134) { st->d[0] = 0; return 0; }   /* FreeArgs        */
+                /* FreeArgs is LVO 143 (-858). 134 is FindArg, and having it
+                 * here meant FindArg was answered as if it were FreeArgs while
+                 * FreeArgs itself fell through as a capability gap. Nothing to
+                 * free on this side: the RDArgs and its results live in the
+                 * guest, allocated by rda_readargs above. */
+                if (lvo == 143) { st->d[0] = 0; return 0; }   /* FreeArgs        */
                 if (lvo == 22) {                              /* IoErr           */
                     st->d[0] = r->last_ioerr; return 0;
                 }
