@@ -488,6 +488,49 @@ static int brief_ea(const struct j5d_m68k_state *st, uint16_t ext,
     return 0;
 }
 
+/* ---- PC-RELATIVE SOURCE OPERANDS ------------------------------------------
+ * Emu68 computes a PC-relative EA from REG_PC, which on the bare metal is a
+ * host pointer into mapped code. In this re-host it is x18 - the one AArch64
+ * register Darwin reserves for the platform - so it is never seeded, and the
+ * whole 68k register file is already spread across x12..x29 with nothing free
+ * to move it to. Emitted code for a PC-relative access therefore reads from a
+ * garbage base.
+ *
+ * A handful of PC-relative forms were already routed around this one at a time
+ * (`lea (d16,pc),An`, `jsr/jmp (d16,PC)`, FP immediates). That list was built
+ * from what the test corpus happened to use, and it missed the ordinary case:
+ * a DATA access through a PC-relative EA, which is how position-independent
+ * code reads its own constants and jump tables. LhA's switch dispatch does
+ * exactly that, read the table with `move.w (d8,pc,d0.l),d0` and jump through
+ * it, and the silent zero it got back sent it into the table itself.
+ *
+ * So: recognise the whole class, end the block there, and execute the one
+ * instruction in C where the 68k PC is known exactly. What is not implemented
+ * yet fails BY NAME rather than reading from a wrong address.
+ *
+ * Only opcode families whose low six bits really are a source EA are eligible.
+ * Elsewhere that bit pattern is a Bcc displacement, a MOVEQ immediate or a
+ * register shift's type-plus-register, and matching it would be a coincidence. */
+static int has_pcrel_src(uint16_t op)
+{
+    unsigned mode = (op >> 3) & 7u, reg = op & 7u, line = (unsigned)(op >> 12);
+
+    if (mode != 7u || (reg != 2u && reg != 3u)) return 0;   /* (d16,PC)/(d8,PC,Xn) */
+
+    switch (line) {
+    case 0x0:                                  /* ORI..CMPI, BTST: low 6 = EA    */
+    case 0x1: case 0x2: case 0x3:              /* MOVE.b/.l/.w  : low 6 = src EA */
+    case 0x8: case 0x9: case 0xB:
+    case 0xC: case 0xD:                        /* OR/SUB/CMP/AND/ADD, EA source  */
+        return 1;
+    case 0x4:                                  /* LEA/PEA/TST/MOVEM/CLR/NOT/NEG. */
+        return (op & 0xFF00u) != 0x4E00u;      /* 4Exx is control flow, already
+                                                * ended by is_terminator        */
+    default:
+        return 0;
+    }
+}
+
 static int is_terminator(uint16_t op)
 {
     if (op == 0x4E75u) return 1;                 /* rts                            */
@@ -1283,7 +1326,7 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         const uint8_t *ophost = sb->host_mem + (cur_pc - sb->origin);
         uint16_t op = be16(ophost);
 
-        if (is_terminator(op)) { *end_pc = cur_pc; break; }
+        if (is_terminator(op) || has_pcrel_src(op)) { *end_pc = cur_pc; break; }
         /* [J5r] FMOVEM / FP system-register moves are opcode2-distinguished; end the block so
          * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist).
          * [J5t] An immediate-source FP arithmetic op (fadd.d #imm,fp etc.) likewise ends the
@@ -1765,13 +1808,160 @@ static int call_vector_by_target(uint32_t target, uint32_t base,
     saved_a6 = st->a[6];
     st->a[6] = base;
     brc = lvo(n, st, user, e2, sizeof e2);
-    st->a[6] = saved_a6;
+    if (brc != J5D_LVO_REDIRECT)                 /* a redirect KEEPS the base in
+                                                  * A6: the 68k routine about to
+                                                  * run is the library's own */
+        st->a[6] = saved_a6;
 
+    if (brc == J5D_LVO_REDIRECT) return J5D_LVO_REDIRECT;
     if (brc) {
         if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
         return 1;
     }
     return 0;
+}
+
+/* Execute one instruction whose SOURCE operand is PC-relative. `tpc` is its 68k
+ * address, so the EA is exact here in a way the emitted code cannot manage.
+ * *after receives the address of the following instruction. */
+static int j5d_exec_pcrel(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t tpc,
+                          uint16_t op, uint32_t *after, char *e, unsigned el)
+{
+    const uint8_t *ih = sb->host_mem + (tpc - sb->origin);
+    unsigned sreg = op & 7u, line = (unsigned)(op >> 12);
+    uint32_t src;                     /* the source EFFECTIVE ADDRESS            */
+    unsigned ext;                     /* bytes of extension the source consumed  */
+
+    /* The base of a PC-relative EA is the address OF the extension word. */
+    if (sreg == 2u) {                                     /* (d16,PC)            */
+        src = (tpc + 2u) + (uint32_t)(int32_t)be16s(ih + 2);
+        ext = 2;
+    } else {                                              /* (d8,PC,Xn)          */
+        if (brief_ea(st, be16(ih + 2), tpc + 2u, &src)) {
+            snprintf(e, el, "PC-relative EA: 68020 full extension word not decoded");
+            return 1;
+        }
+        ext = 2;
+    }
+
+#define PCREL_RD(nbytes, out) do {                                              \
+        if (src < sb->origin ||                                                 \
+            (uint64_t)src + (nbytes) > (uint64_t)sb->origin + sb->size) {       \
+            snprintf(e, el, "PC-relative read at %08x is outside the sandbox", src); \
+            return 1;                                                           \
+        }                                                                       \
+        const uint8_t *sp_ = sb->host_mem + (src - sb->origin);                 \
+        (out) = ((nbytes) == 1) ? (uint32_t)sp_[0]                              \
+              : ((nbytes) == 2) ? (uint32_t)be16(sp_) : be32(sp_);              \
+    } while (0)
+
+    /* ---- MOVE / MOVEA, by far the common case (a jump table, a constant) ---- */
+    if (line == 1u || line == 2u || line == 3u) {
+        unsigned sz    = (line == 1u) ? 1u : (line == 2u) ? 4u : 2u;
+        unsigned dmode = (op >> 6) & 7u, dreg = (op >> 9) & 7u;
+        uint32_t v;
+        PCREL_RD(sz, v);
+
+        if (dmode == 1u) {                                /* MOVEA: sign-extend,
+                                                           * write the full An,
+                                                           * leave the CCR alone */
+            st->a[dreg] = (sz == 2u) ? (uint32_t)(int32_t)(int16_t)(uint16_t)v : v;
+            *after = tpc + 2u + ext;
+            return 0;
+        }
+        if (dmode != 0u) {
+            snprintf(e, el, "PC-relative MOVE to destination mode %u not implemented",
+                     dmode);
+            return 1;
+        }
+        if (sz == 1u)      st->d[dreg] = (st->d[dreg] & 0xFFFFFF00u) | (v & 0xFFu);
+        else if (sz == 2u) st->d[dreg] = (st->d[dreg] & 0xFFFF0000u) | (v & 0xFFFFu);
+        else               st->d[dreg] = v;
+        {   /* MOVE sets N and Z from the moved value, clears V and C, keeps X. */
+            uint32_t m = (sz == 1u) ? 0x80u : (sz == 2u) ? 0x8000u : 0x80000000u;
+            uint32_t mask = (sz == 1u) ? 0xFFu : (sz == 2u) ? 0xFFFFu : 0xFFFFFFFFu;
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if ((v & mask) == 0)  cc |= J5D_CCR_Z;
+            if (v & m)            cc |= J5D_CCR_N;
+            st->ccr = cc;
+        }
+        *after = tpc + 2u + ext;
+        return 0;
+    }
+
+    /* ---- LEA / PEA: the ADDRESS, not the contents -------------------------- */
+    if ((op & 0xF1C0u) == 0x41C0u) {                      /* lea <ea>,An         */
+        st->a[(op >> 9) & 7u] = src;
+        *after = tpc + 2u + ext;
+        return 0;
+    }
+    if ((op & 0xFFC0u) == 0x4840u) {                      /* pea <ea>            */
+        if (sp_push(sb, st, src, e, el)) return 1;
+        *after = tpc + 2u + ext;
+        return 0;
+    }
+
+    /* ---- TST ---------------------------------------------------------------- */
+    if ((op & 0xFF00u) == 0x4A00u) {
+        unsigned szf = (op >> 6) & 3u;                    /* 0=.b 1=.w 2=.l      */
+        unsigned sz  = (szf == 0u) ? 1u : (szf == 1u) ? 2u : 4u;
+        uint32_t v, m = (sz == 1u) ? 0x80u : (sz == 2u) ? 0x8000u : 0x80000000u;
+        uint32_t mask = (sz == 1u) ? 0xFFu : (sz == 2u) ? 0xFFFFu : 0xFFFFFFFFu;
+        uint32_t cc;
+        if (szf == 3u) { snprintf(e, el, "PC-relative TST with size 3"); return 1; }
+        PCREL_RD(sz, v);
+        cc = st->ccr & J5D_CCR_X;
+        if ((v & mask) == 0) cc |= J5D_CCR_Z;
+        if (v & m)           cc |= J5D_CCR_N;
+        st->ccr = cc;
+        *after = tpc + 2u + ext;
+        return 0;
+    }
+
+    /* ---- Dn = Dn op <ea> : CMP, ADD, SUB, AND, OR --------------------------- */
+    if (line == 0x8u || line == 0x9u || line == 0xBu || line == 0xCu || line == 0xDu) {
+        unsigned opmode = (op >> 6) & 7u, dreg = (op >> 9) & 7u;
+        if (opmode <= 2u) {                               /* .b/.w/.l, EA source */
+            unsigned sz = (opmode == 0u) ? 1u : (opmode == 1u) ? 2u : 4u;
+            uint32_t v, a, r, m = (sz == 1u) ? 0x80u : (sz == 2u) ? 0x8000u : 0x80000000u;
+            uint32_t mask = (sz == 1u) ? 0xFFu : (sz == 2u) ? 0xFFFFu : 0xFFFFFFFFu;
+            uint32_t cc = 0;
+            PCREL_RD(sz, v);
+            a = st->d[dreg] & mask;
+            v &= mask;
+            switch (line) {
+            case 0xBu: r = (a - v) & mask; break;         /* CMP                 */
+            case 0xDu: r = (a + v) & mask; break;         /* ADD                 */
+            case 0x9u: r = (a - v) & mask; break;         /* SUB                 */
+            case 0xCu: r = a & v;          break;         /* AND                 */
+            default:   r = a | v;          break;         /* OR                  */
+            }
+            if (r == 0)  cc |= J5D_CCR_Z;
+            if (r & m)   cc |= J5D_CCR_N;
+            if (line == 0xBu || line == 0x9u) {           /* borrow + overflow   */
+                if (a < v) cc |= J5D_CCR_C;
+                if (((a ^ v) & (a ^ r)) & m) cc |= J5D_CCR_V;
+            } else if (line == 0xDu) {                    /* carry + overflow    */
+                if (((a + v) & ~mask) != 0) cc |= J5D_CCR_C;
+                if ((~(a ^ v) & (a ^ r)) & m) cc |= J5D_CCR_V;
+            }
+            if (line == 0xBu) {                           /* CMP keeps X, no wb  */
+                st->ccr = cc | (st->ccr & J5D_CCR_X);
+            } else {
+                if (line == 0x9u || line == 0xDu)
+                    cc |= (cc & J5D_CCR_C) ? J5D_CCR_X : 0;  /* X follows C      */
+                st->d[dreg] = (st->d[dreg] & ~mask) | r;
+                st->ccr = cc;
+            }
+            *after = tpc + 2u + ext;
+            return 0;
+        }
+    }
+
+#undef PCREL_RD
+    snprintf(e, el, "a PC-relative source operand in opcode %04x is not executed "
+                    "in C yet (REG_PC is unavailable on this host)", op);
+    return 1;
 }
 
 static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
@@ -1998,7 +2188,16 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
         uint16_t top = be16(thost);
 
-        if (top == 0x4E75u) {                        /* rts -> POP the return stack */
+        if (has_pcrel_src(top)) {                    /* a PC-relative source operand */
+            uint32_t nxt = 0;
+            char e2[160] = {0};
+            if (j5d_exec_pcrel(sb, st, tpc, top, &nxt, e2, sizeof e2)) {
+                if (errbuf) snprintf(errbuf, errlen, "%s @pc=%08x", e2, tpc);
+                return 1;
+            }
+            pc = nxt;
+        }
+        else if (top == 0x4E75u) {                   /* rts -> POP the return stack */
             if (st->a[7] >= initial_sp) {            /* back at the initial SP: exit */
                 *exit_d0 = st->d[0];
                 finalize_stats();                    /* [J5k] derive chaining metrics         */
@@ -2126,12 +2325,20 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
              * [J3] marshaller and writes any return into st->d[0]. A host-C call that
              * returns immediately — NO return-stack push (the 68k program never sees a
              * pushed frame for a library vector). */
-            if (lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2)) {
+            int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
+            if (brc && brc != J5D_LVO_REDIRECT) {
                 if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
                 return 1;
             }
             g_stats.lib_calls++;
-            pc = tpc + 4;                            /* jsr d16(A6) is 4 bytes      */
+            if (brc == J5D_LVO_REDIRECT) {           /* run 68k code for it instead */
+                if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+                g_stats.calls_pushed++;
+                if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+                pc = st->pc;
+            } else {
+                pc = tpc + 4;                        /* jsr d16(A6) is 4 bytes      */
+            }
         }
         else if ((top & 0xFFF8u) == 0x4EA8u &&
                  libbase_of_target(st->a[top & 7u] +
@@ -2148,13 +2355,20 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             st->a[6] = base;
             char e2[160] = {0};
             int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
-            st->a[6] = saved_a6;
-            if (brc) {
+            if (brc != J5D_LVO_REDIRECT) st->a[6] = saved_a6;
+            if (brc && brc != J5D_LVO_REDIRECT) {
                 if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
                 return 1;
             }
             g_stats.lib_calls++;
-            pc = tpc + 4;
+            if (brc == J5D_LVO_REDIRECT) {
+                if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+                g_stats.calls_pushed++;
+                if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+                pc = st->pc;
+            } else {
+                pc = tpc + 4;
+            }
         }
         else if ((top & 0xFFF8u) == 0x4EE8u &&
                  libbase_of_target(st->a[top & 7u] +
@@ -2165,9 +2379,14 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
              * otherwise claim it and jump into the library base region. */
             uint32_t target = st->a[top & 7u] + (uint32_t)(int32_t)be16s(thost + 2);
             uint32_t ret;
-            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
-                                      st, lvo, user, "jmp(d16,An)", errbuf, errlen))
-                return 1;
+            int brc;
+            if ((brc = call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+                                      st, lvo, user, "jmp(d16,An)", errbuf, errlen)) != 0) {
+                if (brc != J5D_LVO_REDIRECT) return 1;
+                g_stats.lib_calls++;
+                pc = st->pc;                         /* tail call: no push, no pop */
+                continue;
+            }
             g_stats.lib_calls++;
             if (st->a[7] >= initial_sp) {            /* outermost frame: program done */
                 *exit_d0 = st->d[0];
@@ -2227,11 +2446,19 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         else if ((top & 0xFFF8u) == 0x4E90u &&
                  libbase_of_target(st->a[top & 7u], a6_libbase)) {
             uint32_t target = st->a[top & 7u];
-            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
-                                      st, lvo, user, "jsr(An)", errbuf, errlen))
-                return 1;
+            int brc = call_vector_by_target(target,
+                                            libbase_of_target(target, a6_libbase),
+                                            st, lvo, user, "jsr(An)", errbuf, errlen);
+            if (brc && brc != J5D_LVO_REDIRECT) return 1;
             g_stats.lib_calls++;
-            pc = tpc + 2;                            /* jsr (An) is 2 bytes         */
+            if (brc == J5D_LVO_REDIRECT) {
+                if (sp_push(sb, st, tpc + 2, errbuf, errlen)) return 1;
+                g_stats.calls_pushed++;
+                if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+                pc = st->pc;
+            } else {
+                pc = tpc + 2;                        /* jsr (An) is 2 bytes         */
+            }
         }
         /* A jmp onto a vector is a TAIL call: the library's own rts is what
          * returns to THIS function's caller, so resume at the return address on
@@ -2239,9 +2466,14 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         else if ((top & 0xFFF8u) == 0x4ED0u &&
                  libbase_of_target(st->a[top & 7u], a6_libbase)) {
             uint32_t target = st->a[top & 7u], ret;
-            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
-                                      st, lvo, user, "jmp(An)", errbuf, errlen))
-                return 1;
+            int brc;
+            if ((brc = call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+                                      st, lvo, user, "jmp(An)", errbuf, errlen)) != 0) {
+                if (brc != J5D_LVO_REDIRECT) return 1;
+                g_stats.lib_calls++;
+                pc = st->pc;                         /* tail call: no push, no pop */
+                continue;
+            }
             g_stats.lib_calls++;
             if (st->a[7] >= initial_sp) {            /* outermost frame: program done */
                 *exit_d0 = st->d[0];
