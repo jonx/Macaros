@@ -61,6 +61,13 @@
       "c_type": "APTR",
       "kind": "opaque",
       "destructor": "asl.library.FreeAslRequest"
+    },
+    "TextFont": {
+      "id": 11,
+      "c_type": "struct TextFont *",
+      "kind": "facade",
+      "facade_struct": "TextFont",
+      "destructor": "graphics.library.CloseFont"
     }
   },
   "tag_domains": {
@@ -335,6 +342,17 @@
         "bm": {"type": "BitMap", "direction": "out", "clear": false}
       }
     },
+    "graphics.library.OpenFont": {
+      "structs": {
+        "textAttr": {"type": "TextAttr", "direction": "in"}
+      },
+      "result": {"kind": "object", "type": "TextFont"}
+    },
+    "graphics.library.CloseFont": {
+      "objects": {
+        "textFont": {"type": "TextFont", "nullable": false, "consume": true}
+      }
+    },
     "graphics.library.NewRegion": {
       "result": {"kind": "object", "type": "Region"}
     },
@@ -424,6 +442,12 @@
     },
     "asl.library.ActivateAslRequest": {
       "objects": {"requester": {"type": "AslRequest", "nullable": false}}
+    },
+    "diskfont.library.OpenDiskFont": {
+      "structs": {
+        "textAttr": {"type": "TextAttr", "direction": "in"}
+      },
+      "result": {"kind": "object", "type": "TextFont", "owned": false}
     },
     "icon.library.GetDiskObject": {
       "result": {"kind": "object", "type": "DiskObject"}
