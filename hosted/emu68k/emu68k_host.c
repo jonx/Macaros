@@ -168,6 +168,8 @@
 #define LVO_ADDHEAD       40    /* -240 */
 #define LVO_ADDTAIL       41    /* -246 */
 #define LVO_REMOVE        42    /* -252 */
+#define LVO_COPYMEM      104    /* -624 */
+#define LVO_COPYMEMQUICK 105    /* -630 */
 #define LVO_REMHEAD       43    /* -258 */
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
@@ -691,6 +693,25 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
      * native pointer would be an address it cannot dereference, so like the
      * Add* pair these walk guest memory directly. An empty list is detected the
      * way exec does it, by the terminator's NULL link rather than by a count. */
+    /* Both operands are GUEST addresses and the payload is plain bytes, so this
+     * is a move inside the arena. Bridging it would hand dos.library two guest
+     * pointers it cannot dereference. Overlap is allowed: CopyMemQuick promises
+     * long-aligned non-overlapping, but a program that gets that wrong should
+     * misbehave the way it does on a real Amiga, not corrupt the host. */
+    case LVO_COPYMEM:
+    case LVO_COPYMEMQUICK: {
+        uint32_t src = st->a[0], dst = st->a[1], n = st->d[0];
+        if (!n) return 0;
+        if (src < sb->sandbox_origin || dst < sb->sandbox_origin ||
+            (uint64_t)src + n > (uint64_t)sb->sandbox_origin + sb->size ||
+            (uint64_t)dst + n > (uint64_t)sb->sandbox_origin + sb->size) {
+            snprintf(e, el, "CopyMem %08x -> %08x (%u bytes) leaves the guest arena",
+                     src, dst, n);
+            return 1;
+        }
+        memmove(j4_sandbox_host(sb, dst), j4_sandbox_host(sb, src), n);
+        return 0;
+    }
     case LVO_REMHEAD: {
         uint32_t list = st->a[0];
         uint32_t node = gread32(sb, list);           /* lh_Head                */

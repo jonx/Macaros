@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Emit the m68k-vs-native layout of every structure that crosses the 68k
+boundary, from the AROS headers themselves.
+
+A 68k program's structures are AmigaOS structures: big-endian, 32-bit pointers,
+packed to two bytes. Native AROS on aarch64 is little-endian with 64-bit
+pointers and different alignment, so a pointer handed across is not a pointer
+that can be rebased - the object has to be rebuilt field by field. That needs
+the two layouts, and hand-counting offsets is exactly the kind of work that is
+wrong once and then wrong forever.
+
+Both layouts come from one tool. clang dumps a record layout for any target it
+can parse headers for, so the same probe compiled twice gives both:
+
+    clang -target m68k-unknown-elf -fpack-struct=2 ...   the AmigaOS layout
+    clang -target aarch64-unknown-aros ...               the native layout
+
+-fpack-struct=2 is not optional. The m68k ELF psABI aligns 32-bit fields to 4
+while the Amiga ABI packs to 2, and without it struct Node's ln_Name lands at
+12 instead of 10 - every conversion built on that would be silently wrong. The
+self-check below asserts layouts that are known from the AmigaOS ABI and
+refuses to emit if they do not hold.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+AROS_INC = os.environ.get(
+    "AROS_INC",
+    os.path.expanduser("~/aros-build/bin/darwin-aarch64/AROS/Developer/include"))
+CLANG = os.environ.get("AROS_CLANG",
+                       os.path.expanduser("~/aros-crosstools/bin/clang"))
+
+# The structures that actually cross. Data structures the guest reads or writes
+# need converting; OS-owned handles (Window, Screen, RastPort...) do not appear
+# here because they cross as tokens and are never rebuilt.
+HEADERS = [
+    "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
+    "utility/tagitem.h", "exec/lists.h", "exec/ports.h", "workbench/workbench.h",
+]
+
+TYPES = [
+    "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "InfoData",
+    "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
+    "DiskObject", "ExAllData",
+]
+
+# Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
+# probe is being compiled with the wrong alignment and nothing it emits can be
+# trusted. This is the same guard the LVO numbering needed.
+KNOWN_M68K = {
+    "Node":          (14, {"ln_Succ": 0, "ln_Pred": 4, "ln_Type": 8,
+                           "ln_Pri": 9, "ln_Name": 10}),
+    "DateStamp":     (12, {"ds_Days": 0, "ds_Minute": 4, "ds_Tick": 8}),
+    "TagItem":       (8,  {"ti_Tag": 0, "ti_Data": 4}),
+    "FileInfoBlock": (260, {"fib_DiskKey": 0, "fib_DirEntryType": 4,
+                            "fib_FileName": 8, "fib_Protection": 116,
+                            "fib_Size": 124, "fib_NumBlocks": 128}),
+}
+
+LAYOUT_RE = re.compile(r"^\s*(\d+) \| (struct|union) (\w+)$")
+FIELD_RE = re.compile(r"^\s*(\d+) \|   (.+?) (\w+)(\[\d+\])?$")
+SIZE_RE = re.compile(r"^\s*\| \[sizeof=(\d+), align=(\d+)\]$")
+
+
+def dump(target, extra):
+    src = "/tmp/.structprobe-%d.c" % os.getpid()
+    with open(src, "w") as fh:
+        for h in HEADERS:
+            fh.write("#include <%s>\n" % h)
+        for i, t in enumerate(TYPES):
+            # sizeof FORCES clang to compute the layout; a tentative
+            # definition alone does not, and the record is then never dumped
+            fh.write("unsigned long probe_%d = sizeof(struct %s);\n" % (i, t))
+    cmd = [CLANG, "-target", target] + extra + [
+        "-Xclang", "-fdump-record-layouts", "-fsyntax-only", src,
+        "-I" + AROS_INC, "-ffreestanding", "-w"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    os.unlink(src)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr[:4000])
+        sys.exit(1)
+    return parse(r.stdout)
+
+
+def resolve(records, name):
+    """AROS declares several of these as <Name>32 / <Name>64 and lets the target
+    pick, so `struct FileInfoBlock` is a DIFFERENT record on each side. Resolving
+    by suffix is what lets the two layouts be compared at all."""
+    for cand in (name, name + "32", name + "64"):
+        if cand in records:
+            return cand, records[cand]
+    return None, None
+
+
+def parse(text):
+    """-> {name: {'size': n, 'align': n, 'fields': [(name, offset, typetext)]}}"""
+    out, cur = {}, None
+    for line in text.splitlines():
+        m = LAYOUT_RE.match(line)
+        if m:
+            cur = {"size": None, "align": None, "fields": []}
+            out[m.group(3)] = cur
+            continue
+        if cur is None:
+            continue
+        m = SIZE_RE.match(line)
+        if m:
+            cur["size"], cur["align"] = int(m.group(1)), int(m.group(2))
+            cur = None
+            continue
+        m = FIELD_RE.match(line)
+        if m:
+            nm = m.group(3) + (m.group(4) or "")
+            cur["fields"].append((m.group(3), int(m.group(1)),
+                                  m.group(2).strip() + (m.group(4) or "")))
+    return out
+
+
+def selfcheck(m68k):
+    bad = []
+    for name, (size, fields) in KNOWN_M68K.items():
+        _rn, r = resolve(m68k, name)
+        if not r:
+            bad.append("%s: not in the probe output" % name)
+            continue
+        if r["size"] != size:
+            bad.append("%s: sizeof is %s, the AmigaOS ABI says %d"
+                       % (name, r["size"], size))
+        got = {f: o for f, o, _t in r["fields"]}
+        for f, o in fields.items():
+            if got.get(f) != o:
+                bad.append("%s.%s: at %s, the AmigaOS ABI says %d"
+                           % (name, f, got.get(f), o))
+    return bad
+
+
+HEAD = """/* GENERATED by graft/gen-struct-layouts - do not edit.
+ *
+ * The two layouts of every structure that crosses the 68k boundary: the
+ * AmigaOS one the guest uses (big-endian, 32-bit pointers, packed to 2) and
+ * the native aarch64 one. A field whose offsets differ cannot be copied, it
+ * has to be converted, and these are the numbers that say where from and where
+ * to. Both come from the AROS headers via clang, so they cannot drift from the
+ * OS the way a hand-written table would.
+ *
+ * M68K_<Struct>_<field> is the guest offset; the native offset is offsetof()
+ * on this side, which the compiler already knows - only the guest side needs
+ * stating here.
+ */
+
+#ifndef EMU68K_LAYOUTS_H
+#define EMU68K_LAYOUTS_H
+
+"""
+
+
+def emit(m68k, native, out):
+    L = [HEAD]
+    for t in TYPES:
+        an, a = resolve(m68k, t)
+        bn, b = resolve(native, t)
+        if not a:
+            continue
+        L.append("/* struct %s: %d bytes on m68k (%s), %s native (%s) */"
+                 % (t, a["size"], an, b["size"] if b else "?", bn))
+        L.append("#define M68K_%s_SIZEOF %d" % (t, a["size"]))
+        nb = {f: o for f, o, _ in (b["fields"] if b else [])}
+        for f, o, ty in a["fields"]:
+            same = nb.get(f) == o
+            L.append("#define M68K_%s_%s %s%s"
+                     % (t, f, o, "" if same else
+                        "   /* native @%s - CONVERT */" % nb.get(f)))
+        L.append("")
+    L.append("#endif /* EMU68K_LAYOUTS_H */")
+    text = "\n".join(L) + "\n"
+    if "--check" in sys.argv:
+        cur = open(out).read() if os.path.exists(out) else None
+        if cur != text:
+            print("STALE: %s - regenerate with `make struct-layouts`" % out)
+            return 1
+        print("struct layouts are in sync with the AROS headers")
+        return 0
+    open(out, "w").write(text)
+    print("%s <- %d structures" % (out, len([t for t in TYPES if t in m68k])))
+    return 0
+
+
+def main():
+    m68k = dump("m68k-unknown-elf", ["-fpack-struct=2"])
+    native = dump("aarch64-unknown-aros", [])
+
+    bad = selfcheck(m68k)
+    if bad:
+        print("SELF-CHECK FAILED - the m68k probe is not producing AmigaOS "
+              "layouts, so nothing here can be trusted:")
+        for b in bad:
+            print("  ! %s" % b)
+        return 1
+
+    if "--report" in sys.argv:
+        for t in TYPES:
+            an, a = resolve(m68k, t)
+            bn, b = resolve(native, t)
+            if not a:
+                print("%-16s (not found)" % t)
+                continue
+            nb = {f: o for f, o, _ in (b["fields"] if b else [])}
+            moved = sum(1 for f, o, _ in a["fields"] if nb.get(f) != o)
+            print("%-16s m68k %4d b (%-16s) / native %-5s b (%-16s)  %2d of %2d fields move"
+                  % (t, a["size"], an, b["size"] if b else "?", bn, moved,
+                     len(a["fields"])))
+        return 0
+
+    i = sys.argv.index("--emit") if "--emit" in sys.argv else -1
+    if i < 0:
+        print("usage: gen-struct-layouts [--report] [--emit OUT.h [--check]]")
+        return 2
+    return emit(m68k, native, sys.argv[i + 1])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
