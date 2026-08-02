@@ -54,7 +54,7 @@ GEN_LIBS = [
     "exec", "dos", "utility", "intuition", "graphics", "layers", "gadtools",
     "asl", "icon", "iffparse", "commodities", "diskfont", "locale", "keymap",
     "datatypes", "expansion", "cybergraphics", "mathffp", "mathieeesingbas",
-    "mathieeedoubbas",
+    "mathieeedoubbas", "mathieeesingtrans", "mathieeedoubtrans", "mathtrans",
 ]
 
 
@@ -251,10 +251,15 @@ def norm(t):
 
 
 def classify(t):
-    """-> ('scalar'|'widen'|'string'|'void'|'bptr'|'struct'|'aptr'|'other')"""
+    """-> ('scalar'|'widen'|'string'|'void'|'bptr'|'double'|'struct'|'aptr'|'other')"""
     t = norm(t)
     if t in VOID:
         return "void"
+    # A 68k double is a bit pattern in a register PAIR. Nothing about it needs
+    # describing beyond that: no memory is touched and the value crosses
+    # unchanged, so the .conf's own register spelling is the whole contract.
+    if t == "double":
+        return "double"
     if t == "BPTR":
         return "bptr"
     if t in SCALAR:
@@ -813,6 +818,17 @@ def selfcheck(lib, funcs):
 # emit
 # ---------------------------------------------------------------------------
 
+def reg_pair(reg):
+    """`D0/D1` -> ('r->d[0]', 'r->d[1]'), the two halves of a 64-bit value.
+
+    The IEEE double libraries are the only place this appears: a double is
+    passed high half first, in the two registers the .conf names."""
+    m = re.fullmatch(r"([DA][0-7])/([DA][0-7])", reg.strip().upper())
+    if not m:
+        return None
+    return (reg_expr(m.group(1)), reg_expr(m.group(2)))
+
+
 def reg_expr(reg):
     """`D1` -> `r->d[1]`"""
     reg = reg.strip().upper()
@@ -944,7 +960,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         policy = function_policy(lib, f)
         if t not in (1, 2) and not policy:
             continue
-        regs = [reg_expr(x) for x in f.regs]
+        regs = [reg_expr(x) or reg_pair(x) for x in f.regs]
         if any(x is None for x in regs):
             continue
         sig = ", ".join("%s %s" % (norm(t), nm) for t, nm in f.args) or "void"
@@ -983,6 +999,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             size_args[sp["size_arg"]] = var
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
+            if classify(atype) == "double":
+                hi, lo = reg_pair(reg)
+                call_args.append("emu68k_double_in(%s, %s)" % (hi, lo))
+                continue
             if aname in objects:
                 op = objects[aname]
                 oname = op["type"]
@@ -1125,6 +1145,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("        %sr->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
               % ("    " if policy else "", call))
             emit_post(post, "r->d[0]")
+        elif classify(f.ret) == "double":
+            pad = "    " if policy else ""
+            w("        %semu68k_double_out(%s, &r->d[0], &r->d[1]);" % (pad, call))
+            emit_post(post)
         else:
             note = ""
             if classify(f.ret) == "widen":
@@ -1202,6 +1226,24 @@ BPTR  emu68k_handle_bptr(APTR guest0, ULONG token);
 ULONG emu68k_handle_token(APTR guest0, BPTR b);
 #define EMU_HANDLE(g0, t)  emu68k_handle_bptr((g0), (ULONG)(t))
 #define EMU_TOKEN(g0, b)   emu68k_handle_token((g0), (b))
+
+/* A 68k IEEE double is the raw bit pattern in a register pair, high half first.
+ * Nothing is converted: the same 64 bits are handed to a native double, which is
+ * the same format. The union is there so it is a reinterpretation and not a
+ * numeric conversion. */
+static inline double emu68k_double_in(ULONG hi, ULONG lo)
+{
+    union { double d; UQUAD q; } u;
+    u.q = ((UQUAD)hi << 32) | (UQUAD)lo;
+    return u.d;
+}
+static inline void emu68k_double_out(double v, ULONG *hi, ULONG *lo)
+{
+    union { double d; UQUAD q; } u;
+    u.d = v;
+    *hi = (ULONG)(u.q >> 32);
+    *lo = (ULONG)u.q;
+}
 
 UQUAD emu68k_scalar_from_guest(APTR guest0, ULONG addr, UBYTE width);
 void  emu68k_scalar_to_guest(APTR guest0, ULONG addr, UBYTE width, UQUAD value);

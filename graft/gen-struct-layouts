@@ -52,6 +52,17 @@ TYPES = [
     "Window", "RastPort", "Preferences",
 ]
 
+# NOT here, and the reason matters for every structure added after this one:
+# `struct Screen`. Its head is the AmigaOS ABI exactly (LeftEdge 8, Flags 20,
+# Font 40, ViewPort 44, RastPort 84, both nested structures the ABI sizes), but
+# AROS's `struct Layer_Info` is larger than the classic one, so every field
+# after it - FirstGadget, DetailPen, BarLayer, UserData - sits 10 bytes further
+# on than a 1990s binary looks for it. Deriving the guest layout from AROS's own
+# headers is right only where AROS reproduces the ABI, which is most places and
+# is checked below, but it is not a guarantee. Screen crosses as an opaque
+# handle until the classic tail offsets can be confirmed from something better
+# than memory.
+
 # Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
 # probe is being compiled with the wrong alignment and nothing it emits can be
 # trusted. This is the same guard the LVO numbering needed.

@@ -175,6 +175,8 @@
 #define LVO_REMOVE        42    /* -252 */
 #define LVO_COPYMEM      104    /* -624 */
 #define LVO_COPYMEMQUICK 105    /* -630 */
+#define LVO_CACHECLEARU  106    /* -636 */
+#define LVO_CACHECLEARE  107    /* -642 */
 #define LVO_REMHEAD       43    /* -258 */
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
@@ -754,6 +756,23 @@ static uint8_t *read_host_file(const char *path, size_t *len)
     fclose(f); *len = (size_t)n; return p;
 }
 
+/* A file at the right path is not the same as the right file. LIBS: on a booted
+ * AROS holds NATIVE libraries, so a guest asking for one that AROS also has by
+ * name finds an ELF object where a hunk file has to be. Taking it and failing
+ * would end the search at the first wrong answer, so a candidate that is not a
+ * 68k hunk file is discarded and the search carries on to the places a
+ * program's own 68k libraries actually live. */
+static uint8_t *take_if_hunk(uint8_t *image, size_t len)
+{
+    if (image && (len < 4u ||
+                  ((uint32_t)image[0] << 24 | (uint32_t)image[1] << 16 |
+                   (uint32_t)image[2] << 8 | image[3]) != J4_HUNK_HEADER)) {
+        free(image);
+        return NULL;
+    }
+    return image;
+}
+
 static uint8_t *try_library_at(const char *dir, size_t dirlen, const char *leaf,
                                char *found, size_t foundlen, size_t *imagelen)
 {
@@ -762,7 +781,7 @@ static uint8_t *try_library_at(const char *dir, size_t dirlen, const char *leaf,
     if (!dirlen) n = snprintf(path, sizeof path, "%s", leaf);
     else n = snprintf(path, sizeof path, "%.*s/%s", (int)dirlen, dir, leaf);
     if (n < 0 || (size_t)n >= sizeof path) return NULL;
-    uint8_t *p = read_host_file(path, imagelen);
+    uint8_t *p = take_if_hunk(read_host_file(path, imagelen), *imagelen);
     if (p) snprintf(found, foundlen, "%s", path);
     return p;
 }
@@ -839,16 +858,23 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
     if (g_oscall) {
         char dospath[PATH_MAX];
         if (strchr(name, ':')) {
-            if ((p = read_aros_file(r, name, imagelen))) {
+            if ((p = take_if_hunk(read_aros_file(r, name, imagelen), *imagelen))) {
                 snprintf(found, foundlen, "%s", name); return p;
             }
         } else {
             snprintf(dospath, sizeof dospath, "LIBS:%s", name);
-            if ((p = read_aros_file(r, dospath, imagelen))) {
+            if ((p = take_if_hunk(read_aros_file(r, dospath, imagelen), *imagelen))) {
                 snprintf(found, foundlen, "%s", dospath); return p;
             }
             snprintf(dospath, sizeof dospath, "PROGDIR:%s", name);
-            if ((p = read_aros_file(r, dospath, imagelen))) {
+            if ((p = take_if_hunk(read_aros_file(r, dospath, imagelen), *imagelen))) {
+                snprintf(found, foundlen, "%s", dospath); return p;
+            }
+            /* A package that ships its own 68k libraries keeps them beside the
+             * program, which is where its own startup script assigns LIBS: to
+             * before running it. */
+            snprintf(dospath, sizeof dospath, "PROGDIR:libs/%s", name);
+            if ((p = take_if_hunk(read_aros_file(r, dospath, imagelen), *imagelen))) {
                 snprintf(found, foundlen, "%s", dospath); return p;
             }
         }
@@ -1173,6 +1199,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 "locale.library", "keymap.library", "datatypes.library",
                 "expansion.library", "cybergraphics.library", "mathffp.library",
                 "mathieeesingbas.library", "mathieeedoubbas.library",
+                "mathieeesingtrans.library", "mathieeedoubtrans.library",
+                "mathtrans.library",
             };
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
@@ -1324,6 +1352,23 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         memmove(j4_sandbox_host(sb, dst), j4_sandbox_host(sb, src), n);
         return 0;
     }
+    case LVO_CACHECLEARU:
+    case LVO_CACHECLEARE:
+        /* A 68k program clears the caches when it has just written bytes that
+         * are about to be executed. Under translation that is the notification
+         * that a translated block may no longer match the code it came from,
+         * which no amount of host cache maintenance would fix, so the whole
+         * per-run translation cache goes. CacheClearE names a range; dropping
+         * everything is a superset and a range-precise version would only be
+         * faster, never more correct.
+         *
+         * The return cannot go back into a block that was just freed, so this
+         * takes the same exit as the guest-library reclaim: the permanent RTS,
+         * reached by redirect, which pops the caller's return address and
+         * carries on through freshly translated code. */
+        j5d_run_free();
+        st->pc = OSCODE_RETURN;
+        return J5D_LVO_REDIRECT;
     case LVO_REMHEAD: {
         uint32_t list = st->a[0];
         uint32_t node = gread32(sb, list);           /* lh_Head                */

@@ -50,6 +50,11 @@
       "c_type": "struct Region *",
       "kind": "opaque",
       "destructor": "graphics.library.DisposeRegion"
+    },
+    "Screen": {
+      "id": 9,
+      "c_type": "struct Screen *",
+      "kind": "opaque"
     }
   },
   "tag_domains": {
@@ -181,6 +186,16 @@
         "prefbuffer": {"type": "Preferences", "direction": "out", "size_arg": "size"}
       },
       "result": {"kind": "guest_arg", "arg": "prefbuffer"}
+    },
+    "intuition.library.LockPubScreen": {
+      "strings": ["name"],
+      "result": {"kind": "object", "type": "Screen", "owned": false}
+    },
+    "intuition.library.UnlockPubScreen": {
+      "strings": ["name"],
+      "objects": {
+        "screen": {"type": "Screen", "nullable": true, "release": true}
+      }
     },
     "intuition.library.MakeClass": {
       "strings": ["classID", "superClassID"],
