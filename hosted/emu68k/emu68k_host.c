@@ -237,7 +237,12 @@ static int classify_hardware(void *fault_addr, void *user)
     unsigned long long base = (unsigned long long)(uintptr_t)r->sb.host_mem;
     unsigned long long guest;
 
-    if (host < base - 0x10000000ull || host > base + 0x10000000ull) return 0;
+    if (host < base - 0x10000000ull || host > base + 0x10000000ull) {
+        if (getenv("EMU68K_TRACE_FAULT"))
+            fprintf(stderr, "[emu68k] fault host=%llx outside the window around "
+                    "base=%llx: not decodable to a guest address\n", host, base);
+        return 0;
+    }
     guest = host - base + r->sb.sandbox_origin;
 
     if (guest >= HW_CUSTOM_LO && guest <= HW_CUSTOM_HI)
@@ -248,7 +253,8 @@ static int classify_hardware(void *fault_addr, void *user)
     else if (guest <= HW_VECTOR_HI)
         snprintf(g_hw_detail, sizeof g_hw_detail,
                  "exception vector page $%03llX", guest);
-    else if (guest < r->sb.sandbox_origin)
+    else if (guest < r->sb.sandbox_origin ||
+             guest >= (unsigned long long)r->sb.sandbox_origin + r->sb.size)
         /* Everything below the arena is reserved and unmapped on purpose: it is
          * machine address space this sandbox does not provide (ROM, chip RAM
          * the program did not allocate, the autoconfig area). A program reading
@@ -261,10 +267,19 @@ static int classify_hardware(void *fault_addr, void *user)
          * sandbox created deliberately, and it hides the one thing worth
          * knowing, which is that this program wants the real machine. */
         snprintf(g_hw_detail, sizeof g_hw_detail,
-                 "machine address $%06llX, below the memory this sandbox provides",
-                 guest);
-    else
+                 "machine address $%06llX, outside the memory this sandbox "
+                 "provides ($%06X..$%06llX)", guest, r->sb.sandbox_origin,
+                 (unsigned long long)r->sb.sandbox_origin + r->sb.size);
+    else {
+        /* Not one of the regions with a meaning. Say WHICH address, because a
+         * fault that cannot be named is a fault that gets diagnosed by
+         * guesswork - which has been wrong every time on this port. */
+        if (getenv("EMU68K_TRACE_FAULT"))
+            fprintf(stderr, "[emu68k] unclassified fault at guest $%06llX "
+                    "(arena $%06X..$%06llX)\n", guest, r->sb.sandbox_origin,
+                    (unsigned long long)r->sb.sandbox_origin + r->sb.size);
         return 0;                                  /* a genuine wild access     */
+    }
     return 1;
 }
 
