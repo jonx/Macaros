@@ -742,6 +742,18 @@ def validate_policy(targets):
                 elif owned and not ospec["destructor"].startswith(key.rsplit(".", 1)[0] + "."):
                     errors.append("function policy %s object destructor must be in the same library"
                                   % key)
+                fallback = result.get("fallback_textattr")
+                if fallback is not None:
+                    farg = fallback.get("arg") if isinstance(fallback, dict) else None
+                    fname = fallback.get("name") if isinstance(fallback, dict) else None
+                    if (farg not in structs or
+                            structs.get(farg, {}).get("type") != "TextAttr" or
+                            structs.get(farg, {}).get("direction") not in ("in", "inout")):
+                        errors.append("function policy %s font fallback needs an input TextAttr"
+                                      % key)
+                    if not isinstance(fname, str) or not fname or "\0" in fname:
+                        errors.append("function policy %s font fallback needs a valid name"
+                                      % key)
             else:
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
@@ -1158,6 +1170,21 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             cleanup = ("emu_object_cleanup_%s" % c_ident(oname)
                        if result_policy.get("owned", True) else "NULL")
             w("        APTR emu_result = (APTR)%s;" % call)
+            fallback = result_policy.get("fallback_textattr")
+            if fallback:
+                farg = fallback["arg"]
+                fi = [n for _t, n in f.args].index(farg)
+                fallback_args = list(call_args)
+                fallback_args[fi] = "(%s)&emu_fallback_attr" % norm(f.args[fi][0])
+                fallback_call = "%s(%s)" % (
+                    f.name, ",\n                  ".join(fallback_args))
+                w("        if (!emu_result)")
+                w("        {")
+                w("            struct TextAttr emu_fallback_attr = emu_struct_%d;" % fi)
+                w("            emu_fallback_attr.ta_Name = (STRPTR)%s;" %
+                  json.dumps(fallback["name"]))
+                w("            emu_result = (APTR)%s;" % fallback_call)
+                w("        }")
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]

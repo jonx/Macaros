@@ -447,7 +447,15 @@
       "structs": {
         "textAttr": {"type": "TextAttr", "direction": "in"}
       },
-      "result": {"kind": "object", "type": "TextFont", "owned": false}
+      "result": {
+        "kind": "object",
+        "type": "TextFont",
+        "owned": false,
+        "fallback_textattr": {
+          "arg": "textAttr",
+          "name": "Vera Mono.font"
+        }
+      }
     },
     "icon.library.GetDiskObject": {
       "result": {"kind": "object", "type": "DiskObject"}
