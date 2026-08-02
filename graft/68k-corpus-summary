@@ -25,10 +25,13 @@ for lib, base in (('exec','ExecBase'), ('dos','DosLibrary'), ('icon','IconBase')
         lvonames[(lib, int(m.group(2)))] = m.group(1)
 
 raw = open(path, 'rb').read().decode('latin-1')
-rows, tally, gaps = [], {}, {}
+rows, tally, gaps, categories = [], {}, {}, {}
 for part in re.split(r'##### ', raw)[1:]:
     lines = part.split('\n')
-    name, body = lines[0].strip(), '\n'.join(lines[1:]).strip()
+    heading, body = lines[0].strip(), '\n'.join(lines[1:]).strip()
+    body = re.sub(r'(?m)^=== DONE ===\s*$', '', body).strip()
+    cm = re.match(r'\[([^]]+)\]\s+(.*)', heading)
+    category, name = (cm.group(1), cm.group(2)) if cm else ('uncategorized', heading)
     g = re.search(r'(\S+)\.library function LVO (\d+) \(offset (-\d+)\)', body)
     if g:
         lib, n, off = g.group(1), int(g.group(2)), g.group(3)
@@ -43,13 +46,19 @@ for part in re.split(r'##### ', raw)[1:]:
     elif 'killed' in body or '***Break' in body: v, k = "timed out", 'timeout'
     elif 'emu68k:' in body:                 v, k = "err: " + body.split('emu68k:')[1].strip()[:44], 'other'
     else:                                   v, k = "RAN: " + re.sub(r'\s+', ' ', body)[:52], 'ran'
-    rows.append((name, v)); tally[k] = tally.get(k, 0) + 1
+    rows.append((category, name, v)); tally[k] = tally.get(k, 0) + 1
+    categories[category] = categories.get(category, 0) + 1
 
-print(f"{'program':<26} verdict")
+print(f"{'category':<12} {'program':<24} verdict")
 print('-' * 78)
-for n, v in rows: print(f"{n:<26} {v}")
+for c, n, v in rows: print(f"{c:<12} {n:<24} {v}")
 print(f"\n=== {len(rows)} programs ===")
 for k, v in sorted(tally.items(), key=lambda x: -x[1]): print(f"  {v:3d}  {k}")
+print("\n=== category coverage ===")
+if any(c != 'uncategorized' for c in categories):
+    for c in ('cli', 'datatypes', 'gui', 'workbench', 'hardware'):
+        categories.setdefault(c, 0)
+for c, v in sorted(categories.items()): print(f"  {v:3d}  {c}")
 if gaps:
     print("\n=== what to implement next (most programs unblocked first) ===")
     for (lib, n, fn, off), c in sorted(gaps.items(), key=lambda x: -x[1]):

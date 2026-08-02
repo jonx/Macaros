@@ -1,0 +1,45 @@
+#!/bin/sh
+# Stage categorized real programs, run them in one AROS instance, rank their
+# aggregate gaps, and separately make LhA do a byte-exact archive round trip.
+set -eu
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+SOURCE="${1:-$HOME/68k-corpus}"
+OUT="${2:-$ROOT/run/darwin-aarch64/legacy-corpus-$(date +%H%M%S).txt}"
+MANIFEST="$ROOT/hosted/emu68k/legacy-corpus.manifest"
+STAGE="$ROOT/build/legacy-corpus"
+
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+missing=""
+while IFS='|' read -r category program arguments purpose; do
+  case "$category" in ''|'#'*) continue ;; esac
+  source_program="$SOURCE/$program"
+  if [ "$program" = ViewDT ] && [ -n "${EMU68K_DATATYPE_PROGRAM:-}" ]; then
+    source_program="$EMU68K_DATATYPE_PROGRAM"
+  fi
+  if [ ! -f "$source_program" ]; then
+    missing="$missing $category/$program"
+    continue
+  fi
+  destination="$STAGE/$category/$program"
+  mkdir -p "$destination"
+  cp "$source_program" "$destination/$program"
+  printf 'one\ttwo\nthree\n' >"$destination/sample.txt"
+done <"$MANIFEST"
+
+echo "[T3LEGACY] staged category counts:"
+for category in cli datatypes gui workbench hardware; do
+  count=$(find "$STAGE/$category" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  echo "  $category: $count"
+done
+if [ -n "$missing" ]; then
+  echo "[T3LEGACY] unavailable optional/local programs:$missing"
+fi
+
+if [ -f "$SOURCE/lha" ]; then
+  EMU68K_LHA="$SOURCE/lha" "$ROOT/graft/68k-lha-roundtrip" "$OUT.lha"
+fi
+CORPUS_MANIFEST="$MANIFEST" EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" \
+  "$ROOT/graft/68k-corpus" "$STAGE" "$OUT"
+"$ROOT/graft/68k-corpus-summary" "$OUT" | tee "$OUT.summary"
+echo "[T3LEGACY] raw=$OUT summary=$OUT.summary lha=$OUT.lha"

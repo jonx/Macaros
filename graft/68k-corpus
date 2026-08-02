@@ -4,6 +4,9 @@
 # real software: each run names what stopped a program, and the summary says
 # which gap is worth fixing next.
 #
+# Input may be flat (program files) or category/program/program. The latter
+# keeps fixtures beside each executable and produces category-aware reports.
+#
 #   graft/68k-corpus <host-folder-of-68k-programs> [outfile]
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
@@ -17,6 +20,8 @@ CORPUS_ORACLE="${CORPUS_ORACLE:-}"  # optional native command; capture its outpu
 MANIFEST="${CORPUS_MANIFEST:-}"
 OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
 SHARE="$HOME/AROS/Shared"; SUB="corpus"
+RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
+ENTRIES="$RUN/entries"; : >"$ENTRIES"
 # EACH PROGRAM GETS ITS OWN DIRECTORY. They used to share one, which is fine
 # until a program does its job: ConvertTabsToSpaces with no arguments rewrote
 # every file in the directory, so every program after it alphabetically was a
@@ -27,8 +32,21 @@ for f in "$DIR"/*; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
   mkdir -p "$SHARE/$SUB/$b.d" && cp "$f" "$SHARE/$SUB/$b.d/$b"
+  printf '%s|%s|%s\n' "$b" "$b" "$b" >>"$ENTRIES"
 done
-RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
+for category_dir in "$DIR"/*; do
+  [ -d "$category_dir" ] || continue
+  category=$(basename "$category_dir")
+  for program_dir in "$category_dir"/*; do
+    [ -d "$program_dir" ] || continue
+    b=$(basename "$program_dir")
+    [ -f "$program_dir/$b" ] || continue
+    label=$(printf '%s__%s' "$category" "$b" | tr ' /' '__')
+    mkdir -p "$SHARE/$SUB/$label.d"
+    cp -R "$program_dir"/. "$SHARE/$SUB/$label.d/"
+    printf '%s|[%s] %s|%s\n' "$label" "$category" "$b" "$b" >>"$ENTRIES"
+  done
+done
 # deploy from the repo root before every sweep: a sweep against a stale library
 # silently measures the previous build, which has already cost one wasted round
 ( cd "$ROOT" && ./graft/aros-ctl deploy >/dev/null 2>&1 ) || true
@@ -38,20 +56,35 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
   echo 'Echo "=== CORPUS ===" >MacRW:corpus-out.txt'
   [ -n "$CORPUS_BEFORE" ] && printf '%s\n' "$CORPUS_BEFORE"
   [ -n "$CORPUS_ORACLE" ] && echo "$CORPUS_ORACLE <NIL: >>MacRW:corpus-out.txt"
-  for d in "$SHARE/$SUB"/*.d; do
-    b=$(basename "$d" .d)
-    echo "CD MacRW:$SUB/$b.d"
-    echo "Echo \"##### $b\" >>MacRW:corpus-out.txt"
+  while IFS='|' read -r label display b; do
+    [ -n "$label" ] || continue
+    echo "CD MacRW:$SUB/$label.d"
+    echo "Echo \"##### $display\" >>MacRW:corpus-out.txt"
     a="$CORPUS_ARGS"
     if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
-      m=$(grep -i "^[[:space:]]*$b[[:space:]]*:" "$MANIFEST" | head -1 | sed 's/^[^:]*://')
+      m=$(awk -v display="$display" -v base="$b" '
+        function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+        /^[[:space:]]*(#|$)/ { next }
+        index($0, "|") {
+          split($0, f, "|"); key=trim(f[1]) "/" trim(f[2])
+          shown=display; gsub(/^\[/, "", shown); gsub(/\] /, "/", shown)
+          if (tolower(key)==tolower(shown) || tolower(trim(f[2]))==tolower(base)) {
+            print trim(f[3]); exit
+          }
+          next
+        }
+        {
+          p=index($0, ":"); if (!p) next
+          key=trim(substr($0, 1, p-1))
+          if (tolower(key)==tolower(base)) { print trim(substr($0, p+1)); exit }
+        }' "$MANIFEST")
       [ -n "$m" ] && a="$m"
     fi
     # <NIL: matters: an interactive program (a text viewer, a prompt) otherwise
     # blocks forever inside a native Read, and a guest blocked in a native call
     # is past the point where the wall-clock guard can reach it.
     echo "$b $a <NIL: >>MacRW:corpus-out.txt"
-  done
+  done <"$ENTRIES"
   echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
   echo 'Wait 999999'
 } > "$RUN/startup"

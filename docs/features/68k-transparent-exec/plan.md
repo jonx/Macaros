@@ -675,14 +675,27 @@ Depends: T1; informed continuously by the `T1d` ledger.
   string-valued cybergraphics tag reaches native code, and an unknown-tag 68k
   negative control terminates with `unknown tag 8fffffff in
   graphics.best_mode` rather than reaching graphics.library.
-- **`[T3d]` Callbacks (native→68k re-entry).** Hooks detected by
-  sandbox-address test; symmetric marshal through the same descriptors;
-  re-entrancy held across the nested crossing.
-- **`[T3f]` Real-software corpus.** A curated set of system-friendly classic
+- **`[T3d]` Callbacks (native→68k re-entry). DONE 2026-08-02.** Generated
+  `utility.CallHookPkt` and `intuition.NewObjectA` crossings temporarily install
+  native trampolines and re-enter the same JIT engine on a dedicated callback
+  stack. The rebooted positive tests verify the Hook and BOOPSI register ABIs,
+  including `OM_NEW`; zero/out-of-range guest entries fail before native code.
+- **`[T3f]` Real-software corpus. FIRST CATEGORIZED SWEEP DONE 2026-08-02.** A curated set of system-friendly classic
   programs (CLI tools, a text viewer, a simple Workbench app) run headlessly;
   each new success is pinned as a regression test. Native-name-wins; a 68k
   disk library with no native equivalent follows `[T3e]`, and still fails as a
   classified capability gap until that lifecycle accepts it.
+
+  `make hosted-emu68k-t3legacy` stages isolated per-program fixtures using
+  `legacy-corpus.manifest`, runs the CLI/GUI/Workbench/hardware categories,
+  prints category coverage, and ranks aggregate bridge gaps by the number of
+  programs blocked. The same command separately requires the real LhA
+  create/list/extract byte-exact round trip. The first 12-program sweep has
+  eight run/quiet exits, three correctly classified hardware fallbacks, and
+  one library gap: `exec.library/FindSemaphore` (one program). No installed
+  sample currently exercises `datatypes.library`; the report says zero and the
+  optional `EMU68K_DATATYPE_PROGRAM` slot accepts a real `ViewDT` binary when
+  supplied rather than substituting a synthetic success.
 
 Exit criteria: the curated corpus runs; ledger top entries trend to zero for
 that corpus; callbacks proven by a boopsi/hook-using test app; a

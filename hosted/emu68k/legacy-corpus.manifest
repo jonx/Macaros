@@ -1,0 +1,15 @@
+# category|program|arguments|purpose
+# The suite copies a sample.txt fixture beside every executable.
+cli|Afinder||filesystem search
+cli|ConvertTabsToSpaces|sample.txt 4|in-place file conversion
+cli|DMS||self-extracting archive
+cli|GetAsmIncludeIndex||source index generation
+cli|lha||full create/list/extract work is run separately
+datatypes|ViewDT|sample.txt|optional real datatypes.library consumer
+gui|ADhelp|sample.txt|document GUI
+gui|ADocReader|sample.txt|MUI document GUI
+hardware|AMIGAPeek|0|hardware-dependent negative control
+hardware|DSPPeek|0|hardware-dependent negative control
+workbench|AddComment||commodity/Workbench integration
+workbench|AddText||Workbench-launched utility
+workbench|AutodocViewer|sample.txt|workbench.library document viewer
