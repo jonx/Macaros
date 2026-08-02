@@ -12,6 +12,8 @@
 ;   dos.DateStamp      -192  (D1)        generated OUT value-structure shadow
 ;   dos.CompareDates   -738  (D1,D2)     two generated IN structure shadows
 ;   dos.Info           -114  (D1,D2)     generated OUT InfoData + BPTR input
+;   dos.Examine        -102  (D1,D2)     FileInfoBlock OUT shadow
+;   dos.ExNext         -108  (D1,D2)     FileInfoBlock IN/OUT continuation
 ;   utility.Stricmp    -162  (A0,A1)     A-register arguments, second library
 ;   graphics.BestModeIDA -1050 (A0)      policy-typed TagItem shadow
 ;   cybergraphics.BestCModeIDTagList -60  string-valued tag data
@@ -26,6 +28,8 @@ DOS_DateStamp       equ -192
 DOS_CompareDates    equ -738
 DOS_Lock            equ -84
 DOS_UnLock          equ -90
+DOS_Examine         equ -102
+DOS_ExNext          equ -108
 DOS_Info            equ -114
 UTIL_Stricmp        equ -162
 GFX_BestModeIDA     equ -1050
@@ -109,6 +113,41 @@ CGFX_BestCModeID    equ -60
     beq     nope
     tst.l   28(a0)                  ; native BPTR is unsupported, thus zeroed
     bne     nope
+
+    ; ---- FileInfoBlock OUT and IN/OUT shadows ------------------------------
+    move.l  d6,d1
+    lea     fib(pc),a0
+    move.l  a0,d2
+    jsr     DOS_Examine(a6)
+    tst.l   d0
+    beq     examinefail
+    lea     fib(pc),a0
+    tst.b   8(a0)                   ; fib_FileName in the guest's 260-byte FIB
+    beq     examinefail
+    move.l  d6,d1
+    move.l  a0,d2                   ; ExNext consumes the prior fib_DiskKey
+    jsr     DOS_ExNext(a6)
+    tst.l   d0                      ; the installed SYS: corpus is non-empty
+    beq     exnextfail
+    lea     fib(pc),a0
+    tst.b   8(a0)
+    beq     exnextfail
+
+    ; Copy-on-success is part of the crossing contract. Exhaust the valid scan,
+    ; snapshotting fib_DiskKey before each call; the final failed ExNext must
+    ; not zero or partially rebuild the guest's buffer.
+fibscan:
+    lea     fib(pc),a0
+    move.l  (a0),d7
+    move.l  d6,d1
+    move.l  a0,d2
+    jsr     DOS_ExNext(a6)
+    tst.l   d0
+    bne     fibscan
+    lea     fib(pc),a0
+    cmp.l   (a0),d7
+    bne     fibfailurefail
+
     move.l  d6,d1
     jsr     DOS_UnLock(a6)
 
@@ -195,6 +234,15 @@ datecopyfail:
 datecmpfail:
     lea     datecmpmsg(pc),a0
     bra.s   say
+examinefail:
+    lea     examinemsg(pc),a0
+    bra.s   say
+exnextfail:
+    lea     exnextmsg(pc),a0
+    bra.s   say
+fibfailurefail:
+    lea     fibfailuremsg(pc),a0
+    bra.s   say
 nope:
     lea     nopemsg(pc),a0
 say:
@@ -224,6 +272,9 @@ nopemsg:  dc.b "[T3GEN] FAIL",10,0
 dateptrmsg: dc.b "[T3GEN] FAIL DateStamp pointer",10,0
 datecopymsg: dc.b "[T3GEN] FAIL DateStamp copy",10,0
 datecmpmsg: dc.b "[T3GEN] FAIL CompareDates",10,0
+examinemsg: dc.b "[T3GEN] FAIL Examine",10,0
+exnextmsg: dc.b "[T3GEN] FAIL ExNext",10,0
+fibfailuremsg: dc.b "[T3GEN] FAIL FileInfoBlock failure copy",10,0
     even
 besttags:
     dc.l 1,0                         ; TAG_IGNORE
@@ -244,4 +295,5 @@ nowstamp:     dc.l $11223344,$55667788,$10203040
 laterstamp:   dc.l 2,10,5
 earlierstamp: dc.l 1,10,5
 infodata:      ds.b 36
+fib:           ds.b 260
 patbuf:   ds.b 64
