@@ -179,9 +179,17 @@ bound); `MEMF_31BIT`-style allocation inside the guest must come from the
 sandbox, never from AROS; and a library that fails init must be unloaded and
 its base never registered, or a later call reaches free memory.
 
-**Testing it needs a real 68k `.library`, and there is none on this machine** -
-which is the same evidence gap as the corpus, and the reason this is written
-down rather than half-built.
+**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
+real 240-byte hunk `.library` with a self-referencing resident tag
+(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
+vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
+returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
+not crashing. It deliberately does not call `MakeLibrary`, which would make it
+a test of exec rather than of the loader.
+
+That removes the reason this was written down instead of built. What remains is
+the two new steps (find the file, scan for the tag) either side of three that
+are already proven.
 
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
@@ -321,9 +329,17 @@ bound); `MEMF_31BIT`-style allocation inside the guest must come from the
 sandbox, never from AROS; and a library that fails init must be unloaded and
 its base never registered, or a later call reaches free memory.
 
-**Testing it needs a real 68k `.library`, and there is none on this machine** -
-which is the same evidence gap as the corpus, and the reason this is written
-down rather than half-built.
+**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
+real 240-byte hunk `.library` with a self-referencing resident tag
+(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
+vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
+returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
+not crashing. It deliberately does not call `MakeLibrary`, which would make it
+a test of exec rather than of the loader.
+
+That removes the reason this was written down instead of built. What remains is
+the two new steps (find the file, scan for the tag) either side of three that
+are already proven.
 
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
@@ -463,9 +479,17 @@ bound); `MEMF_31BIT`-style allocation inside the guest must come from the
 sandbox, never from AROS; and a library that fails init must be unloaded and
 its base never registered, or a later call reaches free memory.
 
-**Testing it needs a real 68k `.library`, and there is none on this machine** -
-which is the same evidence gap as the corpus, and the reason this is written
-down rather than half-built.
+**The test artifact now exists**: `hosted/emu68k/nativelib/testlib.s` builds a
+real 240-byte hunk `.library` with a self-referencing resident tag
+(`rt_Flags=$80`, `rt_Type=9`), an `rt_Init` that returns a GUEST base, and two
+vectors laid out by hand below it - `TestAdd` at -30 and `TestMagic` at -36
+returning `$5AFEC0DE`, so a loader can be proven end to end rather than merely
+not crashing. It deliberately does not call `MakeLibrary`, which would make it
+a test of exec rather than of the loader.
+
+That removes the reason this was written down instead of built. What remains is
+the two new steps (find the file, scan for the tag) either side of three that
+are already proven.
 
 **The evidence gap that matters most.** The corpus is 12 binaries, and there
 are no others on this machine. Everything above is a claim about twelve
