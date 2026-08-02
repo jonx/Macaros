@@ -242,9 +242,11 @@ and `emu68k_oscall.c` in-OS with the first hand-marshalled set
 (dos I/O: Input/Output/Open/Close/Read/Write/Seek/Delay). File handles cross
 the boundary as opaque TOKENS (a native BPTR is 64-bit and a 68k register is
 32; truncation was the first live failure, exactly as `[T0-P4]` predicted).
-`make hosted-emu68k-t3hello` is the host regression. Still ahead here: the
-generated `[T3a]` tables replacing hand marshalling, printf-class varargs,
-intuition/graphics, callbacks.
+`make hosted-emu68k-t3hello` is the host regression. The generated `[T3a]`
+table now sits BEHIND this hand-written set: a call the hand-written switch
+does not claim falls through to the derived crossings, so a crossing that
+needs judgement is never silently replaced by one inferred from a signature.
+Still ahead here: printf-class varargs, the tier-2 structure types, callbacks.
 
 **The standing rule** (see NOTES.md, 2026-08-02): bridge to AROS's own
 implementation by default; implement in the guest ONLY when the result cannot
@@ -257,16 +259,70 @@ Original plan text follows.
 
 Depends: T1; informed continuously by the `T1d` ledger.
 
-- **`[T3a]` `genmodule` marshal back-end.** The new emitter beside
-  `writefd.c` (lives in the OS-source checkout `../aros-upstream`, committed
-  to the jonx fork's `aarch64-darwin-graft` branch like all OS-side work;
-  kept clean): per-library
-  `lvo_desc[]` tables from the `.conf` register maps, per the
-  [marshalling design §1](../68k-marshalling/README.md). The tables are the
-  *index*; execution goes through **generated thunks + the `[T0-P4]`
-  semantic-annotation layer** (direction, lengths, copy policy, shadow/proxy
-  classes). A function without annotations is unsupported, never
+- **`[T3a]` Generated crossings from the `.conf` files. FIRST SLICE DONE
+  2026-08-02.** `graft/gen-emu68k-bridge` parses every `##begin functionlist`
+  block (full C prototype + m68k register map per vector) and emits
+  `emu68k_gen_<lib>.c` into the OS tree. 64 crossings across dos, exec,
+  utility, intuition, graphics, icon and commodities, none hand-written.
+  `make hosted-emu68k-t3gen` is the regression: it fails if a generated file
+  drifts from the `.conf` it came from, then proves the emitted crossings work
+  in-OS with a 68k program.
+
+  What is generatable is bounded by the **tier** split, which is the durable
+  idea here:
+
+  | tier | what crosses | cost |
+  |---|---|---|
+  | 1 | scalars, and pointers to bytes (a C string, a raw buffer) | free, generated |
+  | 2 | a structure, a BPTR, an untyped APTR | one description per **TYPE**, shared by every function using it |
+  | 3 | the callee retains the pointer, or calls back into the guest | hand-written, always |
+
+  Tier 1 is only ~16% of the public vectors, and it is concentrated where
+  console programs live (dos 18%) rather than in the GUI libraries (graphics
+  5%), whose surface is `struct RastPort *` and `struct Window *`. The
+  leverage is therefore tier 2, and it is measurable: 43 vectors want
+  `RastPort`, 30 want `Window`, 35 dos vectors want only the BPTR handle
+  mapping that already exists. Six type descriptions would outrun everything
+  hand-writing has produced.
+
+  Three lessons the first slice paid for, all of them the same shape (a
+  signature that lies):
+  - **The self-check earns its keep.** LVO numbering is `firstlvo` by module
+    type, except that a `.conf` declaring `noresident` spells out the four
+    standard vectors itself and starts at 1. Validating against offsets known
+    from the 68k ABI (`Open` = -30, `MatchFirst` = -822) caught the resulting
+    4-vector shift in three libraries, and caught a hand-written
+    off-by-one-`.skip` in this plan's own earlier notes.
+  - **Simple signature is not safe to forward.** `exec.ShutdownA`, `SetSR`,
+    `ReadGayle`, `Exception`, `RawPutChar` are all tier 1 by shape and all
+    drive the real machine, so exec is **allowlisted** while everything else is
+    denylisted. `exec.Wait` would block the AROS task hosting the JIT.
+  - **A C prototype can under-describe the vector.** `utility.UDivMod32` is
+    declared `ULONG` but returns the quotient in D0 *and the remainder in D1*;
+    generating it would have left D1 stale and the arithmetic silently wrong.
+    `dos.MakeLink`'s `dest` is a string or a lock depending on another
+    argument. Both are refused by name, with the reason recorded.
+
+  Still ahead: the tier-2 type descriptions (see `[T3b]`), the `[T0-P4]`
+  semantic-annotation layer for direction/length/copy policy, printf-class
+  varargs, callbacks. A function without annotations stays unsupported, never
   best-effort ([design §4](design.md)).
+
+  One vector deserves an implementation rather than a refusal:
+  **`exec.CacheClearU`** means "I have just modified code, forget what you
+  cached". Under translation the honest equivalent is flushing the JIT's
+  translated blocks, so it belongs in the engine, not in a generated crossing.
+  Until it exists, a self-modifying program that calls it stops with a
+  classified gap, which is the right failure: no-oping it would let the JIT run
+  stale translations of code the program has already rewritten, silently.
+
+  **On measuring this with the corpus:** a sweep is NOT a reliable regression
+  signal on its own. Two programs (`ADhelp`, `PPMore`) can hang past the
+  wall-clock guard, because a guest blocked inside a *native* call is past the
+  point the guard can reach; the same build and inputs produced a clean
+  `***Break` on one run and a hang on the next. Attribute a changed line with
+  an A/B (build with the change disabled and re-run the single program), not
+  with a diff of two sweeps.
 - **`[T3b]` Core libraries wired.** exec, dos, utility first; then intuition,
   graphics, gadtools, asl, icon, workbench, each as thunks + curated
   annotations, ledger-prioritized. Hand-written `T1c` stubs retire as

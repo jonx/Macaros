@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""Generate the 68k -> native AROS library bridge from the OS tree's own .conf
+files.
+
+Every AROS library describes each of its vectors in a `##begin functionlist`
+block: the full C prototype, and the m68k register each argument arrives in.
+That is exactly the information a call needs to cross from a 68k guest into a
+native library, so the crossing should be DERIVED from it rather than typed out
+by hand.
+
+What can be derived is limited by one fact: there is no pass-through. Guest
+memory is big-endian with 32-bit pointers; native AROS on aarch64 is
+little-endian with 64-bit pointers and different structure layouts. A pointer
+argument is therefore only safe to forward when the thing behind it has no
+layout at all - a NUL-terminated string, or raw bytes. Anything with fields has
+to be rebuilt, which needs a description of the type, not of the function.
+
+So functions land in tiers:
+
+  1  every argument is a scalar or a char pointer, and the result is a scalar.
+     Fully generated, no hand-written code, ever.
+  2  a structure, a BPTR, or an untyped APTR crosses. Needs a per-TYPE
+     description (written once, shared by every function using that type).
+  3  the signature does not say enough: the callee retains the pointer, or
+     calls back into the guest.
+
+This script emits tier 1 and reports the rest as the work queue.
+"""
+
+import os
+import re
+import sys
+
+AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
+
+# The libraries a 68k program actually calls, with the base and header the
+# generated code needs. Order is the order of the generated files.
+# library, conf, base variable, its type, proto header. The base is declared as
+# a LOCAL of the name and type proto/<lib>.h expects, which shadows the extern
+# that header declares - so the generated call uses the base we were handed
+# rather than a global nobody set. (Defining a macro instead would be wrong for
+# GfxBase and IntuitionBase, whose base name is also their struct tag.)
+LIBS = [
+    ("dos.library",         "rom/dos/dos.conf",
+     "DOSBase",       "struct DosLibrary",   "proto/dos.h"),
+    ("exec.library",        "rom/exec/exec.conf",
+     "SysBase",       "struct ExecBase",     "proto/exec.h"),
+    ("utility.library",     "rom/utility/utility.conf",
+     "UtilityBase",   "struct UtilityBase",  "proto/utility.h"),
+    ("intuition.library",   "rom/intuition/intuition.conf",
+     "IntuitionBase", "struct IntuitionBase","proto/intuition.h"),
+    ("graphics.library",    "rom/graphics/graphics.conf",
+     "GfxBase",       "struct GfxBase",      "proto/graphics.h"),
+    ("icon.library",        "workbench/libs/icon/icon.conf",
+     "IconBase",      "struct Library",      "proto/icon.h"),
+    ("commodities.library", "workbench/libs/commodities/commodities.conf",
+     "CxBase",        "struct Library",      "proto/commodities.h"),
+]
+
+# ---------------------------------------------------------------------------
+# type classification
+# ---------------------------------------------------------------------------
+
+# Fits in (or narrower than) a 32-bit 68k register, and carries no address.
+SCALAR = {
+    "LONG", "ULONG", "WORD", "UWORD", "BYTE", "UBYTE", "BOOL", "LONGBITS",
+    "ULONGBITS", "int", "unsigned int", "long", "unsigned long", "short",
+    "unsigned short", "char", "unsigned char", "signed char", "UBYTE",
+    "STACKULONG", "STACKLONG", "Tag", "TEXT",
+}
+
+# Pointer-sized natively but used as an integer. Safe as an argument (we widen
+# a 32-bit register); as a RESULT it is narrowed, which is only correct because
+# the value is an integer and not an address. Flagged in the generated source.
+WIDENING = {"IPTR", "SIPTR", "APTR_or_IPTR"}
+
+# A pointer to bytes: no layout, so the guest's own buffer can be handed over
+# directly. This is the only pointer class that is safe to forward as-is.
+STRING = {"STRPTR", "CONST_STRPTR", "CONST_STRPTR_or_NULL"}
+
+VOID = {"void", "VOID"}
+
+# Tier 1 by signature is not the same as safe to forward. A guest is not
+# trusted to halt the machine it is a guest on, and a simple signature says
+# nothing about that, so the decision is made by name.
+#
+# exec.library is inverted: it is a kernel API, not an application API, and
+# nearly every one of its simple-signature vectors drives the real machine
+# (ShutdownA, SetSR, ReadGayle, Exception, RawPutChar). The calls a 68k
+# program legitimately makes into exec - memory, lists, semaphores,
+# OpenLibrary - are hand-served already. So exec is allowlisted and everything
+# else is denylisted.
+ALLOWLIST_LIBS = {"exec.library"}
+
+ALLOW = {
+    ("exec.library", "AvailMem"): 1,
+}
+
+DENY = {
+    # the guest exits by returning; calling this would unwind the host task
+    ("dos.library",  "Exit"):        "the guest exits by returning, not by this",
+    # device-level operations: vanishingly rare in the programs being served,
+    # and catastrophic if a mistranslated register ever reaches one
+    ("dos.library",  "Format"):      "device-level, and destroys a volume",
+    ("dos.library",  "Relabel"):     "device-level",
+    ("dos.library",  "Inhibit"):     "device-level",
+    ("dos.library",  "AddBuffers"):  "device-level",
+    ("dos.library",  "SetOwner"):    "device-level",
+    # meaningless or harmful without the paired call, which is not tier 1
+    ("dos.library",  "UnLockDosList"): "pairs with LockDosList, which is not tier 1",
+    ("dos.library",  "SetArgStr"):   "rebinds the host process argument string",
+    ("dos.library",  "SetProgramName"): "renames the host process",
+    ("dos.library",  "SetCurrentDirName"): "moves the host process, not the guest",
+    ("dos.library",  "SetPrompt"):   "the host shell's prompt is not the guest's",
+    ("dos.library",  "MaxCli"):      "reports on host CLIs, not guest ones",
+    # the host task's signals are the JIT's, not the guest's: a guest that
+    # allocates or waits on them stalls the task running it
+    ("dos.library",  "CheckSignal"): "the host task's signals are not the guest's",
+    # `dest` is a STRPTR when soft is set and a BPTR lock when it is not, so
+    # one C type covers two conversions and the signature cannot say which
+    ("dos.library",  "MakeLink"):   "dest is a string or a lock depending on soft",
+    # returns a PAIR: quotient in D0, remainder in D1. The C prototype can only
+    # describe D0, so generating from it would leave D1 stale and the
+    # arithmetic silently wrong. Needs a hand-written crossing.
+    ("utility.library", "UDivMod32"): "returns quotient in D0 AND remainder in D1",
+    ("utility.library", "SDivMod32"): "returns quotient in D0 AND remainder in D1",
+}
+
+
+def norm(t):
+    return re.sub(r"\s+", " ", t.strip())
+
+
+def classify(t):
+    """-> ('scalar'|'widen'|'string'|'void'|'bptr'|'struct'|'aptr'|'other')"""
+    t = norm(t)
+    if t in VOID:
+        return "void"
+    if t == "BPTR":
+        return "bptr"
+    if t in SCALAR:
+        return "scalar"
+    if t in WIDENING:
+        return "widen"
+    if t in STRING:
+        return "string"
+    # `UBYTE *name` / `char *` / `CONST STRPTR` spellings of a byte buffer
+    if re.fullmatch(r"(CONST\s+)?(unsigned\s+|signed\s+)?(char|UBYTE|TEXT)\s*\*", t):
+        return "string"
+    if t == "APTR" or t == "CONST_APTR":
+        return "aptr"
+    if "*" in t:
+        return "struct"
+    return "other"
+
+
+# ---------------------------------------------------------------------------
+# .conf parsing
+# ---------------------------------------------------------------------------
+
+# `<return type> <name>(<args>) (<regs>)`, where the return type may itself
+# carry stars and `struct`.
+FUNC_RE = re.compile(r"^(.*?\**)\s*(\w+)\s*\((.*)\)\s*\(([^()]*)\)\s*$")
+
+
+def split_args(s):
+    """Split an argument list on commas that are not inside parentheses (a
+    function-pointer argument carries its own)."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return [a.strip() for a in out if a.strip()]
+
+
+def arg_type_and_name(a):
+    """`struct FileInfoBlock* fib` -> ('struct FileInfoBlock *', 'fib')"""
+    a = a.strip()
+    if a in VOID or a == "":
+        return None
+    # a function pointer argument: `void (*fn)(...)`
+    if "(*" in a:
+        return ("__fnptr", "fn")
+    m = re.match(r"^(.*?)(\w+)$", a)
+    if not m:
+        return (norm(a), "a")
+    t, n = m.group(1), m.group(2)
+    if not t.strip() or t.strip() in ("struct", "const", "CONST", "unsigned", "signed"):
+        # the whole thing was a bare type with no parameter name
+        return (norm(a), "a")
+    return (norm(t), n)
+
+
+class Func:
+    def __init__(self, lvo, ret, name, args, regs):
+        self.lvo, self.ret, self.name, self.args, self.regs = lvo, ret, name, args, regs
+        self.private = False
+        self.novararg = False
+
+    @property
+    def offset(self):
+        return -6 * self.lvo
+
+    def tier(self, lib=None):
+        """1, or the reason it is not 1."""
+        if self.private:
+            return (None, "private")
+        if lib is not None:
+            if (lib, self.name) in DENY:
+                return (None, "refused: " + DENY[(lib, self.name)])
+            if lib in ALLOWLIST_LIBS and (lib, self.name) not in ALLOW:
+                return (None, "not on the %s allowlist" % lib.split(".")[0])
+        if self.regs and self.regs[0] in ("base", "sysv"):
+            return (None, "not register-based")
+        # a zero-argument function has an empty register list, which is fine
+        if not self.regs and self.args:
+            return (None, "no register mapping")
+        if len(self.regs) != len(self.args):
+            return (None, "register/argument count mismatch")
+        rc = classify(self.ret)
+        if rc == "bptr":
+            return (None, "returns BPTR")
+        # A returned pointer is a 64-bit HOST address. There is no 32-bit
+        # register to put it in, and truncating one is how a guest gets handed
+        # a pointer that dereferences to nothing. This includes STRPTR: a
+        # returned string is as unrepresentable as a returned struct.
+        if rc in ("struct", "aptr", "other", "string"):
+            return (None, "returns a pointer (%s)" % norm(self.ret))
+        blockers = []
+        for t, n in self.args:
+            c = classify(t)
+            if c == "bptr":
+                blockers.append("BPTR %s" % n)
+            elif c == "struct":
+                blockers.append("%s" % norm(t))
+            elif c == "aptr":
+                blockers.append("APTR %s" % n)
+            elif c == "other":
+                blockers.append("%s %s" % (norm(t), n))
+        if blockers:
+            return (None, ", ".join(sorted(set(blockers))))
+        return (1, None)
+
+
+# The first vector the functionlist describes, exactly as genmodule derives it
+# (tools/genmodule/config.c): by module type, except that a library declaring
+# `noresident` spells out the four standard vectors itself and so starts at 1.
+FIRSTLVO_BY_MODTYPE = {
+    "handler": 1, "resource": 1,
+    "library": 5, "usbclass": 5, "hidd": 5, "class": 5, "gadget": 5, "image": 5,
+    "datatype": 6, "mcc": 6, "mui": 6, "mcp": 6,
+    "device": 7,
+}
+
+
+def first_lvo(lines):
+    modtype, options = "library", ""
+    inconf = False
+    for line in lines:
+        if line.startswith("##begin config"):
+            inconf = True
+            continue
+        if line.startswith("##end config"):
+            break
+        if not inconf:
+            continue
+        s = line.split("#")[0].strip()
+        if s.startswith("modtype"):
+            modtype = s.split(None, 1)[1].strip().lower() if len(s.split()) > 1 else modtype
+        elif s.startswith("options"):
+            options += " " + s
+    lvo = FIRSTLVO_BY_MODTYPE.get(modtype, 5)
+    if "noresident" in options:
+        lvo = 1
+    return lvo
+
+
+def parse_conf(path):
+    inlist = False
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return None
+    funcs = []
+    lvo = first_lvo(lines) - 1
+    last = None
+    for raw in lines:
+        line = raw.rstrip()
+        if line.startswith("##begin functionlist"):
+            inlist = True
+            continue
+        if line.startswith("##end functionlist"):
+            break
+        if not inlist:
+            continue
+        # strip trailing comment, but not a `#` inside the prototype
+        s = line.split("#")[0].strip() if not line.lstrip().startswith("#") else ""
+        if not s:
+            continue
+        if s.startswith("."):
+            d = s[1:].split()
+            if d[0] == "skip":
+                lvo += int(d[1]) if len(d) > 1 else 1
+                last = None
+            elif d[0] == "private":
+                if last is not None:
+                    last.private = True
+            elif d[0] == "novararg":
+                if last is not None:
+                    last.novararg = True
+            # .version, .function, .alias and friends do not consume a vector
+            continue
+        m = FUNC_RE.match(s)
+        if not m:
+            last = None
+            continue
+        ret, name, argstr, regstr = m.groups()
+        lvo += 1
+        args = []
+        ok = True
+        for a in split_args(argstr):
+            tn = arg_type_and_name(a)
+            if tn is None:
+                continue
+            if tn[0] == "__fnptr":
+                ok = False
+            args.append(tn)
+        regs = [r.strip() for r in regstr.split(",") if r.strip()]
+        f = Func(lvo, ret if ret.strip() else "void", name, args, regs)
+        if not ok:
+            f.args.append(("__fnptr", "fn"))
+        funcs.append(f)
+        last = f
+    return funcs
+
+
+# ---------------------------------------------------------------------------
+# self-check: LVO assignment must reproduce offsets known from the 68k ABI
+# ---------------------------------------------------------------------------
+
+KNOWN = {
+    "dos.library": {
+        "Open": -30, "Close": -36, "Read": -42, "Write": -48, "Input": -54,
+        "Output": -60, "Seek": -66, "IoErr": -132, "Delay": -198,
+        "MatchFirst": -822, "MatchNext": -828, "MatchEnd": -834,
+        "ParsePattern": -840, "MatchPattern": -846, "ReadArgs": -798,
+        "PrintFault": -474, "SetIoErr": -462, "GetProgramName": -576,
+    },
+    "exec.library": {
+        "Supervisor": -30, "Forbid": -132, "Permit": -138, "AllocMem": -198,
+        "FreeMem": -210, "FindTask": -294, "OpenLibrary": -552,
+        "AllocVec": -684, "FreeVec": -690,
+    },
+    # OpenIntuition/Intuition are `.skip`ped privates in AROS, so they are
+    # deliberately absent by name.
+    "intuition.library": {
+        "DisplayAlert": -90, "OpenWindow": -204,
+        "CloseWindow": -72, "EasyRequestArgs": -588,
+    },
+    "graphics.library": {
+        "BltBitMap": -30, "Text": -60, "Move": -240, "Draw": -246,
+        "SetAPen": -342, "RectFill": -306,
+    },
+    "utility.library": {
+        "FindTagItem": -30, "GetTagData": -36, "Stricmp": -162,
+    },
+    # -96 for FindToolType is confirmed twice over: by this table and by the
+    # hand-written bridge that has been serving it to real programs.
+    "icon.library": {
+        "FreeFreeList": -54, "FindToolType": -96, "MatchToolValue": -102,
+        "BumpRevision": -108,
+    },
+}
+
+
+def selfcheck(lib, funcs):
+    want = KNOWN.get(lib)
+    if not want:
+        return []
+    by = {f.name: f for f in funcs}
+    bad = []
+    for name, off in want.items():
+        f = by.get(name)
+        if f is None:
+            bad.append("%s: not found" % name)
+        elif f.offset != off:
+            bad.append("%s: got %d, 68k ABI says %d" % (name, f.offset, off))
+    return bad
+
+
+# ---------------------------------------------------------------------------
+# emit
+# ---------------------------------------------------------------------------
+
+def reg_expr(reg):
+    """`D1` -> `r->d[1]`"""
+    reg = reg.strip().upper()
+    if not re.fullmatch(r"[DA][0-7]", reg):
+        return None
+    return "r->%s[%s]" % (reg[0].lower(), reg[1])
+
+
+def arg_expr(t, reg):
+    """The C expression that turns one 68k register into one native argument."""
+    c = classify(t)
+    src = reg_expr(reg)
+    t = norm(t)
+    if c == "string":
+        return "(%s)EMU_GPTR(guest0, %s)" % (t, src)
+    if c == "widen":
+        # sign-extend through LONG: the value is an integer, and a negative one
+        # (an error code, a -1 sentinel) must stay negative when it widens
+        return "(%s)(LONG)%s" % (t, src)
+    return "(%s)%s" % (t, src)
+
+
+def emit_lib(lib, rel, base, btype, hdr, funcs):
+    short = lib.split(".")[0]
+    out = []
+    w = out.append
+    w("/* GENERATED by graft/gen-emu68k-bridge from %s - do not edit." % rel)
+    w(" *")
+    w(" * Tier 1 crossings for %s: every argument is a scalar or a pointer to" % lib)
+    w(" * bytes, and the result is a scalar, so the crossing follows entirely from")
+    w(" * the vector's declared prototype and register mapping. Anything needing a")
+    w(" * structure rebuilt, a BPTR mapped, or a callback into the guest is NOT")
+    w(" * here: those are hand-written in emu68k_oscall.c.")
+    w(" */")
+    w("")
+    w("#include <exec/types.h>")
+    w("#include <%s>" % hdr)
+    w("")
+    w('#include "emu68k_gen.h"')
+    w("")
+    w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base)" % short)
+    w("{")
+    w("    %s *%s = base;" % (btype, base))
+    w("    (void)r; (void)guest0; (void)%s;" % base)
+    w("")
+    w("    switch (lvo)")
+    w("    {")
+    n = 0
+    for f in funcs:
+        if f.tier(lib)[0] != 1:
+            continue
+        regs = [reg_expr(x) for x in f.regs]
+        if any(x is None for x in regs):
+            continue
+        args = ",\n              ".join(
+            arg_expr(t, reg) for (t, _), reg in zip(f.args, f.regs))
+        sig = ", ".join("%s %s" % (norm(t), nm) for t, nm in f.args) or "void"
+        w("    case %d:  /* %s(%s) -> %s  [%d] */" % (f.lvo, f.name, sig,
+                                                      norm(f.ret), f.offset))
+        call = "%s(%s)" % (f.name, args)
+        if classify(f.ret) == "void":
+            w("        %s;" % call)
+        else:
+            note = ""
+            if classify(f.ret) == "widen":
+                note = "   /* narrowed: an integer, never an address */"
+            w("        r->d[0] = (ULONG)%s;%s" % (call, note))
+        w("        return 0;")
+        n += 1
+    w("    }")
+    w("    return 1;   /* not a tier-1 vector of this library */")
+    w("}")
+    w("")
+    return "\n".join(out), n
+
+
+HEADER = '''/* GENERATED by graft/gen-emu68k-bridge - do not edit.
+ *
+ * The generated half of the 68k -> native library bridge. One entry point per
+ * library; each returns 0 when it served the call and 1 when the vector is not
+ * one it covers, so the hand-written bridge stays in charge of everything that
+ * needs judgement.
+ */
+
+#ifndef EMU68K_GEN_H
+#define EMU68K_GEN_H
+
+#include <exec/types.h>
+
+/* The leading, stable part of the engine's 68k register file. The engine owns
+ * the full struct; only these two arrays are contractual here. */
+struct Emu68kRegs
+{
+    ULONG d[8];
+    ULONG a[8];
+};
+
+/* A guest pointer becomes a host pointer by adding the guest base. Only memory
+ * inside the guest arena may be handed to a native call this way. */
+#define EMU_GPTR(g0, a)  ((APTR)((a) ? (UBYTE *)(g0) + (ULONG)(a) : NULL))
+
+%s
+#endif /* EMU68K_GEN_H */
+'''
+
+
+def emit(outdir, check=False):
+    """Write the generated sources, or with check=True only verify that what is
+    on disk is what this generator would produce. The sources are checked in so
+    the OS tree builds without python, which makes drift possible: a hand edit
+    to a generated file, or a .conf change upstream that nobody regenerated
+    for. This is what catches both."""
+    protos, total = [], 0
+    stale = []
+    for lib, rel, base, btype, hdr in LIBS:
+        funcs = parse_conf(os.path.join(AROS, rel))
+        if funcs is None:
+            continue
+        src, n = emit_lib(lib, rel, base, btype, hdr, funcs)
+        short = lib.split(".")[0]
+        path = os.path.join(outdir, "emu68k_gen_%s.c" % short)
+        if check:
+            cur = open(path).read() if os.path.exists(path) else None
+            if cur != src:
+                stale.append(path)
+        else:
+            with open(path, "w") as fh:
+                fh.write(src)
+        protos.append("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r,\n"
+                      "                  APTR guest0, APTR base);" % short)
+        print("  %-28s %3d crossings" % (os.path.basename(path), n))
+        total += n
+    hpath = os.path.join(outdir, "emu68k_gen.h")
+    hsrc = HEADER % "\n".join(protos)
+    if check:
+        cur = open(hpath).read() if os.path.exists(hpath) else None
+        if cur != hsrc:
+            stale.append(hpath)
+        if stale:
+            print("STALE - regenerate with --emit:")
+            for x in stale:
+                print("  %s" % x)
+            return 1
+        print("generated sources are in sync with the .conf files (%d crossings)"
+              % total)
+        return 0
+    with open(hpath, "w") as fh:
+        fh.write(hsrc)
+    print("  %-28s %3d total" % ("emu68k_gen.h", total))
+    return 0
+
+
+def main():
+    if "--emit" in sys.argv:
+        i = sys.argv.index("--emit")
+        return emit(sys.argv[i + 1])
+    if "--check" in sys.argv:
+        i = sys.argv.index("--check")
+        return emit(sys.argv[i + 1], check=True)
+    if "--list" in sys.argv:
+        which = [a for a in sys.argv[1:] if not a.startswith("-")]
+        for lib, rel, base, btype, hdr in LIBS:
+            if which and lib.split(".")[0] not in which:
+                continue
+            funcs = parse_conf(os.path.join(AROS, rel)) or []
+            print("== %s" % lib)
+            for f in funcs:
+                if f.tier(lib)[0] != 1:
+                    continue
+                sig = ", ".join("%s %s %s" % (t, n, r)
+                                for (t, n), r in zip(f.args, f.regs)) or "void"
+                print("  %4d %-6d %-22s %-10s (%s)%s"
+                      % (f.lvo, f.offset, f.name, norm(f.ret), sig,
+                         "  [DENIED: %s]" % DENY[(lib, f.name)]
+                         if (lib, f.name) in DENY else ""))
+        return 0
+    total1 = total = 0
+    reasons = {}
+    fail = False
+    for lib, rel, base, btype, hdr in LIBS:
+        path = os.path.join(AROS, rel)
+        funcs = parse_conf(path)
+        if funcs is None:
+            print("%-20s MISSING %s" % (lib, rel))
+            continue
+        bad = selfcheck(lib, funcs)
+        t1 = [f for f in funcs if f.tier(lib)[0] == 1]
+        pub = [f for f in funcs if not f.private]
+        total1 += len(t1)
+        total += len(pub)
+        print("%-20s %4d vectors  %4d public  %4d tier-1 (%.0f%%)  %s"
+              % (lib, len(funcs), len(pub), len(t1),
+                 100.0 * len(t1) / max(1, len(pub)),
+                 "OK" if not bad else "LVO SELF-CHECK FAILED"))
+        for b in bad:
+            fail = True
+            print("      ! %s" % b)
+        for f in pub:
+            if f.tier(lib)[0] != 1:
+                reasons.setdefault(f.tier(lib)[1], []).append("%s.%s" % (lib.split(".")[0], f.name))
+
+    print("\ntotal: %d of %d public vectors are tier 1 (%.0f%%)"
+          % (total1, total, 100.0 * total1 / max(1, total)))
+    print("\nwhat keeps the rest out, most common first:")
+    for r, fs in sorted(reasons.items(), key=lambda kv: -len(kv[1]))[:18]:
+        print("  %4d  %-42s e.g. %s" % (len(fs), r[:42], ", ".join(fs[:3])))
+
+    return 1 if fail else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
