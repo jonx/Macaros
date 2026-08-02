@@ -55,6 +55,12 @@
       "id": 9,
       "c_type": "struct Screen *",
       "kind": "opaque"
+    },
+    "AslRequest": {
+      "id": 10,
+      "c_type": "APTR",
+      "kind": "opaque",
+      "destructor": "asl.library.FreeAslRequest"
     }
   },
   "tag_domains": {
@@ -109,6 +115,89 @@
         {"name": "ICONDUPA_DuplicateToolTypes", "kind": "u32"},
         {"name": "ICONDUPA_DuplicateToolWindow", "kind": "u32"},
         {"name": "ICONDUPA_ActivateImageData", "kind": "u32"}
+      ]
+    },
+    "asl.request": {
+      "headers": ["libraries/asl.h"],
+      "max_items": 64,
+      "tags": [
+        {"name": "ASLFR_TitleText", "kind": "cstr"},
+        {"name": "ASLFR_Window", "kind": "refuse"},
+        {"name": "ASLFR_InitialLeftEdge", "kind": "u32"},
+        {"name": "ASLFR_InitialTopEdge", "kind": "u32"},
+        {"name": "ASLFR_InitialWidth", "kind": "u32"},
+        {"name": "ASLFR_InitialHeight", "kind": "u32"},
+        {"name": "ASLFR_HookFunc", "kind": "refuse"},
+        {"name": "ASLFR_InitialFile", "kind": "cstr"},
+        {"name": "ASLFR_InitialDrawer", "kind": "cstr"},
+        {"name": "ASLFR_InitialPattern", "kind": "cstr"},
+        {"name": "ASLFO_InitialSize", "kind": "u32"},
+        {"name": "ASLFO_InitialStyle", "kind": "u32"},
+        {"name": "ASLFO_InitialFlags", "kind": "u32"},
+        {"name": "ASLFO_InitialFrontPen", "kind": "u32"},
+        {"name": "ASLFO_InitialBackPen", "kind": "u32"},
+        {"name": "ASLFO_MinHeight", "kind": "u32"},
+        {"name": "ASLFO_MaxHeight", "kind": "u32"},
+        {"name": "ASLFR_PositiveText", "kind": "cstr"},
+        {"name": "ASLFR_NegativeText", "kind": "cstr"},
+        {"name": "ASLFR_Flags1", "kind": "u32"},
+        {"name": "ASLFO_ModeList", "kind": "refuse"},
+        {"name": "ASLFR_Flags2", "kind": "u32"},
+        {"name": "ASLFR_Screen", "kind": "refuse"},
+        {"name": "ASLFR_PubScreenName", "kind": "cstr"},
+        {"name": "ASLFR_PrivateIDCMP", "kind": "u32"},
+        {"name": "ASLFR_SleepWindow", "kind": "u32"},
+        {"name": "ASLFR_DoSaveMode", "kind": "u32"},
+        {"name": "ASLFR_DoMultiSelect", "kind": "u32"},
+        {"name": "ASLFR_DoPatterns", "kind": "u32"},
+        {"name": "ASLFR_DrawersOnly", "kind": "u32"},
+        {"name": "ASLFO_FixedWidthOnly", "kind": "u32"},
+        {"name": "ASLFR_FilterFunc", "kind": "refuse"},
+        {"name": "ASLFR_Locale", "kind": "refuse"},
+        {"name": "ASLFR_TextAttr", "kind": "refuse"},
+        {"name": "ASLFR_UserData", "kind": "u32"},
+        {"name": "ASLFO_InitialDrawMode", "kind": "u32"},
+        {"name": "ASLFR_RejectIcons", "kind": "u32"},
+        {"name": "ASLFR_RejectPattern", "kind": "cstr"},
+        {"name": "ASLFR_AcceptPattern", "kind": "cstr"},
+        {"name": "ASLFR_FilterDrawers", "kind": "u32"},
+        {"name": "ASLFO_FrontPens", "kind": "refuse"},
+        {"name": "ASLFO_BackPens", "kind": "refuse"},
+        {"name": "ASLFO_MaxFrontPen", "kind": "u32"},
+        {"name": "ASLFO_MaxBackPen", "kind": "u32"},
+        {"name": "ASLFR_IntuiMsgFunc", "kind": "refuse"},
+        {"name": "ASLSM_InitialDisplayID", "kind": "u32"},
+        {"name": "ASLSM_InitialDisplayWidth", "kind": "u32"},
+        {"name": "ASLSM_InitialDisplayHeight", "kind": "u32"},
+        {"name": "ASLSM_InitialDisplayDepth", "kind": "u32"},
+        {"name": "ASLSM_InitialOverscanType", "kind": "u32"},
+        {"name": "ASLSM_InitialAutoScroll", "kind": "u32"},
+        {"name": "ASLSM_InitialInfoOpened", "kind": "u32"},
+        {"name": "ASLSM_InitialInfoLeftEdge", "kind": "u32"},
+        {"name": "ASLSM_InitialInfoTopEdge", "kind": "u32"},
+        {"name": "ASLSM_DoWidth", "kind": "u32"},
+        {"name": "ASLSM_DoHeight", "kind": "u32"},
+        {"name": "ASLSM_DoDepth", "kind": "u32"},
+        {"name": "ASLSM_DoOverscanType", "kind": "u32"},
+        {"name": "ASLSM_DoAutoScroll", "kind": "u32"},
+        {"name": "ASLSM_PropertyFlags", "kind": "u32"},
+        {"name": "ASLSM_PropertyMask", "kind": "u32"},
+        {"name": "ASLSM_MinWidth", "kind": "u32"},
+        {"name": "ASLSM_MaxWidth", "kind": "u32"},
+        {"name": "ASLSM_MinHeight", "kind": "u32"},
+        {"name": "ASLSM_MaxDepth", "kind": "u32"},
+        {"name": "ASLSM_FilterFunc", "kind": "refuse"},
+        {"name": "ASLSM_CustomSMList", "kind": "refuse"},
+        {"name": "ASLFR_SetSortBy", "kind": "u32"},
+        {"name": "ASLFR_GetSortBy", "kind": "refuse"},
+        {"name": "ASLFR_SetSortDrawers", "kind": "u32"},
+        {"name": "ASLFR_GetSortDrawers", "kind": "refuse"},
+        {"name": "ASLFR_SetSortOrder", "kind": "u32"},
+        {"name": "ASLFR_GetSortOrder", "kind": "refuse"},
+        {"name": "ASLFR_InitialShowVolumes", "kind": "u32"},
+        {"name": "ASLFR_PopToFront", "kind": "u32"},
+        {"name": "ASLFR_Activate", "kind": "u32"},
+        {"name": "ASLFO_SampleText", "kind": "cstr"}
       ]
     },
     "intuition.new_object": {
@@ -236,6 +325,11 @@
     "graphics.library.BestModeIDA": {
       "taglists": {"TagItems": "graphics.best_mode"}
     },
+    "graphics.library.InitRastPort": {
+      "structs": {
+        "rp": {"type": "RastPort", "direction": "out"}
+      }
+    },
     "graphics.library.InitBitMap": {
       "structs": {
         "bm": {"type": "BitMap", "direction": "out", "clear": false}
@@ -313,6 +407,23 @@
       "objects": {
         "catalog": {"type": "Catalog", "nullable": false, "release": true}
       }
+    },
+    "asl.library.AllocAslRequest": {
+      "taglists": {"tagList": "asl.request"},
+      "result": {"kind": "object", "type": "AslRequest"}
+    },
+    "asl.library.FreeAslRequest": {
+      "objects": {"requester": {"type": "AslRequest", "nullable": true, "consume": true}}
+    },
+    "asl.library.AslRequest": {
+      "objects": {"requester": {"type": "AslRequest", "nullable": false}},
+      "taglists": {"tagList": "asl.request"}
+    },
+    "asl.library.AbortAslRequest": {
+      "objects": {"requester": {"type": "AslRequest", "nullable": false}}
+    },
+    "asl.library.ActivateAslRequest": {
+      "objects": {"requester": {"type": "AslRequest", "nullable": false}}
     },
     "icon.library.GetDiskObject": {
       "result": {"kind": "object", "type": "DiskObject"}
