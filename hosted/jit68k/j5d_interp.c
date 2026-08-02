@@ -496,7 +496,8 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                           line == 0x8000u || line == 0xB000u);
             int is_ea_src = (opmode <= 2u);                 /* .b/.w/.l, <ea>->Dn   */
             int mem_mode = (mode == 2u || mode == 3u || mode == 4u || mode == 5u ||
-                            mode == 6u || (mode == 7u && (reg == 1u || reg == 2u)));
+                            mode == 6u ||
+                            (mode == 7u && (reg == 1u || reg == 2u || reg == 3u)));
             if (is_alu && is_ea_src && mem_mode) {
                 unsigned dn = (op >> 9) & 7u;
                 unsigned bits = (opmode == 0u) ? 8u : (opmode == 1u) ? 16u : 32u;
@@ -518,6 +519,13 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                               addr = st->a[reg] + (uint32_t)(int32_t)d8 + idx; break; }
                     case 7:
                         if (reg == 1) { addr = be32(ext); ext += 4; }
+                        else if (reg == 3) {                       /* (d8,PC,Xn) */
+                            uint32_t pcb = pc + (uint32_t)(ext - ip);
+                            int okx;
+                            addr = brief_ea_i(st, be16(ext), pcb, &okx);
+                            ext += 2;
+                            if (!okx) ok = 0;
+                        }
                         else { uint32_t pcb = pc + (uint32_t)(ext - ip);
                                int16_t d16 = be16s(ext); ext += 2;
                                addr = pcb + (uint32_t)(int32_t)d16; }
@@ -2433,6 +2441,37 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             st->ccr = cc;
             pc += 4; continue;
         }
+        /* move.b/.w (d8,PC,Xn),Dn : 103B / 303B | dn<<9. The oracle decodes the
+         * byte and word MOVEs as specific opcode patterns rather than through a
+         * general EA decoder, so the PC-indexed form needs naming here too - and
+         * it matters, because this is the shape a compiler emits to read a
+         * table out of its own code. */
+        if ((op & 0xF1FFu) == 0x103Bu || (op & 0xF1FFu) == 0x303Bu) {
+            unsigned dn = (op >> 9) & 7u;
+            int wide = ((op & 0xF000u) == 0x3000u);
+            int oob = 0, okx;
+            uint32_t ea = brief_ea_i(st, be16(ip + 2), pc + 2u, &okx);
+            if (!okx) IFAIL("move (d8,PC,Xn): 68020 full extension word");
+            if (wide) {
+                uint16_t v = mem_rd16(sb, ea, &oob);
+                if (oob) IFAIL("move.w (d8,PC,Xn): address out of sandbox");
+                st->d[dn] = (st->d[dn] & 0xFFFF0000u) | v;
+                { uint32_t cc = st->ccr & J5D_CCR_X;
+                  if (v == 0) cc |= J5D_CCR_Z;
+                  if (v & 0x8000u) cc |= J5D_CCR_N;
+                  st->ccr = cc; }
+            } else {
+                uint8_t v = mem_rd8(sb, ea, &oob);
+                if (oob) IFAIL("move.b (d8,PC,Xn): address out of sandbox");
+                st->d[dn] = (st->d[dn] & 0xFFFFFF00u) | v;
+                { uint32_t cc = st->ccr & J5D_CCR_X;
+                  if (v == 0) cc |= J5D_CCR_Z;
+                  if (v & 0x80u) cc |= J5D_CCR_N;
+                  st->ccr = cc; }
+            }
+            pc += 4; continue;
+        }
+
         /* add.b (An),Dn : D010 | dn<<9 | an  (byte add from memory; PRM ADD byte size).
          * Same CCR rule as add.b Dm,Dn; only the low byte of Dn changes. */
         if ((op & 0xF1F8u) == 0xD010u) {
