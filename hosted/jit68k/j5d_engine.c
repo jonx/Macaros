@@ -560,6 +560,14 @@ static int is_terminator(uint16_t op)
     if (op == 0x4E74u) return 1;                 /* rtd #d16 (pops PC, then SP+=d16)*/
     if ((op & 0xFFF0u) == 0x4E40u) return 1;     /* TRAP #n  ([J5i] vector 32+n)   */
     if (op == 0x4AFCu) return 1;                 /* ILLEGAL  ([J5i] vector 4)      */
+    /* The status-register moves. Emu68 keeps the SR in a system register on the
+     * bare metal (A64.h: "SR is stored in TPIDR_EL0"), and the emitted access
+     * does not survive being re-hosted - it faults as an illegal instruction.
+     * Here the SR lives in the state struct, so these are decoded in C, where
+     * j5d_pack_sr already knows how to assemble it. */
+    if ((op & 0xFFC0u) == 0x40C0u) return 1;     /* move from SR                   */
+    if ((op & 0xFFC0u) == 0x42C0u) return 1;     /* move from CCR                  */
+    if ((op & 0xFFC0u) == 0x44C0u) return 1;     /* move to CCR                    */
     if ((op & 0xFFC0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
     if ((op & 0xFFC0u) == 0x81C0u) return 1;     /* divs.w  ([J5i] vector 5 on /0) */
     if ((op & 0xF000u) == 0x6000u) return 1;     /* Bcc/BRA/BSR, any .B/.W/.L width */
@@ -2188,7 +2196,29 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
         uint16_t top = be16(thost);
 
-        if (has_pcrel_src(top)) {                    /* a PC-relative source operand */
+        if ((top & 0xFF00u) == 0x4000u && (top & 0xC0u) == 0xC0u &&
+            ((top & 0xFFC0u) == 0x40C0u || (top & 0xFFC0u) == 0x42C0u ||
+             (top & 0xFFC0u) == 0x44C0u)) {
+            /* move from SR / from CCR / to CCR, in C. Only the register and
+             * immediate forms are served; anything else is refused by name
+             * rather than translated into a fault. */
+            unsigned mode = (top >> 3) & 7u, reg = top & 7u;
+            if ((top & 0xFFC0u) == 0x44C0u) {        /* move to CCR              */
+                uint32_t v;
+                if (mode == 0u)            { v = st->d[reg]; pc = tpc + 2; }
+                else if (mode == 7u && reg == 4u) {  /* #imm.w                   */
+                    v = be16(thost + 2); pc = tpc + 4;
+                } else RFAIL("move to CCR: only Dn and #imm are decoded here");
+                j5d_unpack_sr(st, (uint16_t)((st->sr_high << 8) | (v & 0x1Fu)));
+            } else {                                  /* move from SR / from CCR  */
+                uint16_t sr = j5d_pack_sr(st);
+                if ((top & 0xFFC0u) == 0x42C0u) sr &= 0x00FFu;   /* CCR only     */
+                if (mode != 0u) RFAIL("move from SR/CCR: only Dn is decoded here");
+                st->d[reg] = (st->d[reg] & 0xFFFF0000u) | sr;
+                pc = tpc + 2;
+            }
+        }
+        else if (has_pcrel_src(top)) {               /* a PC-relative source operand */
             uint32_t nxt = 0;
             char e2[160] = {0};
             if (j5d_exec_pcrel(sb, st, tpc, top, &nxt, e2, sizeof e2)) {
