@@ -1,0 +1,77 @@
+#!/bin/sh
+# 68k-lha-roundtrip - prove the 68k translation layer on a REAL program doing
+# its real job: LhA compresses a file, lists the archive, extracts it again,
+# and the extracted bytes must equal the original.
+#
+# This is the end-to-end test the unit tests cannot be. It exercises the
+# library bridge, the generated crossings, the in-guest RawDoFmt, PC-relative
+# addressing, the FileInfoBlock conversion and the file I/O path all at once,
+# and it fails if any of them regress.
+#
+# LhA is third-party freeware and is deliberately NOT checked in. Point
+# EMU68K_LHA at a copy, or drop one at ~/68k-corpus/lha; without it the test
+# reports SKIP rather than failing, so a fresh checkout is not blocked.
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+LHA="${EMU68K_LHA:-$HOME/68k-corpus/lha}"
+SHARE="$HOME/AROS/Shared"; DIR="$SHARE/lharound"
+OUT="${1:-$ROOT/build/t3lha-out.txt}"
+
+if [ ! -f "$LHA" ]; then
+  echo "[T3LHA] SKIP: no LhA binary at $LHA (set EMU68K_LHA to one)"
+  exit 0
+fi
+
+mkdir -p "$(dirname "$OUT")"
+rm -rf "$DIR"; mkdir -p "$DIR/out"
+cp "$LHA" "$DIR/lha"
+# Content with repetition, so a wrong compressor produces a wrong SIZE as well
+# as wrong bytes, and the listing is worth comparing.
+{ echo "The quick brown fox jumps over the lazy dog."
+  echo "Line two of the payload."
+  echo "Line three, with some repetition repetition repetition."
+} > "$DIR/payload.txt"
+
+# <NIL: matters: LhA asks questions, and a guest blocked in a native Read is
+# past the point the run's wall-clock guard can reach.
+cat > "$DIR/.startup" <<EOF
+FailAt 255
+CD MacRW:lharound
+Echo "=== ADD ===" >MacRW:lharound-out.txt
+lha a test.lzh payload.txt <NIL: >>MacRW:lharound-out.txt
+Echo "=== LIST ===" >>MacRW:lharound-out.txt
+lha l test.lzh <NIL: >>MacRW:lharound-out.txt
+Echo "=== EXTRACT ===" >>MacRW:lharound-out.txt
+lha x test.lzh out/ <NIL: >>MacRW:lharound-out.txt
+Echo "=== DONE ===" >>MacRW:lharound-out.txt
+Wait 999999
+EOF
+
+pkill -f Macaros 2>/dev/null; sleep 1
+rm -f "$SHARE/lharound-out.txt"
+( cd "$ROOT" && ./graft/aros-ctl deploy >/dev/null 2>&1 ) || true
+AROS_CTL_STARTUP_FILE="$DIR/.startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
+  EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-25}" \
+  "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
+i=0; LIMIT="${LHA_TIMEOUT:-180}"
+while [ $i -lt $LIMIT ]; do
+  [ -f "$SHARE/lharound-out.txt" ] &&
+    LC_ALL=C grep -qa "=== DONE ===" "$SHARE/lharound-out.txt" && break
+  sleep 3; i=$((i+3))
+done
+"$ROOT/graft/aros-ctl" stop >/dev/null 2>&1
+cp "$SHARE/lharound-out.txt" "$OUT" 2>/dev/null
+
+fail() { echo "[T3LHA] FAIL: $1"; [ -f "$OUT" ] && LC_ALL=C sed 's/[^[:print:]]/./g' "$OUT" | tail -25; exit 1; }
+
+[ -f "$OUT" ] || fail "no output (the run did not finish)"
+LC_ALL=C grep -qa "=== DONE ===" "$OUT" || fail "the run did not reach DONE (hang?)"
+[ -s "$DIR/test.lzh" ]  || fail "no archive was written"
+[ -f "$DIR/out/payload.txt" ] || fail "nothing was extracted"
+cmp -s "$DIR/payload.txt" "$DIR/out/payload.txt" ||
+  fail "the extracted file differs from the original"
+LC_ALL=C grep -qa "payload.txt" "$OUT" || fail "the listing did not name the file"
+
+echo "[T3LHA] PASS: LhA compressed ($(wc -c < "$DIR/payload.txt" | tr -d ' ') bytes ->" \
+     "$(wc -c < "$DIR/test.lzh" | tr -d ' ') byte archive), listed it, and extracted it" \
+     "byte-identically."
