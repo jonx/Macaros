@@ -455,6 +455,39 @@ static uint32_t be32(const uint8_t *p)
  * library jsr d16(A6) vector, and lea abs.l,An.  [J5i] adds the EXCEPTION-causing
  * instructions + rte as dispatcher-decoded terminators (the 68k exception model is OURS,
  * in C — Emu68's bare-metal EMIT_Exception is a no-op stub in the hosted runtime). */
+/* The 68k BRIEF extension word, as used by the (d8,An,Xn) and (d8,PC,Xn)
+ * addressing modes:
+ *
+ *   15     index register is An (1) or Dn (0)
+ *   14-12  index register number
+ *   11     index is the sign-extended low word (0) or the full long (1)
+ *   10-9   scale 1/2/4/8 - 68020+, so a 68000 program leaves this zero
+ *   8      0 = this brief format; 1 = the 68020 FULL format, which carries a
+ *          base displacement and suppression bits and is a different layout
+ *   7-0    signed 8-bit displacement
+ *
+ * `base` is An, or for the PC-relative modes the address OF the extension word.
+ * Returns 1 for the full format, which is refused by the caller rather than
+ * decoded as if it were brief - guessing there would compute a wrong target and
+ * jump into the middle of something. */
+static int brief_ea(const struct j5d_m68k_state *st, uint16_t ext,
+                    uint32_t base, uint32_t *out)
+{
+    unsigned rn;
+    uint32_t xn;
+
+    if (ext & 0x0100u) return 1;                 /* 68020 full format          */
+
+    rn = (ext >> 12) & 7u;
+    xn = (ext & 0x8000u) ? st->a[rn] : st->d[rn];
+    if (!(ext & 0x0800u))                        /* .W: sign-extend the low word */
+        xn = (uint32_t)(int32_t)(int16_t)(uint16_t)xn;
+    xn <<= ((ext >> 9) & 3u);                    /* scale (1/2/4/8)            */
+
+    *out = base + (uint32_t)(int32_t)(int8_t)(uint8_t)(ext & 0xFFu) + xn;
+    return 0;
+}
+
 static int is_terminator(uint16_t op)
 {
     if (op == 0x4E75u) return 1;                 /* rts                            */
@@ -469,6 +502,19 @@ static int is_terminator(uint16_t op)
     if ((op & 0xFFF8u) == 0x4EE8u) return 1;     /* jmp (d16,An) (computed)        */
     if ((op & 0xFFF8u) == 0x4E90u) return 1;     /* jsr (An)   (computed)          */
     if ((op & 0xFFF8u) == 0x4ED0u) return 1;     /* jmp (An)   (computed)          */
+    /* The INDEXED forms - a switch statement's jump table. Missing these does not
+     * fail loudly: the decoder does not see a branch, walks straight off the end
+     * of the function into the jump table's DATA, and decodes that as
+     * instructions until the runaway guard below fires thousands of "insns"
+     * later. Every corpus program that tripped that guard has one of these. */
+    if ((op & 0xFFF8u) == 0x4EB0u) return 1;     /* jsr (d8,An,Xn)                 */
+    if ((op & 0xFFF8u) == 0x4EF0u) return 1;     /* jmp (d8,An,Xn)                 */
+    if (op == 0x4EBBu) return 1;                 /* jsr (d8,PC,Xn) (PIC jump table)*/
+    if (op == 0x4EFBu) return 1;                 /* jmp (d8,PC,Xn) (PIC jump table)*/
+    if (op == 0x4EB8u) return 1;                 /* jsr (xxx).W                    */
+    if (op == 0x4EF8u) return 1;                 /* jmp (xxx).W                    */
+    if (op == 0x4E77u) return 1;                 /* rtr  (pops CCR then PC)        */
+    if (op == 0x4E74u) return 1;                 /* rtd #d16 (pops PC, then SP+=d16)*/
     if ((op & 0xFFF0u) == 0x4E40u) return 1;     /* TRAP #n  ([J5i] vector 32+n)   */
     if (op == 0x4AFCu) return 1;                 /* ILLEGAL  ([J5i] vector 4)      */
     if ((op & 0xFFC0u) == 0x80C0u) return 1;     /* divu.w  ([J5i] vector 5 on /0) */
@@ -1687,6 +1733,47 @@ static int sp_pop(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t *out,
  * top-level RTS (which pops back to that initial SP) is the program exit — so the
  * existing flat-PC corpus (which never pushes) hits its first RTS at the initial SP and
  * exits exactly as before. A subroutine program pushes/pops in between. */
+/* [T3] Perform a library call whose vector was reached BY ADDRESS rather than as
+ * the textbook `jsr -N(a6)`. Real programs get there several ways: the base
+ * copied to another register, the vector address hoisted into one by `lea`, or
+ * a tail call straight to the vector. Every one of those loses the offset by
+ * the time the instruction executes, so they are all recognised the same way,
+ * from the address landed on, and all end up here.
+ *
+ * Returns 0 when the bridge served the call, 1 on error with errbuf set. The
+ * AmigaOS ABI wants the base in A6 for the duration whatever register the
+ * program actually used, so it is presented that way and restored after. */
+static int call_vector_by_target(uint32_t target, uint32_t base,
+                                 struct j5d_m68k_state *st, j5d_lvo_fn lvo,
+                                 void *user, const char *how,
+                                 char *errbuf, unsigned errlen)
+{
+    char e2[160] = {0};
+    uint32_t saved_a6;
+    int n, brc;
+
+    n = j3_vector_recognise(base, target);
+    if (n < 0) {
+        if (errbuf) snprintf(errbuf, errlen, "%s: target not a valid library vector", how);
+        return 1;
+    }
+    if (!lvo) {
+        if (errbuf) snprintf(errbuf, errlen, "%s: library call but no bridge registered", how);
+        return 1;
+    }
+
+    saved_a6 = st->a[6];
+    st->a[6] = base;
+    brc = lvo(n, st, user, e2, sizeof e2);
+    st->a[6] = saved_a6;
+
+    if (brc) {
+        if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
+        return 1;
+    }
+    return 0;
+}
+
 static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             struct j5d_m68k_state *st, uint32_t *exit_d0,
             j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
@@ -2069,6 +2156,29 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             g_stats.lib_calls++;
             pc = tpc + 4;
         }
+        else if ((top & 0xFFF8u) == 0x4EE8u &&
+                 libbase_of_target(st->a[top & 7u] +
+                                   (uint32_t)(int32_t)be16s(thost + 2), a6_libbase)) {
+            /* jmp (d16,An) onto a vector: the tail-call spelling of jsr (d16,An),
+             * emitted for a one-line wrapper that just forwards to the library.
+             * MUST precede the plain jmp (d16,An) case below, which would
+             * otherwise claim it and jump into the library base region. */
+            uint32_t target = st->a[top & 7u] + (uint32_t)(int32_t)be16s(thost + 2);
+            uint32_t ret;
+            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+                                      st, lvo, user, "jmp(d16,An)", errbuf, errlen))
+                return 1;
+            g_stats.lib_calls++;
+            if (st->a[7] >= initial_sp) {            /* outermost frame: program done */
+                *exit_d0 = st->d[0];
+                finalize_stats();
+                return 0;
+            }
+            if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+            g_stats.returns_popped++;
+            if (depth) depth--;
+            pc = ret;
+        }
         else if ((top & 0xFFF8u) == 0x4EA8u) {       /* jsr (d16,An) -> computed push+jump
              * (includes jsr (d16,a6) when a6 is a frame pointer, not the lib base). */
             unsigned an = top & 7u;
@@ -2106,6 +2216,43 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int16_t d16 = (int16_t)be16(thost + 2);
             pc = tpc + 2u + (uint32_t)(int32_t)d16;
         }
+        /* [T3] The vector address PRECOMPUTED into a register:
+         *      lea -216(a2),a3 ; ... ; jsr (a3)
+         * A program that calls the same vector in a loop hoists the address out,
+         * and hand-written asm does it as a matter of course. The offset is gone
+         * by the time the jsr executes, so this is recognised the only way left:
+         * by the address it lands on, the same rule jsr (d16,An) already uses.
+         * Missing it is silent - the jump lands in the library base region and
+         * the decoder translates structure bytes until the runaway guard fires. */
+        else if ((top & 0xFFF8u) == 0x4E90u &&
+                 libbase_of_target(st->a[top & 7u], a6_libbase)) {
+            uint32_t target = st->a[top & 7u];
+            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+                                      st, lvo, user, "jsr(An)", errbuf, errlen))
+                return 1;
+            g_stats.lib_calls++;
+            pc = tpc + 2;                            /* jsr (An) is 2 bytes         */
+        }
+        /* A jmp onto a vector is a TAIL call: the library's own rts is what
+         * returns to THIS function's caller, so resume at the return address on
+         * the stack rather than after the jmp. */
+        else if ((top & 0xFFF8u) == 0x4ED0u &&
+                 libbase_of_target(st->a[top & 7u], a6_libbase)) {
+            uint32_t target = st->a[top & 7u], ret;
+            if (call_vector_by_target(target, libbase_of_target(target, a6_libbase),
+                                      st, lvo, user, "jmp(An)", errbuf, errlen))
+                return 1;
+            g_stats.lib_calls++;
+            if (st->a[7] >= initial_sp) {            /* outermost frame: program done */
+                *exit_d0 = st->d[0];
+                finalize_stats();
+                return 0;
+            }
+            if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+            g_stats.returns_popped++;
+            if (depth) depth--;
+            pc = ret;
+        }
         else if ((top & 0xFFF8u) == 0x4E90u) {       /* jsr (An) -> computed push+jump */
             unsigned an = top & 7u;
             uint32_t target = st->a[an];
@@ -2122,6 +2269,78 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             unsigned an = top & 7u;
             g_stats.computed_jumps++;
             pc = st->a[an];
+        }
+        /* ---- the INDEXED forms: a switch statement's jump table -------------
+         * base + d8 + (Xn sized and scaled), the extension word being the
+         * second word of a 4-byte instruction. For the PC-relative modes the
+         * base is the address OF that extension word (tpc + 2), per the PRM. */
+        else if ((top & 0xFFF8u) == 0x4EB0u) {       /* jsr (d8,An,Xn) -> push + jump */
+            uint32_t target;
+            if (brief_ea(st, be16(thost + 2), st->a[top & 7u], &target))
+                RFAIL("jsr (d8,An,Xn): 68020 full extension word not decoded");
+            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+            g_stats.calls_pushed++;
+            g_stats.computed_jumps++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if ((top & 0xFFF8u) == 0x4EF0u) {       /* jmp (d8,An,Xn) -> jump      */
+            uint32_t target;
+            if (brief_ea(st, be16(thost + 2), st->a[top & 7u], &target))
+                RFAIL("jmp (d8,An,Xn): 68020 full extension word not decoded");
+            g_stats.computed_jumps++;
+            pc = target;
+        }
+        else if (top == 0x4EBBu) {                   /* jsr (d8,PC,Xn) -> push + jump */
+            uint32_t target;
+            if (brief_ea(st, be16(thost + 2), tpc + 2u, &target))
+                RFAIL("jsr (d8,PC,Xn): 68020 full extension word not decoded");
+            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+            g_stats.calls_pushed++;
+            g_stats.computed_jumps++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if (top == 0x4EFBu) {                   /* jmp (d8,PC,Xn) -> jump      */
+            uint32_t target;
+            if (brief_ea(st, be16(thost + 2), tpc + 2u, &target))
+                RFAIL("jmp (d8,PC,Xn): 68020 full extension word not decoded");
+            g_stats.computed_jumps++;
+            pc = target;
+        }
+        else if (top == 0x4EB8u) {                   /* jsr (xxx).W -> push + jump  */
+            uint32_t target = (uint32_t)(int32_t)be16s(thost + 2);
+            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+            g_stats.calls_pushed++;
+            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+            pc = target;
+        }
+        else if (top == 0x4EF8u) {                   /* jmp (xxx).W -> jump         */
+            pc = (uint32_t)(int32_t)be16s(thost + 2);
+        }
+        else if (top == 0x4E77u) {                   /* rtr -> pop CCR, then PC     */
+            uint32_t a7 = st->a[7], ret;
+            uint16_t sr;
+            if (a7 < sb->origin || (uint64_t)a7 + 6 > (uint64_t)sb->origin + sb->size)
+                RFAIL("rtr: frame a7 out of sandbox");
+            sr = be16(sb->host_mem + (a7 - sb->origin));
+            st->a[7] = a7 + 2;
+            if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+            /* rtr restores the CONDITION CODES only; the system byte is the
+             * running one, not whatever was on the stack. */
+            j5d_unpack_sr(st, (uint16_t)((st->sr_high << 8) | (sr & 0x1Fu)));
+            g_stats.returns_popped++;
+            if (depth) depth--;
+            pc = ret;
+        }
+        else if (top == 0x4E74u) {                   /* rtd #d16 -> pop PC, SP += d16 */
+            uint32_t ret;
+            int16_t  d16 = be16s(thost + 2);
+            if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+            st->a[7] += (uint32_t)(int32_t)d16;
+            g_stats.returns_popped++;
+            if (depth) depth--;
+            pc = ret;
         }
         else if ((top & 0xF000u) == 0x6000u) {       /* Bcc/BRA/BSR, any .B/.W/.L    */
             unsigned cc4 = (top >> 8) & 0xFu;        /* 0=BRA 1=BSR else condition  */
