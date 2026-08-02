@@ -96,6 +96,8 @@ int main(int argc, char **argv)
     }
     printf("[T3E-LIVE] PASS: live exec.OpenLibrary ran AUTOINIT and direct-init disk "
            "libraries; Close/Expunge unregistered before reload; version failure and "
-           "A->B->A dependency cycle rolled back normally; later opens still worked\n");
+           "A->B->A dependency cycle rolled back normally; later opens still worked; "
+           "a per-opener (clone) base library gave two live openers distinct working "
+           "bases, closed each on its own, and expunged on the last\n");
     return 0;
 }

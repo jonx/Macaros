@@ -204,9 +204,18 @@
       },
       "result": {"kind": "object", "type": "Class"}
     },
+    "intuition.library.AddClass": {
+      "objects": {"classPtr": {"type": "Class", "nullable": false}}
+    },
+    "intuition.library.RemoveClass": {
+      "objects": {"classPtr": {"type": "Class", "nullable": false}}
+    },
+    "intuition.library.FreeClass": {
+      "objects": {"iclass": {"type": "Class", "nullable": false, "consume": true}}
+    },
     "intuition.library.NewObjectA": {
       "objects": {
-        "classPtr": {"type": "Class", "nullable": false}
+        "classPtr": {"type": "Class", "nullable": true}
       },
       "taglists": {"tagList": "intuition.new_object"},
       "boopsi": {"class_arg": "classPtr"},
@@ -219,6 +228,11 @@
     },
     "graphics.library.BestModeIDA": {
       "taglists": {"TagItems": "graphics.best_mode"}
+    },
+    "graphics.library.InitBitMap": {
+      "structs": {
+        "bm": {"type": "BitMap", "direction": "out", "clear": false}
+      }
     },
     "graphics.library.NewRegion": {
       "result": {"kind": "object", "type": "Region"}

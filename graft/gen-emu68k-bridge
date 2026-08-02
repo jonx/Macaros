@@ -55,6 +55,7 @@ GEN_LIBS = [
     "asl", "icon", "iffparse", "commodities", "diskfont", "locale", "keymap",
     "datatypes", "expansion", "cybergraphics", "mathffp", "mathieeesingbas",
     "mathieeedoubbas", "mathieeesingtrans", "mathieeedoubtrans", "mathtrans",
+    "workbench",
 ]
 
 
@@ -612,6 +613,9 @@ def validate_policy(targets):
             if direction not in ("in", "out", "inout"):
                 errors.append("function policy %s struct %s has invalid direction %r"
                               % (key, arg, direction))
+            if sp.get("clear", True) not in (True, False):
+                errors.append("function policy %s struct %s clear must be boolean"
+                              % (key, arg))
             copy_on = sp.get("copy_on", "always")
             if copy_on not in ("always", "nonzero"):
                 errors.append("function policy %s struct %s has invalid copy_on %r"
@@ -1054,10 +1058,20 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     w("                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
                       % (stype, stype, span))
                 if direction in ("out", "inout"):
-                    post.append((["memset(EMU_GPTR(guest0, %s), 0, %s);" % (src, span),
-                                  "emu68k_to_guest_sized(guest0, %s, &emu_struct_%d," % (src, ai),
-                                  "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
-                                  % (stype, stype, span)], sp.get("copy_on", "always")))
+                    # Blanking first is right when the call fills the whole
+                    # structure: a field it chose not to set must not read as
+                    # leftovers. It is WRONG when the call sets only some
+                    # fields, or when the structure holds anything the tables
+                    # cannot convert (guest pointers the program put there
+                    # itself), because those are the program's, not the OS's.
+                    lines = []
+                    if sp.get("clear", True):
+                        lines.append("memset(EMU_GPTR(guest0, %s), 0, %s);"
+                                     % (src, span))
+                    lines += ["emu68k_to_guest_sized(guest0, %s, &emu_struct_%d," % (src, ai),
+                              "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
+                              % (stype, stype, span)]
+                    post.append((lines, sp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
                 continue
             if aname in size_args:

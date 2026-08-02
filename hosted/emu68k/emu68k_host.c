@@ -194,6 +194,13 @@
 #define LVO_GL_RECLAIM    653   /* -3918 */
 
 #define GUESTLIB_MAX 16
+/* Opens are tracked one entry per live open, not one per library. A library's
+ * Open vector returns the base the CALLER must use, and it is free to return a
+ * different one to every opener: that is how a library keeps per-opener state,
+ * and it is ordinary AmigaOS, not an oddity. Duplicates are expected (a library
+ * that hands back its own base every time appears N times) because each entry
+ * is one reference, which is exactly what CloseLibrary decrements. */
+#define GUESTLIB_OPENS_MAX 32
 enum guestlib_state {
     GL_EMPTY = 0, GL_LOADING, GL_OPENING, GL_READY, GL_FAILED, GL_UNLOADED
 };
@@ -212,7 +219,9 @@ struct guestlib_live {
     uint32_t            close_trampoline;
     uint32_t            mem_start;
     uint32_t            mem_end;
+    uint32_t            open_base[GUESTLIB_OPENS_MAX];  /* one per live open  */
     int                 open_count;
+    uint32_t            closing_base;   /* which one CloseLibrary is unwinding */
     int                 parent;
     int                 reclaim_pending;
     uint32_t            saved_d[6];       /* ABI-preserved D2-D7 around exec */
@@ -724,11 +733,14 @@ static uint32_t make_open_trampoline(struct emu68k_run *r, int idx,
     return start;
 }
 
-static uint32_t make_close_trampoline(struct emu68k_run *r, int idx, uint32_t base)
+/* A6 is NOT baked in: it is the base being closed, which the dispatcher sets,
+ * because a library that hands a different base to each opener has to have each
+ * of them closed on its own. One trampoline therefore serves every base the
+ * library ever handed out. */
+static uint32_t make_close_trampoline(struct emu68k_run *r, int idx)
 {
     uint32_t start = guest_alloc(r, 32u), pc = start;
     if (!start) return 0;
-    emit_move_a6(&r->sb, &pc, base);
     emit_jsr_a6(&r->sb, &pc, 2);                    /* library Close, -12 */
     emit_move_d1(&r->sb, &pc, (uint32_t)idx);
     emit_move_a6(&r->sb, &pc, EXEC_BASE);
@@ -921,12 +933,51 @@ static int find_guestlib_name(struct emu68k_run *r, const char *name)
     return -1;
 }
 
+static int guestlib_add_open(struct guestlib_live *g, uint32_t base)
+{
+    if (g->open_count >= GUESTLIB_OPENS_MAX) return -1;
+    g->open_base[g->open_count++] = base;
+    return 0;
+}
+
+/* Drop ONE reference, not every entry with that base: two opens that were
+ * handed the same base are two references, and closing one leaves the other. */
+static void guestlib_drop_open(struct guestlib_live *g, uint32_t base)
+{
+    for (int i = 0; i < g->open_count; i++) {
+        if (g->open_base[i] != base) continue;
+        for (int j = i + 1; j < g->open_count; j++)
+            g->open_base[j - 1] = g->open_base[j];
+        g->open_count--;
+        return;
+    }
+}
+
+static int guestlib_owns_base(const struct guestlib_live *g, uint32_t base)
+{
+    if (base && base == g->base) return 1;
+    for (int i = 0; i < g->open_count; i++)
+        if (g->open_base[i] == base) return 1;
+    return 0;
+}
+
+/* The base a program holds is whatever Open handed it, which is not necessarily
+ * the library's own. Both answer to CloseLibrary. */
 static int find_guestlib_base(struct emu68k_run *r, uint32_t base)
 {
     for (int i = 0; i < GUESTLIB_MAX; i++)
-        if (r->guestlib[i].state == GL_READY && r->guestlib[i].base == base)
+        if (r->guestlib[i].state == GL_READY &&
+            guestlib_owns_base(&r->guestlib[i], base))
             return i;
     return -1;
+}
+
+/* A library base has a vector area below it and a Library structure above it,
+ * and both have to be inside the arena before anything dereferences either. */
+static int plausible_libbase(const struct emu68k_run *r, uint32_t base)
+{
+    return base >= r->sb.sandbox_origin + 24u &&
+           (uint64_t)base + 34u <= (uint64_t)r->sb.sandbox_origin + r->sb.size;
 }
 
 static void guestlib_save_preserved(struct guestlib_live *g,
@@ -1052,21 +1103,33 @@ static int guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
         guestlib_restore_preserved(g, st);
         return 0;
     }
-    if (st->d[0] != g->base) {
+    /* Open returns the base the CALLER must use. A library is entitled to make
+     * a fresh one per opener, so an unfamiliar base is recorded rather than
+     * refused: it only has to be a base, in this arena, and there has to be
+     * room to remember it. It is registered as a GUEST base so a call through
+     * it is run as the guest code it is, never mistaken for a native vector. */
+    if (st->d[0] != g->base && !plausible_libbase(r, st->d[0])) {
         if (g->state == GL_OPENING) {
             j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
             r->active_loader = g->parent;
         }
-        snprintf(e, el, "%s returned a per-open base; clone bases are not supported yet",
-                 g->name);
+        snprintf(e, el, "%s Open returned invalid base %08x", g->name, st->d[0]);
         st->d[0] = 0;
         guestlib_restore_preserved(g, st);
         return 1;
     }
-    g->open_count++;
+    if (guestlib_add_open(g, st->d[0]) < 0) {
+        snprintf(e, el, "%s has more than %d opens live at once",
+                 g->name, GUESTLIB_OPENS_MAX);
+        st->d[0] = 0;
+        guestlib_restore_preserved(g, st);
+        return 1;
+    }
+    if (st->d[0] != g->base)
+        j5d_register_guest_libbase(st->d[0]);
     if (g->state == GL_OPENING) {
         if (!g->close_trampoline)
-            g->close_trampoline = make_close_trampoline(r, idx, g->base);
+            g->close_trampoline = make_close_trampoline(r, idx);
         if (!g->close_trampoline) {
             j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
             r->active_loader = g->parent; st->d[0] = 0;
@@ -1087,8 +1150,17 @@ static int guestlib_close_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     (void)e; (void)el;
     if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
     struct guestlib_live *g = &r->guestlib[idx];
-    if (g->open_count > 0) g->open_count--;
+    uint32_t closed = g->closing_base;
+    g->closing_base = 0;
+    guestlib_drop_open(g, closed);
+    /* A clone the library has just freed must stop being an address the engine
+     * knows; the library's own base outlives every open and goes with expunge. */
+    if (closed && closed != g->base && !guestlib_owns_base(g, closed))
+        j5d_unregister_libbase(closed);
     if (st->d[0]) {                                 /* Close/Expunge returned seglist */
+        for (int i = 0; i < g->open_count; i++)
+            j5d_unregister_libbase(g->open_base[i]);
+        g->open_count = 0;
         j5d_unregister_libbase(g->base);
         g->base = 0; g->state = GL_UNLOADED; g->reclaim_pending = 1;
     }
@@ -1200,7 +1272,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 "expansion.library", "cybergraphics.library", "mathffp.library",
                 "mathieeesingbas.library", "mathieeedoubbas.library",
                 "mathieeesingtrans.library", "mathieeedoubtrans.library",
-                "mathtrans.library",
+                "mathtrans.library", "workbench.library",
             };
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
@@ -1251,6 +1323,11 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         int gi = find_guestlib_base(r, st->a[1]);       /* A1 = library base */
         if (gi >= 0) {
             guestlib_save_preserved(&r->guestlib[gi], st);
+            /* Close runs on the base the caller was given, not on the
+             * library's own: that is the only way a per-opener base can free
+             * the right instance. */
+            r->guestlib[gi].closing_base = st->a[1];
+            st->a[6] = st->a[1];
             st->pc = r->guestlib[gi].close_trampoline;
             return J5D_LVO_REDIRECT;
         }

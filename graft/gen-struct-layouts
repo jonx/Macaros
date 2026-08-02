@@ -40,7 +40,7 @@ HEADERS = [
     "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
     "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
-    "graphics/regions.h", "graphics/rastport.h",
+    "graphics/regions.h", "graphics/rastport.h", "graphics/gfx.h",
     "intuition/preferences.h",
 ]
 
@@ -49,7 +49,7 @@ TYPES = [
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
-    "Window", "RastPort", "Preferences",
+    "Window", "RastPort", "Preferences", "BitMap",
 ]
 
 # NOT here, and the reason matters for every structure added after this one:
