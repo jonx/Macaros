@@ -419,6 +419,26 @@ Depends: T1; informed continuously by the `T1d` ledger.
   `FileInfoBlock` = 260, `DateStamp` = 12, `TagItem` = 8) and refuse to emit if
   they do not hold.
 
+  **BUILT 2026-08-02** as `graft/gen-struct-layouts` (`make struct-layouts`),
+  emitting `emu68k_layouts.h`. Three things the build of it turned up, all of
+  which would have been silent:
+  - clang does **not** compute a layout for a tentative definition, so the probe
+    has to force it with `sizeof`. Without that the record is simply absent.
+  - AROS names several of these `<Name>32` / `<Name>64` and lets the target
+    pick, so `struct FileInfoBlock` resolves to a *different record* on each
+    side. That is the conversion, not an obstacle, but the generator has to
+    resolve by suffix or it finds nothing.
+  - the self-check caught the `-fpack-struct=2` omission immediately, exactly
+    as the LVO self-check caught the `firstlvo` shift.
+
+  First use: `dos.Examine`/`ExNext`. FileInfoBlock is 260 bytes on the guest
+  side and 264 here, with **14 of its 15 fields at a different offset**, so the
+  native call fills a native structure and the fields are copied back through
+  the generated offsets. With that plus `FilePart`/`PathPart` (a pointer INTO
+  the caller's string, so what crosses is the guest's own pointer advanced by
+  the same offset) and host-served `CopyMem`, **LhA compresses, lists and
+  extracts byte-exactly**.
+
   What this does NOT generate, and cannot:
   - **Direction** (does the callee read the struct, fill it, or both) is a
     property of each (function, argument), not of the type. `const` in the
