@@ -9,6 +9,8 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 DIR="${1:?usage: 68k-corpus <folder> [out]}"
 CORPUS_ARGS="${CORPUS_ARGS:-}"      # arguments appended to every program
+CORPUS_BEFORE="${CORPUS_BEFORE:-}"  # optional native/setup command(s)
+CORPUS_ORACLE="${CORPUS_ORACLE:-}"  # optional native command; capture its output
 # CORPUS_MANIFEST: "program : arguments" per line. Running a CLI tool with no
 # arguments proves nothing - it exits immediately and tells you nothing about
 # whether it works. Give each one real work and the result means something.
@@ -34,6 +36,8 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
   echo 'FailAt 255'
   echo 'CD MacRW:corpus'
   echo 'Echo "=== CORPUS ===" >MacRW:corpus-out.txt'
+  [ -n "$CORPUS_BEFORE" ] && printf '%s\n' "$CORPUS_BEFORE"
+  [ -n "$CORPUS_ORACLE" ] && echo "$CORPUS_ORACLE <NIL: >>MacRW:corpus-out.txt"
   for d in "$SHARE/$SUB"/*.d; do
     b=$(basename "$d" .d)
     echo "CD MacRW:$SUB/$b.d"

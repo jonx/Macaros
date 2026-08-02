@@ -411,6 +411,14 @@ def parse_conf(path):
             break
         if not inlist:
             continue
+        # genmodule treats an empty line *inside* a functionlist as a reserved
+        # vector slot (config.c:readsectionfunctionlist).  locale.library uses
+        # exactly this after `.version 39` to leave LVO 5 to the OpenCatalog()
+        # stack-call veneer, so discarding blank lines shifts every real entry.
+        if not line.strip():
+            lvo += 1
+            last = None
+            continue
         # strip trailing comment, but not a `#` inside the prototype
         s = line.split("#")[0].strip() if not line.lstrip().startswith("#") else ""
         if not s:
@@ -472,15 +480,49 @@ def c_ident(s):
     return re.sub(r"[^A-Za-z0-9_]", "_", s)
 
 
+def object_canon(t):
+    """Compare an object's pointer type without const qualification. Policy
+    names identity classes, so `struct Locale *` and `const struct Locale *`
+    are the same class while unrelated pointer types must still be rejected."""
+    t = re.sub(r"\b(const|CONST)\b", "", norm(t))
+    t = re.sub(r"\s*\*\s*", " *", t)
+    return norm(t)
+
+
 def validate_policy(targets):
     """Refuse stale names and unsafe shapes before emitting any C. A policy
     typo must fail the build, not quietly leave the intended vector uncovered."""
     domains = POLICY.get("tag_domains", {})
+    object_types = POLICY.get("object_types", {})
     errors = []
     bykey = {}
     for lib, rel, _base, _btype, _hdr in targets:
         for f in parse_conf(os.path.join(AROS, rel)) or []:
             bykey[policy_key(lib, f)] = f
+
+    seen_object_ids = set()
+    for name, o in object_types.items():
+        oid = o.get("id")
+        ctype = o.get("c_type")
+        destructor = o.get("destructor")
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            errors.append("object type %r has an invalid name" % name)
+        if not isinstance(oid, int) or oid < 1 or oid > 255:
+            errors.append("object type %s id must be 1..255" % name)
+        elif oid in seen_object_ids:
+            errors.append("object type %s repeats id %d" % (name, oid))
+        seen_object_ids.add(oid)
+        if not isinstance(ctype, str) or classify(ctype) not in ("struct", "aptr"):
+            errors.append("object type %s has invalid pointer c_type %r" % (name, ctype))
+        if o.get("kind") != "opaque":
+            errors.append("object type %s kind must currently be opaque" % name)
+        df = bykey.get(destructor)
+        if not destructor or not df:
+            errors.append("object type %s has missing destructor %r" % (name, destructor))
+        elif (classify(df.ret) != "void" or len(df.args) != 1 or
+              object_canon(df.args[0][0]) != object_canon(ctype)):
+            errors.append("object type %s destructor %s has incompatible signature"
+                          % (name, destructor))
 
     for name, d in domains.items():
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
@@ -513,6 +555,7 @@ def validate_policy(targets):
             errors.append("function policy %s names a private vector" % key)
         taglists = p.get("taglists", {})
         structs = p.get("structs", {})
+        objects = p.get("objects", {})
         args = {n: t for t, n in f.args}
         for arg, domain in taglists.items():
             if arg not in args:
@@ -537,15 +580,48 @@ def validate_policy(targets):
                               % (key, arg, direction))
             if arg in taglists:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, op in objects.items():
+            otype = op.get("type")
+            ospec = object_types.get(otype)
+            if arg not in args:
+                errors.append("function policy %s names missing argument %s" % (key, arg))
+            elif not ospec:
+                errors.append("function policy %s uses missing object type %s"
+                              % (key, otype))
+            elif object_canon(args[arg]) != object_canon(ospec.get("c_type", "")):
+                errors.append("function policy %s argument %s is not object %s"
+                              % (key, arg, otype))
+            if op.get("nullable", True) not in (True, False):
+                errors.append("function policy %s object %s nullable must be boolean"
+                              % (key, arg))
+            if op.get("release", False) not in (True, False):
+                errors.append("function policy %s object %s release must be boolean"
+                              % (key, arg))
+            if arg in taglists or arg in structs:
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
         result = p.get("result")
         if result:
-            if result.get("kind") != "guest_arg" or result.get("arg") not in args:
-                errors.append("function policy %s has invalid guest_arg result" % key)
-            elif result.get("arg") not in structs:
-                errors.append("function policy %s result argument is not a struct shadow" % key)
+            if result.get("kind") == "guest_arg":
+                if result.get("arg") not in args:
+                    errors.append("function policy %s has invalid guest_arg result" % key)
+                elif result.get("arg") not in structs:
+                    errors.append("function policy %s result argument is not a struct shadow" % key)
+            elif result.get("kind") == "object":
+                otype = result.get("type")
+                ospec = object_types.get(otype)
+                if not ospec:
+                    errors.append("function policy %s uses missing result object %s"
+                                  % (key, otype))
+                elif object_canon(f.ret) != object_canon(ospec.get("c_type", "")):
+                    errors.append("function policy %s result is not object %s" % (key, otype))
+                elif not ospec.get("destructor", "").startswith(key.rsplit(".", 1)[0] + "."):
+                    errors.append("function policy %s object destructor must be in the same library"
+                                  % key)
+            else:
+                errors.append("function policy %s has invalid result policy" % key)
         blockers = []
         for t, n in f.args:
-            if n in taglists or n in structs:
+            if n in taglists or n in structs or n in objects:
                 continue
             if classify(t) not in ("scalar", "widen", "string"):
                 blockers.append("%s %s" % (t, n))
@@ -593,6 +669,14 @@ KNOWN = {
     "icon.library": {
         "FreeFreeList": -54, "FindToolType": -96, "MatchToolValue": -102,
         "BumpRevision": -108,
+    },
+    # The blank line following `.version 39` reserves LVO 5 for the public
+    # OpenCatalog() stack-call veneer.  These checks specifically protect the
+    # blank-vector semantics in parse_conf().
+    "locale.library": {
+        "CloseCatalog": -36, "CloseLocale": -42,
+        "ConvToLower": -48, "ConvToUpper": -54,
+        "OpenCatalogA": -150, "OpenLocale": -156,
     },
 }
 
@@ -648,7 +732,9 @@ def _arg_expr(t, reg):
 def emit_lib(lib, rel, base, btype, hdr, funcs):
     short = lib.split(".")[0]
     domains = POLICY.get("tag_domains", {})
+    object_types = POLICY.get("object_types", {})
     used_domains = []
+    used_objects = []
     for f in funcs:
         p = function_policy(lib, f)
         if not p:
@@ -656,6 +742,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         for d in p.get("taglists", {}).values():
             if d not in used_domains:
                 used_domains.append(d)
+        for op in p.get("objects", {}).values():
+            if op.get("type") not in used_objects:
+                used_objects.append(op.get("type"))
+        result = p.get("result", {})
+        if result.get("kind") == "object" and result.get("type") not in used_objects:
+            used_objects.append(result.get("type"))
     uses_structs = any(function_policy(lib, f) and
                        function_policy(lib, f).get("structs") for f in funcs)
     out = []
@@ -694,6 +786,18 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
           % (ident, ident, ident, d))
         w("};")
         w("")
+    for oname in used_objects:
+        ospec = object_types[oname]
+        destructor = ospec["destructor"].rsplit(".", 1)[1]
+        if not ospec["destructor"].startswith(lib + "."):
+            continue
+        w("static void emu_object_cleanup_%s(APTR emu_base, APTR emu_object)" %
+          c_ident(oname))
+        w("{")
+        w("    %s *%s = emu_base;" % (btype, base))
+        w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
+        w("}")
+        w("")
     w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base," % short)
     w("                  char *err, ULONG errlen)")
     w("{")
@@ -716,12 +820,27 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                                       norm(f.ret), f.offset))
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
+        objects = policy.get("objects", {}) if policy else {}
         if policy:
             w("    {")
         call_args = []
         post = []
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
+            if aname in objects:
+                op = objects[aname]
+                oname = op["type"]
+                w("        APTR emu_object_%d;" % ai)
+                w("        if (emu68k_object_from_guest(guest0, %s, EMU_OBJ_%s, %d,"
+                  % (src, c_ident(oname), 1 if op.get("nullable", True) else 0))
+                w('                                        "%s", &emu_object_%d, err, errlen) < 0)'
+                  % (oname, ai))
+                w("            return 1;")
+                call_args.append("(%s)emu_object_%d" % (norm(atype), ai))
+                if op.get("release", False):
+                    post.append("        emu68k_object_release(guest0, %s, EMU_OBJ_%s);"
+                                % (src, c_ident(oname)))
+                continue
             if aname in structs:
                 sp = structs[aname]
                 stype, direction = sp["type"], sp["direction"]
@@ -760,7 +879,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         result_policy = policy.get("result") if policy else None
-        if result_policy:
+        if result_policy and result_policy.get("kind") == "guest_arg":
             result_arg = result_policy["arg"]
             result_index = [n for _t, n in f.args].index(result_arg)
             result_src = reg_expr(f.regs[result_index])
@@ -768,6 +887,18 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             for line in post:
                 w(line)
             w("        r->d[0] = emu_result ? %s : 0;" % result_src)
+        elif result_policy and result_policy.get("kind") == "object":
+            oname = result_policy["type"]
+            w("        APTR emu_result = (APTR)%s;" % call)
+            for line in post:
+                w(line)
+            w("        if (emu68k_object_to_guest(guest0, emu_result, EMU_OBJ_%s,"
+              % c_ident(oname))
+            w("                                      base, emu_object_cleanup_%s,"
+              % c_ident(oname))
+            w('                                      "%s", &r->d[0], err, errlen) < 0)'
+              % oname)
+            w("            return 1;")
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
             for line in post:
@@ -833,6 +964,19 @@ ULONG emu68k_handle_token(APTR guest0, BPTR b);
 #define EMU_HANDLE(g0, t)  emu68k_handle_bptr((g0), (ULONG)(t))
 #define EMU_TOKEN(g0, b)   emu68k_handle_token((g0), (b))
 
+/* Native OS objects cross as typed, per-run tokens. The table preserves
+ * identity and reference counts, rejects stale/wrong-type tokens, and owns a
+ * cleanup callback so objects still live at program exit are released. */
+typedef void (*EmuObjectCleanup)(APTR base, APTR object);
+LONG emu68k_object_from_guest(APTR guest0, ULONG token, UWORD type,
+                              BOOL nullable, const char *type_name,
+                              APTR *native, char *err, ULONG errlen);
+LONG emu68k_object_to_guest(APTR guest0, APTR native, UWORD type,
+                            APTR base, EmuObjectCleanup cleanup,
+                            const char *type_name, ULONG *token,
+                            char *err, ULONG errlen);
+void emu68k_object_release(APTR guest0, ULONG token, UWORD type);
+
 /* Policy-compiled TagItem values. A domain names every accepted tag and the
  * type of ti_Data. Unknown/refused tags fail the crossing; they are never
  * forwarded as if every IPTR were a scalar. */
@@ -882,7 +1026,13 @@ def emit(outdir, check=False):
         for e in errors:
             print("  ! %s" % e)
         return 1
-    protos, total = [], 0
+    object_types = POLICY.get("object_types", {})
+    object_enum = ["enum"]
+    object_enum.append("{")
+    for name, spec in sorted(object_types.items(), key=lambda kv: kv[1]["id"]):
+        object_enum.append("    EMU_OBJ_%s = %d," % (c_ident(name), spec["id"]))
+    object_enum.append("};")
+    protos, total = ["\n".join(object_enum)], 0
     stale = []
     for lib, rel, base, btype, hdr in targets:
         funcs = parse_conf(os.path.join(AROS, rel))

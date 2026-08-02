@@ -1,5 +1,19 @@
 {
   "schema": 1,
+  "object_types": {
+    "Catalog": {
+      "id": 1,
+      "c_type": "struct Catalog *",
+      "kind": "opaque",
+      "destructor": "locale.library.CloseCatalog"
+    },
+    "Locale": {
+      "id": 2,
+      "c_type": "struct Locale *",
+      "kind": "opaque",
+      "destructor": "locale.library.CloseLocale"
+    }
+  },
   "tag_domains": {
     "graphics.best_mode": {
       "headers": ["graphics/modeid.h"],
@@ -30,6 +44,16 @@
         {"name": "CYBRBIDTG_MonitorID", "kind": "u32"},
         {"name": "CYBRBIDTG_BoardName", "kind": "cstr"}
       ]
+    },
+    "locale.open_catalog": {
+      "headers": ["libraries/locale.h"],
+      "max_items": 8,
+      "tags": [
+        {"name": "OC_BuiltInLanguage", "kind": "cstr"},
+        {"name": "OC_BuiltInCodeSet", "kind": "u32"},
+        {"name": "OC_Version", "kind": "u32"},
+        {"name": "OC_Language", "kind": "cstr"}
+      ]
     }
   },
   "functions": {
@@ -50,6 +74,36 @@
     },
     "cybergraphics.library.BestCModeIDTagList": {
       "taglists": {"tags": "cybergraphics.best_mode"}
+    },
+    "locale.library.OpenLocale": {
+      "result": {"kind": "object", "type": "Locale"}
+    },
+    "locale.library.CloseLocale": {
+      "objects": {
+        "locale": {"type": "Locale", "nullable": false, "release": true}
+      }
+    },
+    "locale.library.ConvToLower": {
+      "objects": {
+        "locale": {"type": "Locale", "nullable": false}
+      }
+    },
+    "locale.library.ConvToUpper": {
+      "objects": {
+        "locale": {"type": "Locale", "nullable": false}
+      }
+    },
+    "locale.library.OpenCatalogA": {
+      "objects": {
+        "locale": {"type": "Locale", "nullable": true}
+      },
+      "taglists": {"tags": "locale.open_catalog"},
+      "result": {"kind": "object", "type": "Catalog"}
+    },
+    "locale.library.CloseCatalog": {
+      "objects": {
+        "catalog": {"type": "Catalog", "nullable": false, "release": true}
+      }
     }
   }
 }
