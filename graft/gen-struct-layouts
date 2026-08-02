@@ -284,6 +284,17 @@ OPAQUE_SCALAR_FIELDS = {
     ("InfoData", "id_InUse"),
 }
 
+# Fields that ARE guest addresses of raw bytes, and may therefore be rebased
+# into native pointers. This is a decision per field, not a property of the
+# type, which is why it is written down rather than inferred: the same
+# pointer-shaped field could equally be an address the guest must never see
+# rebased. Bitplanes qualify because plane data is a bit array addressed
+# MSB-first within each byte on both machines, so the bytes mean the same
+# thing to native code without being touched.
+GUEST_BYTE_POINTER_FIELDS = {
+    ("BitMap", "Planes"),
+}
+
 ARRAY_RE = re.compile(r"^(.*?)\[(\d+)\]$")
 
 
@@ -301,6 +312,9 @@ def field_kind(struct_name, field_name, guest_type, native_type):
     something this cannot convert and must not pretend to. The widths are of
     ONE element; count says how many there are."""
     gt, nt = guest_type.strip(), native_type.strip()
+    if (struct_name, field_name) in GUEST_BYTE_POINTER_FIELDS:
+        m = ARRAY_RE.match(gt)
+        return ("GPTR", 4, 8, int(m.group(2)) if m else 1)
     m = ARRAY_RE.match(gt)
     if m:
         base, n = m.group(1).strip(), int(m.group(2))
@@ -385,6 +399,9 @@ def emit(m68k, native, out):
     L.append("#define EMU_F_SCALAR 0   /* byte-swapped, narrowed to the guest width */")
     L.append("#define EMU_F_BYTES  1   /* copied verbatim: no byte order to change  */")
     L.append("#define EMU_F_ARRAY  2   /* count scalars, each one byte-swapped       */")
+    L.append("#define EMU_F_GUESTPTR 3 /* guest addresses of raw bytes, rebased;")
+    L.append("                          * guest -> native only, since a native")
+    L.append("                          * address has no guest form to write back  */")
     L.append("")
     for t in TYPES:
         an, a = resolve(m68k, t)
@@ -402,8 +419,8 @@ def emit(m68k, native, out):
             if k is None or k[0] == "PTR":
                 skipped.append("%s (%s)" % (f, ty))
                 continue
-            kind = {"BYTES": "EMU_F_BYTES", "ARRAY": "EMU_F_ARRAY"}.get(
-                k[0], "EMU_F_SCALAR")
+            kind = {"BYTES": "EMU_F_BYTES", "ARRAY": "EMU_F_ARRAY",
+                    "GPTR": "EMU_F_GUESTPTR"}.get(k[0], "EMU_F_SCALAR")
             rows.append("    { %4d, %4d, %4d, %d, %d, %s },   /* %-24s %s */"
                         % (o, no, k[3], k[1], k[2], kind, f, ty))
         if not rows:

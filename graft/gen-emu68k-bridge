@@ -491,7 +491,7 @@ def parse_conf(path):
 # ---------------------------------------------------------------------------
 
 TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
-             "refuse": "EMU_TAG_REFUSE"}
+             "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT"}
 
 
 def policy_key(lib, f):
@@ -575,6 +575,10 @@ def validate_policy(targets):
             if kind not in TAG_KINDS:
                 errors.append("tag domain %s tag %s has unknown kind %r"
                               % (name, macro, kind))
+            elif kind == "struct" and not re.fullmatch(
+                    r"[A-Za-z_]\w*", t.get("type", "")):
+                errors.append("tag domain %s tag %s needs a structure type"
+                              % (name, macro))
 
     for key, p in POLICY.get("functions", {}).items():
         f = bykey.get(key)
@@ -883,7 +887,9 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             used_objects.append(result.get("type"))
     uses_structs = (any(function_policy(lib, f) and
                         function_policy(lib, f).get("structs") for f in funcs) or
-                    any(object_types[o].get("kind") == "facade" for o in used_objects))
+                    any(object_types[o].get("kind") == "facade" for o in used_objects) or
+                    any(t.get("kind") == "struct"
+                        for d in used_domains for t in domains[d]["tags"]))
     out = []
     w = out.append
 
@@ -927,10 +933,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("{")
         tags = domains[d]["tags"]
         for tag in tags:
-            w('    { %s, %s, "%s" },' %
-              (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
+            if tag["kind"] == "struct":
+                st = tag["type"]
+                w('    { %s, %s, "%s", emu_fields_%s, EMU_NFIELDS(emu_fields_%s),'
+                  % (tag["name"], TAG_KINDS[tag["kind"]], tag["name"], st, st))
+                w("      M68K_%s_SIZEOF, sizeof(struct %s) }," % (st, st))
+            else:
+                w('    { %s, %s, "%s", NULL, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
         if not tags:
-            w("    { 0, EMU_TAG_REFUSE, NULL },")
+            w("    { 0, EMU_TAG_REFUSE, NULL, NULL, 0, 0, 0 },")
         w("};")
         w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
         w("{")
@@ -1109,10 +1121,22 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             cap = domains[dname]["max_items"]
             ident = c_ident(dname)
             w("        struct TagItem emu_tags_%d[%d];" % (ai, cap + 1))
+            # Room for the structures the domain's tags point at, one chunk per
+            # such tag, in UQUADs so it is aligned for any of them. The
+            # compiler sizes it, so the scratch cannot drift from the types.
+            # A domain with no structure tags emits no scratch at all.
+            structs = [t["type"] for t in domains[dname]["tags"]
+                       if t.get("kind") == "struct"]
+            if structs:
+                w("        UQUAD emu_tagscratch_%d[%s];"
+                  % (ai, " + ".join("(sizeof(struct %s) + 7) / 8" % s
+                                    for s in structs)))
             w("        if (emu68k_tags_to_native(guest0, %s, &emu_tagdomain_%s,"
               % (src, ident))
-            w("                                     emu_tags_%d, %d, err, errlen) < 0)"
-              % (ai, cap + 1))
+            w("                                     emu_tags_%d, %d, %s, err, errlen) < 0)"
+              % (ai, cap + 1,
+                 "emu_tagscratch_%d, sizeof emu_tagscratch_%d" % (ai, ai)
+                 if structs else "NULL, 0"))
             w("            return 1;")
             call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
                              % (norm(atype), src, ai))
@@ -1297,11 +1321,20 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_U32     0
 #define EMU_TAG_CSTR    1
 #define EMU_TAG_REFUSE  2
+#define EMU_TAG_STRUCT  3   /* ti_Data is a guest pointer to a value structure */
 struct EmuTagDesc
 {
     ULONG tag;
     UBYTE kind;
     const char *name;
+    /* EMU_TAG_STRUCT only: how to rebuild what ti_Data points at. The native
+     * copy lives in the caller's scratch and is valid for the call, which is
+     * why a structure tag is only described for calls that consume it rather
+     * than retain it. */
+    const struct EmuField *fields;
+    UWORD nfields;
+    UWORD guest_size;
+    UWORD native_size;
 };
 struct EmuTagDomain
 {
@@ -1312,6 +1345,7 @@ struct EmuTagDomain
 LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
                            const struct EmuTagDomain *domain,
                            struct TagItem *native_tags, ULONG capacity,
+                           APTR scratch, ULONG scratch_size,
                            char *err, ULONG errlen);
 
 LONG emu68k_require_guest_range(ULONG guest_addr, ULONG length,
@@ -1354,7 +1388,7 @@ def emit(outdir, check=False):
         object_enum.append("    EMU_OBJ_%s = %d," % (c_ident(name), spec["id"]))
     object_enum.append("};")
     protos, total = ["\n".join(object_enum)], 0
-    stale = []
+    stale, emitted = [], []
     for lib, rel, base, btype, hdr in targets:
         funcs = parse_conf(os.path.join(AROS, rel))
         if funcs is None:
@@ -1372,14 +1406,49 @@ def emit(outdir, check=False):
         protos.append("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r,\n"
                       "                  APTR guest0, APTR base,\n"
                       "                  char *err, ULONG errlen);" % short)
+        emitted.append(short)
         print("  %-28s %3d crossings" % (os.path.basename(path), n))
         total += n
+    # The two places that have to know the SAME set of library names: the
+    # dispatch table that routes a call to its generated crossings, and the
+    # host's list of names it hands the guest a native base for. Both were
+    # written by hand and both drifted the first time a library was added, so
+    # both are emitted from the set that was actually generated.
+    protos.append("\n".join(
+        ["/* name, generated entry point, and where its base comes from. */",
+         "#define EMU68K_GEN_LIBS(X) \\"] +
+        ['    X("%s.library", emu68k_gen_%s, GENBASE_%s) \\'
+         % (s, s, {"dos": "DOS", "exec": "EXEC"}.get(s, "OPEN"))
+         for s in emitted] +
+        ["    /* end */"]))
     hpath = os.path.join(outdir, "emu68k_gen.h")
     hsrc = HEADER % "\n".join(protos)
+    # The host service decides which library names it answers with a native
+    # base rather than looking for a 68k one on disk. That set is exactly the
+    # set generated here: offering a name with no crossings behind it means the
+    # program's first call to it is a capability gap, and NOT offering a name
+    # we generated for sends it looking for a disk library that is not there.
+    host_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "hosted", "emu68k", "emu68k_genlibs.h")
+    host_src = ("/* GENERATED by graft/gen-emu68k-bridge - do not edit.\n"
+                " *\n"
+                " * The libraries the bridge has generated crossings for, and\n"
+                " * therefore the ones the guest is given a native base for.\n"
+                " */\n\n"
+                "#ifndef EMU68K_GENLIBS_H\n"
+                "#define EMU68K_GENLIBS_H\n\n"
+                "#define EMU68K_SERVABLE_LIBS(X) \\\n"
+                + "".join('    X("%s.library") \\\n' % s for s in emitted)
+                + "    /* end */\n\n"
+                "#endif /* EMU68K_GENLIBS_H */\n")
     if check:
         cur = open(hpath).read() if os.path.exists(hpath) else None
         if cur != hsrc:
             stale.append(hpath)
+        cur = (open(host_path).read()
+               if os.path.exists(host_path) else None)
+        if cur != host_src:
+            stale.append(os.path.normpath(host_path))
         if stale:
             print("STALE - regenerate with --emit:")
             for x in stale:
@@ -1390,6 +1459,8 @@ def emit(outdir, check=False):
         return 0
     with open(hpath, "w") as fh:
         fh.write(hsrc)
+    with open(host_path, "w") as fh:
+        fh.write(host_src)
     print("  %-28s %3d total" % ("emu68k_gen.h", total))
     return 0
 

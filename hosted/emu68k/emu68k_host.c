@@ -8,6 +8,7 @@
  * OS: bounded quanta, streaming output, async kill, contained faults. */
 
 #include "emu68k_host.h"
+#include "emu68k_genlibs.h"
 #include "scan68k.h"
 #include "guestlib68k.h"
 
@@ -1263,17 +1264,16 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
 
         {
+            /* Exactly the libraries the bridge generated crossings for. Kept
+             * in step by generating it: offering a name with nothing behind it
+             * turns the program's first call into a capability gap, and
+             * withholding one we did generate sends it looking on disk for a
+             * 68k library that is not there. */
+#define EMU_SERVABLE_ROW(name) name,
             static const char *const servable[] = {
-                "exec.library", "dos.library", "utility.library",
-                "intuition.library", "graphics.library", "layers.library",
-                "gadtools.library", "asl.library", "icon.library",
-                "iffparse.library", "commodities.library", "diskfont.library",
-                "locale.library", "keymap.library", "datatypes.library",
-                "expansion.library", "cybergraphics.library", "mathffp.library",
-                "mathieeesingbas.library", "mathieeedoubbas.library",
-                "mathieeesingtrans.library", "mathieeedoubtrans.library",
-                "mathtrans.library", "workbench.library",
+                EMU68K_SERVABLE_LIBS(EMU_SERVABLE_ROW)
             };
+#undef EMU_SERVABLE_ROW
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
                 if (!strcmp(nm, servable[k])) { known = 1; break; }

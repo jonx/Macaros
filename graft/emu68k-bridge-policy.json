@@ -112,9 +112,16 @@
       ]
     },
     "intuition.new_object": {
-      "headers": ["intuition/classes.h"],
-      "max_items": 1,
-      "tags": []
+      "headers": ["intuition/classes.h", "intuition/pointerclass.h"],
+      "max_items": 32,
+      "tags": [
+        {"name": "POINTERA_BitMap", "kind": "struct", "type": "BitMap"},
+        {"name": "POINTERA_XOffset", "kind": "u32"},
+        {"name": "POINTERA_YOffset", "kind": "u32"},
+        {"name": "POINTERA_WordWidth", "kind": "u32"},
+        {"name": "POINTERA_XResolution", "kind": "u32"},
+        {"name": "POINTERA_YResolution", "kind": "u32"}
+      ]
     }
   },
   "functions": {
