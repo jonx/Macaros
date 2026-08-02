@@ -538,7 +538,13 @@ def validate_policy(targets):
         elif oid in seen_object_ids:
             errors.append("object type %s repeats id %d" % (name, oid))
         seen_object_ids.add(oid)
-        if not isinstance(ctype, str) or classify(ctype) not in ("struct", "aptr"):
+        pointer_typedef = o.get("pointer_typedef", False)
+        if pointer_typedef not in (True, False):
+            errors.append("object type %s pointer_typedef must be boolean" % name)
+        typedef_pointer = (pointer_typedef and isinstance(ctype, str) and
+                           re.fullmatch(r"[A-Za-z_]\w*", ctype))
+        if (not isinstance(ctype, str) or
+                (classify(ctype) not in ("struct", "aptr") and not typedef_pointer)):
             errors.append("object type %s has invalid pointer c_type %r" % (name, ctype))
         if o.get("kind") not in ("opaque", "facade"):
             errors.append("object type %s kind must be opaque or facade" % name)

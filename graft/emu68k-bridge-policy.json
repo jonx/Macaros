@@ -68,6 +68,12 @@
       "kind": "facade",
       "facade_struct": "TextFont",
       "destructor": "graphics.library.CloseFont"
+    },
+    "DisplayInfoHandle": {
+      "id": 12,
+      "c_type": "DisplayInfoHandle",
+      "pointer_typedef": true,
+      "kind": "opaque"
     }
   },
   "tag_domains": {
@@ -331,6 +337,9 @@
     },
     "graphics.library.BestModeIDA": {
       "taglists": {"TagItems": "graphics.best_mode"}
+    },
+    "graphics.library.FindDisplayInfo": {
+      "result": {"kind": "object", "type": "DisplayInfoHandle", "owned": false}
     },
     "graphics.library.InitRastPort": {
       "structs": {
