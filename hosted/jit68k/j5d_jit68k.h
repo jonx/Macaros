@@ -290,6 +290,20 @@ typedef struct j5d_sandbox {
 typedef int (*j5d_lvo_fn)(int lvo, struct j5d_m68k_state *st, void *user,
                           char *errbuf, unsigned errlen);
 
+/* [T3] ...or the bridge can decline to do the work natively and REDIRECT the
+ * guest into 68k code instead: return J5D_LVO_REDIRECT with the routine's guest
+ * address in st->pc, and the dispatcher enters it as an ordinary subroutine
+ * (pushing the return address for a jsr-form call, and not for a tail-call jmp,
+ * whose caller's frame the routine's own rts will land on).
+ *
+ * This exists for the vectors that take a CALLBACK into guest code. RawDoFmt is
+ * the case that forced it: it invokes the caller's PutChProc once per character,
+ * so serving it natively would mean re-entering the JIT from inside a native
+ * call, and its argument block cannot even be converted without parsing the
+ * format string first. Run in the guest, all of that is just 68k code calling
+ * 68k code in one address space. */
+#define J5D_LVO_REDIRECT 2
+
 /* ----- The engine (j5d_engine.c) --------------------------------------------------
  * Run the 68k program from `entry_pc` through the JIT: translate each basic block via
  * the REAL Emu68 decoders into a MAP_JIT region, run it under W^X, then decode the

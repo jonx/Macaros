@@ -26,6 +26,8 @@
 #include <ctype.h>
 #include <unistd.h>
 
+#include "nativelib/rawdofmt_blob.h"
+
 /* The guest memory map (the run68k layout; see run68k.c for the full map).
  *
  * [T2b] THE RUNTIME HARDWARE GUARD. The arena deliberately STOPS where the Amiga
@@ -70,6 +72,12 @@
 #define PROG_ORIGIN     0x00250000u
 #define ARGS_BASE       0x00238000u
 #define ARGS_REGION_END 0x00240000u
+/* [T3] In-guest OS code: 68k routines the bridge REDIRECTS to instead of
+ * serving natively, because they take a callback into the program's own code.
+ * Sits between the argument region and the program, which starts at 0x250000. */
+#define OSCODE_BASE     0x00240000u
+#define OSCODE_END      0x00250000u
+#define OSCODE_RAWDOFMT OSCODE_BASE
 #define GUEST_RESERVE   GUEST_TOP       /* the whole low guest space reserved   */
 
 /* [T3] The AmigaOS environment a real program expects.
@@ -129,6 +137,7 @@
 
 /* exec LVOs a program uses to get going (negative offset / 6). */
 #define LVO_OPENLIBRARY   92    /* -552 */
+#define LVO_RAWDOFMT      87    /* -522: the printf engine, run in the guest */
 #define LVO_CLOSELIBRARY  69    /* -414 */
 #define LVO_ALLOCMEM      33    /* -198 */
 #define LVO_FREEMEM       35    /* -210 */
@@ -159,6 +168,9 @@
 #define LVO_ADDHEAD       40    /* -240 */
 #define LVO_ADDTAIL       41    /* -246 */
 #define LVO_REMOVE        42    /* -252 */
+#define LVO_REMHEAD       43    /* -258 */
+#define LVO_REMTAIL       44    /* -264 */
+#define LVO_ENQUEUE       45    /* -270 */
 
 static const char *g_crash_dir = NULL;
 
@@ -560,6 +572,16 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      struct j5d_m68k_state *st, char *e, unsigned el)
 {
     switch (lvo) {
+    case LVO_RAWDOFMT:
+        /* Not served here: RawDoFmt calls the PROGRAM's PutChProc once per
+         * character, so doing it natively would mean re-entering the JIT from
+         * inside a native call, and its argument block cannot be converted
+         * without parsing the format string first (a %s argument is a guest
+         * pointer, a %d argument is not). Redirect into 68k code instead and
+         * all of it stays inside the guest address space. */
+        st->pc = OSCODE_RAWDOFMT;
+        return J5D_LVO_REDIRECT;
+
     case LVO_OLDOPENLIB:      /* same thing, older entry point: A1 = name     */
     case LVO_OPENLIBRARY: {
         const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
@@ -665,6 +687,49 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         gwrite32(sb, succ + 4, pred);
         return 0;
     }
+    /* RemHead/RemTail hand back a NODE, and the node is the guest's own: a
+     * native pointer would be an address it cannot dereference, so like the
+     * Add* pair these walk guest memory directly. An empty list is detected the
+     * way exec does it, by the terminator's NULL link rather than by a count. */
+    case LVO_REMHEAD: {
+        uint32_t list = st->a[0];
+        uint32_t node = gread32(sb, list);           /* lh_Head                */
+        uint32_t succ = gread32(sb, node);           /* node->ln_Succ          */
+        if (!succ) { st->d[0] = 0; return 0; }       /* the list was empty     */
+        gwrite32(sb, list, succ);                    /* lh_Head = succ         */
+        gwrite32(sb, succ + 4, list);                /* succ->ln_Pred = &lh_Head */
+        st->d[0] = node;
+        return 0;
+    }
+    case LVO_REMTAIL: {
+        uint32_t list = st->a[0];
+        uint32_t node = gread32(sb, list + 8);       /* lh_TailPred            */
+        uint32_t pred = gread32(sb, node + 4);       /* node->ln_Pred          */
+        if (!pred) { st->d[0] = 0; return 0; }
+        gwrite32(sb, list + 8, pred);                /* lh_TailPred = pred     */
+        gwrite32(sb, pred, list + 4);                /* pred->ln_Succ = &lh_Tail */
+        st->d[0] = node;
+        return 0;
+    }
+    case LVO_ENQUEUE: {
+        /* Priority-sorted insert: walk to the first node of LOWER priority and
+         * insert before it. ln_Pri is a SIGNED byte at offset 9. */
+        uint32_t list = st->a[0], node = st->a[1];
+        int pri = (int8_t)j4_sandbox_host(sb, node)[9];
+        uint32_t next = gread32(sb, list);           /* lh_Head                */
+        uint32_t succ;
+        while ((succ = gread32(sb, next)) != 0) {    /* not yet the terminator */
+            if ((int8_t)j4_sandbox_host(sb, next)[9] < pri) break;
+            next = succ;
+        }
+        {   uint32_t pred = gread32(sb, next + 4);
+            gwrite32(sb, node, next);                /* node->ln_Succ = next   */
+            gwrite32(sb, node + 4, pred);            /* node->ln_Pred = pred   */
+            gwrite32(sb, pred, node);
+            gwrite32(sb, next + 4, node);
+        }
+        return 0;
+    }
     case LVO_CREATEMSGPORT: {
         /* A guest MsgPort: the program holds it and may put it in structures,
          * so it is built in guest memory with a properly initialised (empty)
@@ -748,7 +813,11 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
     if (r && a6 == EXEC_BASE) {
         trace_call(r, "exec.library", lvo, st);
         if (el) e[0] = 0;
-        if (exec_call(r, c->sb, lvo, st, e, el) == 0) return 0;
+        {   /* a redirect is neither "served" nor "failed": the guest is about
+             * to run 68k code for this vector, so pass it straight through. */
+            int rc = exec_call(r, c->sb, lvo, st, e, el);
+            if (rc == 0 || rc == J5D_LVO_REDIRECT) return rc;
+        }
         if (e[0]) {          /* exec_call said something specific: do not bury it
                               * under a generic "capability gap" message */
             ledger_record(lvo, r->name[0] ? r->name : NULL);
@@ -908,6 +977,16 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             mprotect((uint8_t *)r->reserve + lo, hi - lo, PROT_NONE);
         }
     }
+    /* [T3] Plant the in-guest OS routines before the program loads. These are
+     * the vectors the bridge redirects to rather than serving natively, because
+     * they call back into the program's own code. */
+    if (sizeof emu68k_rawdofmt_bin > OSCODE_END - OSCODE_BASE) {
+        snprintf(err, errlen, "in-guest OS code does not fit its region");
+        goto fail;
+    }
+    memcpy(j4_sandbox_host(&r->sb, OSCODE_RAWDOFMT), emu68k_rawdofmt_bin,
+           sizeof emu68k_rawdofmt_bin);
+
     r->sb.next_alloc = PROG_ORIGIN;
     if (j4_load_hunks(&r->sb, r->image, imagelen, 0, &r->seg, err, errlen))
         goto fail;
