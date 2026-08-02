@@ -121,6 +121,35 @@ Engine change this forced: the chain-entry safe point now decrements a **chain
 budget** instead of only testing a flag, because a self-chained loop never
 returns to C on its own, so nothing in-OS could poll CTRL-C.
 
+## STATUS 2026-08-02: the 12-program corpus is fully disposed
+
+9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
+DSPPeek are correctly ROUTED as needing a real machine, which is the right
+answer for a memory scanner rather than a bug. LhA compresses, lists and
+extracts byte-exact under `make hosted-emu68k-t3lha`.
+
+**What is NOT built.** Nothing below should be assumed to exist:
+
+| piece | state |
+|---|---|
+| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
+| tier 2b generation from the field tables | designed, not built |
+| the policy schema (per-type class) | designed, not built |
+| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
+
+**The evidence gap that matters most.** The corpus is 12 binaries, and there
+are no others on this machine. Everything above is a claim about twelve
+programs, not about legacy 68k software as a class. Scaling the corpus and
+fixing gaps in ledger-FREQUENCY order (rather than one program at a time, which
+is what today was) is the work that would turn it into one.
+
+**A debugging rule this port paid three wrong guesses for in a single day.**
+Never diagnose a 68k fault by inference; print the value. The jump-table
+theory, the size-overrun theory and "my engine change broke GetAsmIncludeIndex"
+were all wrong, and each was settled in one run by an actual number.
+`EMU68K_TRACE_FAULT` names the decoded guest address of an unclassified fault,
+`J5G_TRACE` gives per-block PCs, `EMU68K_TRACE_CALLS` gives library calls.
+
 Original plan text follows.
 
 The transparency spine. Depends: T0.
@@ -188,6 +217,35 @@ tooltype, crash bundle v2) are still open.
   end (so the arena became a real mapping), and `mprotect` rounds a length UP,
   which put the CIA registers back inside the writable window.
 
+## STATUS 2026-08-02: the 12-program corpus is fully disposed
+
+9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
+DSPPeek are correctly ROUTED as needing a real machine, which is the right
+answer for a memory scanner rather than a bug. LhA compresses, lists and
+extracts byte-exact under `make hosted-emu68k-t3lha`.
+
+**What is NOT built.** Nothing below should be assumed to exist:
+
+| piece | state |
+|---|---|
+| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
+| tier 2b generation from the field tables | designed, not built |
+| the policy schema (per-type class) | designed, not built |
+| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
+
+**The evidence gap that matters most.** The corpus is 12 binaries, and there
+are no others on this machine. Everything above is a claim about twelve
+programs, not about legacy 68k software as a class. Scaling the corpus and
+fixing gaps in ledger-FREQUENCY order (rather than one program at a time, which
+is what today was) is the work that would turn it into one.
+
+**A debugging rule this port paid three wrong guesses for in a single day.**
+Never diagnose a 68k fault by inference; print the value. The jump-table
+theory, the size-overrun theory and "my engine change broke GetAsmIncludeIndex"
+were all wrong, and each was settled in one run by an actual number.
+`EMU68K_TRACE_FAULT` names the decoded guest address of an unclassified fault,
+`J5G_TRACE` gives per-block PCs, `EMU68K_TRACE_CALLS` gives library calls.
+
 Original plan text follows.
 
 Make failure excellent before scaling coverage. Depends: T1.
@@ -254,6 +312,35 @@ cross the boundary (a guest base, guest-arena memory, a structure the program
 walks). MatchFirst therefore calls the native MatchFirst into a native
 AnchorPath and copies back the fields the program reads - it does NOT
 reimplement AmigaDOS pattern matching.
+
+## STATUS 2026-08-02: the 12-program corpus is fully disposed
+
+9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
+DSPPeek are correctly ROUTED as needing a real machine, which is the right
+answer for a memory scanner rather than a bug. LhA compresses, lists and
+extracts byte-exact under `make hosted-emu68k-t3lha`.
+
+**What is NOT built.** Nothing below should be assumed to exist:
+
+| piece | state |
+|---|---|
+| third-party 68k `.library` loaded INTO the guest | not started; this is what closes off xpkmaster/muimaster properly rather than failing cleanly on them |
+| tier 2b generation from the field tables | designed, not built |
+| the policy schema (per-type class) | designed, not built |
+| conformance beyond MOVE/arithmetic | shifts, bit ops, MULS/DIVS, MOVEM, BCD all uncovered |
+
+**The evidence gap that matters most.** The corpus is 12 binaries, and there
+are no others on this machine. Everything above is a claim about twelve
+programs, not about legacy 68k software as a class. Scaling the corpus and
+fixing gaps in ledger-FREQUENCY order (rather than one program at a time, which
+is what today was) is the work that would turn it into one.
+
+**A debugging rule this port paid three wrong guesses for in a single day.**
+Never diagnose a 68k fault by inference; print the value. The jump-table
+theory, the size-overrun theory and "my engine change broke GetAsmIncludeIndex"
+were all wrong, and each was settled in one run by an actual number.
+`EMU68K_TRACE_FAULT` names the decoded guest address of an unclassified fault,
+`J5G_TRACE` gives per-block PCs, `EMU68K_TRACE_CALLS` gives library calls.
 
 Original plan text follows.
 
