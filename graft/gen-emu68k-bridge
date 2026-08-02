@@ -33,29 +33,96 @@ import sys
 
 AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
 
-# The libraries a 68k program actually calls, with the base and header the
-# generated code needs. Order is the order of the generated files.
-# library, conf, base variable, its type, proto header. The base is declared as
-# a LOCAL of the name and type proto/<lib>.h expects, which shadows the extern
-# that header declares - so the generated call uses the base we were handed
-# rather than a global nobody set. (Defining a macro instead would be wrong for
-# GfxBase and IntuitionBase, whose base name is also their struct tag.)
-LIBS = [
-    ("dos.library",         "rom/dos/dos.conf",
-     "DOSBase",       "struct DosLibrary",   "proto/dos.h"),
-    ("exec.library",        "rom/exec/exec.conf",
-     "SysBase",       "struct ExecBase",     "proto/exec.h"),
-    ("utility.library",     "rom/utility/utility.conf",
-     "UtilityBase",   "struct UtilityBase",  "proto/utility.h"),
-    ("intuition.library",   "rom/intuition/intuition.conf",
-     "IntuitionBase", "struct IntuitionBase","proto/intuition.h"),
-    ("graphics.library",    "rom/graphics/graphics.conf",
-     "GfxBase",       "struct GfxBase",      "proto/graphics.h"),
-    ("icon.library",        "workbench/libs/icon/icon.conf",
-     "IconBase",      "struct Library",      "proto/icon.h"),
-    ("commodities.library", "workbench/libs/commodities/commodities.conf",
-     "CxBase",        "struct Library",      "proto/commodities.h"),
+# Where the BUILD put the generated proto headers. They are the authority on how
+# a library's base is named and typed (the .conf does not always say), and a
+# library without one cannot be compiled against at all - which makes the
+# presence of the header the natural test for "can we generate for this".
+GENINC = os.environ.get(
+    "AROS_GENINC",
+    os.path.expanduser("~/aros-build/bin/darwin-aarch64/gen/include"))
+
+# The libraries a 68k Amiga program plausibly calls: the AmigaOS application
+# surface. Every .conf in the tree is CLASSIFIED (see --report-all, 175 of them),
+# but only these have code emitted - compiling all 175 would link the bridge
+# against HIDDs, datatypes and internal modules that no 68k program opens.
+GEN_LIBS = [
+    "exec", "dos", "utility", "intuition", "graphics", "layers", "gadtools",
+    "asl", "icon", "iffparse", "commodities", "diskfont", "locale", "keymap",
+    "datatypes", "expansion", "cybergraphics", "mathffp", "mathieeesingbas",
+    "mathieeedoubbas",
 ]
+
+
+def find_confs():
+    """short name -> path, for every .conf in the tree carrying a functionlist.
+    Prefers rom/ and workbench/libs/ when a name appears more than once."""
+    out = {}
+    for root, dirs, files in os.walk(AROS):
+        dirs[:] = [d for d in dirs if d not in (".git", "bin")]
+        for fn in files:
+            if not fn.endswith(".conf"):
+                continue
+            p = os.path.join(root, fn)
+            try:
+                if "##begin functionlist" not in open(
+                        p, encoding="utf-8", errors="replace").read():
+                    continue
+            except OSError:
+                continue
+            rel = os.path.relpath(p, AROS)
+            short = fn[:-5]
+            rank = 0 if rel.startswith(("rom/", "workbench/libs/")) else 1
+            if short not in out or rank < out[short][1]:
+                out[short] = (rel, rank)
+    return {k: v[0] for k, v in out.items()}
+
+
+BASE_RE = re.compile(r"extern\s+(struct\s+\w+|\w+)\s*\*\s*(\w+)\s*;")
+GETBASE_RE = re.compile(r"__aros_getbase_(\w+)\s*\(\)")
+
+
+def proto_base(short):
+    """(base name, base type) for `short`, read from its generated proto header.
+    Returns None when there is no header, i.e. nothing to generate against."""
+    path = os.path.join(GENINC, "proto", short + ".h")
+    try:
+        src = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    m = GETBASE_RE.search(src)
+    if not m:
+        return None
+    name = m.group(1)
+    btype = "struct Library"
+    for bt, bn in BASE_RE.findall(src):
+        # the specific spelling wins over the generic `struct Library` one
+        if bn == name and norm(bt) != "struct Library":
+            btype = norm(bt)
+    return (name, btype)
+
+
+def gen_targets():
+    """The libraries code is emitted for: on GEN_LIBS, has a .conf, and has a
+    generated proto header to compile against."""
+    confs = find_confs()
+    out = []
+    for short in GEN_LIBS:
+        rel = confs.get(short)
+        if not rel:
+            continue
+        pb = proto_base(short)
+        if not pb:
+            continue
+        out.append((short + ".library", rel, pb[0], pb[1], "proto/%s.h" % short))
+    return out
+
+
+def all_targets():
+    """Every library in the tree, for classification. No proto header needed:
+    nothing is compiled, only counted."""
+    return [(short + ".library", rel, None, None, None)
+            for short, rel in sorted(find_confs().items())]
+
 
 # ---------------------------------------------------------------------------
 # type classification
@@ -515,7 +582,7 @@ def emit(outdir, check=False):
     for. This is what catches both."""
     protos, total = [], 0
     stale = []
-    for lib, rel, base, btype, hdr in LIBS:
+    for lib, rel, base, btype, hdr in gen_targets():
         funcs = parse_conf(os.path.join(AROS, rel))
         if funcs is None:
             continue
@@ -553,16 +620,59 @@ def emit(outdir, check=False):
     return 0
 
 
+def report_all():
+    """Classify EVERY library in the tree. Nothing is compiled, so this needs no
+    proto headers - it is the complete work queue, and it is what says the
+    remaining effort is a list of TYPES rather than a list of functions."""
+    import collections
+    tot = t1 = 0
+    types = collections.Counter()
+    libs = 0
+    for lib, rel, _b, _t, _h in all_targets():
+        funcs = parse_conf(os.path.join(AROS, rel))
+        if not funcs:
+            continue
+        libs += 1
+        for f in funcs:
+            if f.private:
+                continue
+            tot += 1
+            if f.tier(lib)[0] == 1:
+                t1 += 1
+                continue
+            for t, n in f.args:
+                if classify(t) == "struct":
+                    types[norm(t)] += 1
+            if classify(f.ret) == "struct":
+                types[norm(f.ret)] += 1
+            if classify(f.ret) == "bptr" or any(classify(t) == "bptr" for t, _ in f.args):
+                types["BPTR (the handle table)"] += 1
+
+    print("%d libraries, %d public vectors" % (libs, tot))
+    print("  tier 1, generated free:  %5d  (%.0f%%)" % (t1, 100.0 * t1 / max(1, tot)))
+    print("  needs a type described:  %5d" % (tot - t1))
+    print("\nthe types that block the most vectors (describe one, unlock all):")
+    cum = 0
+    for i, (t, c) in enumerate(types.most_common(25), 1):
+        cum += c
+        print("  %2d. %-34s %4d   (cumulative %d of %d)"
+              % (i, t[:34], c, cum, tot - t1))
+    print("\n%d distinct blocking types in total" % len(types))
+    return 0
+
+
 def main():
     if "--emit" in sys.argv:
         i = sys.argv.index("--emit")
         return emit(sys.argv[i + 1])
+    if "--report-all" in sys.argv:
+        return report_all()
     if "--check" in sys.argv:
         i = sys.argv.index("--check")
         return emit(sys.argv[i + 1], check=True)
     if "--list" in sys.argv:
         which = [a for a in sys.argv[1:] if not a.startswith("-")]
-        for lib, rel, base, btype, hdr in LIBS:
+        for lib, rel, base, btype, hdr in gen_targets():
             if which and lib.split(".")[0] not in which:
                 continue
             funcs = parse_conf(os.path.join(AROS, rel)) or []
@@ -580,7 +690,7 @@ def main():
     total1 = total = 0
     reasons = {}
     fail = False
-    for lib, rel, base, btype, hdr in LIBS:
+    for lib, rel, base, btype, hdr in gen_targets():
         path = os.path.join(AROS, rel)
         funcs = parse_conf(path)
         if funcs is None:
