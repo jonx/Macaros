@@ -70,6 +70,19 @@
 #define HW_CUSTOM_HI    0x00DFFFFFu
 #define HW_VECTOR_HI    0x000003FFu
 #define LIBBASE         0x0021E000u
+
+/* The base a run starts with in A6, which is also the one extra address the
+ * engine will accept as a library base when it recognises a vector call by
+ * where it lands. That heuristic exists because real code calls through a copy
+ * of the base (`move.l a6,a0 ; jsr -42(a0)`), and it costs one false positive
+ * for every ordinary indirect call that happens to land just below a base.
+ *
+ * So the stub OS's base is only offered when the stub OS is the OS. With the
+ * real one bridged it is not a library at all, and advertising it turned an
+ * ordinary indirect call in a real program into a call on a library that does
+ * not exist. Exec's base is the honest answer there, and is what a 68k program
+ * expects to find in A6 anyway. */
+#define RUN_LIBBASE     (g_oscall ? EXEC_BASE : LIBBASE)
 #define HEAP_BASE       0x00231000u
 #define HEAP_END        0x00238000u
 #define PROG_ORIGIN     0x00250000u
@@ -157,6 +170,10 @@
 #define LVO_AVAILMEM      36    /* -216 */
 #define LVO_ALLOCVEC     114    /* -684: the most-wanted call in the corpus    */
 #define LVO_FREEVEC      115    /* -690 */
+#define LVO_CREATEPOOL   116    /* -696 */
+#define LVO_DELETEPOOL   117    /* -702 */
+#define LVO_ALLOCPOOLED  118    /* -708 */
+#define LVO_FREEPOOLED   119    /* -714 */
 #define LVO_ALLOCENTRY    37    /* -222 */
 #define EXECBASE_THISTASK 276   /* ExecBase->ThisTask, the classic offset      */
 /* struct Library: ln(14) lib_Flags(14) lib_pad(15) lib_NegSize(16)
@@ -178,6 +195,7 @@
 #define LVO_COPYMEMQUICK 105    /* -630 */
 #define LVO_CACHECLEARU  106    /* -636 */
 #define LVO_CACHECLEARE  107    /* -642 */
+#define LVO_SUPERVISOR     5    /* -30  */
 #define LVO_REMHEAD       43    /* -258 */
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
@@ -195,6 +213,8 @@
 #define LVO_GL_RECLAIM    653   /* -3918 */
 
 #define GUESTLIB_MAX 16
+#define GUESTSEG_MAX 32
+#define GUESTPOOL_MAX 32
 /* Opens are tracked one entry per live open, not one per library. A library's
  * Open vector returns the base the CALLER must use, and it is free to return a
  * different one to every opener: that is how a library keeps per-opener state,
@@ -229,6 +249,21 @@ struct guestlib_live {
     uint32_t            saved_a[5];       /* ABI-preserved A2-A6 around exec */
 };
 
+struct guestseg_live {
+    int        live;
+    char       name[128];
+    j4_seglist seg;
+    uint32_t   bptr;
+    uint32_t   mem_start;
+    uint32_t   mem_end;
+};
+
+struct guestpool_live {
+    int      live;
+    uint32_t guest;
+    uint32_t requirements;
+};
+
 static const char *g_crash_dir = NULL;
 
 struct emu68k_run {
@@ -260,6 +295,8 @@ struct emu68k_run {
     int                   nlib;
     /* [T3e] disk-loaded libraries execute inside this run's guest arena. */
     struct guestlib_live  guestlib[GUESTLIB_MAX];
+    struct guestseg_live  guestseg[GUESTSEG_MAX];
+    struct guestpool_live guestpool[GUESTPOOL_MAX];
     int                   active_loader;
     stub_lib             *run_lib;       /* the corpus stub's small heap        */
     uint32_t              exec_heap;     /* exec AllocMem cursor (real programs) */
@@ -443,6 +480,9 @@ static void gwrite32(j4_sandbox *sb, uint32_t a, uint32_t v)
 #define ERROR_REQUIRED_ARG_MISSING_ 116
 #define ERROR_BAD_TEMPLATE_         114
 #define ERROR_TOO_MANY_ARGS_        115
+#define ERROR_NO_FREE_STORE_         103
+#define ERROR_OBJECT_NOT_FOUND_      205
+#define ERROR_BAD_HUNK_              235
 
 struct rda_item {
     char name[32], alias[32];
@@ -925,6 +965,103 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
     return try_library_at("", 0, leaf, found, foundlen, imagelen);
 }
 
+/* dos.LoadSeg as seen BY a 68k program.  Unlike the outer AROS loader's native
+ * proxy, this value is dereferenced by guest code, so it is a classic BPTR chain
+ * in the guest arena: BADDR(seg) is the link word and BADDR(seg)+4 is the hunk
+ * payload.  The common J4 relocator supplies guest addresses throughout. */
+static int dos_guest_loadseg(struct emu68k_run *r, j4_sandbox *sb,
+                             struct j5d_m68k_state *st,
+                             char *e, unsigned el)
+{
+    const char *guest_name = guest_cstr(sb, st->d[1]);
+    char name[128], why[256] = {0};
+    uint8_t *image;
+    size_t imagelen = 0;
+    uint32_t mark, bptr;
+    int slot = -1;
+
+    if (!guest_name || strlen(guest_name) >= sizeof name) {
+        r->last_ioerr = ERROR_OBJECT_NOT_FOUND_;
+        st->d[0] = 0;
+        return 0;
+    }
+    snprintf(name, sizeof name, "%s", guest_name);
+    for (int i = 0; i < GUESTSEG_MAX; i++)
+        if (!r->guestseg[i].live) { slot = i; break; }
+    if (slot < 0) {
+        r->last_ioerr = ERROR_NO_FREE_STORE_;
+        st->d[0] = 0;
+        return 0;
+    }
+
+    image = read_aros_file(r, name, &imagelen);
+    image = take_if_hunk(image, imagelen);
+    if (!image) {
+        if (getenv("EMU68K_TRACE_CALLS"))
+            fprintf(stderr, "[68k] LoadSeg(\"%s\") -> not found/not a hunk\n", name);
+        r->last_ioerr = ERROR_OBJECT_NOT_FOUND_;
+        st->d[0] = 0;
+        return 0;
+    }
+
+    mark = r->exec_heap > sb->next_alloc ? r->exec_heap : sb->next_alloc;
+    r->exec_heap = sb->next_alloc = mark;
+    memset(&r->guestseg[slot], 0, sizeof r->guestseg[slot]);
+    if (j4_load_hunks_bptr(sb, image, imagelen, &r->guestseg[slot].seg,
+                           &bptr, why, sizeof why)) {
+        free(image);
+        r->exec_heap = sb->next_alloc = mark;
+        r->last_ioerr = ERROR_BAD_HUNK_;
+        st->d[0] = 0;
+        if (getenv("EMU68K_TRACE_CALLS"))
+            fprintf(stderr, "[68k] LoadSeg(\"%s\") failed: %s\n", name, why);
+        return 0;
+    }
+    free(image);
+
+    r->exec_heap = sb->next_alloc;
+    r->guestseg[slot].live = 1;
+    r->guestseg[slot].bptr = bptr;
+    r->guestseg[slot].mem_start = mark;
+    r->guestseg[slot].mem_end = r->exec_heap;
+    snprintf(r->guestseg[slot].name, sizeof r->guestseg[slot].name, "%s", name);
+    r->last_ioerr = 0;
+    st->d[0] = bptr;
+    if (getenv("EMU68K_TRACE_CALLS"))
+        fprintf(stderr, "[68k] LoadSeg(\"%s\") -> %08x entry=%08x hunks=%d\n",
+                name, bptr, r->guestseg[slot].seg.entry,
+                r->guestseg[slot].seg.numhunks);
+    (void)e; (void)el;
+    return 0;
+}
+
+static int dos_guest_unloadseg(struct emu68k_run *r,
+                               struct j5d_m68k_state *st)
+{
+    uint32_t bptr = st->d[1];
+    for (int i = 0; i < GUESTSEG_MAX; i++) {
+        struct guestseg_live *g = &r->guestseg[i];
+        if (!g->live || g->bptr != bptr) continue;
+
+        /* Loaded code may have translated entries and incoming block chains.
+         * UnLoadSeg is cold, so invalidate the whole per-run cache before any
+         * byte can be reused; this is the same conservative rule as guest
+         * library expunge and CacheClearE. */
+        j5d_run_free();
+        if (g->mem_end > g->mem_start)
+            memset(j4_sandbox_host(&r->sb, g->mem_start), 0,
+                   g->mem_end - g->mem_start);
+        if (g->mem_end == r->exec_heap && r->sb.next_alloc == r->exec_heap)
+            r->exec_heap = r->sb.next_alloc = g->mem_start;
+        memset(g, 0, sizeof *g);
+        r->last_ioerr = 0;
+        st->d[0] = 0xffffffffu;                    /* DOSTRUE */
+        return 0;
+    }
+    st->d[0] = 0;
+    return 0;
+}
+
 static int find_guestlib_name(struct emu68k_run *r, const char *name)
 {
     for (int i = 0; i < GUESTLIB_MAX; i++)
@@ -1246,6 +1383,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      sb->sandbox_origin + sb->size);
             return 1;
         }
+        if (getenv("EMU68K_TRACE_CALLS"))
+            fprintf(stderr, "[68k] OpenLibrary(\"%s\", %u)\n", nm, requested);
         for (int i = 0; i < r->nlib; i++)                 /* already open?       */
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
 
@@ -1341,6 +1480,48 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_FREEVEC:
         st->d[0] = 0;                                    /* bump heap: no free  */
         return 0;
+    case LVO_CREATEPOOL: {
+        /* PoolHeader is opaque to callers. Give it stable guest identity so
+         * accidental field reads remain in-range, while the allocations it
+         * produces come from the same guest heap as AllocMem/AllocVec. */
+        for (int i = 0; i < GUESTPOOL_MAX; i++) {
+            if (r->guestpool[i].live) continue;
+            uint32_t token = guest_alloc(r, 32u);
+            if (!token) { st->d[0] = 0; return 0; }
+            r->guestpool[i].live = 1;
+            r->guestpool[i].guest = token;
+            r->guestpool[i].requirements = st->d[0];
+            st->d[0] = token;
+            return 0;
+        }
+        st->d[0] = 0;
+        return 0;
+    }
+    case LVO_DELETEPOOL:
+        for (int i = 0; i < GUESTPOOL_MAX; i++)
+            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
+                memset(&r->guestpool[i], 0, sizeof r->guestpool[i]);
+                st->d[0] = 0;
+                return 0;
+            }
+        snprintf(e, el, "DeletePool received unknown guest pool %08x", st->a[0]);
+        return 1;
+    case LVO_ALLOCPOOLED:
+        for (int i = 0; i < GUESTPOOL_MAX; i++)
+            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
+                st->d[0] = guest_alloc(r, st->d[0]);
+                return 0;
+            }
+        snprintf(e, el, "AllocPooled received unknown guest pool %08x", st->a[0]);
+        return 1;
+    case LVO_FREEPOOLED:
+        for (int i = 0; i < GUESTPOOL_MAX; i++)
+            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
+                st->d[0] = 0;                           /* bump heap: no free */
+                return 0;
+            }
+        snprintf(e, el, "FreePooled received unknown guest pool %08x", st->a[0]);
+        return 1;
     case LVO_ALLOCATE:       /* Allocate(MemHeader A0, size D0): the header is
                               * the guest's idea of where memory comes from; in
                               * this arena there is one place, so serve it. */
@@ -1429,6 +1610,47 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         memmove(j4_sandbox_host(sb, dst), j4_sandbox_host(sb, src), n);
         return 0;
     }
+    case LVO_SUPERVISOR:
+        /* Supervisor(A5) runs the CALLER'S OWN routine with the S bit set. It
+         * is not a request for anything the host has to provide: the code is
+         * the guest's, in the guest's memory, and the only thing supervisor
+         * mode buys it is the right to touch the privileged registers. So it
+         * runs, in the guest, exactly where it is - and if it then reaches for
+         * something this machine does not have, that is caught there, by name,
+         * instead of the whole call being refused for what it might do.
+         *
+         * The routine returns with rte, so the dispatcher builds the frame. */
+        if (!st->a[5]) {                             /* nothing to run          */
+            st->d[0] = 0;
+            return 0;
+        }
+        if (getenv("EMU68K_TRACE_CALLS")) {
+            uint32_t target = st->a[5];
+            fprintf(stderr, "[68k] Supervisor target=%08x", target);
+            if (target >= sb->sandbox_origin &&
+                (uint64_t)target + 16u <=
+                    (uint64_t)sb->sandbox_origin + sb->size) {
+                const uint8_t *p = j4_sandbox_host(sb, target);
+                fputs(" bytes=", stderr);
+                for (unsigned i = 0; i < 16; i++)
+                    fprintf(stderr, "%s%02x", i ? " " : "", p[i]);
+            } else {
+                fputs(" (outside guest sandbox)", stderr);
+            }
+            fputc('\n', stderr);
+            if (st->pc >= sb->sandbox_origin + 16u &&
+                (uint64_t)st->pc + 16u <=
+                    (uint64_t)sb->sandbox_origin + sb->size) {
+                const uint8_t *p = j4_sandbox_host(sb, st->pc - 16u);
+                fprintf(stderr, "[68k] Supervisor caller=%08x bytes[-16..+15]=",
+                        st->pc);
+                for (unsigned i = 0; i < 32; i++)
+                    fprintf(stderr, "%s%02x", i ? " " : "", p[i]);
+                fputc('\n', stderr);
+            }
+        }
+        st->pc = st->a[5];
+        return J5D_LVO_REDIRECT_RTE;
     case LVO_CACHECLEARU:
     case LVO_CACHECLEARE:
         /* A 68k program clears the caches when it has just written bytes that
@@ -1585,8 +1807,11 @@ static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
 {
     if (g_trace < 0) g_trace = getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
     if (!g_trace) return;
-    fprintf(stderr, "[68k] %s LVO %d (%d)  d0=%08x d1=%08x a0=%08x a1=%08x\n",
-            lib, lvo, -6 * lvo, st->d[0], st->d[1], st->a[0], st->a[1]);
+    fprintf(stderr, "[68k] %s LVO %d (%d) pc=%08x  d0=%08x d1=%08x "
+            "a0=%08x a1=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
+            lib, lvo, -6 * lvo, st->pc,
+            st->d[0], st->d[1], st->a[0], st->a[1], st->a[3],
+            st->a[4], st->a[5], st->a[6], st->a[7]);
     (void)r;
 }
 
@@ -1718,7 +1943,8 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
         {   /* a redirect is neither "served" nor "failed": the guest is about
              * to run 68k code for this vector, so pass it straight through. */
             int rc = exec_call(r, c->sb, lvo, st, e, el);
-            if (rc == 0 || rc == J5D_LVO_REDIRECT) return rc;
+            if (rc == 0 || rc == J5D_LVO_REDIRECT ||
+                rc == J5D_LVO_REDIRECT_RTE) return rc;
         }
         if (e[0]) {          /* exec_call said something specific: do not bury it
                               * under a generic "capability gap" message */
@@ -1743,6 +1969,8 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
              * guest: handing back native pointers would give the program
              * addresses it cannot dereference. */
             if (!strcmp(r->openlib[i].name, "dos.library")) {
+                if (lvo == 25) return dos_guest_loadseg(r, c->sb, st, e, el);
+                if (lvo == 26) return dos_guest_unloadseg(r, st);
                 if (lvo == 133) return rda_readargs(r, c->sb, st, e, el);
                 /* FreeArgs is LVO 143 (-858). 134 is FindArg, and having it
                  * here meant FindArg was answered as if it were FreeArgs while
@@ -1797,8 +2025,9 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
     int rc = stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
     if (rc) {
         ledger_record(lvo, r && r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: library function LVO %d (offset %d) "
-                        "is not marshalled yet", lvo, -6 * lvo);
+        snprintf(e, el, "capability gap: library function LVO %d (offset %d) on "
+                        "an unrecognised base %08x is not marshalled yet",
+                 lvo, -6 * lvo, st->a[6]);
     }
     return rc;
 }
@@ -1847,7 +2076,7 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     /* A nested callback must complete as part of the native call; yielding it
      * would strand the native stack. Restore the outer quantum immediately. */
     j5d_set_poll(NULL, NULL, 0);
-    int rc = j5d_run(&sb, (uint32_t)entry, LIBBASE, &st, &d0,
+    int rc = j5d_run(&sb, (uint32_t)entry, RUN_LIBBASE, &st, &d0,
                      bridge, &c, err, errlen);
     j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     if (rc != 0)
@@ -2116,7 +2345,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     uint32_t d0 = 0;
     char lerr[256] = {0};
 
-    int rc = j5d_run(&j5sb, r->resume_pc, LIBBASE, &r->st, &d0,
+    int rc = j5d_run(&j5sb, r->resume_pc, RUN_LIBBASE, &r->st, &d0,
                      bridge, &c, lerr, sizeof lerr);
     r->resume_pc = r->st.pc;
 
