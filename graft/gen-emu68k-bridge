@@ -519,13 +519,14 @@ def validate_policy(targets):
         if o.get("kind") == "facade" and not re.fullmatch(
                 r"[A-Za-z_]\w*", o.get("facade_struct", "")):
             errors.append("object type %s facade_struct is invalid" % name)
-        df = bykey.get(destructor)
-        if not destructor or not df:
-            errors.append("object type %s has missing destructor %r" % (name, destructor))
-        elif (classify(df.ret) not in ("void", "scalar") or len(df.args) != 1 or
-              object_canon(df.args[0][0]) != object_canon(ctype)):
-            errors.append("object type %s destructor %s has incompatible signature"
-                          % (name, destructor))
+        if destructor is not None:
+            df = bykey.get(destructor)
+            if not isinstance(destructor, str) or not df:
+                errors.append("object type %s has invalid destructor %r" % (name, destructor))
+            elif (classify(df.ret) not in ("void", "scalar") or len(df.args) != 1 or
+                  object_canon(df.args[0][0]) != object_canon(ctype)):
+                errors.append("object type %s destructor %s has incompatible signature"
+                              % (name, destructor))
 
     for name, d in domains.items():
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
@@ -611,6 +612,12 @@ def validate_policy(targets):
             if op.get("release", False) not in (True, False):
                 errors.append("function policy %s object %s release must be boolean"
                               % (key, arg))
+            if op.get("consume", False) not in (True, False):
+                errors.append("function policy %s object %s consume must be boolean"
+                              % (key, arg))
+            if op.get("release", False) and op.get("consume", False):
+                errors.append("function policy %s object %s cannot release and consume"
+                              % (key, arg))
             if arg in taglists or arg in structs:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, cb in callbacks.items():
@@ -652,12 +659,17 @@ def validate_policy(targets):
             elif result.get("kind") == "object":
                 otype = result.get("type")
                 ospec = object_types.get(otype)
+                owned = result.get("owned", True)
+                if owned not in (True, False):
+                    errors.append("function policy %s object result owned must be boolean" % key)
                 if not ospec:
                     errors.append("function policy %s uses missing result object %s"
                                   % (key, otype))
                 elif object_canon(f.ret) != object_canon(ospec.get("c_type", "")):
                     errors.append("function policy %s result is not object %s" % (key, otype))
-                elif not ospec.get("destructor", "").startswith(key.rsplit(".", 1)[0] + "."):
+                elif owned and not ospec.get("destructor"):
+                    errors.append("function policy %s owned object needs a destructor" % key)
+                elif owned and not ospec["destructor"].startswith(key.rsplit(".", 1)[0] + "."):
                     errors.append("function policy %s object destructor must be in the same library"
                                   % key)
             else:
@@ -850,9 +862,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("")
     for oname in used_objects:
         ospec = object_types[oname]
-        destructor = ospec["destructor"].rsplit(".", 1)[1]
-        if not ospec["destructor"].startswith(lib + "."):
+        destructor_spec = ospec.get("destructor")
+        if not destructor_spec or not destructor_spec.startswith(lib + "."):
             continue
+        destructor = destructor_spec.rsplit(".", 1)[1]
         w("static void emu_object_cleanup_%s(APTR emu_base, APTR emu_object)" %
           c_ident(oname))
         w("{")
@@ -915,6 +928,9 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   "    return 1;"], "always"))
                 if op.get("release", False):
                     post.append((["emu68k_object_release(guest0, %s, EMU_OBJ_%s);"
+                                  % (src, c_ident(oname))], "always"))
+                if op.get("consume", False):
+                    post.append((["emu68k_object_consume(guest0, %s, EMU_OBJ_%s);"
                                   % (src, c_ident(oname))], "always"))
                 continue
             if aname in callbacks:
@@ -984,14 +1000,15 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         elif result_policy and result_policy.get("kind") == "object":
             oname = result_policy["type"]
             ospec = object_types[oname]
+            cleanup = ("emu_object_cleanup_%s" % c_ident(oname)
+                       if result_policy.get("owned", True) else "NULL")
             w("        APTR emu_result = (APTR)%s;" % call)
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]
                 w("        if (emu68k_object_to_guest_facade(guest0, emu_result, EMU_OBJ_%s,"
                   % c_ident(oname))
-                w("                                             base, emu_object_cleanup_%s,"
-                  % c_ident(oname))
+                w("                                             base, %s," % cleanup)
                 w('                                             "%s", M68K_%s_SIZEOF,'
                   % (oname, stype))
                 w("                                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
@@ -1000,8 +1017,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             else:
                 w("        if (emu68k_object_to_guest(guest0, emu_result, EMU_OBJ_%s,"
                   % c_ident(oname))
-                w("                                      base, emu_object_cleanup_%s,"
-                  % c_ident(oname))
+                w("                                      base, %s," % cleanup)
                 w('                                      "%s", &r->d[0], err, errlen) < 0)'
                   % oname)
             w("            return 1;")
@@ -1107,6 +1123,7 @@ LONG emu68k_object_to_guest_facade(APTR guest0, APTR native, UWORD type,
                                    const struct EmuField *fields, int field_count,
                                    ULONG *token, char *err, ULONG errlen);
 void emu68k_object_release(APTR guest0, ULONG token, UWORD type);
+void emu68k_object_consume(APTR guest0, ULONG token, UWORD type);
 LONG emu68k_hook_prepare(APTR guest0, ULONG guest_hook,
                          struct Emu68kHookBridge *bridge,
                          char *err, ULONG errlen);

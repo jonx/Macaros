@@ -32,6 +32,24 @@
       "c_type": "APTR",
       "kind": "opaque",
       "destructor": "intuition.library.DisposeObject"
+    },
+    "SignalSemaphore": {
+      "id": 6,
+      "c_type": "struct SignalSemaphore *",
+      "kind": "opaque"
+    },
+    "MsgPort": {
+      "id": 7,
+      "c_type": "struct MsgPort *",
+      "kind": "facade",
+      "facade_struct": "MsgPort",
+      "destructor": "exec.library.DeleteMsgPort"
+    },
+    "Region": {
+      "id": 8,
+      "c_type": "struct Region *",
+      "kind": "opaque",
+      "destructor": "graphics.library.DisposeRegion"
     }
   },
   "tag_domains": {
@@ -95,6 +113,24 @@
     }
   },
   "functions": {
+    "exec.library.FindSemaphore": {
+      "result": {"kind": "object", "type": "SignalSemaphore", "owned": false}
+    },
+    "exec.library.ObtainSemaphore": {
+      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+    },
+    "exec.library.ReleaseSemaphore": {
+      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+    },
+    "exec.library.AttemptSemaphore": {
+      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+    },
+    "exec.library.ObtainSemaphoreShared": {
+      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+    },
+    "exec.library.AttemptSemaphoreShared": {
+      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+    },
     "dos.library.DateStamp": {
       "structs": {
         "date": {"type": "DateStamp", "direction": "out"}
@@ -145,11 +181,51 @@
     },
     "intuition.library.DisposeObject": {
       "objects": {
-        "object": {"type": "Object", "nullable": true, "release": true}
+        "object": {"type": "Object", "nullable": true, "consume": true}
       }
     },
     "graphics.library.BestModeIDA": {
       "taglists": {"TagItems": "graphics.best_mode"}
+    },
+    "graphics.library.NewRegion": {
+      "result": {"kind": "object", "type": "Region"}
+    },
+    "graphics.library.DisposeRegion": {
+      "objects": {"region": {"type": "Region", "nullable": true, "consume": true}}
+    },
+    "graphics.library.ClearRegion": {
+      "objects": {"region": {"type": "Region", "nullable": false}}
+    },
+    "graphics.library.IsPointInRegion": {
+      "objects": {"Reg": {"type": "Region", "nullable": false}}
+    },
+    "graphics.library.SetRegion": {
+      "objects": {
+        "src": {"type": "Region", "nullable": false},
+        "dest": {"type": "Region", "nullable": false}
+      }
+    },
+    "graphics.library.AreRegionsEqual": {
+      "objects": {
+        "R1": {"type": "Region", "nullable": false},
+        "R2": {"type": "Region", "nullable": false}
+      }
+    },
+    "graphics.library.AndRectRegion": {
+      "objects": {"Reg": {"type": "Region", "nullable": false}},
+      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+    },
+    "graphics.library.OrRectRegion": {
+      "objects": {"Reg": {"type": "Region", "nullable": false}},
+      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+    },
+    "graphics.library.ClearRectRegion": {
+      "objects": {"Reg": {"type": "Region", "nullable": false}},
+      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+    },
+    "graphics.library.XorRectRegion": {
+      "objects": {"Reg": {"type": "Region", "nullable": false}},
+      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
     },
     "cybergraphics.library.BestCModeIDTagList": {
       "taglists": {"tags": "cybergraphics.best_mode"}
@@ -198,7 +274,7 @@
     },
     "icon.library.FreeDiskObject": {
       "objects": {
-        "diskobj": {"type": "DiskObject", "nullable": true, "release": true}
+        "diskobj": {"type": "DiskObject", "nullable": true, "consume": true}
       }
     },
     "icon.library.DupDiskObjectA": {

@@ -21,7 +21,7 @@ for lib, base in (('exec','ExecBase'), ('dos','DosLibrary'), ('icon','IconBase')
     f = os.path.join(gendir, lib + '.h')
     if not os.path.exists(f): continue
     t = open(f).read()
-    for m in re.finditer(r'AROS_LC\d*\((?:[^,]+),\s*(\w+),.*?\(__\w+\), (\d+), \w+\)', t, re.S):
+    for m in re.finditer(r'AROS_LC\d*(?:NR)?\((?:[^,]+),\s*(\w+),.*?\(__\w+\), (\d+), \w+\)', t, re.S):
         lvonames[(lib, int(m.group(2)))] = m.group(1)
 
 raw = open(path, 'rb').read().decode('latin-1')
@@ -33,6 +33,18 @@ for part in re.split(r'##### ', raw)[1:]:
     cm = re.match(r'\[([^]]+)\]\s+(.*)', heading)
     category, name = (cm.group(1), cm.group(2)) if cm else ('uncategorized', heading)
     g = re.search(r'(\S+)\.library function LVO (\d+) \(offset (-\d+)\)', body)
+    if not g:
+        short = re.search(r'lib bridge: (\S+)\.library LVO (\d+)', body)
+        if short:
+            lib, n = short.group(1), int(short.group(2))
+            off = str(-6 * n)
+            fn = lvonames.get((lib, n), '?')
+            v = f"GAP {lib}.{fn}({off})"
+            gaps[(lib, n, fn, off)] = gaps.get((lib, n, fn, off), 0) + 1
+            k = 'capability gap'
+            rows.append((category, name, v)); tally[k] = tally.get(k, 0) + 1
+            categories[category] = categories.get(category, 0) + 1
+            continue
     if g:
         lib, n, off = g.group(1), int(g.group(2)), g.group(3)
         fn = lvonames.get((lib, n), '?')

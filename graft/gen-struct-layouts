@@ -39,13 +39,14 @@ CLANG = os.environ.get("AROS_CLANG",
 HEADERS = [
     "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
     "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
-    "workbench/workbench.h", "intuition/classes.h",
+    "workbench/workbench.h", "intuition/classes.h", "graphics/regions.h",
 ]
 
 TYPES = [
     "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "InfoData",
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
+    "Rectangle",
 ]
 
 # Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
