@@ -597,8 +597,31 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
         if (r->nlib >= LIBBASE_MAX) { snprintf(e, el, "too many open libraries"); return 1; }
         /* Only offer what the embedder can actually serve; anything else fails
-         * the AmigaOS way (D0 = 0), which programs are written to handle. */
+         * the AmigaOS way (D0 = 0), which programs are written to handle.
+         *
+         * Handing out a base for a library we cannot serve is worse than
+         * refusing: the program takes it as success, calls a vector, and either
+         * aborts on a capability gap or - if it never checks - dereferences the
+         * NULL it stored and takes the run down with it. Refusing produces the
+         * message the program was written to print. A third-party 68k library
+         * is a different case entirely: it is 68k code and belongs IN the
+         * guest, which is a separate piece of work. */
         if (!g_oscall) { st->d[0] = 0; return 0; }
+        {
+            static const char *const servable[] = {
+                "exec.library", "dos.library", "utility.library",
+                "intuition.library", "graphics.library", "layers.library",
+                "gadtools.library", "asl.library", "icon.library",
+                "iffparse.library", "commodities.library", "diskfont.library",
+                "locale.library", "keymap.library", "datatypes.library",
+                "expansion.library", "cybergraphics.library", "mathffp.library",
+                "mathieeesingbas.library", "mathieeedoubbas.library",
+            };
+            unsigned k; int known = 0;
+            for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
+                if (!strcmp(nm, servable[k])) { known = 1; break; }
+            if (!known) { st->d[0] = 0; return 0; }      /* not available here */
+        }
         uint32_t base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
         snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name, "%s", nm);
         r->openlib[r->nlib].base = base;

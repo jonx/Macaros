@@ -15,8 +15,17 @@ CORPUS_ARGS="${CORPUS_ARGS:-}"      # arguments appended to every program
 MANIFEST="${CORPUS_MANIFEST:-}"
 OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
 SHARE="$HOME/AROS/Shared"; SUB="corpus"
-mkdir -p "$SHARE/$SUB" && rm -f "$SHARE/$SUB"/* 2>/dev/null
-cp "$DIR"/* "$SHARE/$SUB/" 2>/dev/null
+# EACH PROGRAM GETS ITS OWN DIRECTORY. They used to share one, which is fine
+# until a program does its job: ConvertTabsToSpaces with no arguments rewrote
+# every file in the directory, so every program after it alphabetically was a
+# corrupted binary and reported "file is not executable". The sweep looked like
+# a mass regression and was actually one program working correctly.
+mkdir -p "$SHARE/$SUB" && rm -rf "$SHARE/$SUB"/* 2>/dev/null
+for f in "$DIR"/*; do
+  [ -f "$f" ] || continue
+  b=$(basename "$f")
+  mkdir -p "$SHARE/$SUB/$b.d" && cp "$f" "$SHARE/$SUB/$b.d/$b"
+done
 RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
 # deploy from the repo root before every sweep: a sweep against a stale library
 # silently measures the previous build, which has already cost one wasted round
@@ -25,8 +34,9 @@ RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
   echo 'FailAt 255'
   echo 'CD MacRW:corpus'
   echo 'Echo "=== CORPUS ===" >MacRW:corpus-out.txt'
-  for f in "$SHARE/$SUB"/*; do
-    b=$(basename "$f")
+  for d in "$SHARE/$SUB"/*.d; do
+    b=$(basename "$d" .d)
+    echo "CD MacRW:$SUB/$b.d"
     echo "Echo \"##### $b\" >>MacRW:corpus-out.txt"
     a="$CORPUS_ARGS"
     if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
