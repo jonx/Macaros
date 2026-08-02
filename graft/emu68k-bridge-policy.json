@@ -113,6 +113,12 @@
     }
   },
   "functions": {
+    "intuition.library.CurrentTime": {
+      "pointers": {
+        "seconds": {"kind": "u32", "direction": "out"},
+        "micros": {"kind": "u32", "direction": "out"}
+      }
+    },
     "exec.library.FindSemaphore": {
       "result": {"kind": "object", "type": "SignalSemaphore", "owned": false}
     },

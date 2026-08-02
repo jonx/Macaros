@@ -1,7 +1,7 @@
 # category|program|arguments|purpose
 # The suite copies a sample.txt fixture beside every executable.
 cli|Afinder||filesystem search
-cli|ConvertTabsToSpaces|sample.txt 4|in-place file conversion
+cli|ConvertTabsToSpaces|FILE=sample.txt SPACES_FOR_TABS=4|in-place file conversion
 cli|DMS||self-extracting archive
 cli|GetAsmIncludeIndex||source index generation
 cli|lha||full create/list/extract work is run separately

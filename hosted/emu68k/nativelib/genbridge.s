@@ -15,6 +15,7 @@
 ;   dos.Examine        -102  (D1,D2)     FileInfoBlock OUT shadow
 ;   dos.ExNext         -108  (D1,D2)     FileInfoBlock IN/OUT continuation
 ;   utility.Stricmp    -162  (A0,A1)     A-register arguments, second library
+;   intuition.CurrentTime -84 (A0,A1)    two generated scalar-pointer OUTs
 ;   graphics.BestModeIDA -1050 (A0)      policy-typed TagItem shadow
 ;   cybergraphics.BestCModeIDTagList -60  string-valued tag data
 ;   dos.PutStr         -948  (D1)        prints the verdict through the table
@@ -34,6 +35,7 @@ DOS_Info            equ -114
 UTIL_Stricmp        equ -162
 GFX_BestModeIDA     equ -1050
 CGFX_BestCModeID    equ -60
+INT_CurrentTime     equ -84
 
     move.l  4.w,a6                  ; SysBase from absolute address 4
     lea     dosname(pc),a1
@@ -223,6 +225,26 @@ fibscan:
     move.l  4.w,a6
     jsr     EXEC_CloseLibrary(a6)
 
+    ; ---- scalar-pointer OUTs: two native ULONGs copy back big-endian -------
+    move.l  4.w,a6
+    lea     intuitionname(pc),a1
+    moveq   #0,d0
+    jsr     EXEC_OpenLibrary(a6)
+    tst.l   d0
+    beq     nope
+    move.l  d0,a2
+    move.l  a2,a6
+    lea     seconds(pc),a0
+    lea     micros(pc),a1
+    jsr     INT_CurrentTime(a6)
+    cmp.l   #$deadbeef,(a0)
+    beq     scalarptrfail
+    cmp.l   #1000000,(a1)
+    bhs     scalarptrfail
+    move.l  a2,a1
+    move.l  4.w,a6
+    jsr     EXEC_CloseLibrary(a6)
+
     lea     okmsg(pc),a0
     bra.s   say
 dateptrfail:
@@ -243,6 +265,9 @@ exnextfail:
 fibfailurefail:
     lea     fibfailuremsg(pc),a0
     bra.s   say
+scalarptrfail:
+    lea     scalarptrmsg(pc),a0
+    bra.s   say
 nope:
     lea     nopemsg(pc),a0
 say:
@@ -260,6 +285,7 @@ dosname:  dc.b "dos.library",0
 utilname: dc.b "utility.library",0
 gfxname:  dc.b "graphics.library",0
 cgfxname: dc.b "cybergraphics.library",0
+intuitionname: dc.b "intuition.library",0
 sysname:  dc.b "SYS:",0
 pat:      dc.b "#?.txt",0
 good:     dc.b "hello.txt",0
@@ -275,6 +301,7 @@ datecmpmsg: dc.b "[T3GEN] FAIL CompareDates",10,0
 examinemsg: dc.b "[T3GEN] FAIL Examine",10,0
 exnextmsg: dc.b "[T3GEN] FAIL ExNext",10,0
 fibfailuremsg: dc.b "[T3GEN] FAIL FileInfoBlock failure copy",10,0
+scalarptrmsg: dc.b "[T3GEN] FAIL scalar pointer copy",10,0
     even
 besttags:
     dc.l 1,0                         ; TAG_IGNORE
@@ -296,4 +323,6 @@ laterstamp:   dc.l 2,10,5
 earlierstamp: dc.l 1,10,5
 infodata:      ds.b 36
 fib:           ds.b 260
+seconds:       dc.l $deadbeef
+micros:        dc.l $deadbeef
 patbuf:   ds.b 64

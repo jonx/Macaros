@@ -167,6 +167,15 @@ WIDENING = {"IPTR", "SIPTR", "APTR_or_IPTR"}
 # directly. This is the only pointer class that is safe to forward as-is.
 STRING = {"STRPTR", "CONST_STRPTR", "CONST_STRPTR_or_NULL"}
 
+POINTER_SCALARS = {
+    "u8":  ({"UBYTE"}, 1),
+    "s8":  ({"BYTE"}, 1),
+    "u16": ({"UWORD"}, 2),
+    "s16": ({"WORD"}, 2),
+    "u32": ({"ULONG", "ULONGBITS"}, 4),
+    "s32": ({"LONG", "LONGBITS"}, 4),
+}
+
 VOID = {"void", "VOID"}
 
 # Tier 1 by signature is not the same as safe to forward. A guest is not
@@ -561,6 +570,7 @@ def validate_policy(targets):
         structs = p.get("structs", {})
         objects = p.get("objects", {})
         callbacks = p.get("callbacks", {})
+        pointers = p.get("pointers", {})
         guest_values = p.get("guest_values", [])
         strings = p.get("strings", [])
         boopsi = p.get("boopsi")
@@ -595,6 +605,31 @@ def validate_policy(targets):
                               % (key, arg))
             if arg in taglists:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, pp in pointers.items():
+            kind, direction = pp.get("kind"), pp.get("direction")
+            expected = POINTER_SCALARS.get(kind)
+            if arg not in args:
+                errors.append("function policy %s names missing scalar pointer %s" % (key, arg))
+            elif not expected or "*" not in args[arg]:
+                errors.append("function policy %s scalar pointer %s has invalid kind %r"
+                              % (key, arg, kind))
+            else:
+                base_type = norm(re.sub(r"\s*\*\s*$", "", args[arg]))
+                if base_type not in expected[0]:
+                    errors.append("function policy %s scalar pointer %s kind %s mismatches %s"
+                                  % (key, arg, kind, base_type))
+            if direction not in ("in", "out", "inout"):
+                errors.append("function policy %s scalar pointer %s has invalid direction %r"
+                              % (key, arg, direction))
+            copy_on = pp.get("copy_on", "always")
+            if copy_on not in ("always", "nonzero"):
+                errors.append("function policy %s scalar pointer %s has invalid copy_on %r"
+                              % (key, arg, copy_on))
+            elif copy_on == "nonzero" and classify(f.ret) not in ("scalar", "widen"):
+                errors.append("function policy %s scalar pointer %s copy_on nonzero needs scalar result"
+                              % (key, arg))
+            if arg in taglists or arg in structs:
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, op in objects.items():
             otype = op.get("type")
             ospec = object_types.get(otype)
@@ -618,7 +653,7 @@ def validate_policy(targets):
             if op.get("release", False) and op.get("consume", False):
                 errors.append("function policy %s object %s cannot release and consume"
                               % (key, arg))
-            if arg in taglists or arg in structs:
+            if arg in taglists or arg in structs or arg in pointers:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, cb in callbacks.items():
             if arg not in args:
@@ -633,7 +668,7 @@ def validate_policy(targets):
                 if cb.get(role) not in args:
                     errors.append("function policy %s callback %s has missing %s"
                                   % (key, arg, role))
-            if arg in taglists or arg in structs or arg in objects:
+            if arg in taglists or arg in structs or arg in objects or arg in pointers:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         if not isinstance(guest_values, list) or any(a not in args for a in guest_values):
             errors.append("function policy %s has invalid guest_values" % key)
@@ -676,7 +711,7 @@ def validate_policy(targets):
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
         for t, n in f.args:
-            if (n in taglists or n in structs or n in objects or n in callbacks or
+            if (n in taglists or n in structs or n in pointers or n in objects or n in callbacks or
                     n in guest_values or n in strings):
                 continue
             if classify(t) not in ("scalar", "widen", "string", "bptr"):
@@ -895,6 +930,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                                       norm(f.ret), f.offset))
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
+        pointers = policy.get("pointers", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
         callbacks = policy.get("callbacks", {}) if policy else {}
         guest_values = policy.get("guest_values", []) if policy else []
@@ -964,6 +1000,25 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s));"
                                   % (stype, stype)], sp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
+                continue
+            if aname in pointers:
+                pp = pointers[aname]
+                direction = pp["direction"]
+                width = POINTER_SCALARS[pp["kind"]][1]
+                base_type = norm(re.sub(r"\s*\*\s*$", "", atype))
+                w("        %s emu_scalar_%d = 0;" % (base_type, ai))
+                w("        if (emu68k_require_guest_range(%s, %d,"
+                  % (src, width))
+                w('                                         "%s.%s", err, errlen) < 0)'
+                  % (f.name, aname))
+                w("            return 1;")
+                if direction in ("in", "inout"):
+                    w("        emu_scalar_%d = (%s)emu68k_scalar_from_guest(guest0, %s, %d);"
+                      % (ai, base_type, src, width))
+                if direction in ("out", "inout"):
+                    post.append((["emu68k_scalar_to_guest(guest0, %s, %d, (UQUAD)emu_scalar_%d);"
+                                  % (src, width, ai)], pp.get("copy_on", "always")))
+                call_args.append("(%s)&emu_scalar_%d" % (norm(atype), ai))
                 continue
             if aname in guest_values:
                 call_args.append("(%s)(IPTR)%s" % (norm(atype), src))
@@ -1105,6 +1160,9 @@ BPTR  emu68k_handle_bptr(APTR guest0, ULONG token);
 ULONG emu68k_handle_token(APTR guest0, BPTR b);
 #define EMU_HANDLE(g0, t)  emu68k_handle_bptr((g0), (ULONG)(t))
 #define EMU_TOKEN(g0, b)   emu68k_handle_token((g0), (b))
+
+UQUAD emu68k_scalar_from_guest(APTR guest0, ULONG addr, UBYTE width);
+void  emu68k_scalar_to_guest(APTR guest0, ULONG addr, UBYTE width, UQUAD value);
 
 /* Native OS objects cross as typed, per-run tokens. The table preserves
  * identity and reference counts, rejects stale/wrong-type tokens, and owns a
