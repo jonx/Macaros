@@ -399,6 +399,47 @@ Depends: T1; informed continuously by the `T1d` ledger.
   `***Break` on one run and a hang on the next. Attribute a changed line with
   an A/B (build with the change disabled and re-run the single program), not
   with a diff of two sweeps.
+- **`[T3b0]` The struct-layout generator. MACHINERY PROVEN 2026-08-02.** Field
+  names, offsets and sizes for BOTH layouts come out of one tool, with one
+  output format, for every type at once:
+
+      clang -target m68k-unknown-elf   -fpack-struct=2 \
+            -Xclang -fdump-record-layouts -fsyntax-only probe.c -I$AROS_INC
+      clang -target aarch64-unknown-aros \
+            -Xclang -fdump-record-layouts -fsyntax-only probe.c -I$AROS_INC
+
+  where `probe.c` just declares one variable per type. Nothing is run and
+  nothing is hand-counted.
+
+  **`-fpack-struct=2` is load-bearing.** The m68k-ELF psABI aligns 32-bit
+  fields to 4, the Amiga ABI packs to 2. Without it `struct Node.ln_Name` comes
+  out at 12 instead of 10 and every conversion using it would be silently
+  wrong. So the generator needs the same kind of self-check the LVO numbering
+  got: assert known AmigaOS truths (`Node` = 14 bytes with `ln_Name` at 10,
+  `FileInfoBlock` = 260, `DateStamp` = 12, `TagItem` = 8) and refuse to emit if
+  they do not hold.
+
+  What this does NOT generate, and cannot:
+  - **Direction** (does the callee read the struct, fill it, or both) is a
+    property of each (function, argument), not of the type. `const` in the
+    prototype implies in-only; the rest is a judgement call, and the safe
+    default is to refuse rather than guess.
+  - **Retention** (does the callee keep the pointer past the call).
+
+  And a large part of the ranked list needs no layout at all: `Window`,
+  `Screen`, `RastPort`, `Region`, `Layer`, `MsgPort`, `CxObj`, `Object`,
+  `Class`, `IFFHandle`, `ColorMap`, `ViewPort` are OS-owned things the guest
+  receives and hands straight back, so they want the **token** mechanism that
+  already exists for BPTR. The types that genuinely need converting are the
+  data structures the guest reads and writes: `FileInfoBlock`, `AnchorPath`,
+  `TagItem`, `DateStamp`, `InfoData`, `DiskObject`. That is the real list, and
+  it is short.
+
+  The token mechanism holds only while the guest does not read fields out of
+  the handle. Real programs do (`window->RPort`), and that is where the
+  fault-driven shadow of the design notes becomes necessary - per type, and
+  later.
+
 - **`[T3b]` Core libraries wired.** exec, dos, utility first; then intuition,
   graphics, gadtools, asl, icon, workbench, each as thunks + curated
   annotations, ledger-prioritized. Hand-written `T1c` stubs retire as
