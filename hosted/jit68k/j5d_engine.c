@@ -2013,8 +2013,6 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
     memset(&g_stats, 0, sizeof(g_stats));
     g_block_exec_count = 0;                         /* [J5k] reset the JIT-side exec counter */
     g_insn_number = 0;                              /* [J5n] reset the deterministic insn #N */
-    st->a[6] = a6_libbase;                          /* A6 = library base (AmigaOS)  */
-
     /* [J5n] register the live 68k state + sandbox with the host-signal net so a genuine host
      * SIGSEGV/SIGBUS in translated code recovers THIS context (NULL-safe; only meaningful
      * when the diagnostics signal net is installed). */
@@ -2034,6 +2032,12 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         depth      = g_eng->resume_depth;
         g_eng->resume_valid = 0;                     /* consumed                     */
     } else {
+        /* Seed A6 only for a NEW run.  On a quantum resume it is live guest
+         * state, just like D0 or A4.  Resetting it here can split two adjacent
+         * calls that intentionally share one loaded library base: the first
+         * uses that base, a yield lands between them, and the second is
+         * silently rerouted through the run's initial Exec base. */
+        st->a[6] = a6_libbase;
         initial_sp = st->a[7];
         if (initial_sp == 0)
             initial_sp = (sb->origin + sb->size) & ~0xFu;   /* default: sandbox top */

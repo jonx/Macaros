@@ -40,10 +40,20 @@
     fprintf(stderr, "[T0P3] FAIL: %s (line %d)\n", why, __LINE__); exit(1); } } while (0)
 
 /* ---- one runnable 68k program: its own arena, stub OS and 68k state ---- */
-struct bctx { stub_lib *lib; j4_sandbox *sb; };
+struct bctx {
+    stub_lib *lib;
+    j4_sandbox *sb;
+    uint32_t preserve_base;
+    unsigned preserve_calls;
+};
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
+    if (c->preserve_base && st->a[6] == c->preserve_base &&
+        (lvo == 1 || lvo == 2)) {
+        c->preserve_calls++;
+        return 0;
+    }
     return stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
 }
 
@@ -178,6 +188,33 @@ int main(void)
     fprintf(stderr, "[T0P3] A ok: interleaved on one thread (mandel %d yields, j5t %d yields)\n",
             A->yields, B->yields);
     prog_free(A); prog_free(B);
+
+    /* PhotoDemo found the nastier resume case: one base load followed by two
+     * adjacent library calls.  Force a yield between those calls and prove A6
+     * remains the guest's live alternate base rather than being reseeded to
+     * the run's initial LIBBASE on re-entry. */
+    static const uint32_t preserve_code[] = {
+        0x2C7C0024u, 0x00004EAEu, 0xFFFA4EAEu, 0xFFF44E75u
+    };
+    uint8_t pb[256]; size_t plen = mk_hunk(pb, preserve_code, 4);
+    prog *P = prog_new(pb, plen);
+    P->c.preserve_base = 0x00240000u;
+    j5d_engine_activate(P->eng);
+    j5d_register_libbase(P->c.preserve_base);
+    j5d_set_poll(poll_yield, NULL, 2);
+    while (!P->done) {
+        int prc = prog_run(P, err, sizeof err);
+        CHECK(prc == 0 || prc == J5D_RC_YIELD, err);
+    }
+    CHECK(P->yields > 0, "adjacent library calls actually yielded between quanta");
+    CHECK(P->c.preserve_calls == 2,
+          "both adjacent calls kept the alternate A6 library base across resume");
+    CHECK(P->st.a[6] == P->c.preserve_base,
+          "live A6 remains the alternate library base after resumed completion");
+    fprintf(stderr, "[T0P3] A6 ok: yield/resume preserved %08x across two adjacent calls\n",
+            P->st.a[6]);
+    j5d_clear_libbases();
+    prog_free(P);
 
     /* ================= D. two sequential runs, one process, two instances ========= */
     /* The exact sequence that crashed the global single-run engine ([T0-P1] NOTES.md
