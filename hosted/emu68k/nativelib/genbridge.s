@@ -1,7 +1,8 @@
 ; genbridge.s - exercises the GENERATED half of the library bridge.
 ;
-; Every vector this program calls is generated from the .conf files by
-; graft/gen-emu68k-bridge, and NONE is hand-written in emu68k_oscall.c. The
+; Every vector under test is generated from the .conf files by
+; graft/gen-emu68k-bridge. Lock/UnLock only create the BPTR input used to prove
+; generated Info; they remain setup calls in the hand-written table. The
 ; BestModeIDA call additionally consumes the type policy: its guest-layout
 ; TagItem chain is flattened and rebuilt in native layout before graphics sees
 ; it. So PASS covers both free tier-1 generation and the first tier-2 compiler.
@@ -10,6 +11,7 @@
 ;   dos.MatchPattern   -846  (D1,D2)     must match, then must NOT match
 ;   dos.DateStamp      -192  (D1)        generated OUT value-structure shadow
 ;   dos.CompareDates   -738  (D1,D2)     two generated IN structure shadows
+;   dos.Info           -114  (D1,D2)     generated OUT InfoData + BPTR input
 ;   utility.Stricmp    -162  (A0,A1)     A-register arguments, second library
 ;   graphics.BestModeIDA -1050 (A0)      policy-typed TagItem shadow
 ;   cybergraphics.BestCModeIDTagList -60  string-valued tag data
@@ -22,6 +24,9 @@ DOS_MatchPattern    equ -846
 DOS_PutStr          equ -948
 DOS_DateStamp       equ -192
 DOS_CompareDates    equ -738
+DOS_Lock            equ -84
+DOS_UnLock          equ -90
+DOS_Info            equ -114
 UTIL_Stricmp        equ -162
 GFX_BestModeIDA     equ -1050
 CGFX_BestCModeID    equ -60
@@ -83,6 +88,29 @@ CGFX_BestCModeID    equ -60
     jsr     DOS_CompareDates(a6)
     tst.l   d0                      ; date1 later => negative (Amiga ordering)
     bpl     datecmpfail
+
+    ; ---- InfoData OUT shadow, with a BPTR translated by the handle table ---
+    move.l  a5,a6
+    lea     sysname(pc),a0
+    move.l  a0,d1
+    moveq   #-2,d2                  ; ACCESS_READ
+    jsr     DOS_Lock(a6)
+    tst.l   d0
+    beq     nope
+    move.l  d0,d6
+    move.l  d6,d1
+    lea     infodata(pc),a0
+    move.l  a0,d2
+    jsr     DOS_Info(a6)
+    tst.l   d0
+    beq     nope
+    lea     infodata(pc),a0
+    tst.l   20(a0)                  ; id_BytesPerBlock was filled natively
+    beq     nope
+    tst.l   28(a0)                  ; native BPTR is unsupported, thus zeroed
+    bne     nope
+    move.l  d6,d1
+    jsr     DOS_UnLock(a6)
 
     ; ---- utility.library, opened on demand by the generated table -----------
     move.l  4.w,a6
@@ -184,6 +212,7 @@ dosname:  dc.b "dos.library",0
 utilname: dc.b "utility.library",0
 gfxname:  dc.b "graphics.library",0
 cgfxname: dc.b "cybergraphics.library",0
+sysname:  dc.b "SYS:",0
 pat:      dc.b "#?.txt",0
 good:     dc.b "hello.txt",0
 bad:      dc.b "hello.doc",0
@@ -214,4 +243,5 @@ nosuchboard: dc.b "emu68k-no-such-board",0
 nowstamp:     dc.l $11223344,$55667788,$10203040
 laterstamp:   dc.l 2,10,5
 earlierstamp: dc.l 1,10,5
+infodata:      ds.b 36
 patbuf:   ds.b 64

@@ -74,6 +74,11 @@ int emu68k_ledger_get(int idx, int *lvo, unsigned long *count);
  * "this run is over". */
 void *emu68k_run_guest0(emu68k_run *r);
 
+/* Reserve zeroed memory in this run's guest heap for native-created façades
+ * (DiskObject and other structures legacy code reads). Returns a 32-bit guest
+ * address, never a host pointer. Serialized by the same caller contract. */
+unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size);
+
 void emu68k_run_free(emu68k_run *r);
 
 /* Crash-bundle directory for subsequent runs (default: the engine's own). */

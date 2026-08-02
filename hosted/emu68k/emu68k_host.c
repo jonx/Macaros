@@ -450,6 +450,12 @@ static uint32_t guest_alloc(struct emu68k_run *r, uint32_t size)
     return a;
 }
 
+unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size)
+{
+    if (!r || size > UINT32_MAX) return 0;
+    return (unsigned long)guest_alloc(r, (uint32_t)size);
+}
+
 static uint32_t guest_strdup(struct emu68k_run *r, const char *s, size_t n)
 {
     uint32_t a = guest_alloc(r, (uint32_t)n + 1);
