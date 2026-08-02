@@ -54,7 +54,8 @@
     "Screen": {
       "id": 9,
       "c_type": "struct Screen *",
-      "kind": "opaque"
+      "kind": "opaque",
+      "destructor": "intuition.library.CloseScreen"
     },
     "AslRequest": {
       "id": 10,
@@ -224,6 +225,31 @@
         {"name": "POINTERA_XResolution", "kind": "u32"},
         {"name": "POINTERA_YResolution", "kind": "u32"}
       ]
+    },
+    "intuition.open_screen": {
+      "headers": ["intuition/screens.h"],
+      "max_items": 24,
+      "tags": [
+        {"name": "SA_AutoScroll", "kind": "u32"},
+        {"name": "SA_Pens", "kind": "u16_ffff", "max_count": 32},
+        {"name": "SA_Width", "kind": "u32"},
+        {"name": "SA_Height", "kind": "u32"},
+        {"name": "SA_Depth", "kind": "u32"},
+        {"name": "SA_Overscan", "kind": "u32"},
+        {"name": "SA_DisplayID", "kind": "u32", "fallback": "omit"},
+        {"name": "SA_Interleaved", "kind": "u32"},
+        {"name": "SA_Title", "kind": "cstr"},
+        {"name": "SA_ShowTitle", "kind": "u32"},
+        {"name": "SA_Colors32", "kind": "rgb32", "max_longs": 1024},
+        {"name": "SA_SharePens", "kind": "u32"},
+        {"name": "SA_PubName", "kind": "cstr"},
+        {
+          "name": "SA_Font",
+          "kind": "struct",
+          "type": "TextAttr",
+          "fallback_cstr_field": {"field": "ta_Name", "value": "Vera Mono.font"}
+        }
+      ]
     }
   },
   "functions": {
@@ -305,6 +331,17 @@
       "objects": {
         "screen": {"type": "Screen", "nullable": true, "release": true}
       }
+    },
+    "intuition.library.OpenScreenTagList": {
+      "null_args": ["newScreen"],
+      "taglists": {"tagList": "intuition.open_screen"},
+      "result": {"kind": "object", "type": "Screen"}
+    },
+    "intuition.library.CloseScreen": {
+      "objects": {"screen": {"type": "Screen", "nullable": false, "consume": true}}
+    },
+    "intuition.library.PubScreenStatus": {
+      "objects": {"Scr": {"type": "Screen", "nullable": false}}
     },
     "intuition.library.MakeClass": {
       "strings": ["classID", "superClassID"],

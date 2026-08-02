@@ -491,7 +491,9 @@ def parse_conf(path):
 # ---------------------------------------------------------------------------
 
 TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
-             "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT"}
+             "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT",
+             "null": "EMU_TAG_NULL", "u16_ffff": "EMU_TAG_U16_FFFF",
+             "rgb32": "EMU_TAG_RGB32"}
 
 
 def policy_key(lib, f):
@@ -585,6 +587,28 @@ def validate_policy(targets):
                     r"[A-Za-z_]\w*", t.get("type", "")):
                 errors.append("tag domain %s tag %s needs a structure type"
                               % (name, macro))
+            elif kind == "u16_ffff" and (not isinstance(t.get("max_count"), int) or
+                                           t["max_count"] < 1 or t["max_count"] > 256):
+                errors.append("tag domain %s tag %s needs max_count 1..256"
+                              % (name, macro))
+            elif kind == "rgb32" and (not isinstance(t.get("max_longs"), int) or
+                                       t["max_longs"] < 1 or t["max_longs"] > 4096):
+                errors.append("tag domain %s tag %s needs max_longs 1..4096"
+                              % (name, macro))
+            fallback = t.get("fallback_cstr_field")
+            if fallback is not None:
+                if kind != "struct" or not isinstance(fallback, dict):
+                    errors.append("tag domain %s tag %s string fallback needs a structure"
+                                  % (name, macro))
+                elif (not re.fullmatch(r"[A-Za-z_]\w*", fallback.get("field", "")) or
+                      not isinstance(fallback.get("value"), str) or
+                      not fallback["value"] or "\0" in fallback["value"]):
+                    errors.append("tag domain %s tag %s has invalid string fallback"
+                                  % (name, macro))
+            tag_fallback = t.get("fallback")
+            if tag_fallback is not None and tag_fallback != "omit":
+                errors.append("tag domain %s tag %s has invalid fallback"
+                              % (name, macro))
 
     for key, p in POLICY.get("functions", {}).items():
         f = bykey.get(key)
@@ -601,6 +625,7 @@ def validate_policy(targets):
         pointers = p.get("pointers", {})
         guest_values = p.get("guest_values", [])
         strings = p.get("strings", [])
+        null_args = p.get("null_args", [])
         boopsi = p.get("boopsi")
         args = {n: t for t, n in f.args}
         for arg, domain in taglists.items():
@@ -765,6 +790,18 @@ def validate_policy(targets):
                                   % (key, arg))
         if not isinstance(strings, list) or any(a not in args for a in strings):
             errors.append("function policy %s has invalid strings" % key)
+        if not isinstance(null_args, list) or any(a not in args for a in null_args):
+            errors.append("function policy %s has invalid null_args" % key)
+        else:
+            for arg in null_args:
+                if "*" not in args[arg]:
+                    errors.append("function policy %s NULL-only argument %s is not a pointer"
+                                  % (key, arg))
+                if (arg in taglists or arg in structs or arg in tagged_structs or
+                        arg in objects or arg in callbacks or arg in pointers or
+                        arg in guest_values or arg in strings):
+                    errors.append("function policy %s argument %s has two policies"
+                                  % (key, arg))
         if boopsi:
             class_arg = boopsi.get("class_arg")
             if class_arg not in objects or objects[class_arg].get("type") != "Class":
@@ -809,8 +846,9 @@ def validate_policy(targets):
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
         for t, n in f.args:
-            if (n in taglists or n in structs or n in pointers or n in objects or n in callbacks or
-                    n in guest_values or n in strings):
+            if (n in taglists or n in structs or n in tagged_structs or
+                    n in pointers or n in objects or n in callbacks or
+                    n in guest_values or n in strings or n in null_args):
                 continue
             if classify(t) not in ("scalar", "widen", "string", "bptr"):
                 blockers.append("%s %s" % (t, n))
@@ -987,7 +1025,9 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     w("#include <%s>" % hdr)
     if uses_structs:
         w("#include <string.h>")
-    if used_headers:
+    if (used_headers or
+            any(function_policy(lib, f) and function_policy(lib, f).get("null_args")
+                for f in funcs)):
         w("#include <stdio.h>")
     for h in used_headers:
         w("#include <%s>" % h)
@@ -1010,6 +1050,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w('    { %s, %s, "%s", emu_fields_%s, EMU_NFIELDS(emu_fields_%s),'
                   % (tag["name"], TAG_KINDS[tag["kind"]], tag["name"], st, st))
                 w("      M68K_%s_SIZEOF, sizeof(struct %s) }," % (st, st))
+            elif tag["kind"] == "u16_ffff":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_count"]))
+            elif tag["kind"] == "rgb32":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_longs"]))
             else:
                 w('    { %s, %s, "%s", NULL, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
@@ -1062,12 +1110,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         callbacks = policy.get("callbacks", {}) if policy else {}
         guest_values = policy.get("guest_values", []) if policy else []
         strings = policy.get("strings", []) if policy else []
+        null_args = policy.get("null_args", []) if policy else []
         boopsi = policy.get("boopsi") if policy else None
         if policy:
             w("    {")
         call_args = []
         post = []
         precall = []
+        heap_tag_scratch = []
         # A "how much of this structure do you want" argument is clamped before
         # anything else: it bounds the guest range check as well as the copy, so
         # it cannot be computed inside the block that already needs it. The
@@ -1247,6 +1297,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             if aname in strings:
                 call_args.append("(%s)EMU_GPTR(guest0, %s)" % (norm(atype), src))
                 continue
+            if aname in null_args:
+                w("        if (%s)" % src)
+                w("        {")
+                w("            if (err && errlen)")
+                w('                snprintf(err, errlen, "%s.%s currently requires NULL");'
+                  % (f.name, aname))
+                w("            return 1;")
+                w("        }")
+                call_args.append("(%s)NULL" % norm(atype))
+                continue
             if aname not in taglists:
                 call_args.append(arg_expr(atype, reg))
                 continue
@@ -1260,17 +1320,41 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             # A domain with no structure tags emits no scratch at all.
             structs = [t["type"] for t in domains[dname]["tags"]
                        if t.get("kind") == "struct"]
-            if structs:
-                w("        UQUAD emu_tagscratch_%d[%s];"
-                  % (ai, " + ".join("(sizeof(struct %s) + 7) / 8" % s
-                                    for s in structs)))
+            array_counts = [t["max_count"] for t in domains[dname]["tags"]
+                            if t.get("kind") == "u16_ffff"]
+            rgb32_sizes = [t["max_longs"] for t in domains[dname]["tags"]
+                           if t.get("kind") == "rgb32"]
+            scratch_parts = (["(sizeof(struct %s) + 7) / 8" % s for s in structs] +
+                             ["(sizeof(UWORD) * %d + 7) / 8" % n for n in array_counts] +
+                             ["(sizeof(ULONG) * %d + 7) / 8" % n for n in rgb32_sizes])
+            heap_scratch = bool(array_counts or rgb32_sizes)
+            scratch_quads = " + ".join(scratch_parts)
+            if heap_scratch:
+                w("        ULONG emu_tagscratch_size_%d = sizeof(UQUAD) * (%s);"
+                  % (ai, scratch_quads))
+                w("        APTR emu_tagscratch_%d = emu68k_scratch_alloc("
+                  "emu_tagscratch_size_%d, err, errlen);" % (ai, ai))
+                w("        if (!emu_tagscratch_%d)" % ai)
+                w("            return 1;")
+                heap_tag_scratch.append(ai)
+            elif scratch_parts:
+                w("        UQUAD emu_tagscratch_%d[%s];" % (ai, scratch_quads))
             w("        if (emu68k_tags_to_native(guest0, %s, &emu_tagdomain_%s,"
               % (src, ident))
             w("                                     emu_tags_%d, %d, %s, err, errlen) < 0)"
               % (ai, cap + 1,
+                 "emu_tagscratch_%d, emu_tagscratch_size_%d" % (ai, ai)
+                 if heap_scratch else
                  "emu_tagscratch_%d, sizeof emu_tagscratch_%d" % (ai, ai)
-                 if structs else "NULL, 0"))
-            w("            return 1;")
+                 if scratch_parts else "NULL, 0"))
+            if heap_scratch:
+                w("        {")
+                w("            emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
+                  % (ai, ai))
+                w("            return 1;")
+                w("        }")
+            else:
+                w("            return 1;")
             call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
                              % (norm(atype), src, ai))
         for line in precall:
@@ -1278,11 +1362,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         result_policy = policy.get("result") if policy else None
+        def emit_heap_tag_cleanup():
+            for scratch_ai in heap_tag_scratch:
+                w("        emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
+                  % (scratch_ai, scratch_ai))
         if result_policy and result_policy.get("kind") == "guest_arg":
             result_arg = result_policy["arg"]
             result_index = [n for _t, n in f.args].index(result_arg)
             result_src = reg_expr(f.regs[result_index])
             w("        APTR emu_result = (APTR)%s;" % call)
+            emit_heap_tag_cleanup()
             emit_post(post, "emu_result")
             w("        r->d[0] = emu_result ? %s : 0;" % result_src)
         elif result_policy and result_policy.get("kind") == "object":
@@ -1306,6 +1395,66 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                   json.dumps(fallback["name"]))
                 w("            emu_result = (APTR)%s;" % fallback_call)
                 w("        }")
+            tag_fallbacks = []
+            for tag_arg, dname in taglists.items():
+                tag_ai = [n for _t, n in f.args].index(tag_arg)
+                for tag in domains[dname]["tags"]:
+                    if tag.get("fallback_cstr_field"):
+                        tag_fallbacks.append((tag_ai, tag))
+            if tag_fallbacks:
+                w("        if (!emu_result)")
+                w("        {")
+                w("            BOOL emu_fallback_changed = FALSE;")
+                for tag_ai, tag in tag_fallbacks:
+                    stype = tag["type"]
+                    field = tag["fallback_cstr_field"]["field"]
+                    value = tag["fallback_cstr_field"]["value"]
+                    w("            for (ULONG emu_fallback_i = 0;")
+                    w("                 emu_tags_%d[emu_fallback_i].ti_Tag != TAG_DONE;"
+                      % tag_ai)
+                    w("                 emu_fallback_i++)")
+                    w("                if (emu_tags_%d[emu_fallback_i].ti_Tag == %s)"
+                      % (tag_ai, tag["name"]))
+                    w("                {")
+                    w("                    struct %s *emu_fallback_value =" % stype)
+                    w("                        (struct %s *)emu_tags_%d[emu_fallback_i].ti_Data;"
+                      % (stype, tag_ai))
+                    w("                    if (emu_fallback_value)")
+                    w("                    {")
+                    w("                        emu_fallback_value->%s = (STRPTR)%s;"
+                      % (field, json.dumps(value)))
+                    w("                        emu_fallback_changed = TRUE;")
+                    w("                    }")
+                    w("                }")
+                w("            if (emu_fallback_changed)")
+                w("                emu_result = (APTR)%s;" % call)
+                w("        }")
+            omitted_fallbacks = []
+            for tag_arg, dname in taglists.items():
+                tag_ai = [n for _t, n in f.args].index(tag_arg)
+                for tag in domains[dname]["tags"]:
+                    if tag.get("fallback") == "omit":
+                        omitted_fallbacks.append((tag_ai, tag))
+            if omitted_fallbacks:
+                w("        if (!emu_result)")
+                w("        {")
+                w("            BOOL emu_fallback_changed = FALSE;")
+                for tag_ai, tag in omitted_fallbacks:
+                    w("            for (ULONG emu_fallback_i = 0;")
+                    w("                 emu_tags_%d[emu_fallback_i].ti_Tag != TAG_DONE;"
+                      % tag_ai)
+                    w("                 emu_fallback_i++)")
+                    w("                if (emu_tags_%d[emu_fallback_i].ti_Tag == %s)"
+                      % (tag_ai, tag["name"]))
+                    w("                {")
+                    w("                    emu_tags_%d[emu_fallback_i].ti_Tag = TAG_IGNORE;"
+                      % tag_ai)
+                    w("                    emu_fallback_changed = TRUE;")
+                    w("                }")
+                w("            if (emu_fallback_changed)")
+                w("                emu_result = (APTR)%s;" % call)
+                w("        }")
+            emit_heap_tag_cleanup()
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]
@@ -1326,14 +1475,17 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("            return 1;")
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
+            emit_heap_tag_cleanup()
             emit_post(post)
         elif classify(f.ret) == "bptr":
             w("        %sr->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
               % ("    " if policy else "", call))
+            emit_heap_tag_cleanup()
             emit_post(post, "r->d[0]")
         elif classify(f.ret) == "double":
             pad = "    " if policy else ""
             w("        %semu68k_double_out(%s, &r->d[0], &r->d[1]);" % (pad, call))
+            emit_heap_tag_cleanup()
             emit_post(post)
         else:
             note = ""
@@ -1341,6 +1493,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 note = "   /* narrowed: an integer, never an address */"
             w("        %sr->d[0] = (ULONG)%s;%s" %
               ("    " if policy else "", call, note))
+            emit_heap_tag_cleanup()
             emit_post(post, "r->d[0]")
         w("        %sreturn 0;" % ("    " if policy else ""))
         if policy:
@@ -1433,6 +1586,8 @@ static inline void emu68k_double_out(double v, ULONG *hi, ULONG *lo)
 
 UQUAD emu68k_scalar_from_guest(APTR guest0, ULONG addr, UBYTE width);
 void  emu68k_scalar_to_guest(APTR guest0, ULONG addr, UBYTE width, UQUAD value);
+APTR  emu68k_scratch_alloc(ULONG size, char *err, ULONG errlen);
+void  emu68k_scratch_free(APTR scratch, ULONG size);
 
 /* Native OS objects cross as typed, per-run tokens. The table preserves
  * identity and reference counts, rejects stale/wrong-type tokens, and owns a
@@ -1470,6 +1625,9 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_CSTR    1
 #define EMU_TAG_REFUSE  2
 #define EMU_TAG_STRUCT  3   /* ti_Data is a guest pointer to a value structure */
+#define EMU_TAG_NULL    4   /* pointer-valued tag accepted only when NULL       */
+#define EMU_TAG_U16_FFFF 5  /* guest UWORD array terminated by 0xffff           */
+#define EMU_TAG_RGB32    6  /* LoadRGB32 block stream terminated by zero         */
 struct EmuTagDesc
 {
     ULONG tag;
