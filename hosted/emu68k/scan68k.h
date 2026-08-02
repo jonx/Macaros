@@ -82,6 +82,29 @@ int scan68k_lib_bridged(const char *name);
 
 /* Scan a raw AmigaOS hunk image. Returns 0 on success, nonzero if the image is
  * not a parseable hunk file (err is set). */
+/* [T3e] Find an AmigaOS RESIDENT TAG in a loaded hunk image - the structure
+ * that says "this file is a library, here is how to start it".
+ *
+ * A tag is NOT just the RTC_MATCHWORD ($4AFC): that word is the ILLEGAL
+ * instruction and turns up inside ordinary code. What makes it a tag is that
+ * rt_MatchTag points AT THE WORD ITSELF, so the check is self-referential and
+ * a coincidence cannot pass it.
+ *
+ * `image` is the hunk payload as loaded, `base` the guest address it was
+ * loaded at (so the self-reference can be compared against real addresses).
+ * Returns 1 and fills *out when a library tag is found, 0 otherwise. */
+typedef struct {
+    unsigned long tag_off;     /* offset of the tag within the image      */
+    unsigned long init_off;    /* rt_Init, as an offset within the image  */
+    unsigned      version;
+    unsigned      type;        /* 9 = NT_LIBRARY                          */
+    unsigned      flags;       /* $80 = RTF_AUTOINIT                      */
+    char          name[64];
+} scan68k_resident;
+
+int scan68k_find_resident(const void *image, unsigned long len,
+                          unsigned long base, scan68k_resident *out);
+
 int scan68k_image(const void *image, unsigned long len,
                   scan68k_report *out, char *err, unsigned errlen);
 

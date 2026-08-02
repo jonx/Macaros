@@ -517,6 +517,43 @@ int scan68k_image(const void *image, unsigned long len,
 }
 
 /* what the oscall bridge serves today; grows with emu68k_oscall.c */
+/* See the header: the self-reference is the whole test. */
+int scan68k_find_resident(const void *image, unsigned long len,
+                          unsigned long base, scan68k_resident *out)
+{
+    const unsigned char *p = image;
+    unsigned long o;
+
+    if (!p || !out || len < 26) return 0;
+    for (o = 0; o + 26 <= len; o += 2) {
+        unsigned long match, init, nameoff;
+        if (!(p[o] == 0x4A && p[o + 1] == 0xFC)) continue;      /* RTC_MATCHWORD */
+        match = ((unsigned long)p[o+2] << 24) | ((unsigned long)p[o+3] << 16) |
+                ((unsigned long)p[o+4] << 8)  |  (unsigned long)p[o+5];
+        if (match != base + o) continue;          /* must point AT ITSELF        */
+        if (p[o + 12] != 9) continue;             /* rt_Type must be NT_LIBRARY  */
+
+        out->tag_off = o;
+        out->flags   = p[o + 10];
+        out->version = p[o + 11];
+        out->type    = p[o + 12];
+        nameoff = ((unsigned long)p[o+14] << 24) | ((unsigned long)p[o+15] << 16) |
+                  ((unsigned long)p[o+16] << 8)  |  (unsigned long)p[o+17];
+        init    = ((unsigned long)p[o+22] << 24) | ((unsigned long)p[o+23] << 16) |
+                  ((unsigned long)p[o+24] << 8)  |  (unsigned long)p[o+25];
+        out->init_off = (init >= base && init < base + len) ? init - base : 0;
+        out->name[0] = 0;
+        if (nameoff >= base && nameoff < base + len) {
+            unsigned long i, n = nameoff - base;
+            for (i = 0; i + 1 < sizeof out->name && n + i < len && p[n+i]; i++)
+                out->name[i] = (char)p[n + i];
+            out->name[i] = 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 int scan68k_lib_bridged(const char *name)
 {
     if (!strcmp(name, "exec.library")) return 1;   /* bootstrap + AllocMem      */

@@ -30,7 +30,12 @@ static const char *kind_name(scan68k_evkind k)
 int main(int argc, char **argv)
 {
     int quiet = 0, argi = 1;
+    int resident = 0;
     if (argc > 1 && !strcmp(argv[1], "-q")) { quiet = 1; argi = 2; }
+    /* [T3e] --resident: is this file a 68k LIBRARY, and where does it start?
+     * The image is scanned unrelocated, so the tag's self-reference is against
+     * base 0 - which is what a hunk-relative rt_MatchTag holds before load. */
+    if (argc > 1 && !strcmp(argv[1], "--resident")) { resident = 1; argi = 2; }
     if (argi >= argc) {
         fprintf(stderr, "usage: scan68k [-q] <program.exe>\n");
         return 2;
@@ -44,6 +49,33 @@ int main(int argc, char **argv)
         fprintf(stderr, "scan68k: cannot read %s\n", argv[argi]); return 1;
     }
     fclose(f);
+
+    if (resident) {
+        /* Scan the CODE hunk payload, unrelocated: a hunk-relative rt_MatchTag
+         * holds its own offset, so the self-reference is against base 0. */
+        scan68k_resident res;
+        long i;
+        for (i = 0; i + 8 < sz; i += 2)
+            if (buf[i] == 0 && buf[i+1] == 0 && buf[i+2] == 3 && buf[i+3] == 0xE9)
+                break;                                   /* HUNK_CODE */
+        if (i + 8 >= sz) { printf("not a hunk file with code\n"); return 1; }
+        {
+            unsigned long n = ((unsigned long)buf[i+4] << 24) |
+                              ((unsigned long)buf[i+5] << 16) |
+                              ((unsigned long)buf[i+6] << 8)  | buf[i+7];
+            if (!scan68k_find_resident(buf + i + 8, n * 4, 0, &res)) {
+                printf("%s: no library resident tag\n", argv[argi]);
+                return 1;
+            }
+            printf("%s\n  resident tag at +0x%lx\n  name       : %s\n"
+                   "  version    : %u\n  type       : %u%s\n"
+                   "  flags      : 0x%02x%s\n  rt_Init at : +0x%lx\n",
+                   argv[argi], res.tag_off, res.name, res.version, res.type,
+                   res.type == 9 ? " (NT_LIBRARY)" : "", res.flags,
+                   (res.flags & 0x80) ? " (RTF_AUTOINIT)" : "", res.init_off);
+        }
+        return 0;
+    }
 
     scan68k_report r;
     char err[128] = {0};
