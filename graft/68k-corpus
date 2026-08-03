@@ -26,14 +26,26 @@ OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
 # conclusion drawn from it is void. Recording it costs one command; not
 # recording it cost an hour.
 if [ -z "${EMU68K_BRIDGE_TREE:-}" ]; then
-    _os="$ROOT/../aros-upstream"
-    if [ -d "$_os/.git" ]; then
-        _b=$(git -C "$_os" rev-parse --abbrev-ref HEAD 2>/dev/null)
-        _h=$(git -C "$_os" rev-parse --short HEAD 2>/dev/null)
-        _d=$(git -C "$_os" status --porcelain 2>/dev/null | head -1)
-        EMU68K_BRIDGE_TREE="$_b@$_h${_d:+ +dirty}"
-        export EMU68K_BRIDGE_TREE
+    _p=""
+    for _r in "$ROOT" "$ROOT/../aros-upstream"; do
+        [ -d "$_r/.git" ] || continue
+        _n=$(basename "$(cd "$_r" && pwd)")
+        _b=$(git -C "$_r" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        _h=$(git -C "$_r" rev-parse --short HEAD 2>/dev/null)
+        _d=$(git -C "$_r" status --porcelain 2>/dev/null | head -1)
+        _p="${_p:+$_p }$_n=$_b@$_h${_d:+ +dirty}"
+    done
+    # A source SHA cannot identify a stale ARTIFACT, and +dirty warns without
+    # making a run reproducible. Hash the dylib that will actually be loaded:
+    # it is the only thing that says what the measurement really ran.
+    _lib="$HOME/lib/libemu68k.dylib"
+    [ -f "$_lib" ] || _lib="$ROOT/build/libemu68k.dylib"
+    if [ -f "$_lib" ]; then
+        _s=$(shasum -a 256 "$_lib" 2>/dev/null | cut -c1-12)
+        _p="$_p dylib=$_s"
     fi
+    EMU68K_BRIDGE_TREE="$_p"
+    export EMU68K_BRIDGE_TREE
 fi
 SHARE="$HOME/AROS/Shared"; SUB="corpus"
 RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"

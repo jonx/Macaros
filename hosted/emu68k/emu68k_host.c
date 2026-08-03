@@ -457,8 +457,25 @@ static void dump_fault_code(struct emu68k_run *r)
     fprintf(stderr, "\n");
 }
 
-/* Nonzero while a bridge call is running NATIVE code on the guest's behalf. */
+/* The EXECUTION DOMAIN, as a depth rather than a flag.
+ *
+ * Nonzero means native code is running on the guest's behalf. It is not a
+ * boolean because a native call can re-enter the GUEST - a Hook, a BOOPSI
+ * dispatcher, another 68k context - and hardware touched by that nested guest
+ * code is genuinely the program's, not ours. Every nested guest entry saves the
+ * depth and clears it for the duration, so the domain follows the real
+ * guest -> native -> guest nesting instead of latching on at the first bridge
+ * call and staying on. */
 static int g_in_bridge;
+
+static int domain_enter_guest(void)      /* -> the depth to restore */
+{
+    int saved = g_in_bridge;
+    g_in_bridge = 0;
+    return saved;
+}
+
+static void domain_leave_guest(int saved) { g_in_bridge = saved; }
 
 static int classify_hardware(void *fault_addr, void *user)
 {
@@ -2526,9 +2543,11 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     }
     j5d_set_poll(NULL, NULL, 0);
     if (setjmp(ctx->unwind) == 0) {
+        int dom = domain_enter_guest();   /* this context IS the guest again */
         ctx->can_unwind = 1;
         rc = j5d_run(&nsb, pc, RUN_LIBBASE, &ctx->st, &d0, bridge, &c, e, el);
         ctx->can_unwind = 0;
+        domain_leave_guest(dom);
         if (rc == 0) ctx->finished = 1;   /* it returned: the process exited  */
     } else {
         ctx->can_unwind = 0;              /* it blocked back; state is parked */
@@ -2868,8 +2887,10 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     /* A nested callback must complete as part of the native call; yielding it
      * would strand the native stack. Restore the outer quantum immediately. */
     j5d_set_poll(NULL, NULL, 0);
+    int dom = domain_enter_guest();   /* the hook body is GUEST code */
     int rc = j5d_run(&sb, (uint32_t)entry, RUN_LIBBASE, &st, &d0,
                      bridge, &c, err, errlen);
+    domain_leave_guest(dom);
     j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     if (rc != 0)
         return 1;
