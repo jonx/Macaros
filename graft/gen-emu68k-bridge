@@ -1442,8 +1442,18 @@ def ast_compile_config(rel, short):
     args += [
         "-DAROS_BUILD_TYPE=AROS_BUILD_TYPE_PERSONAL",
         "-DUSE_EXEC_DEBUG", "-D__arm64__",
-        "-Wno-everything", "-fsyntax-only"
     ]
+    # A module's own build flags, taken from its mmakefile rather than assumed.
+    #
+    # Some of them change what its headers MEAN. graphics is built with
+    # -D__OOP_NOMETHODBASES__ because it declares its own HWBase and friends,
+    # and interface/HW.h defines a macro of that exact name unless told not to;
+    # compiled without the flag, the module's own struct members expand into
+    # function calls and nothing after them parses. Reading the flags is the
+    # only way to compile a module the way the build compiles it, and it is the
+    # difference between having evidence for a vector and refusing it.
+    args += module_build_defines(source_root)
+    args += ["-Wno-everything", "-fsyntax-only"]
     return {
         "compiler": AROS_CC,
         "sysroot": sysroot,
@@ -1761,6 +1771,30 @@ def ast_function_definition(values, symbol):
     # Intuition_34_OpenWindow. The suffix is unambiguous because it includes
     # the complete requested vector name, not a substring match.
     return generated[0] if len(generated) == 1 else None
+
+
+def module_build_defines(module_dir):
+    """The -D flags a module's own mmakefile compiles it with.
+
+    Only defines are taken. Include paths and link flags describe where the
+    build puts things, which the analyzer already knows; defines describe what
+    the source MEANS, which it cannot know any other way. Continuation lines
+    are joined first, because these lists are habitually wrapped."""
+    path = os.path.join(module_dir, "mmakefile.src")
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return []
+    text = text.replace("\\\n", " ")
+    defines = []
+    for line in text.splitlines():
+        if not re.match(r"\s*USER_(CPPFLAGS|CFLAGS|INCLUDES)\s*:?=", line):
+            continue
+        for flag in re.findall(r"-D[A-Za-z_]\w*(?:=[^\s]+)?", line):
+            if "$(" in flag or flag in defines:
+                continue
+            defines.append(flag)
+    return defines
 
 
 def compile_named_ast(config, symbol, source):
