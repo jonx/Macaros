@@ -38,6 +38,8 @@ AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
 AROS_BUILD = os.environ.get("AROS_BUILD", os.path.expanduser("~/aros-build"))
 AROS_CC = os.environ.get(
     "AROS_CC", os.path.expanduser("~/aros-crosstools/bin/clang"))
+LAYOUT_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "gen-struct-layouts")
 POLICY_PATH = os.environ.get(
     "EMU68K_BRIDGE_POLICY",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1255,6 +1257,78 @@ def ast_compile_config(rel, short):
     }
 
 
+def signature_record_name(ctype):
+    if "*" not in ctype:
+        return None
+    base = re.sub(r"\b(?:const|CONST|volatile)\b", "", norm(ctype))
+    base = re.sub(r"\s*\*+\s*$", "", base).strip()
+    if base.startswith("struct "):
+        return base.split(None, 1)[1]
+    return None
+
+
+def discover_record_headers(type_names, config):
+    include = os.path.join(config["sysroot"], "include")
+    headers = []
+    for name in sorted(set(type_names)):
+        pattern = r"\bstruct\s+%s(?:32|64)?\b" % re.escape(name)
+        try:
+            proc = subprocess.run(
+                ["rg", "-l", "-e", pattern, include], stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, encoding="utf-8", errors="replace", timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        candidates = []
+        definition = re.compile(r"\bstruct\s+%s(?:32|64)?\s*\{" % re.escape(name), re.S)
+        for path in proc.stdout.splitlines():
+            if not path:
+                continue
+            try:
+                raw = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if definition.search(mask_c_comments(raw)):
+                candidates.append(os.path.relpath(path, include))
+        candidates.sort(key=lambda path: (path.count(os.sep), len(path), path))
+        if candidates and candidates[0] not in headers:
+            headers.append(candidates[0])
+    return headers
+
+
+def probe_record_layouts(funcs, config):
+    types = set()
+    for f in funcs:
+        for ctype in [f.ret] + [t for t, _name in f.args]:
+            name = signature_record_name(ctype)
+            if name:
+                types.add(name)
+    if not types:
+        return {"status": "ok", "headers": [], "types": {}}
+    headers = discover_record_headers(types, config)
+    cmd = [LAYOUT_TOOL, "--probe-json", ",".join(sorted(types))]
+    for header in headers:
+        cmd += ["--header", header]
+    env = dict(os.environ)
+    env["AROS_INC"] = os.path.join(config["sysroot"], "include")
+    env["AROS_CLANG"] = config["compiler"]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              encoding="utf-8", errors="replace", timeout=60, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "error", "headers": headers, "types": {},
+                "error": str(exc)}
+    if proc.returncode != 0:
+        return {"status": "error", "headers": headers, "types": {},
+                "error": (proc.stderr + proc.stdout)[-4000:]}
+    try:
+        result = json.loads(proc.stdout)
+    except ValueError as exc:
+        return {"status": "error", "headers": headers, "types": {},
+                "error": "invalid layout JSON: %s" % exc}
+    return {"status": "ok", "headers": headers,
+            "types": result.get("types", {})}
+
+
 def ast_nodes(node):
     if not isinstance(node, dict):
         return
@@ -1635,6 +1709,7 @@ def collect_source_reports(which):
         funcs = [f for f in (parse_conf(os.path.join(AROS, rel)) or []) if not f.private]
         basename = conf_basename(os.path.join(AROS, rel))
         ast_config = ast_compile_config(rel, short)
+        record_layouts = probe_record_layouts(funcs, ast_config)
         root, paths = source_files_for_target(rel)
         sources = []
         for path in paths:
@@ -1689,6 +1764,7 @@ def collect_source_reports(which):
                 "compiled_functions": ast_ok,
                 "failed_functions": ast_errors
             },
+            "record_layouts": record_layouts,
             "functions": evidence,
             "ownership_candidates": pairs,
             "library_tag_evidence": library_tags,
@@ -1856,6 +1932,44 @@ def synthesize_function_tags(evidence, add_review):
     return [domains[name] for name in sorted(domains)]
 
 
+def function_record_contracts(evidence, layouts):
+    contracts = []
+    for argument in evidence.get("signature", {}).get("arguments", []):
+        name, ctype = argument["name"], argument["type"]
+        record_name = signature_record_name(ctype)
+        if not record_name or record_name not in layouts:
+            continue
+        layout = layouts[record_name]
+        guest = layout.get("m68k") or {}
+        native = layout.get("native") or {}
+        guest_fields = {field["name"]: field for field in guest.get("fields", [])}
+        native_fields = {field["name"]: field for field in native.get("fields", [])}
+        observed = set(evidence.get("arguments", {}).get(name, {}).get(
+            "dereferenced_fields", []))
+        observed.update(fact["value"] for fact in
+                        evidence.get("propagated_arguments", {}).get(name, [])
+                        if fact["kind"] == "dereferenced_fields")
+        required = []
+        for field_name in sorted(observed.intersection(guest_fields)):
+            guest_field, native_field = guest_fields[field_name], native_fields.get(field_name)
+            required.append({
+                "name": field_name,
+                "m68k_offset": guest_field["offset"],
+                "m68k_type": guest_field["type"],
+                "native_offset": native_field["offset"] if native_field else None,
+                "native_type": native_field["type"] if native_field else None,
+                "pointer_shaped": classify(guest_field["type"]) in
+                                  ("string", "aptr", "struct", "bptr")
+            })
+        contracts.append({
+            "argument": name, "declared_type": ctype, "record": record_name,
+            "m68k_size": guest.get("size"), "native_size": native.get("size"),
+            "required_fields": required,
+            "unresolved_observed_fields": sorted(observed - set(guest_fields))
+        })
+    return contracts
+
+
 def build_import_manifest(report):
     lib, rel = report["library"], report["conf"]
     short = lib.split(".")[0]
@@ -1869,6 +1983,11 @@ def build_import_manifest(report):
         source_inputs.append(input_file(path, role))
     source_inputs = sorted((x for x in source_inputs if x), key=lambda x: x["path"])
     public_headers = discover_public_headers(short, config)
+    layout_header_inputs = [input_file(
+        os.path.join(config["sysroot"], "include", header), "record-layout-header")
+        for header in report.get("record_layouts", {}).get("headers", [])]
+    layout_header_inputs = sorted((x for x in layout_header_inputs if x),
+                                  key=lambda x: x["path"])
     external_evidence = (report.get("source_tree_tag_evidence", []) +
                          report.get("callsite_tag_evidence", []))
     external_paths = sorted(set(os.path.join(AROS, item["source"])
@@ -1888,6 +2007,10 @@ def build_import_manifest(report):
     if not forced:
         add_review("missing-build-input", None, short,
                    "generated *_deflibdefs.h is absent; AST compilation is incomplete")
+    if report.get("record_layouts", {}).get("status") != "ok":
+        add_review("record-layout-probe", None, short,
+                   report.get("record_layouts", {}).get("error",
+                                                        "record layout probe failed"))
 
     parsed = parse_conf(conf_path) or []
     by_name = {f.name: f for f in parsed if not f.private}
@@ -1941,6 +2064,8 @@ def build_import_manifest(report):
             "outcome": outcome, "blocker": blocker,
             "existing_policy": policy,
             "reachable_helpers": len(evidence.get("reachable_helpers", [])),
+            "record_contracts": function_record_contracts(
+                evidence, report.get("record_layouts", {}).get("types", {})),
             "tag_domains": synthesize_function_tags(evidence, add_review),
             "argument_evidence": evidence.get("arguments", {}),
             "propagated_arguments": evidence.get("propagated_arguments", {}),
@@ -1974,6 +2099,7 @@ def build_import_manifest(report):
         "public_headers": public_headers,
         "implementation": source_inputs,
         "external_tag_consumers": external_inputs,
+        "record_layout_headers": layout_header_inputs,
         "generated_build_header": forced,
         "compiler": compiler_identity(config),
         "sysroot": logical_path(config["sysroot"]),

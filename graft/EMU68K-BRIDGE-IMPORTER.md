@@ -94,6 +94,10 @@ For each non-private public vector, the analyzer:
   pairs at real call sites. The evidence is attached to that exact function, so
   an input value accepted by `CreateGadget` is not confused with an output
   storage pointer passed to `GT_GetGadgetAttrs`.
+- discovers every record type in public signatures, locates the installed
+  header containing its definition, and invokes the dual-target layout probe.
+  The manifest records classic packed-m68k and native AArch64 sizes, field
+  offsets, and the subset of fields actually reached through each argument.
 
 For example, `CreateGadgetA` does not itself spell out every gadget tag. It calls
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
@@ -109,6 +113,13 @@ Tag domains remain per public function and argument. A tag used for input by a
 creation/setter API does not automatically describe an output/query API: in the
 latter, `ti_Data` can instead be a guest pointer to result storage. Direction
 must be proved before a candidate domain is activated.
+
+Record layouts are compiler results, not hand-counted offsets. The same public
+headers are compiled for `m68k-unknown-elf` with Amiga two-byte packing and for
+`aarch64-unknown-aros`. Header files contributing layouts are input-hashed. A
+pointer-shaped field is marked explicitly because knowing its two widths is not
+enough to decide whether it is a string, object token, callback, nested record,
+or retained guest address.
 
 ## Confidence and fail-closed rules
 

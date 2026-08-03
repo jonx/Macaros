@@ -475,6 +475,20 @@ def emit(m68k, native, out):
 
 
 def main():
+    probe_types = []
+    if "--probe-json" in sys.argv:
+        i = sys.argv.index("--probe-json")
+        if i + 1 >= len(sys.argv):
+            print("--probe-json requires a comma-separated type list", file=sys.stderr)
+            return 2
+        probe_types = [x for x in sys.argv[i + 1].split(",") if x]
+        for t in probe_types:
+            if t not in TYPES:
+                TYPES.append(t)
+    for i, arg in enumerate(sys.argv):
+        if arg == "--header" and i + 1 < len(sys.argv) and sys.argv[i + 1] not in HEADERS:
+            HEADERS.append(sys.argv[i + 1])
+
     m68k = dump("m68k-unknown-elf", ["-fpack-struct=2"])
     native = dump("aarch64-unknown-aros", [])
 
@@ -485,6 +499,24 @@ def main():
         for b in bad:
             print("  ! %s" % b)
         return 1
+
+    if probe_types:
+        result = {"schema": 1, "types": {}}
+        for t in probe_types:
+            guest_name, guest = resolve(m68k, t)
+            native_name, host = resolve(native, t)
+            def record(name, value):
+                if not value:
+                    return None
+                return {"resolved_name": name, "size": value["size"],
+                        "align": value["align"],
+                        "fields": [{"name": f, "offset": o, "type": ty}
+                                   for f, o, ty in value["fields"]]}
+            result["types"][t] = {"m68k": record(guest_name, guest),
+                                   "native": record(native_name, host)}
+        import json
+        print(json.dumps(result, indent=2, sort_keys=False))
+        return 0
 
     if "--report" in sys.argv:
         for t in TYPES:
@@ -502,7 +534,8 @@ def main():
 
     i = sys.argv.index("--emit") if "--emit" in sys.argv else -1
     if i < 0:
-        print("usage: gen-struct-layouts [--report] [--emit OUT.h [--check]]")
+        print("usage: gen-struct-layouts [--report] [--probe-json T1,T2 --header H] "
+              "[--emit OUT.h [--check]]")
         return 2
     return emit(m68k, native, sys.argv[i + 1])
 
