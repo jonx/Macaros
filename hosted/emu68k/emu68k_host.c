@@ -171,6 +171,12 @@
 #define LVO_ALLOCSIGNAL   55    /* -330 */
 #define LVO_FREESIGNAL    56    /* -336 */
 #define LVO_OPENDEVICE    74    /* -444 */
+#define LVO_CLOSEDEVICE   75    /* -450 */
+#define LVO_DOIO          76    /* -456 */
+#define LVO_SENDIO        77    /* -462 */
+#define LVO_CHECKIO       78    /* -468 */
+#define LVO_WAITIO        79    /* -474 */
+#define LVO_ABORTIO       80    /* -480 */
 #define LVO_WAIT          53    /* -318 */
 #define LVO_SIGNAL        54    /* -324 */
 #define LVO_ADDPORT       59    /* -354 */
@@ -359,6 +365,7 @@ struct emu68k_run {
     uint32_t              stack_upper;
     uint32_t              callback_stack_top;
     uint32_t              poll_quantum;
+    int                   failed;      /* the run ended badly; run.end says so */
     /* ctx[0] is the program itself; the rest are what it asked exec for. */
     /* Guest ports the program bound to a window, and the signal each one
      * carries, so a Wait knows which of them could answer it. */
@@ -637,6 +644,27 @@ static uint32_t guest_alloc(struct emu68k_run *r, uint32_t size)
     if (r->sb.next_alloc < r->exec_heap) r->sb.next_alloc = r->exec_heap;
     memset(j4_sandbox_host(&r->sb, a), 0, size);
     return a;
+}
+
+/* A base the guest calls a DEVICE through. Devices reach their vectors exactly
+ * as libraries do, so this is the same facade table: one base per device name,
+ * reused on a second open the way a native base is. */
+unsigned long emu68k_run_device_base(emu68k_run *r, const char *name)
+{
+    uint32_t base;
+    int i;
+    if (!r || !name) return 0;
+    for (i = 0; i < r->nlib; i++)
+        if (!strcmp(r->openlib[i].name, name)) return r->openlib[i].base;
+    if (r->nlib >= LIBBASE_MAX) return 0;
+    base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
+    snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
+             "%s", name);
+    r->openlib[r->nlib].base = base;
+    r->nlib++;
+    j5d_register_libbase(base);
+    memset(j4_sandbox_host(&r->sb, base), 0, 64);
+    return base;
 }
 
 unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size)
@@ -2030,48 +2058,42 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_OPENDEVICE: {
         /* OpenDevice(name A0, unit D0, ioRequest A1, flags D1) -> 0 on success.
          *
-         * A device the program opens only to REACH ITS VECTORS - console.device
-         * at unit -1 is the standard way to get at RawKeyConvert, and nothing
-         * is ever sent to it - needs a base in io_Device and nothing else. That
-         * is the same facade a bridged library gets, so it is handed out the
-         * same way and its vectors arrive here like any other.
+         * Opened for real, on the AROS side: a device this system does not have
+         * must fail the way a missing device fails, not succeed and then behave
+         * oddly. What the guest gets back is a base in io_Device - the same
+         * facade a bridged library gets - so the device's VECTORS arrive here
+         * like any other call.
          *
-         * A device the program means to do I/O on is a different contract (a
-         * request queue, DoIO/SendIO/AbortIO) and is refused by name below
-         * rather than opened and then found not to work. */
-        const char *name = guest_cstr(sb, st->a[0]);
-        int32_t unit = (int32_t)st->d[0];
-        if (name && !strcmp(name, "console.device") && unit == -1) {
-            uint32_t base;
-            int i;
-            for (i = 0; i < r->nlib; i++)
-                if (!strcmp(r->openlib[i].name, name)) break;
-            if (i == r->nlib) {
-                if (r->nlib >= LIBBASE_MAX) {
-                    snprintf(e, el, "too many native library facades");
-                    return 1;
-                }
-                base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
-                snprintf(r->openlib[r->nlib].name,
-                         sizeof r->openlib[r->nlib].name, "%s", name);
-                r->openlib[r->nlib].base = base;
-                r->nlib++;
-                j5d_register_libbase(base);
-                memset(j4_sandbox_host(sb, base), 0, 64);
-            } else {
-                base = r->openlib[i].base;
-            }
-            if (st->a[1]) {
-                gwrite32(sb, st->a[1] + M68K_IORequest_io_Device, base);
-                gwrite32(sb, st->a[1] + M68K_IORequest_io_Unit, 0);
-            }
-            st->d[0] = 0;                                    /* success       */
+         * That is deliberately all this contract promises. Sending a COMMAND to
+         * the device is a separate contract (a request queue, DoIO/SendIO/
+         * AbortIO, and a marshalled IORequest per command), and each unserved
+         * command is refused by name at the point it is sent - so a program
+         * that opens a device defensively and never uses it runs, and one that
+         * really does I/O stops at the exact command it needed. */
+        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                 g_oscall_user, e, el) == 0)
             return 0;
+        {
+            const char *name = guest_cstr(sb, st->a[0]);
+            snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") is "
+                     "not available yet", name ? name : "?");
         }
-        snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") is not "
-                 "available yet", name ? name : "?");
         return 1;
     }
+    case LVO_CLOSEDEVICE:
+        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                 g_oscall_user, e, el) == 0)
+            return 0;
+        return 0;                       /* closing what we never opened is fine */
+    case LVO_DOIO: case LVO_SENDIO: case LVO_ABORTIO:
+    case LVO_CHECKIO: case LVO_WAITIO:
+        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                 g_oscall_user, e, el) == 0)
+            return 0;
+        ledger_record(lvo, r->name[0] ? r->name : NULL);
+        snprintf(e, el, "capability gap: a device command was sent that this "
+                 "bridge does not marshal yet (exec LVO %d)", lvo);
+        return 1;
     case LVO_WAITPORT: {
         /* WaitPort(port A0) -> the first message, LEFT ON the port.
          *
@@ -3112,14 +3134,24 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
         r->done = 1;
         snprintf(err, errlen, "needs the Amiga hardware (%s)",
                  g_hw_detail[0] ? g_hw_detail : "unmapped hardware window");
+        r->failed = 1;          /* routed away is not a clean finish either */
+        bl_event(BL_SUMMARY, -1, 0, 0, "bridge.hardware", "\"detail\":\"%s\"",
+                 g_hw_detail[0] ? g_hw_detail : "unmapped hardware window");
         return EMU68K_RC_HARDWARE;
     }
     r->done = 1;
+    r->failed = 1;
     if (r->diag.bundles_written > 0)
         snprintf(err, errlen, "68k program fault (crash bundle: %s)",
                  r->diag.last_bundle[0] ? r->diag.last_bundle : "written");
     else
         snprintf(err, errlen, "%s", lerr[0] ? lerr : "68k program failed");
+    /* A run that FAULTED must not report ok. Anything reading the trace would
+     * otherwise treat a crash as a clean finish, which is the same class of
+     * lie as reporting a contract supported because nothing exercised it. */
+    bl_event(BL_SUMMARY, -1, 0, 0, "bridge.fault", "\"detail\":\"%s\"",
+             r->diag.bundles_written > 0 ? "fault, crash bundle written"
+                                         : "run failed");
     return EMU68K_RC_ERROR;
 }
 
@@ -3137,7 +3169,8 @@ void *emu68k_run_guest0(emu68k_run *r) { return r ? r->reserve : NULL; }
 
 void emu68k_run_free(emu68k_run *r)
 {
-    bl_close(r && r->done ? "ok" : "incomplete");
+    bl_close(!r ? "unknown" : r->failed ? "fault"
+                                        : r->done ? "ok" : "incomplete");
     if (!r) return;
     j5d_engine_free(r->eng);
     if (r->reserve) munmap(r->reserve, GUEST_RESERVE);

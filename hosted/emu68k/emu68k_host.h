@@ -79,6 +79,9 @@ void *emu68k_run_guest0(emu68k_run *r);
  * address, never a host pointer. Serialized by the same caller contract. */
 unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size);
 
+/* A base the guest calls a DEVICE through, one per device name. */
+unsigned long emu68k_run_device_base(emu68k_run *r, const char *name);
+
 /* Re-enter this run at a guest Hook entry point using the Amiga Hook ABI:
  * A0=Hook, A2=object, A1=message, result=D0. */
 int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
