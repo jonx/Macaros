@@ -53,8 +53,14 @@ from expresses sector numbers as `ULONG` while computing the byte offset as `UQU
 bounds arithmetic is performed in 32 bits, so a wrap makes an out-of-range access pass
 the guard and then issue a well-formed 64-bit offset into the wrong place.
 
-- **S1** Every sector number, sector count and sector bound is `UQUAD` end to end:
-  `AccessDisk()`, the cache block key, and every `FSSuper` sector field.
+- **S1** The domain splits in two, deliberately:
+  - **Absolute sector positions and volume capacities are `UQUAD`** end to end:
+    `AccessDisk()`'s starting sector, the cache block key, and every `FSSuper` sector
+    field.
+  - **A single transfer count stays `ULONG`.** It is bounded by the cache range size
+    and has to reach a 32-bit `io_Length`, so widening it would be theatre. It is
+    range checked before every conversion, and `exfat_byte_range()` refuses rather
+    than truncates when `nblocks * block_size` will not fit.
 - **S2** Range checks are **overflow-safe by construction, not merely 64-bit**.
   Widening alone is insufficient: `first + total` can overflow `UQUAD` as easily as
   `ULONG`. Express every bound as a **subtraction against a known-valid limit**, never
@@ -69,24 +75,34 @@ the guard and then issue a well-formed 64-bit offset into the wrong place.
   operands are not already bounded.
 - **S3** Cluster numbers remain `ULONG`. `[PUB]` exFAT FAT entries are 32-bit, so the
   cluster domain is 32-bit by definition. Only the sector domain widens.
-- **S4** `SECTOR_FROM_CLUSTER` **must promote before the shift**, and **must only be
-  called after the cluster has been validated** as `2 ..= ClusterCount + 1`.
+- **S4** `SECTOR_FROM_CLUSTER` has three separate requirements, and only the first two
+  are about arithmetic:
 
-  ```
-  (((UQUAD)cluster - 2) << shift) + heap
-  ```
+  1. **The cluster is validated as `2 ..= ClusterCount + 1` before the macro is
+     reached.** This is a precondition, not an optimisation the caller may skip.
+  2. **The shift is evaluated in `UQUAD`.** The unsafe form is one that shifts in
+     `ULONG` and widens afterwards:
 
-  `[OURS]` T13a disproves a weaker claim made in revision 2 of this document, that
-  moving the promotion ahead of the subtraction makes an invalid cluster safe. It does
-  not. `(UQUAD)1 - 2` underflows exactly as `(ULONG)1 - 2` does, and the subsequent
-  shift and add wrap the result back into a plausible-looking sector: with an 8-sector
-  cluster and a heap at 4096, cluster 1 yields sector **4088** under either form.
-  Promotion order changes which wrong answer is produced, not whether one is.
+     ```
+     /* wrong: the top bits are gone before the widening */
+     (UQUAD)((cluster - 2) << shift) + heap
+     /* required */
+     (((UQUAD)cluster - 2) << shift) + heap
+     ```
 
-  The promotion is required because `cluster << shift` evaluated in `ULONG` overflows
-  for a large cluster. The **only** protection against underflow is the range check, so
-  it is a precondition of the macro and not an optimisation the caller may skip. The
-  macro is not defensive and must not be treated as though it were.
+     `[OURS]` T13a shows the largest legal cluster, `0xFFFFFFF5`, landing at the wrong
+     sector under the first form with an 8-sector cluster.
+  3. **The final addition is bounded**, which follows from the mount-time geometry
+     check rather than from anything the macro does.
+
+  `[OURS]` Two earlier revisions of this document got S4 wrong in opposite directions,
+  and T13a is why we know. Revision 2 claimed that moving the promotion ahead of the
+  subtraction made an invalid cluster safe: it does not, because `(UQUAD)1 - 2`
+  underflows exactly as `(ULONG)1 - 2` does and the shift and add wrap the result back
+  to a plausible sector. Revision 3 then asserted the corrected expression against
+  itself, which proved nothing. **The macro is not defensive against an invalid
+  cluster and must not be treated as though it were**; requirement 1 is the whole of
+  that protection.
 - **S5** No `UQUAD` may reach `bug()` / `ErrorMessage()` through an unchecked `%lu`.
   Either one audited formatting helper, or every widened diagnostic call is
   compile-tested on m68k and AArch64. `[OURS]` This project has already shipped a

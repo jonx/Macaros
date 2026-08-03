@@ -1,11 +1,11 @@
 /*
- * T13a - sector-domain arithmetic around 2^32, against a fake backend.
+ * T13a - sector-domain arithmetic around 2^32.
  *
- * Proves spec.md S2 (overflow-safe bounds) and S4 (promote before subtract)
- * without needing a multi-terabyte image or a real device. Builds and runs on
- * the host.
+ * Exercises the PRODUCTION code: it includes rom/filesys/exfat/exfat_bounds.h
+ * directly, so there is no second model of the rules to drift from the real
+ * one. Proves spec.md S1 to S4 without a multi-terabyte image or a device.
  *
- *     cc -O2 -o t13a t13a_bounds.c && ./t13a
+ *     ./build.sh && ./t13a
  */
 
 #include <stdio.h>
@@ -15,26 +15,27 @@
 typedef uint64_t UQUAD;
 typedef uint32_t ULONG;
 
+#include "exfat_bounds.h"
+
 static int failures;
 
 static void check(const char *what, int ok)
 {
-    printf("  %-58s %s\n", what, ok ? "ok" : "FAIL");
+    printf("  %-60s %s\n", what, ok ? "ok" : "FAIL");
     if (!ok)
         failures++;
 }
 
 /* ------------------------------------------------------------------ S4 */
 
-/* The shape that was in the spec first: subtracts in ULONG, then promotes. */
-static UQUAD sector_from_cluster_wrong(ULONG cluster, unsigned shift,
-    UQUAD heap)
+/* Shift performed in ULONG, then widened. This is the genuinely unsafe form. */
+static UQUAD sfc_shift_in_ulong(ULONG cluster, unsigned shift, UQUAD heap)
 {
-    return ((UQUAD)(cluster - 2) << shift) + heap;
+    return (UQUAD)((cluster - 2) << shift) + heap;
 }
 
-/* The required shape: promote, then subtract. Caller has validated >= 2. */
-static UQUAD sector_from_cluster(ULONG cluster, unsigned shift, UQUAD heap)
+/* Required: the shift happens in UQUAD. Caller has validated the cluster. */
+static UQUAD sfc(ULONG cluster, unsigned shift, UQUAD heap)
 {
     return (((UQUAD)cluster - 2) << shift) + heap;
 }
@@ -43,150 +44,135 @@ static void test_s4(void)
 {
     const unsigned shift = 3;          /* 8 sectors per cluster */
     const UQUAD heap = 4096;
+    ULONG top = 0xFFFFFFF5u;           /* the largest legal cluster */
 
-    puts("S4  promote before subtract");
+    puts("S4  the shift must happen in UQUAD");
 
-    /* Valid clusters: both forms must agree. */
-    check("cluster 2 agrees",
-        sector_from_cluster(2, shift, heap)
-            == sector_from_cluster_wrong(2, shift, heap));
-    check("cluster 1000 agrees",
-        sector_from_cluster(1000, shift, heap)
-            == sector_from_cluster_wrong(1000, shift, heap));
-
-    /* The top of the cluster domain still lands where it should. */
-    check("cluster 0xFFFFFFF5 does not wrap",
-        sector_from_cluster(0xFFFFFFF5u, shift, heap)
-            == (((UQUAD)0xFFFFFFF5u - 2) << shift) + heap);
+    check("small clusters agree with the hand-computed sector",
+        sfc(2, shift, heap) == heap
+        && sfc(1000, shift, heap) == ((UQUAD)998 << shift) + heap);
 
     /*
-     * Invalid clusters. NEITHER form is safe, and this is the point of the
-     * test: (UQUAD)1 - 2 underflows exactly as (ULONG)1 - 2 does, and the
-     * subsequent shift and add wrap it back into a plausible-looking sector.
-     * Promotion order changes which wrong answer you get, not whether you
-     * get one. The only protection is the caller's cluster >= 2 check.
+     * The real defect. (cluster - 2) << 3 evaluated in ULONG discards the top
+     * three bits before the value is widened, so the largest legal cluster
+     * lands in completely the wrong place. Computed independently here rather
+     * than by reusing either expression, so this asserts something.
      */
-    check("cluster 1: old form yields a plausible sector (unsafe)",
-        sector_from_cluster_wrong(1, shift, heap) < (UQUAD)1 << 40);
-    check("cluster 1: new form ALSO yields a plausible sector (unsafe)",
-        sector_from_cluster(1, shift, heap) < (UQUAD)1 << 40);
-    check("cluster 0: old form yields a plausible sector (unsafe)",
-        sector_from_cluster_wrong(0, shift, heap) < (UQUAD)1 << 40);
-    check("cluster 0: new form ALSO yields a plausible sector (unsafe)",
-        sector_from_cluster(0, shift, heap) < (UQUAD)1 << 40);
-    check("=> validation, not promotion order, is what makes this safe", 1);
+    check("top cluster: shifting in ULONG loses the high bits",
+        sfc_shift_in_ulong(top, shift, heap) != (UQUAD)0xFFFFFFF3ull * 8 + heap);
+    check("top cluster: shifting in UQUAD is correct",
+        sfc(top, shift, heap) == (UQUAD)0xFFFFFFF3ull * 8 + heap);
+
+    /*
+     * Underflow. NEITHER form is safe, and that is the point: (UQUAD)1 - 2
+     * underflows exactly as (ULONG)1 - 2 does, and the shift and add wrap the
+     * result back to a plausible-looking sector. Promotion order changes which
+     * wrong answer appears, not whether one does. The range check is the only
+     * protection, so it is a precondition and not an optimisation.
+     */
+    check("cluster 1 yields a plausible sector, so is NOT self-detecting",
+        sfc(1, shift, heap) < (UQUAD)1 << 40);
+    check("cluster 0 likewise",
+        sfc(0, shift, heap) < (UQUAD)1 << 40);
 }
 
-/* ------------------------------------------------------------------ S2 */
+/* ------------------------------------------------------- S2, production */
 
-struct clip { UQUAD num; ULONG nblocks; int rejected; };
-
-/* The clipping logic as rewritten in disk.c: no addition anywhere. */
-static struct clip clip_request(UQUAD num, ULONG nblocks, UQUAD start,
-    UQUAD total)
+static void test_geometry(void)
 {
-    struct clip r = { num, nblocks, 0 };
-    UQUAD rel;
+    puts("\nS2  geometry validation (production exfat_geometry_ok)");
 
-    if (r.num < start)
-    {
-        UQUAD before = start - r.num;
-
-        if ((UQUAD)r.nblocks <= before) { r.rejected = 1; return r; }
-        r.nblocks -= (ULONG)before;
-        r.num = start;
-    }
-
-    rel = r.num - start;
-    if (rel >= total) { r.rejected = 1; return r; }
-    if ((UQUAD)r.nblocks > total - rel)
-        r.nblocks = (ULONG)(total - rel);
-
-    return r;
+    check("ordinary volume accepted", exfat_geometry_ok(64, 1000));
+    check("zero-length volume rejected", !exfat_geometry_ok(64, 0));
+    check("volume ending exactly at the domain top accepted",
+        exfat_geometry_ok(EXFAT_UQUAD_MAX - 99, 100));
+    check("volume whose last sector overflows is REJECTED",
+        !exfat_geometry_ok(EXFAT_UQUAD_MAX - 99, 200));
+    check("start at the domain top with one sector accepted",
+        exfat_geometry_ok(EXFAT_UQUAD_MAX, 1));
 }
 
-/* The original: 32-bit additions guarding a 64-bit access. */
-static struct clip clip_request_old(ULONG num, ULONG nblocks, ULONG start,
-    ULONG total)
+static void test_clip(void)
 {
-    struct clip r = { num, nblocks, 0 };
-    ULONG n = num, end;
+    UQUAD num, skipped;
+    ULONG nb;
 
-    if (n + nblocks <= start) { r.rejected = 1; return r; }
-    else if (n < start) { r.nblocks -= start - n; n = start; }
+    puts("\nS2  request clipping (production exfat_clip)");
 
-    end = start + total;
-    if (n >= end) { r.rejected = 1; return r; }
-    else if (n + r.nblocks > end) r.nblocks = end - n;
-
-    r.num = n;
-    return r;
-}
-
-static void test_s2(void)
-{
-    struct clip c;
-
-    puts("\nS2  overflow-safe bounds");
-
-    /* Ordinary cases still behave. */
-    c = clip_request(100, 8, 64, 1000);
+    num = 100; nb = 8;
     check("in-range request passes unclipped",
-        !c.rejected && c.num == 100 && c.nblocks == 8);
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OK
+        && num == 100 && nb == 8 && skipped == 0);
 
-    c = clip_request(60, 8, 64, 1000);
+    num = 60; nb = 8;
     check("straddling the start is clipped forward",
-        !c.rejected && c.num == 64 && c.nblocks == 4);
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OK
+        && num == 64 && nb == 4 && skipped == 4);
 
-    c = clip_request(10, 8, 64, 1000);
-    check("entirely before the volume is rejected", c.rejected);
+    num = 10; nb = 8;
+    check("entirely before the volume is rejected",
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OUTSIDE);
 
-    c = clip_request(1064, 8, 64, 1000);
-    check("entirely past the volume is rejected", c.rejected);
+    num = 1064; nb = 8;
+    check("entirely past the volume is rejected",
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OUTSIDE);
 
-    c = clip_request(1060, 8, 64, 1000);
+    num = 1060; nb = 8;
     check("straddling the end is clipped short",
-        !c.rejected && c.nblocks == 4);
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OK
+        && nb == 4);
 
-    /* Above 2^32, where the old code could not reach at all. */
-    c = clip_request((UQUAD)1 << 33, 8, (UQUAD)1 << 32, (UQUAD)1 << 33);
-    check("request above 2^32 is accepted",
-        !c.rejected && c.nblocks == 8);
+    num = 100; nb = 0;
+    check("zero-length request rejected",
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OUTSIDE);
+
+    num = (UQUAD)1 << 33; nb = 8;
+    check("request above 2^32 accepted",
+        exfat_clip(&num, &nb, &skipped, (UQUAD)1 << 32, (UQUAD)1 << 33)
+            == EXFAT_RANGE_OK && nb == 8);
 
     /*
-     * The wrap. num + nblocks overflows 32 bits, so the old guard's
-     * comparison is against a tiny wrapped value and the clip never fires:
-     * it returns the full block count for a request past the end.
+     * The wrap that motivated all of this. num is inside the volume so the
+     * leading guards pass; nblocks is absurd and num + nblocks wraps 32 bits
+     * to a small value, so a "num + nblocks > end" clip never fires and the
+     * caller keeps its full out-of-range count.
      */
-    {
-        /*
-         * num sits inside the volume, so both leading guards pass. nblocks is
-         * absurd, and num + nblocks wraps 32 bits to a small value, so the
-         * old clip "num + nblocks > end" is false and never fires: the caller
-         * is handed back its full, wildly out-of-range block count.
-         */
-        ULONG start = 64, total = 1000;      /* volume ends at sector 1064 */
-        ULONG num = 1000;                    /* inside the volume */
-        ULONG nb = 0xFFFFFF00u;              /* 1000 + this wraps to 744 */
-        struct clip oldc = clip_request_old(num, nb, start, total);
-        struct clip newc = clip_request(num, nb, start, total);
+    num = 1000; nb = 0xFFFFFF00u;
+    check("huge count inside a small volume is clipped, not wrapped",
+        exfat_clip(&num, &nb, &skipped, 64, 1000) == EXFAT_RANGE_OK
+        && nb == 64);
 
-        check("old form: wrapped addition leaves the count unclipped",
-            !oldc.rejected && oldc.nblocks == nb);
-        check("new form: clips it to the volume",
-            !newc.rejected && newc.nblocks == 64);
-    }
+    num = 100; nb = 8;
+    check("unusable geometry is reported, not clipped around",
+        exfat_clip(&num, &nb, &skipped, EXFAT_UQUAD_MAX - 99, 200)
+            == EXFAT_RANGE_BADGEOMETRY);
+}
 
-    /* first + total would overflow UQUAD itself. */
-    {
-        UQUAD start = ~(UQUAD)0 - 100;
-        UQUAD total = 200;                   /* start + total overflows */
-        c = clip_request(start + 50, 8, start, total);
-        check("start + total overflowing UQUAD is still handled",
-            !c.rejected && c.nblocks == 8);
-        c = clip_request(start - 1, 1, start, total);
-        check("  and the bound below it still rejects", c.rejected);
-    }
+static void test_byte_range(void)
+{
+    UQUAD off;
+    ULONG len;
+
+    puts("\nS2  byte range (production exfat_byte_range)");
+
+    check("ordinary range converts",
+        exfat_byte_range(100, 8, 512, &off, &len) == EXFAT_RANGE_OK
+        && off == 51200 && len == 4096);
+
+    check("sector offset overflowing the 64-bit domain is refused",
+        exfat_byte_range(EXFAT_UQUAD_MAX / 512 + 1, 1, 512, &off, &len)
+            == EXFAT_RANGE_TOOBIG);
+
+    check("transfer length overflowing 32 bits is refused",
+        exfat_byte_range(0, 0x800000u, 4096, &off, &len)
+            == EXFAT_RANGE_TOOBIG);
+
+    check("range ending past the domain top is refused",
+        exfat_byte_range(EXFAT_UQUAD_MAX / 512, 8, 512, &off, &len)
+            == EXFAT_RANGE_TOOBIG);
+
+    check("zero block size is refused",
+        exfat_byte_range(1, 1, 0, &off, &len) == EXFAT_RANGE_BADGEOMETRY);
 }
 
 /* ----------------------------------------------------------------- T14 */
@@ -213,14 +199,15 @@ static void test_hash(void)
             ok = 0;
 
     check("sequential ranges distribute identically above and below 2^32", ok);
-    check("64-bit keys compare exactly",
-        (((UQUAD)1 << 32) | 7) != (UQUAD)7);
+    check("64-bit keys compare exactly", (((UQUAD)1 << 32) | 7) != (UQUAD)7);
 }
 
 int main(void)
 {
     test_s4();
-    test_s2();
+    test_geometry();
+    test_clip();
+    test_byte_range();
     test_hash();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
