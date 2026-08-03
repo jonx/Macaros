@@ -98,6 +98,9 @@ For each non-private public vector, the analyzer:
   header containing its definition, and invokes the dual-target layout probe.
   The manifest records classic packed-m68k and native AArch64 sizes, field
   offsets, and the subset of fields actually reached through each argument.
+- turns high-confidence producer/releaser pairs into library-wide object type
+  candidates. Initially these are opaque handles; available facade layouts and
+  linked-family cleanup requirements are retained as explicit promotion gates.
 
 For example, `CreateGadgetA` does not itself spell out every gadget tag. It calls
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
@@ -120,6 +123,12 @@ headers are compiled for `m68k-unknown-elf` with Amiga two-byte packing and for
 pointer-shaped field is marked explicitly because knowing its two widths is not
 enough to decide whether it is a string, object token, callback, nested record,
 or retained guest address.
+
+Object inference is type-level. Once `CreateGadgetA → FreeGadgets` establishes
+`struct Gadget *` as an owned object, the same candidate is reused for `previous`
+and every other exact `struct Gadget *` crossing. A destructor that walks
+`NextGadget`, `NextMenu`, or a similar linked field cannot be treated as releasing
+one token; promotion remains blocked until family-token invalidation is generated.
 
 ## Confidence and fail-closed rules
 

@@ -1970,6 +1970,83 @@ def function_record_contracts(evidence, layouts):
     return contracts
 
 
+def api_noun(name):
+    name = re.sub(r"A$", "", name)
+    return re.sub(r"^(?:GT_)?(?:Get|Create|Alloc|Open|New|Free|Close|Dispose|"
+                  r"Delete|Reply|Release|Post|Filter)", "", name)
+
+
+def object_name_for_type(ctype, fallback=None):
+    canonical = object_canon(ctype)
+    matches = [name for name, spec in POLICY.get("object_types", {}).items()
+               if object_canon(spec["c_type"]) == canonical]
+    if len(matches) == 1:
+        return matches[0]
+    record = signature_record_name(ctype)
+    return record or fallback
+
+
+def infer_object_candidates(report):
+    by_name = {f["name"]: f for f in report["functions"]}
+    layouts = report.get("record_layouts", {}).get("types", {})
+    candidates = {}
+    for pair in report.get("ownership_candidates", []):
+        if pair.get("confidence") != "high":
+            continue
+        producer = by_name.get(pair["producer"], {})
+        ctype = producer.get("signature", {}).get("result", pair["type"])
+        name = object_name_for_type(ctype, api_noun(pair["producer"]))
+        if not name:
+            continue
+        existing = POLICY.get("object_types", {}).get(name)
+        consumer = by_name.get(pair["consumer"], {})
+        consumer_fields = set()
+        for facts in consumer.get("arguments", {}).values():
+            consumer_fields.update(facts.get("dereferenced_fields", []))
+        linked = sorted(field for field in consumer_fields
+                        if field.startswith(("Next", "First")) or field.endswith("Next"))
+        candidates[name] = {
+            "c_type": norm(ctype),
+            "kind": existing.get("kind") if existing else "opaque",
+            "status": "active" if existing else "candidate",
+            "producer": pair["producer"], "consumer": pair["consumer"],
+            "destructor": report["library"] + "." + pair["consumer"],
+            "confidence": "high", "evidence": pair["evidence"],
+            "record_layout": name if name in layouts else None,
+            "linked_fields": linked,
+            "promotion_requires": ([] if existing else
+                ["facade-or-opaque-decision"] +
+                (["linked-family-token-invalidation"] if linked else []))
+        }
+    return dict(sorted(candidates.items()))
+
+
+def function_object_contracts(evidence, candidates):
+    contracts = {"arguments": {}, "result": None}
+    signature = evidence.get("signature", {})
+    result_type = signature.get("result", "void")
+    for name, candidate in candidates.items():
+        if object_canon(candidate["c_type"]) == object_canon(result_type):
+            contracts["result"] = {"type": name, "kind": "object",
+                                   "source": candidate["producer"]}
+            break
+    for argument in signature.get("arguments", []):
+        for name, candidate in candidates.items():
+            if object_canon(candidate["c_type"]) == object_canon(argument["type"]):
+                contracts["arguments"][argument["name"]] = {
+                    "type": name, "nullable": "unresolved",
+                    "consume": evidence["name"] == candidate["consumer"]
+                }
+                break
+        else:
+            known = object_name_for_type(argument["type"])
+            if known and known in POLICY.get("object_types", {}):
+                contracts["arguments"][argument["name"]] = {
+                    "type": known, "nullable": "unresolved", "consume": False
+                }
+    return contracts
+
+
 def build_import_manifest(report):
     lib, rel = report["library"], report["conf"]
     short = lib.split(".")[0]
@@ -2011,6 +2088,18 @@ def build_import_manifest(report):
         add_review("record-layout-probe", None, short,
                    report.get("record_layouts", {}).get("error",
                                                         "record layout probe failed"))
+
+    object_candidates = infer_object_candidates(report)
+    for name, candidate in object_candidates.items():
+        if candidate["status"] == "active":
+            continue
+        add_review("object-representation", candidate["producer"], name,
+                   "choose opaque handle or guest-readable facade before promotion",
+                   [candidate])
+        if candidate["linked_fields"]:
+            add_review("linked-object-lifecycle", candidate["consumer"], name,
+                       "consumer traverses a linked family; invalidate every related token",
+                       [{"fields": candidate["linked_fields"]}])
 
     parsed = parse_conf(conf_path) or []
     by_name = {f.name: f for f in parsed if not f.private}
@@ -2066,6 +2155,7 @@ def build_import_manifest(report):
             "reachable_helpers": len(evidence.get("reachable_helpers", [])),
             "record_contracts": function_record_contracts(
                 evidence, report.get("record_layouts", {}).get("types", {})),
+            "object_contracts": function_object_contracts(evidence, object_candidates),
             "tag_domains": synthesize_function_tags(evidence, add_review),
             "argument_evidence": evidence.get("arguments", {}),
             "propagated_arguments": evidence.get("propagated_arguments", {}),
@@ -2119,6 +2209,7 @@ def build_import_manifest(report):
         },
         "accepted": {"abi_vectors": len(functions),
                      "ownership": accepted_ownership},
+        "object_candidates": object_candidates,
         "functions": functions,
         "review": review,
         "certification": {"status": "not-run", "checks": []}
@@ -2213,6 +2304,10 @@ def policy_subset_for_library(manifest):
         "library": lib,
         "status": "candidate-not-active",
         "object_types": objects,
+        "candidate_object_types": {
+            name: candidate for name, candidate in manifest["object_candidates"].items()
+            if candidate["status"] != "active"
+        },
         "tag_domains": domains,
         "functions": functions,
         "candidate_tag_domains": candidates,
