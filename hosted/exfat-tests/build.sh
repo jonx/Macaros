@@ -19,12 +19,17 @@ CFLAGS="-O2 -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Werror"
 
 # Plain build, then again under the sanitisers. The bounds code is all
 # integer arithmetic, so UBSan is the one that matters.
-$CC $CFLAGS -I"$SRC" -o "$HERE/t13a" "$HERE/t13a_bounds.c"
-$CC $CFLAGS -I"$SRC" -fsanitize=undefined,address \
-    -o "$HERE/t13a-san" "$HERE/t13a_bounds.c"
+fail=0
+for t in t13a_bounds t_boot; do
+    name=${t%_bounds}
+    $CC $CFLAGS -I"$SRC" -o "$HERE/$name" "$HERE/$t.c"
+    $CC $CFLAGS -I"$SRC" -fsanitize=undefined,address \
+        -o "$HERE/$name-san" "$HERE/$t.c"
 
-echo "== t13a =="
-"$HERE/t13a"
-echo
-echo "== t13a, ASan + UBSan =="
-UBSAN_OPTIONS=halt_on_error=1 "$HERE/t13a-san"
+    echo "== $name =="
+    "$HERE/$name" || fail=1
+    echo "== $name, ASan + UBSan =="
+    UBSAN_OPTIONS=halt_on_error=1 "$HERE/$name-san" >/dev/null || fail=1
+    echo
+done
+exit $fail
