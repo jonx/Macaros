@@ -281,7 +281,45 @@ Three things it needed, all of which were general rather than specific to it:
   crosses and carries itself into the policy; and an entry the importer wrote
   stays derivable, so later rules reach vectors already promoted.
 
+### DONE since: message ports
+
+`PutMsg`, `GetMsg`, `ReplyMsg`, `Signal`, `AllocSignal`/`FreeSignal` and the
+satisfiable half of `Wait` are in, gated by `T3PORT`. Every structure a port
+involves is the program's own memory, so these are guest-memory list operations
+plus the signal that makes a `WaitPort` return; handing them to the native exec
+would give it addresses it cannot dereference and put the program's messages on
+a list it cannot see. Ports are the shape every interactive Amiga program is
+written in, and there were none.
+
+A `Wait` nothing can satisfy is a NAMED gap, not a hang: with one context there
+is nobody to send the signal, and an unbreakable wait inside translated code
+would have to be killed from outside to find out why.
+
 ### The next piece: a 68k process
+
+**Correction to the design below.** Threads are the wrong shape. Both contexts
+are 68k, everything they share is guest memory, and they communicate only
+through signal bits - so they never need to run at the same instant, only to
+make progress. Run them COOPERATIVELY on one thread, which the engine already
+proves it can do (T0P3: "two instances interleaved on one thread"), and the
+locking, the shared-state races and the `ExecBase->ThisTask` problem all
+disappear - only one context is current, so that one word is always right.
+
+The switch point is `Wait`: it runs the OTHER context nested (the same nested
+entry `emu68k_run_call_hook` already uses) until the signal it wants arrives or
+that context blocks back. Bounded by the number of contexts, no scheduler state
+machine. The one case to refuse by name is a context that would have to re-enter
+one already on the stack: that is a genuine deadlock and must be reported, not
+recursed into.
+
+What is still needed:
+
+- a context struct - its own engine instance, 68k state, guest stack and guest
+  `Task` - created by `CreateNewProc` from `NP_Entry`/`NP_StackSize`/`NP_Name`;
+- `FindTask(NULL)` answering the CURRENT context rather than the one fixed
+  guest Process;
+- `Wait` switching as above.
+
 
 `dos.CreateNewProc` is the current stop, and it is a subsystem rather than a
 capability gap. PhotoDemo's helper library asks for `NP_Entry` (68k code),
