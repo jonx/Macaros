@@ -3466,6 +3466,212 @@
         }
       },
       "origin": "import"
+    },
+    "intuition.library.ActivateGadget": {
+      "objects": {
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.AddGList": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.EndRequest": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ModifyProp": {
+      "objects": {
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.NewModifyProp": {
+      "objects": {
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.OffGadget": {
+      "objects": {
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.OnGadget": {
+      "objects": {
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.QueryOverscan": {
+      "structs": {
+        "rect": {
+          "type": "Rectangle",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.RefreshGList": {
+      "objects": {
+        "gadgets": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.RefreshGadgets": {
+      "objects": {
+        "gadgets": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.Request": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.SetDMRequest": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "dmrequest": {
+          "type": "Requester",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
     }
   }
 }

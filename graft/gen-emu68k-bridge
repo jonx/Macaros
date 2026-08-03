@@ -2665,6 +2665,24 @@ def function_object_contracts(evidence, candidates):
 STRUCT_PTR_RE = re.compile(r"^(?:const\s+)?struct\s+(\w+)\s*\*$")
 
 
+MARSHALLED_STRUCT_RE = re.compile(r"^static const struct EmuField emu_fields_(\w+)\[\]",
+                                  re.M)
+
+
+def marshallable_structs():
+    """Types the layout generator produced a conversion table for.
+
+    A structure with a table can cross by value with no hand-written C: the
+    generic walker converts it field by field. Which types have one is not a
+    judgement call, it is whatever `make struct-layouts` emitted."""
+    path = os.path.join(AROS, "arch/all-darwin/libs/emu68k/emu68k_layouts.h")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return set(MARSHALLED_STRUCT_RE.findall(fh.read()))
+    except OSError:
+        return set()
+
+
 def described_object_types():
     """struct name -> policy object type, for every type the bridge can already
     carry. This is the vocabulary the importer is allowed to apply on its own."""
@@ -2764,18 +2782,32 @@ def infer_object_crossing(f, evidence, detachers=None):
 
     if classify(f.ret) not in ("scalar", "widen", "void"):
         return None
-    objects = {}
+    marshallable = marshallable_structs()
+    objects, structs = {}, {}
     for atype, aname in f.args:
         c = classify(atype)
         if c in ("scalar", "widen", "string"):
             continue
         m = STRUCT_PTR_RE.match(norm(atype))
-        if not m or m.group(1) not in known:
-            return None                  # a type nobody has described yet
+        if not m:
+            return None
         if kept_past_the_call(aname):
             return None                  # the callee keeps it: a lifetime call
-        objects[aname] = {"type": known[m.group(1)], "nullable": True}
-    if not objects:
+        if m.group(1) in known:
+            objects[aname] = {"type": known[m.group(1)], "nullable": True}
+            continue
+        if m.group(1) not in marshallable:
+            return None                  # a type nobody has described yet
+        # A structure the program owns and the library only borrows. Copying it
+        # in and back out is what the 68k side already sees on real hardware,
+        # where the library reads and writes the program's own memory; the
+        # narrower directions are optimisations, and `const` is the one the
+        # source states outright.
+        structs[aname] = {
+            "type": m.group(1),
+            "direction": "in" if norm(atype).startswith("const ") else "inout"
+        }
+    if not objects and not structs:
         return None                      # nothing to infer; tier 1 covers it
     for argument, propagated in evidence.get("propagated_arguments", {}).items():
         # Only a POINTER can be kept. RectFill's helper stores its four WORD
@@ -2783,11 +2815,16 @@ def infer_object_crossing(f, evidence, detachers=None):
         # as storing a pointer, and a number copied into a struct has no
         # identity and nothing to outlive. Treating the two alike refused every
         # drawing call in the library.
-        if argument not in objects:
+        if argument not in objects and argument not in structs:
             continue
         if any(fact["kind"] == "stored_in_fields" for fact in propagated):
             return None                  # a helper keeps it: same decision
-    return {"objects": objects}
+    crossing = {}
+    if objects:
+        crossing["objects"] = objects
+    if structs:
+        crossing["structs"] = structs
+    return crossing
 
 
 def build_import_manifest(report):
