@@ -2699,11 +2699,15 @@ def validate_policy(targets):
                 if not isinstance(count, int) or count < 1 or count > 1024:
                     errors.append("object type %s nested field %s needs max_count 1..1024"
                                   % (name, field))
-            elif kind in ("object", "embedded_object"):
+            elif kind in ("object", "embedded_object", "embedded_facade"):
                 nested_type = nested.get("type")
                 if nested_type not in object_types:
                     errors.append("object type %s nested field %s uses missing object %s"
                                   % (name, field, nested_type))
+                elif (kind == "embedded_facade" and
+                      object_types[nested_type].get("kind") != "facade"):
+                    errors.append("object type %s nested field %s needs a facade object"
+                                  % (name, field))
             else:
                 errors.append("object type %s nested field %s has invalid kind %r"
                               % (name, field, kind))
@@ -3063,6 +3067,13 @@ def validate_policy(targets):
                               % (key, arg))
             if op.get("consume", False) not in (True, False):
                 errors.append("function policy %s object %s consume must be boolean"
+                              % (key, arg))
+            if op.get("sync", False) not in (True, False):
+                errors.append("function policy %s object %s sync must be boolean"
+                              % (key, arg))
+            elif (op.get("sync", False) and ospec and
+                  ospec.get("kind") != "facade"):
+                errors.append("function policy %s object %s sync needs a facade"
                               % (key, arg))
             if op.get("release", False) and op.get("consume", False):
                 errors.append("function policy %s object %s cannot release and consume"
@@ -3565,7 +3576,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                 % (src, stype, nested["field"]),
                                 "    EMU_OBJ_%s);" % c_ident(nested["type"]),
                             ], "always"))
-                        elif nested["kind"] == "embedded_object":
+                        elif nested["kind"] in ("embedded_object", "embedded_facade"):
                             post.append(([
                                 "emu68k_object_release(guest0,",
                                 "    %s + M68K_%s_%s," % (src, stype, nested["field"]),
@@ -3577,6 +3588,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 if op.get("consume", False):
                     post.append((["emu68k_object_consume(guest0, %s, EMU_OBJ_%s);"
                                   % (src, c_ident(oname))], "always"))
+                if op.get("sync", False):
+                    ospec = object_types[oname]
+                    stype = ospec["facade_struct"]
+                    post.append(([
+                        "emu68k_to_guest_sized(guest0, %s, emu_object_%d," % (src, ai),
+                        "    emu_fields_%s, EMU_NFIELDS(emu_fields_%s), M68K_%s_SIZEOF);"
+                        % (stype, stype, stype),
+                    ], "always"))
                 continue
             if aname in callbacks:
                 w("        struct Emu68kHookBridge emu_hook_%d;" % ai)
@@ -4108,10 +4127,18 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         w("            emu68k_scalar_to_guest(guest0,")
                         w("                r->d[0] + M68K_%s_%s, 4, emu_nested_token_%d);"
                           % (stype, field, ni))
-                    elif nested["kind"] == "embedded_object":
+                    elif nested["kind"] in ("embedded_object", "embedded_facade"):
                         nested_type = nested["type"]
+                        nested_spec = object_types[nested_type]
                         w("            ULONG emu_nested_token_%d =" % ni)
                         w("                r->d[0] + M68K_%s_%s;" % (stype, field))
+                        if nested["kind"] == "embedded_facade":
+                            nested_struct = nested_spec["facade_struct"]
+                            w("            emu68k_to_guest_sized(guest0, emu_nested_token_%d," % ni)
+                            w("                &emu_facade_native->%s," % native_field)
+                            w("                emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
+                              % (nested_struct, nested_struct))
+                            w("                M68K_%s_SIZEOF);" % nested_struct)
                         w("            if (emu68k_object_alias_to_guest(guest0,")
                         w("                    emu_nested_token_%d, &emu_facade_native->%s," %
                           (ni, native_field))

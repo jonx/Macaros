@@ -56,7 +56,7 @@
       "c_type": "struct Screen *",
       "kind": "facade",
       "facade_struct": "Screen",
-      "facade_size": 84,
+      "facade_size": 184,
       "nested_fields": [
         {
           "field": "ViewPort_Next",
@@ -69,6 +69,12 @@
           "native_field": "ViewPort.ColorMap",
           "kind": "object",
           "type": "ColorMap"
+        },
+        {
+          "field": "RastPort_Layer",
+          "native_field": "RastPort",
+          "kind": "embedded_facade",
+          "type": "RastPort"
         }
       ],
       "destructor": "intuition.library.CloseScreen"
@@ -128,6 +134,12 @@
       "c_type": "struct Menu *",
       "kind": "opaque",
       "destructor": "gadtools.library.FreeMenus"
+    },
+    "RastPort": {
+      "id": 18,
+      "c_type": "struct RastPort *",
+      "kind": "facade",
+      "facade_struct": "RastPort"
     }
   },
   "tag_domains": {
@@ -290,6 +302,15 @@
         {"name": "GTMN_Checkmark", "kind": "refuse"},
         {"name": "GTMN_AmigaKey", "kind": "refuse"},
         {"name": "GTMN_FrontPen", "kind": "u32"}
+      ]
+    },
+    "gadtools.draw_bevel": {
+      "headers": ["libraries/gadtools.h"],
+      "max_items": 8,
+      "tags": [
+        {"name": "GT_VisualInfo", "kind": "object", "type": "VisualInfo", "nullable": false},
+        {"name": "GTBB_Recessed", "kind": "u32"},
+        {"name": "GTBB_FrameType", "kind": "u32"}
       ]
     },
     "intuition.new_object": {
@@ -638,6 +659,12 @@
       "evidence": [
         {"source": "workbench/libs/gadtools/gt_refreshwindow.c", "line_start": 51, "line_end": 59}
       ]
+    },
+    "gadtools.library.DrawBevelBoxA": {
+      "objects": {
+        "rport": {"type": "RastPort", "nullable": false, "sync": true}
+      },
+      "taglists": {"taglist": "gadtools.draw_bevel"}
     },
     "gadtools.library.FreeVisualInfo": {
       "objects": {

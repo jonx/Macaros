@@ -130,6 +130,21 @@ and every other exact `struct Gadget *` crossing. A destructor that walks
 `NextGadget`, `NextMenu`, or a similar linked field cannot be treated as releasing
 one token; promotion remains blocked until family-token invalidation is generated.
 
+Native objects can expose embedded OS objects without leaking a host pointer.
+An `embedded_facade` nested field reserves the compiler-probed classic subrecord
+inside the parent facade, copies the nested object's scalar fields there, and
+registers that exact guest address as a typed alias of the native embedded
+object. Releasing or consuming the parent also invalidates the alias. For
+functions whose native call can mutate a facade, an object argument may request
+`sync`; generated post-call code then copies the approved scalar fields back to
+the same guest facade. Pointer-shaped fields remain governed by explicit nested
+contracts and are never copied by the scalar layout table.
+
+The GadTools import exercises both mechanisms through `Screen.RastPort` and
+`DrawBevelBoxA`. The screen owns the RastPort identity and storage; GadTools sees
+the real native RastPort, while the 68k caller sees the classic 100-byte facade
+at offset 84 of its Screen facade.
+
 ### Terminated record arrays
 
 The importer also recognizes a public structure pointer that a reachable helper
@@ -305,6 +320,9 @@ NULL argument and must terminate with the policy's exact
 `gennoop.s` does the converse for a source-proven no-op: it supplies deliberately
 invalid Window and Requester addresses and must return successfully without
 reading them or calling the native implementation.
+The positive record/menu program also draws a bevel through the classic
+`Screen.RastPort` embedded facade. `gendrawbad.s` proves an arbitrary address
+cannot masquerade as that typed facade and reach native drawing.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:
