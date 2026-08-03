@@ -56,7 +56,7 @@ TYPES = [
     "Window", "Screen", "RastPort", "Preferences", "BitMap",
     "TextAttr", "TextFont",
     "DimensionInfo", "DrawInfo",
-    "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester",
+    "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage",
     "Gadget", "ExtGadget",
 ]
 

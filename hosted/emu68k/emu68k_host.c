@@ -2017,6 +2017,14 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
+        /* A window's UserPort is a facade over a NATIVE port, and the messages
+         * on it are Intuition's. Ask the AROS side first: it is the only side
+         * that can take one and rebuild it where the guest can read it. A port
+         * the guest owns is not one it knows, and falls through to the list
+         * walk below. */
+        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                 g_oscall_user, e, el) == 0)
+            return 0;
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
         uint32_t succ = head ? gread32(sb, head) : 0;
@@ -2028,6 +2036,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_REPLYMSG: {
         uint32_t msg = st->a[1];
+        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                 g_oscall_user, e, el) == 0)
+            return 0;                     /* it was one of Intuition's       */
         uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
         if (!reply) return 0;               /* a message with nowhere to go back */
         st->a[0] = reply;
