@@ -256,9 +256,11 @@ make hosted-emu68k-t3lha
 
 `hosted-emu68k-t3gen` now includes two record-array programs. `genrecord.s`
 passes a real classic `NewMenu[]` through native `CreateMenusA`, receives a typed
-Menu token, and frees it. `genrecordbad.s` passes an image-valued record and must
-terminate with the named `CreateMenusA.newmenu[0].nm_Type` capability gap before
-native GadTools sees it.
+Menu token, lays it out through `LayoutMenusA`, and frees the Menu and VisualInfo
+lifecycle. `genrecordbad.s` passes an image-valued record and must terminate with
+the named `CreateMenusA.newmenu[0].nm_Type` capability gap before native GadTools
+sees it. `genlayoutbad.s` independently proves that an Image-valued layout tag is
+refused by `gadtools.layout_menus` before native `LayoutMenusA` runs.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:
@@ -291,14 +293,17 @@ sits beside the import packet and records auditable per-review-ID decisions.
 ### Current GadTools checkpoint
 
 At this checkpoint all 19 public GadTools vectors parse and their reachable C
-helpers analyze successfully. Four crossings are active in generated code:
-`GetVisualInfoA`, `FreeVisualInfo`, `CreateMenusA`, and `FreeMenus`. The text-menu
-create/free lifecycle and the image-menu refusal pass in booted AROS. Unchanged
-PhotoDemo now passes `GetVisualInfoA` and `CreateMenusA`, then stops at the next
-named boundary, `LayoutMenusA` (GadTools LVO 11, offset -66). The import still
-reports 34 review items, so GadTools as a whole is not yet certified; gadget
-creation, retained data, object-family invalidation, and remaining tag payloads
-must be resolved through the same pipeline.
+helpers analyze successfully. Five crossings are active in generated code:
+`GetVisualInfoA`, `FreeVisualInfo`, `CreateMenusA`, `FreeMenus`, and
+`LayoutMenusA`. The text-menu create/layout/free lifecycle and both image-pointer
+refusals pass in booted AROS. The last unchanged PhotoDemo trace passed
+`GetVisualInfoA` and `CreateMenusA` and stopped at `LayoutMenusA`; that exact
+boundary is now covered, but the next legacy run is deliberately held until the
+remaining manifest is reviewed as a library-wide batch rather than using the app
+as a vector-discovery loop. The import still reports 33 review items, so GadTools
+as a whole is not yet certified; gadget creation, retained data, object-family
+invalidation, and remaining tag payloads must be resolved through the same
+pipeline.
 
 ## What cannot be completely automatic
 

@@ -7,15 +7,20 @@
 EXEC_OpenLibrary  equ -552
 EXEC_CloseLibrary equ -414
 DOS_PutStr         equ -948
+INT_CloseScreen     equ -66
+INT_OpenScreenTags  equ -612
 GT_CreateMenusA    equ -48
 GT_FreeMenus       equ -54
+GT_LayoutMenusA    equ -66
+GT_GetVisualInfoA  equ -126
+GT_FreeVisualInfo  equ -132
 
     move.l  4.w,a6
     lea     dosname(pc),a1
     moveq   #0,d0
     jsr     EXEC_OpenLibrary(a6)
     tst.l   d0
-    beq.s   done
+    beq.w   done
     move.l  d0,a5
 
     move.l  4.w,a6
@@ -23,8 +28,32 @@ GT_FreeMenus       equ -54
     moveq   #0,d0
     jsr     EXEC_OpenLibrary(a6)
     tst.l   d0
-    beq.s   failed
+    beq.w   failed
     move.l  d0,a4
+
+    move.l  4.w,a6
+    lea     intuitionname(pc),a1
+    moveq   #0,d0
+    jsr     EXEC_OpenLibrary(a6)
+    tst.l   d0
+    beq.s   failed
+    move.l  d0,a3
+
+    move.l  a3,a6
+    suba.l  a0,a0
+    suba.l  a1,a1
+    jsr     INT_OpenScreenTags(a6)
+    tst.l   d0
+    beq.s   failed
+    move.l  d0,d6
+
+    move.l  a4,a6
+    move.l  d6,a0
+    suba.l  a1,a1
+    jsr     GT_GetVisualInfoA(a6)
+    tst.l   d0
+    beq.s   failed
+    move.l  d0,d7
 
     move.l  a4,a6
     lea     newmenus(pc),a0
@@ -32,9 +61,27 @@ GT_FreeMenus       equ -54
     jsr     GT_CreateMenusA(a6)
     tst.l   d0
     beq.s   failed
+    move.l  d0,d5
 
-    move.l  d0,a0
+    move.l  d5,a0
+    move.l  d7,a1
+    suba.l  a2,a2
+    jsr     GT_LayoutMenusA(a6)
+    tst.l   d0
+    beq.s   failed
+
+    move.l  d5,a0
     jsr     GT_FreeMenus(a6)
+    move.l  d7,a0
+    jsr     GT_FreeVisualInfo(a6)
+
+    move.l  a3,a6
+    move.l  d6,a0
+    jsr     INT_CloseScreen(a6)
+
+    move.l  a3,a1
+    move.l  4.w,a6
+    jsr     EXEC_CloseLibrary(a6)
 
     move.l  a4,a1
     move.l  4.w,a6
@@ -54,6 +101,7 @@ done:
 
 dosname:      dc.b "dos.library",0
 gadtoolsname: dc.b "gadtools.library",0
+intuitionname: dc.b "intuition.library",0
 title:        dc.b "Bridge",0
 item:         dc.b "Imported menu",0
 key:          dc.b "I",0

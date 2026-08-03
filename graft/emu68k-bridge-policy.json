@@ -281,6 +281,17 @@
         {"name": "GTMN_SecondaryError", "kind": "refuse"}
       ]
     },
+    "gadtools.layout_menus": {
+      "headers": ["libraries/gadtools.h", "graphics/text.h"],
+      "max_items": 16,
+      "tags": [
+        {"name": "GTMN_TextAttr", "kind": "struct", "type": "TextAttr"},
+        {"name": "GTMN_NewLookMenus", "kind": "u32"},
+        {"name": "GTMN_Checkmark", "kind": "refuse"},
+        {"name": "GTMN_AmigaKey", "kind": "refuse"},
+        {"name": "GTMN_FrontPen", "kind": "u32"}
+      ]
+    },
     "intuition.new_object": {
       "headers": [
         "intuition/classes.h",
@@ -588,6 +599,13 @@
       "objects": {
         "menu": {"type": "Menu", "nullable": true, "consume": true}
       }
+    },
+    "gadtools.library.LayoutMenusA": {
+      "objects": {
+        "menu": {"type": "Menu", "nullable": true},
+        "vi": {"type": "VisualInfo", "nullable": false}
+      },
+      "taglists": {"tagList": "gadtools.layout_menus"}
     },
     "gadtools.library.FreeVisualInfo": {
       "objects": {
