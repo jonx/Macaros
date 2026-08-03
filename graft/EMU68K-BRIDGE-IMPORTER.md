@@ -186,6 +186,18 @@ review decision but does not claim functional compatibility; it can later be
 replaced by a generated crossing once the missing generic representation is
 implemented and tested.
 
+### Source-proven no-op vectors
+
+A void vector whose target implementation deliberately performs no runtime work
+can use an active `noop` contract with exact source evidence. The generated case
+does not translate, validate, or dereference any argument and does not call the
+native function; it simply returns success. This is important for pointer-typed
+legacy signatures such as compatibility stubs: requiring object machinery for
+values the source explicitly ignores would create a false gap. Policy validation
+forbids combining `noop` with any crossing rule or applying it to a non-void
+result, and the generated test contract requires invalid pointer-shaped inputs
+to return without being read.
+
 ## Confidence and fail-closed rules
 
 The analyzer produces evidence; it does not silently make uncertain evidence a
@@ -290,6 +302,9 @@ refused by `gadtools.layout_menus` before native `LayoutMenusA` runs.
 `genrefused.s` calls a reviewed whole-function refusal with an otherwise unsafe
 NULL argument and must terminate with the policy's exact
 `gadtools.library.GT_GetIMsg refused` diagnostic before native GadTools runs.
+`gennoop.s` does the converse for a source-proven no-op: it supplies deliberately
+invalid Window and Requester addresses and must return successfully without
+reading them or calling the native implementation.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:

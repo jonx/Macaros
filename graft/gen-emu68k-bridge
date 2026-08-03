@@ -2460,6 +2460,10 @@ def generated_test_plan(manifest):
                  "expected": "named-fail-closed"})
             continue
         policy = function.get("existing_policy") or {}
+        if policy.get("noop"):
+            add("source-noop", function["name"], "ready",
+                {"expected": "return-without-reading-arguments-or-calling-native",
+                 "evidence": policy["evidence"]})
         for argument, obj in sorted(policy.get("objects", {}).items()):
             add("invalid-object-token", function["name"], "ready",
                 {"argument": argument, "object_type": obj["type"],
@@ -2806,6 +2810,29 @@ def validate_policy(targets):
             continue
         if f.private:
             errors.append("function policy %s names a private vector" % key)
+        if p.get("noop") is not None:
+            if p.get("noop") is not True:
+                errors.append("function policy %s noop must be true" % key)
+            if classify(f.ret) != "void":
+                errors.append("function policy %s noop requires a void result" % key)
+            if set(p) - {"noop", "evidence"}:
+                errors.append("function policy %s noop cannot combine with crossings" % key)
+            evidence = p.get("evidence")
+            if not isinstance(evidence, list) or not evidence:
+                errors.append("function policy %s noop needs source evidence" % key)
+            else:
+                for item in evidence:
+                    source = item.get("source") if isinstance(item, dict) else None
+                    first = item.get("line_start") if isinstance(item, dict) else None
+                    last = item.get("line_end", first) if isinstance(item, dict) else None
+                    if (not isinstance(source, str) or not re.fullmatch(
+                            r"[A-Za-z0-9_./-]+", source) or source.startswith("/") or
+                            ".." in source.split("/")):
+                        errors.append("function policy %s noop has invalid evidence source" % key)
+                    if (not isinstance(first, int) or not isinstance(last, int) or
+                            first < 1 or last < first):
+                        errors.append("function policy %s noop has invalid evidence lines" % key)
+            continue
         taglists = p.get("taglists", {})
         structs = p.get("structs", {})
         tagged_structs = p.get("tagged_structs", {})
@@ -3403,6 +3430,11 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         sig = ", ".join("%s %s" % (norm(t), nm) for t, nm in f.args) or "void"
         w("    case %d:  /* %s(%s) -> %s  [%d] */" % (f.lvo, f.name, sig,
                                                       norm(f.ret), f.offset))
+        if policy and policy.get("noop"):
+            w("        r->d[0] = 0;   /* source-proven no-op; arguments are untouched */")
+            w("        return 0;")
+            n += 1
+            continue
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
         tagged_structs = policy.get("tagged_structs", {}) if policy else {}

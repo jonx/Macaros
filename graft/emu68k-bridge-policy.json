@@ -633,6 +633,12 @@
       },
       "taglists": {"tagList": "gadtools.layout_menus"}
     },
+    "gadtools.library.GT_RefreshWindow": {
+      "noop": true,
+      "evidence": [
+        {"source": "workbench/libs/gadtools/gt_refreshwindow.c", "line_start": 51, "line_end": 59}
+      ]
+    },
     "gadtools.library.FreeVisualInfo": {
       "objects": {
         "vi": {"type": "VisualInfo", "nullable": true, "consume": true}
