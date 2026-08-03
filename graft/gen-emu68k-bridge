@@ -31,8 +31,12 @@ import os
 import re
 import sys
 import json
+import subprocess
 
 AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
+AROS_BUILD = os.environ.get("AROS_BUILD", os.path.expanduser("~/aros-build"))
+AROS_CC = os.environ.get(
+    "AROS_CC", os.path.expanduser("~/aros-crosstools/bin/clang"))
 POLICY_PATH = os.environ.get(
     "EMU68K_BRIDGE_POLICY",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -484,6 +488,546 @@ def parse_conf(path):
         funcs.append(f)
         last = f
     return funcs
+
+
+# ---------------------------------------------------------------------------
+# implementation-source evidence
+# ---------------------------------------------------------------------------
+
+# The .conf prototype is the ABI authority, but intentionally says nothing
+# about the meaning of an APTR or TagItem payload.  The implementation often
+# does: GetTagData/FindTagItem name accepted tags, casts name pointer payloads,
+# field accesses show which structures are read, and Alloc/Free pairs expose
+# ownership.  Keep this pass evidence-producing rather than silently rewriting
+# policy: only facts with an explicit source location should ever graduate into
+# the fail-closed bridge policy.
+
+SOURCE_FUNC_RE = (r"\bAROS_LH\d+[A-Z]*\s*\(\s*[^,]+,\s*%s\s*,")
+TAG_CALL_RE = re.compile(r"\b(GetTagData|FindTagItem)\s*\(")
+TAG_MACRO_RE = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
+ALLOC_CALL_RE = re.compile(r"\b(Alloc(?:Mem|Vec|Pooled|DosObject|AslRequest)|"
+                           r"Create(?:Pool|MsgPort|IORequest)|NewObjectA?)\s*\(")
+FREE_CALL_RE = re.compile(r"\b(Free(?:Mem|Vec|Pooled|DosObject|AslRequest)|"
+                          r"Delete(?:Pool|MsgPort|IORequest)|DisposeObject|"
+                          r"Close[A-Za-z0-9_]*)\s*\(")
+CALLBACK_SOURCE_RE = re.compile(
+    r"\b(CallHookPkt|CALLHOOKPKT|AROS_UFC\d*|HookEntry|h_Entry|cl_Dispatcher)\b")
+
+
+def mask_c_comments(src):
+    """Replace comments with spaces while preserving byte offsets/newlines.
+
+    Evidence line numbers then still refer to the original source, and regexes
+    cannot mistake an autodoc example or commented-out implementation for code.
+    String and character literals are retained because a string default is
+    useful evidence that a tag payload is a C string.
+    """
+    out = list(src)
+    i, state = 0, "code"
+    while i < len(src):
+        ch = src[i]
+        nxt = src[i + 1] if i + 1 < len(src) else ""
+        if state == "code":
+            if ch == "/" and nxt == "*":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "block"
+                continue
+            if ch == "/" and nxt == "/":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "line"
+                continue
+            if ch == '"':
+                state = "string"
+            elif ch == "'":
+                state = "char"
+        elif state == "block":
+            if ch == "*" and nxt == "/":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "code"
+                continue
+            if ch != "\n":
+                out[i] = " "
+        elif state == "line":
+            if ch == "\n":
+                state = "code"
+            else:
+                out[i] = " "
+        elif state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                state = "code"
+        i += 1
+    return "".join(out)
+
+
+def call_arguments(src, opening):
+    """Return the top-level arguments and closing offset for a C call."""
+    if opening >= len(src) or src[opening] != "(":
+        return ([], opening)
+    args, start, depth = [], opening + 1, 1
+    i, state = opening + 1, "code"
+    while i < len(src):
+        ch = src[i]
+        if state == "code":
+            if ch == '"':
+                state = "string"
+            elif ch == "'":
+                state = "char"
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    args.append(src[start:i].strip())
+                    return (args, i + 1)
+            elif ch == "," and depth == 1:
+                args.append(src[start:i].strip())
+                start = i + 1
+        elif state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                state = "code"
+        i += 1
+    return ([], opening)
+
+
+def source_cast_before(src, offset):
+    """The result cast immediately preceding a GetTagData call, if any."""
+    prefix = src[max(0, offset - 96):offset]
+    m = re.search(r"\(\s*((?:const\s+)?(?:struct\s+)?[A-Za-z_]\w*"
+                  r"(?:\s+[A-Za-z_]\w*)?\s*\*?)\s*\)\s*$", prefix)
+    return norm(m.group(1)) if m else None
+
+
+def infer_source_tag_kind(access, cast, default):
+    """Classify only what the implementation spells out; retain ambiguity."""
+    if access == "FindTagItem":
+        return ("unknown", "medium")
+    c = object_canon(cast) if cast else ""
+    if c:
+        if c in ("STRPTR", "CONST_STRPTR", "char *", "const char *", "TEXT *"):
+            return ("cstr", "high")
+        if "*" in c or c in ("APTR",):
+            return ("pointer:" + c, "high")
+    if re.search(r'(^|\W)"(?:[^"\\]|\\.)*"', default or ""):
+        return ("cstr", "high")
+    if re.search(r"\bNULL\b", default or ""):
+        return ("pointer:unknown", "medium")
+    return ("u32", "high")
+
+
+def source_function_chunk(src, name):
+    """Find an AROS public function and the source through its closing marker."""
+    m = re.search(SOURCE_FUNC_RE % re.escape(name), src, re.S)
+    if not m:
+        return None
+    end = re.search(r"\}\s*/\*\s*%s\s*\*/" % re.escape(name), src[m.end():])
+    if end:
+        stop = m.end() + end.end()
+    else:
+        # Most AROS functions carry the marker.  Falling back to the next
+        # public macro is conservative: it cannot blend two functions.
+        nxt = re.search(r"\bAROS_LH\d+[A-Z]*\s*\(", src[m.end():])
+        stop = m.end() + (nxt.start() if nxt else len(src) - m.end())
+    return (m.start(), src[m.start():stop])
+
+
+def source_files_for_target(rel):
+    root = os.path.dirname(os.path.join(AROS, rel))
+    files = []
+    for walk_root, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in (".git", "bin", "obj")]
+        for name in names:
+            if name.endswith((".c", ".h")):
+                files.append(os.path.join(walk_root, name))
+    return root, sorted(files)
+
+
+def analyze_function_source(lib, rel, f, sources):
+    found = None
+    for path, src in sources:
+        chunk = source_function_chunk(src, f.name)
+        if chunk:
+            found = (path, src, chunk[0], chunk[1])
+            break
+    if not found:
+        return {
+            "name": f.name, "lvo": f.lvo, "offset": f.offset,
+            "source": None, "policy": policy_key(lib, f) in POLICY.get("functions", {}),
+            "tags": [], "arguments": {}, "memory": {}, "callbacks": []
+        }
+
+    path, whole, start, raw = found
+    code = mask_c_comments(raw)
+    base_line = whole.count("\n", 0, start) + 1
+    tags = []
+    for m in TAG_CALL_RE.finditer(code):
+        opening = code.find("(", m.start())
+        args, _end = call_arguments(code, opening)
+        if not args:
+            continue
+        tag = args[0].strip()
+        if not TAG_MACRO_RE.fullmatch(tag):
+            continue
+        default = args[1].strip() if len(args) > 1 else ""
+        cast = source_cast_before(code, m.start())
+        kind, confidence = infer_source_tag_kind(m.group(1), cast, default)
+        tags.append({
+            "name": tag,
+            "access": m.group(1),
+            "kind": kind,
+            "confidence": confidence,
+            "line": base_line + code.count("\n", 0, m.start()),
+            "cast": cast,
+            "default": re.sub(r"\s+", " ", default)[:120]
+        })
+
+    # A NextTagItem loop generally dispatches on ti_Tag.  These cases are
+    # valid domain evidence but payload typing needs data-flow, so keep them
+    # distinct and low confidence rather than pretending every case is u32.
+    if "NextTagItem" in code:
+        for m in re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code):
+            tag = m.group(1)
+            if not (tag.startswith(("GA_", "GTM", "GTC", "GTS", "GTLV_", "GT_",
+                                    "PGA_", "STRINGA_", "MX_", "CYCLE_"))):
+                continue
+            tags.append({
+                "name": tag, "access": "NextTagItem/case", "kind": "unknown",
+                "confidence": "low",
+                "line": base_line + code.count("\n", 0, m.start()),
+                "cast": None, "default": ""
+            })
+
+    # Deduplicate repeated reads but preserve the strongest evidence and first
+    # source location.  A cast beats a NULL-derived pointer: high > medium > low.
+    strength = {"low": 0, "medium": 1, "high": 2}
+    tag_by_key = {}
+    for tag in tags:
+        key = (tag["name"], tag["access"])
+        old = tag_by_key.get(key)
+        if not old or strength[tag["confidence"]] > strength[old["confidence"]]:
+            tag_by_key[key] = tag
+    tags = sorted(tag_by_key.values(), key=lambda x: (x["name"], x["line"]))
+
+    arguments = {}
+    for atype, aname in f.args:
+        ev = {}
+        fields = sorted(set(re.findall(r"\b%s\s*->\s*([A-Za-z_]\w*)" %
+                                       re.escape(aname), code)))
+        if fields:
+            ev["dereferenced_fields"] = fields
+        casts = sorted(set(norm(x) for x in re.findall(
+            r"\(\s*((?:const\s+)?(?:struct\s+)?[A-Za-z_]\w*"
+            r"(?:\s+[A-Za-z_]\w*)?\s*\*)\s*\)\s*%s\b" % re.escape(aname), code)))
+        if casts:
+            ev["concrete_casts"] = casts
+        retained = sorted(set(re.findall(
+            r"(?:->|\.)\s*([A-Za-z_]\w*)\s*=\s*(?:\([^;=]+\)\s*)?%s\b" %
+            re.escape(aname), code)))
+        if retained:
+            ev["stored_in_fields"] = retained
+        if ev:
+            ev["declared_type"] = norm(atype)
+            arguments[aname] = ev
+
+    allocs = sorted(set(m.group(1) for m in ALLOC_CALL_RE.finditer(code)))
+    frees = sorted(set(m.group(1) for m in FREE_CALL_RE.finditer(code)))
+    callbacks = sorted(set(m.group(1) for m in CALLBACK_SOURCE_RE.finditer(code)))
+    return {
+        "name": f.name,
+        "lvo": f.lvo,
+        "offset": f.offset,
+        "signature": {
+            "result": norm(f.ret),
+            "arguments": [{"type": norm(t), "name": n, "register": r}
+                          for (t, n), r in zip(f.args, f.regs)]
+        },
+        "source": os.path.relpath(path, AROS),
+        "line": base_line,
+        "policy": policy_key(lib, f) in POLICY.get("functions", {}),
+        "tags": tags,
+        "arguments": arguments,
+        "memory": {"allocators": allocs, "releasers": frees},
+        "callbacks": callbacks,
+        "_raw": raw
+    }
+
+
+def ownership_candidates(functions, evidence):
+    """Pair pointer-producing allocators with source-correlated releasers."""
+    byname = {f.name: f for f in functions}
+    evname = {e["name"]: e for e in evidence}
+    out = []
+    release_prefixes = ("Free", "Close", "Dispose", "Delete")
+
+    def noun(name):
+        name = re.sub(r"A$", "", name)
+        return re.sub(r"^(?:Get|Create|Alloc|Open|New|Free|Close|Dispose|Delete)", "", name)
+
+    for producer in functions:
+        pe = evname.get(producer.name, {})
+        if not pe.get("memory", {}).get("allocators"):
+            continue
+        if classify(producer.ret) not in ("struct", "aptr", "string"):
+            continue
+        for consumer in functions:
+            if not consumer.name.startswith(release_prefixes) or len(consumer.args) != 1:
+                continue
+            same_type = object_canon(producer.ret) == object_canon(consumer.args[0][0])
+            same_noun = noun(producer.name) == noun(consumer.name)
+            ce = evname.get(consumer.name, {})
+            cross_ref = (consumer.name in pe.get("_raw", "") or
+                         producer.name in ce.get("_raw", ""))
+            if not same_type and not same_noun and not cross_ref:
+                continue
+            confidence = "high" if cross_ref and (same_type or same_noun) else "medium"
+            out.append({
+                "producer": producer.name,
+                "consumer": consumer.name,
+                "type": norm(producer.ret),
+                "confidence": confidence,
+                "evidence": sorted(set(
+                    (["matching-type"] if same_type else []) +
+                    (["matching-api-noun"] if same_noun else []) +
+                    (["source-cross-reference"] if cross_ref else [])))
+            })
+    return sorted(out, key=lambda x: (x["producer"], x["consumer"]))
+
+
+def conf_basename(path):
+    """The basename is the prefix genmodule puts on expanded AROS_LH symbols."""
+    try:
+        src = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    m = re.search(r"^basename\s+([A-Za-z_]\w*)\s*$", src, re.M)
+    return m.group(1) if m else None
+
+
+def ast_compile_config(rel, short):
+    """Reproduce the target compiler inputs used by a generated library.
+
+    AROS' cross clang already carries the aarch64-unknown-aros triple.  Its
+    configured sysroot can outlive a scratch build, so always point it at the
+    current build explicitly.  genmodule's per-library forced include is what
+    gives AROS_LH macros their concrete base/symbol definitions.
+    """
+    source_root = os.path.dirname(os.path.join(AROS, rel))
+    mirror = os.path.join(AROS_BUILD, os.path.dirname(rel))
+    objdir = os.path.join(AROS_BUILD, "bin", "darwin-aarch64", "gen",
+                          os.path.dirname(rel), short)
+    sysroot = os.path.join(AROS_BUILD, "bin", "darwin-aarch64", "AROS",
+                           "Developer")
+    forced = os.path.join(objdir, "include", "%s_deflibdefs.h" % short)
+    args = [
+        AROS_CC,
+        "--sysroot", sysroot,
+        "-iquote", source_root,
+        "-iquote", mirror,
+        "-I", os.path.join(objdir, "include"),
+    ]
+    if os.path.exists(forced):
+        args += ["-include", forced]
+    args += [
+        "-DAROS_BUILD_TYPE=AROS_BUILD_TYPE_PERSONAL",
+        "-DUSE_EXEC_DEBUG", "-D__NOLIBBASE__", "-D__arm64__",
+        "-Wno-everything", "-fsyntax-only"
+    ]
+    return {
+        "compiler": AROS_CC,
+        "sysroot": sysroot,
+        "source_root": source_root,
+        "object_dir": objdir,
+        "forced_include": forced if os.path.exists(forced) else None,
+        "arguments": args
+    }
+
+
+def ast_nodes(node):
+    if not isinstance(node, dict):
+        return
+    yield node
+    for child in node.get("inner", []):
+        yield from ast_nodes(child)
+
+
+def ast_referenced_parameters(node):
+    out = set()
+    for child in ast_nodes(node):
+        if child.get("kind") != "DeclRefExpr":
+            continue
+        ref = child.get("referencedDecl", {})
+        if ref.get("kind") == "ParmVarDecl" and ref.get("name"):
+            out.add(ref["name"])
+    return out
+
+
+def ast_callee(call):
+    """Return the direct function declaration used as a CallExpr callee."""
+    inner = call.get("inner", [])
+    if not inner:
+        return None
+    for node in ast_nodes(inner[0]):
+        if node.get("kind") != "DeclRefExpr":
+            continue
+        ref = node.get("referencedDecl", {})
+        if ref.get("kind") == "FunctionDecl":
+            return ref.get("name")
+    return None
+
+
+def ast_line(node):
+    """Best-effort spelling/expansion line from Clang JSON locations."""
+    locs = [node.get("loc", {}), node.get("range", {}).get("begin", {})]
+    for loc in locs:
+        for key in (None, "expansionLoc", "spellingLoc"):
+            part = loc if key is None else loc.get(key, {})
+            if part.get("line"):
+                return part["line"]
+    return None
+
+
+def summarize_ast(ast, symbol):
+    calls, param_fields, param_casts, retained, indirect = [], {}, {}, {}, []
+    for node in ast_nodes(ast):
+        kind = node.get("kind")
+        if kind == "CallExpr":
+            callee = ast_callee(node)
+            if callee:
+                calls.append({"name": callee, "line": ast_line(node)})
+            else:
+                inner = node.get("inner", [])
+                indirect.append({
+                    "line": ast_line(node),
+                    "callee_kind": inner[0].get("kind") if inner else None,
+                    "type": inner[0].get("type", {}).get("qualType") if inner else None
+                })
+        elif kind == "MemberExpr" and node.get("name"):
+            for param in ast_referenced_parameters(node):
+                param_fields.setdefault(param, set()).add(node["name"])
+        elif kind in ("CStyleCastExpr", "ImplicitCastExpr"):
+            cast_type = node.get("type", {}).get("qualType")
+            if cast_type:
+                for param in ast_referenced_parameters(node):
+                    param_casts.setdefault(param, set()).add(cast_type)
+        elif kind in ("BinaryOperator", "CompoundAssignOperator") and node.get("opcode") == "=":
+            children = node.get("inner", [])
+            if len(children) >= 2:
+                lhs_fields = [x.get("name") for x in ast_nodes(children[0])
+                              if x.get("kind") == "MemberExpr" and x.get("name")]
+                for param in ast_referenced_parameters(children[1]):
+                    retained.setdefault(param, set()).update(lhs_fields)
+    # Calls appear inside other calls' argument trees; each CallExpr itself is
+    # still visited once, so de-duplicate identical source locations only.
+    unique_calls = []
+    seen = set()
+    for call in calls:
+        key = (call["name"], call["line"])
+        if key not in seen:
+            unique_calls.append(call)
+            seen.add(key)
+    return {
+        "symbol": symbol,
+        "direct_calls": unique_calls,
+        "parameter_fields": {k: sorted(v) for k, v in sorted(param_fields.items())},
+        "parameter_casts": {k: sorted(v) for k, v in sorted(param_casts.items())},
+        "retained_parameters": {k: sorted(v) for k, v in sorted(retained.items())},
+        "indirect_calls": indirect
+    }
+
+
+def compile_function_ast(config, basename, f, source):
+    symbol = "%s_%d_%s" % (basename, f.lvo, f.name)
+    if not os.path.isfile(config["compiler"]):
+        return {"status": "unavailable", "symbol": symbol,
+                "error": "AROS cross compiler not found"}
+    if not os.path.isdir(config["sysroot"]):
+        return {"status": "unavailable", "symbol": symbol,
+                "error": "AROS build sysroot not found"}
+    cmd = config["arguments"] + [
+        "-Xclang", "-ast-dump=json",
+        "-Xclang", "-ast-dump-filter=%s" % symbol,
+        source
+    ]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "error", "symbol": symbol, "error": str(exc)}
+    if proc.returncode != 0:
+        return {"status": "error", "symbol": symbol,
+                "error": proc.stderr.strip()[-2000:]}
+    try:
+        ast = json.loads(proc.stdout)
+    except ValueError as exc:
+        return {"status": "error", "symbol": symbol,
+                "error": "invalid clang AST JSON: %s" % exc}
+    summary = summarize_ast(ast, symbol)
+    summary["status"] = "ok"
+    return summary
+
+
+def analyze_sources(which):
+    """Emit JSON evidence mined from AROS library implementations."""
+    wanted = set(which)
+    reports = []
+    for lib, rel, _base, _btype, _hdr in gen_targets():
+        short = lib.split(".")[0]
+        if wanted and short not in wanted and lib not in wanted:
+            continue
+        funcs = [f for f in (parse_conf(os.path.join(AROS, rel)) or []) if not f.private]
+        basename = conf_basename(os.path.join(AROS, rel))
+        ast_config = ast_compile_config(rel, short)
+        root, paths = source_files_for_target(rel)
+        sources = []
+        for path in paths:
+            try:
+                sources.append((path, open(path, encoding="utf-8", errors="replace").read()))
+            except OSError:
+                pass
+        evidence = [analyze_function_source(lib, rel, f, sources) for f in funcs]
+        ast_ok = ast_errors = 0
+        for f, e in zip(funcs, evidence):
+            if not e.get("source") or not basename:
+                continue
+            source = os.path.join(AROS, e["source"])
+            e["ast"] = compile_function_ast(ast_config, basename, f, source)
+            if e["ast"].get("status") == "ok":
+                ast_ok += 1
+            else:
+                ast_errors += 1
+        pairs = ownership_candidates(funcs, evidence)
+        for e in evidence:
+            e.pop("_raw", None)
+        reports.append({
+            "library": lib,
+            "conf": rel,
+            "source_root": os.path.relpath(root, AROS),
+            "analysis_backend": {
+                "kind": "clang-ast+source-evidence",
+                "compiler": ast_config["compiler"],
+                "sysroot": ast_config["sysroot"],
+                "forced_include": ast_config["forced_include"],
+                "compiled_functions": ast_ok,
+                "failed_functions": ast_errors
+            },
+            "functions": evidence,
+            "ownership_candidates": pairs
+        })
+    if wanted and not reports:
+        print("no generated library matches: %s" % ", ".join(sorted(wanted)), file=sys.stderr)
+        return 1
+    print(json.dumps({"schema": 1, "libraries": reports}, indent=2, sort_keys=False))
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2064,6 +2608,14 @@ def main():
         for e in errors:
             print("  ! %s" % e)
         return 1
+    if "--analyze-source" in sys.argv:
+        i = sys.argv.index("--analyze-source")
+        which = []
+        for arg in sys.argv[i + 1:]:
+            if arg.startswith("-"):
+                break
+            which.extend(x for x in arg.split(",") if x)
+        return analyze_sources(which)
     if "--emit" in sys.argv:
         i = sys.argv.index("--emit")
         return emit(sys.argv[i + 1])
