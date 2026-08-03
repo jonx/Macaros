@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review 68k Bridge Import"
+  short_description: "Audit and certify generated 68k crossings"
+  default_prompt: "Use $review-emu68k-bridge-import to review this library import and promote only source-proven bridge contracts."
