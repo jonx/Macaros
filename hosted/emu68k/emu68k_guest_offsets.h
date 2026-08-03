@@ -311,4 +311,19 @@
 #define M68K_Process_pr_ShellPrivate 228
 #define M68K_Process_pr_CES 232
 
+/* struct IORequest: 32 bytes on m68k (IORequest) */
+#define M68K_IORequest_SIZEOF 32
+#define M68K_IORequest_io_Message_mn_Node_ln_Succ 0
+#define M68K_IORequest_io_Message_mn_Node_ln_Pred 4
+#define M68K_IORequest_io_Message_mn_Node_ln_Type 8
+#define M68K_IORequest_io_Message_mn_Node_ln_Pri 9
+#define M68K_IORequest_io_Message_mn_Node_ln_Name 10
+#define M68K_IORequest_io_Message_mn_ReplyPort 14
+#define M68K_IORequest_io_Message_mn_Length 18
+#define M68K_IORequest_io_Device 20
+#define M68K_IORequest_io_Unit 24
+#define M68K_IORequest_io_Command 28
+#define M68K_IORequest_io_Flags 30
+#define M68K_IORequest_io_Error 31
+
 #endif /* EMU68K_GUEST_OFFSETS_H */

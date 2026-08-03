@@ -1943,6 +1943,51 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         return 0;
     }
+    case LVO_OPENDEVICE: {
+        /* OpenDevice(name A0, unit D0, ioRequest A1, flags D1) -> 0 on success.
+         *
+         * A device the program opens only to REACH ITS VECTORS - console.device
+         * at unit -1 is the standard way to get at RawKeyConvert, and nothing
+         * is ever sent to it - needs a base in io_Device and nothing else. That
+         * is the same facade a bridged library gets, so it is handed out the
+         * same way and its vectors arrive here like any other.
+         *
+         * A device the program means to do I/O on is a different contract (a
+         * request queue, DoIO/SendIO/AbortIO) and is refused by name below
+         * rather than opened and then found not to work. */
+        const char *name = guest_cstr(sb, st->a[0]);
+        int32_t unit = (int32_t)st->d[0];
+        if (name && !strcmp(name, "console.device") && unit == -1) {
+            uint32_t base;
+            int i;
+            for (i = 0; i < r->nlib; i++)
+                if (!strcmp(r->openlib[i].name, name)) break;
+            if (i == r->nlib) {
+                if (r->nlib >= LIBBASE_MAX) {
+                    snprintf(e, el, "too many native library facades");
+                    return 1;
+                }
+                base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
+                snprintf(r->openlib[r->nlib].name,
+                         sizeof r->openlib[r->nlib].name, "%s", name);
+                r->openlib[r->nlib].base = base;
+                r->nlib++;
+                j5d_register_libbase(base);
+                memset(j4_sandbox_host(sb, base), 0, 64);
+            } else {
+                base = r->openlib[i].base;
+            }
+            if (st->a[1]) {
+                gwrite32(sb, st->a[1] + M68K_IORequest_io_Device, base);
+                gwrite32(sb, st->a[1] + M68K_IORequest_io_Unit, 0);
+            }
+            st->d[0] = 0;                                    /* success       */
+            return 0;
+        }
+        snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") is not "
+                 "available yet", name ? name : "?");
+        return 1;
+    }
     case LVO_WAITPORT: {
         /* WaitPort(port A0) -> the first message, LEFT ON the port.
          *
@@ -2311,6 +2356,20 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     ctx->on_stack = 1;
     r->cur_ctx = idx;
     j5d_engine_activate(ctx->eng);
+    /* The bases a program has opened are recorded IN the engine instance, and
+     * this context has its own. Without replaying them its engine does not know
+     * that a jsr through a library base is a bridge call, and tries to decode
+     * the base as code. Replayed on every entry, not just the first, because
+     * the parent keeps opening libraries after the child exists. */
+    {
+        int i;
+        j5d_register_libbase(EXEC_BASE);
+        for (i = 0; i < r->nlib; i++)
+            j5d_register_libbase(r->openlib[i].base);
+        for (i = 0; i < GUESTLIB_MAX; i++)
+            if (r->guestlib[i].state == GL_READY && r->guestlib[i].base)
+                j5d_register_guest_libbase(r->guestlib[i].base);
+    }
     j5d_set_poll(NULL, NULL, 0);
     if (setjmp(ctx->unwind) == 0) {
         ctx->can_unwind = 1;
