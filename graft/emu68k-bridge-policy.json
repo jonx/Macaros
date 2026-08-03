@@ -1405,6 +1405,73 @@
         },
         "otherwise": "refuse"
       }
+    },
+    "import.graphics.ObtainBestPenA.tags": {
+      "headers": [
+        "graphics/view.h"
+      ],
+      "max_items": 8,
+      "tags": [
+        {
+          "name": "OBP_FailIfBad",
+          "kind": "u32"
+        },
+        {
+          "name": "OBP_Precision",
+          "kind": "u32"
+        }
+      ],
+      "origin": "import"
+    },
+    "import.icon.GetIconRectangleA.tags": {
+      "headers": [
+        "workbench/icon.h"
+      ],
+      "max_items": 8,
+      "tags": [
+        {
+          "name": "ICONDRAWA_Borderless",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDRAWA_Frameless",
+          "kind": "u32"
+        }
+      ],
+      "origin": "import"
+    },
+    "import.icon.PutIconTagList.tags": {
+      "headers": [
+        "workbench/icon.h"
+      ],
+      "max_items": 10,
+      "tags": [
+        {
+          "name": "ICONPUTA_DropChunkyIconImage",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONPUTA_DropNewIconToolTypes",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONPUTA_DropPlanarIconImage",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONPUTA_OnlyUpdatePosition",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONPUTA_OptimizeImageSpace",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONPUTA_PreserveOldIconImages",
+          "kind": "u32"
+        }
+      ],
+      "origin": "import"
     }
   },
   "refused_functions": {
@@ -3891,6 +3958,54 @@
           "nullable": true,
           "clear": false
         }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ObtainBestPenA": {
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "taglists": {
+        "tags": "import.graphics.ObtainBestPenA.tags"
+      },
+      "origin": "import"
+    },
+    "icon.library.GetIconRectangleA": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "icon": {
+          "type": "DiskObject",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "rectangle": {
+          "type": "Rectangle",
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
+        }
+      },
+      "taglists": {
+        "tags": "import.icon.GetIconRectangleA.tags"
+      },
+      "origin": "import"
+    },
+    "icon.library.PutIconTagList": {
+      "objects": {
+        "icon": {
+          "type": "DiskObject",
+          "nullable": true
+        }
+      },
+      "taglists": {
+        "tags": "import.icon.PutIconTagList.tags"
       },
       "origin": "import"
     }

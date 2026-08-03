@@ -2810,7 +2810,60 @@ def published_detachers(report):
     return index
 
 
-def infer_object_crossing(f, evidence, detachers=None):
+_TAG_HEADER_INDEX = {}
+
+
+def tag_defining_headers(names):
+    """Which AROS headers define these tag macros.
+
+    The generated file has to compile, so a domain has to name the headers its
+    tag constants come from. That is not a judgement: it is wherever the
+    `#define` is, so read it rather than keep a hand list in step with the tree."""
+    if not _TAG_HEADER_INDEX:
+        root = os.path.join(AROS, "compiler", "include")
+        pattern = re.compile(r"^\s*#\s*define\s+([A-Z][A-Za-z0-9_]*)\b", re.M)
+        for base, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.endswith(".h"):
+                    continue
+                path = os.path.join(base, name)
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                rel = os.path.relpath(path, root)
+                for macro in pattern.findall(text):
+                    _TAG_HEADER_INDEX.setdefault(macro, rel)
+    headers = []
+    for name in names:
+        header = _TAG_HEADER_INDEX.get(name)
+        if not header:
+            return None                  # a tag nothing in the tree defines
+        if header not in headers:
+            headers.append(header)
+    return sorted(headers)
+
+
+def bridge_tag_domain(domain, short, function_name):
+    """A policy tag domain from a fully resolved import domain."""
+    tags = []
+    for tag in domain["accepted"]:
+        kind = tag["kind"]
+        if kind in ("u32", "cstr"):
+            tags.append({"name": tag["name"], "kind": kind})
+            continue
+        return None                      # a payload with no approved conversion
+    headers = tag_defining_headers([t["name"] for t in tags])
+    if not headers:
+        return None
+    return {"headers": headers,
+            "max_items": max(8, min(128, len(tags) + 4)),
+            "tags": tags}
+
+
+def infer_object_crossing(f, evidence, detachers=None, function_tags=None,
+                          short=None):
     """A crossing the importer may write without asking, or None.
 
     The rule is deliberately narrow, and it is about EVIDENCE rather than
@@ -2870,10 +2923,28 @@ def infer_object_crossing(f, evidence, detachers=None):
     if classify(f.ret) not in ("scalar", "widen", "void"):
         return None
     marshallable = marshallable_structs()
-    objects, structs = {}, {}
+    # A TagItem argument whose every tag the source resolved. A domain with even
+    # one unproved payload stays in review: forwarding an IPTR whose meaning is
+    # unknown is the one thing a taglist crossing must never do.
+    resolved_tags = {}
+    for domain in (function_tags or []):
+        if domain["accepted"] and not domain["unresolved"]:
+            resolved_tags[domain["argument"]] = domain
+    objects, structs, taglists, domains = {}, {}, {}, {}
     for atype, aname in f.args:
         c = classify(atype)
         if c in ("scalar", "widen", "string"):
+            continue
+        if norm(atype) in ("struct TagItem *", "const struct TagItem *"):
+            domain = resolved_tags.get(aname)
+            if not domain:
+                return None
+            spec = bridge_tag_domain(domain, short, f.name)
+            if not spec:
+                return None
+            name = "import.%s.%s.%s" % (short, f.name, aname)
+            taglists[aname] = name
+            domains[name] = spec
             continue
         m = STRUCT_PTR_RE.match(norm(atype))
         if not m:
@@ -2902,7 +2973,7 @@ def infer_object_crossing(f, evidence, detachers=None):
             # blanking it would destroy what the bridge chose not to describe.
             "clear": False
         }
-    if not objects and not structs:
+    if not objects and not structs and not taglists:
         return None                      # nothing to infer; tier 1 covers it
     for argument, propagated in evidence.get("propagated_arguments", {}).items():
         # Only a POINTER can be kept. RectFill's helper stores its four WORD
@@ -2919,6 +2990,9 @@ def infer_object_crossing(f, evidence, detachers=None):
         crossing["objects"] = objects
     if structs:
         crossing["structs"] = structs
+    if taglists:
+        crossing["taglists"] = taglists
+        crossing["_tag_domains"] = domains
     return crossing
 
 
@@ -2992,6 +3066,15 @@ def build_import_manifest(report):
         tier, blocker = f.tier(lib)
         policy = function_policy(lib, f)
         refusal = refusal_policy(lib, f)
+
+        def add_tag_review(*args):
+            if not refusal:
+                add_review(*args)
+
+        # Before the outcome, because a TagItem argument whose domain the source
+        # fully resolves is no longer a reason to send the vector to review.
+        function_tags = synthesize_function_tags(evidence, add_tag_review, policy)
+
         if refusal:
             outcome = "explicitly-refused"
         elif policy:
@@ -3002,7 +3085,8 @@ def build_import_manifest(report):
             # opposite of what regenerating is for. A person's entry is never
             # re-derived; promotion refuses to touch those anyway.
             if policy.get(POLICY_ORIGIN_KEY) == "import":
-                again = infer_object_crossing(f, evidence, detach_index)
+                again = infer_object_crossing(f, evidence, detach_index,
+                                              function_tags, short)
                 if again:
                     inferred_functions["%s.%s" % (lib, f.name)] = again
         elif tier in (1, 2):
@@ -3010,7 +3094,8 @@ def build_import_manifest(report):
         elif blocker and (blocker.startswith("refused:") or "allowlist" in blocker):
             outcome = "explicitly-refused"
         else:
-            inferred = infer_object_crossing(f, evidence, detach_index)
+            inferred = infer_object_crossing(f, evidence, detach_index,
+                                             function_tags, short)
             if inferred:
                 outcome = "inferred-from-source"
                 inferred_functions["%s.%s" % (lib, f.name)] = inferred
@@ -3045,10 +3130,6 @@ def build_import_manifest(report):
                                "reachable helper stores this public argument in native state",
                                retained)
 
-        def add_tag_review(*args):
-            if not refusal:
-                add_review(*args)
-
         functions.append({
             "name": f.name, "lvo": f.lvo, "offset": f.offset,
             "signature": evidence.get("signature"),
@@ -3062,7 +3143,7 @@ def build_import_manifest(report):
             "record_arrays": function_record_arrays(
                 evidence, report.get("record_layouts", {}).get("types", {})),
             "object_contracts": function_object_contracts(evidence, object_candidates),
-            "tag_domains": synthesize_function_tags(evidence, add_tag_review, policy),
+            "tag_domains": function_tags,
             "argument_evidence": evidence.get("arguments", {}),
             "propagated_arguments": evidence.get("propagated_arguments", {}),
             "memory": evidence.get("memory", {}),
@@ -5796,8 +5877,18 @@ def promote_import(name, apply_changes=True):
         active = json.load(fh)
     functions = active.setdefault("functions", {})
 
+    domains = active.setdefault("tag_domains", {})
     added, refreshed, kept, unchanged = [], [], [], []
     for key, proposal in sorted(inferred.items()):
+        # A taglist crossing carries its own domain. It is written alongside the
+        # function so a regeneration cannot leave a crossing pointing at a
+        # domain that is not there, and it is marked like everything else this
+        # tool writes so a person can take one over.
+        proposal = dict(proposal)
+        for domain_name, spec in sorted(proposal.pop("_tag_domains", {}).items()):
+            if domains.get(domain_name, {}).get(POLICY_ORIGIN_KEY, "import") != "import":
+                continue                          # a person owns this domain
+            domains[domain_name] = dict(spec, **{POLICY_ORIGIN_KEY: "import"})
         existing = functions.get(key)
         if existing is None:
             entry = dict(proposal)
@@ -5832,7 +5923,8 @@ def promote_import(name, apply_changes=True):
                   % len(drift))
             return 1
         return 0
-    if added or refreshed:
+    if added or refreshed or domains != json.load(
+            open(POLICY_PATH, encoding="utf-8")).get("tag_domains", {}):
         with open(POLICY_PATH, "w", encoding="utf-8") as fh:
             json.dump(active, fh, indent=2)
             fh.write("\n")
