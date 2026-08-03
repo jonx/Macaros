@@ -54,7 +54,7 @@ TYPES = [
     "Window", "Screen", "RastPort", "Preferences", "BitMap",
     "TextAttr", "TextFont",
     "DimensionInfo", "DrawInfo",
-    "NewMenu", "NewGadget",
+    "NewMenu", "NewGadget", "Menu", "MenuItem",
 ]
 
 # `struct Screen` is intentionally only marshalled through byte 83. Its head is

@@ -132,7 +132,11 @@
     "Menu": {
       "id": 17,
       "c_type": "struct Menu *",
-      "kind": "opaque",
+      "kind": "facade",
+      "facade_struct": "Menu",
+      "nested_fields": [
+        {"field": "FirstItem", "kind": "object", "type": "MenuItem"}
+      ],
       "destructor": "gadtools.library.FreeMenus"
     },
     "RastPort": {
@@ -165,6 +169,12 @@
       "linked_field": "NextGadget",
       "linked_limit": 4096,
       "destructor": "gadtools.library.FreeGadgets"
+    },
+    "MenuItem": {
+      "id": 21,
+      "c_type": "struct MenuItem *",
+      "kind": "facade",
+      "facade_struct": "MenuItem"
     }
   },
   "tag_domains": {
@@ -517,6 +527,13 @@
         {"name": "STRINGA_Justification", "kind": "u32"},
         {"name": "STRINGA_ReplaceMode", "kind": "u32"}
       ]
+    },
+    "gadtools.get_gadget": {
+      "derive": {
+        "from": "gadtools.create_gadget",
+        "map": {"u32": "out_u32"},
+        "otherwise": "refuse"
+      }
     }
   },
   "refused_functions": {
@@ -818,6 +835,13 @@
       },
       "taglists": {"tagList": "gadtools.layout_menus"}
     },
+    "gadtools.library.LayoutMenuItemsA": {
+      "objects": {
+        "menuitem": {"type": "MenuItem", "nullable": true},
+        "vi": {"type": "VisualInfo", "nullable": false}
+      },
+      "taglists": {"tagList": "gadtools.layout_menus"}
+    },
     "gadtools.library.CreateContext": {
       "result": {"kind": "object", "type": "Gadget", "store_arg": "glistpointer"}
     },
@@ -856,6 +880,22 @@
           "consume_family": true
         }
       }
+    },
+    "gadtools.library.GT_SetGadgetAttrsA": {
+      "objects": {
+        "gad": {"type": "Gadget", "nullable": true},
+        "win": {"type": "Window", "nullable": true}
+      },
+      "null_args": ["req"],
+      "taglists": {"tagList": "gadtools.create_gadget"}
+    },
+    "gadtools.library.GT_GetGadgetAttrsA": {
+      "objects": {
+        "gad": {"type": "Gadget", "nullable": true},
+        "win": {"type": "Window", "nullable": true}
+      },
+      "null_args": ["req"],
+      "taglists": {"taglist": "gadtools.get_gadget"}
     },
     "gadtools.library.GT_RefreshWindow": {
       "noop": true,

@@ -77,6 +77,41 @@ def load_policy():
         raise SystemExit("cannot load bridge policy %s: %s" % (POLICY_PATH, e))
     if p.get("schema") != 1:
         raise SystemExit("bridge policy schema must be 1")
+    domains = p.get("tag_domains", {})
+    unresolved = {name for name, spec in domains.items() if "derive" in spec}
+    while unresolved:
+        progressed = False
+        for name in sorted(unresolved):
+            spec = domains[name]
+            derive = spec.get("derive", {})
+            source_name = derive.get("from")
+            source = domains.get(source_name)
+            if not source or source_name in unresolved:
+                continue
+            mapping = derive.get("map", {})
+            otherwise = derive.get("otherwise", "refuse")
+            tags = []
+            for original in source.get("tags", []):
+                target_kind = mapping.get(original.get("kind"), otherwise)
+                if target_kind == "same":
+                    item = dict(original)
+                else:
+                    item = {"name": original["name"], "kind": target_kind}
+                    if target_kind == "refuse":
+                        item["reason"] = ("derived output domain has no approved %s copyback" %
+                                          original.get("kind", "payload"))
+                tags.append(item)
+            expanded = {key: value for key, value in spec.items() if key != "derive"}
+            expanded.setdefault("headers", list(source.get("headers", [])))
+            expanded.setdefault("max_items", source.get("max_items", 32))
+            expanded["tags"] = tags
+            domains[name] = expanded
+            unresolved.remove(name)
+            progressed = True
+            break
+        if not progressed:
+            raise SystemExit("bridge policy has unresolved/cyclic derived tag domains: %s" %
+                             ", ".join(sorted(unresolved)))
     return p
 
 
@@ -757,8 +792,12 @@ def explicit_cast_kind(cast):
 
 def declaration_type_index(code):
     found = {}
-    pattern = re.compile(r"\b(%s)\s*([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*(?=[=;,])" %
-                         C_TYPE_TOKEN_RE)
+    # Anchor at a declaration line. Without that boundary the optional second
+    # type word can greedily consume most of a one-word declaration's field
+    # name (`UBYTE FrontPen` became type `UBYTE FrontPe`, name `n`).
+    pattern = re.compile(
+        r"(?m)^[ \t]*(%s)[ \t]+([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*(?=[=;,])" %
+        C_TYPE_TOKEN_RE)
     for match in pattern.finditer(code):
         declared = norm(match.group(1)) + (" *" if match.group(3) else "")
         found.setdefault(match.group(2), set()).add(norm(declared))
@@ -823,7 +862,7 @@ def scalar_payload_macros(code):
     return result
 
 
-def extract_library_tag_evidence(sources, evidence_scope="library"):
+def extract_library_tag_evidence(sources, evidence_scope="library", type_sources=None):
     """Find type-bearing uses of tags anywhere in a library implementation.
 
     A public wrapper often forwards an IPTR unchanged to a BOOPSI class, so the
@@ -834,7 +873,7 @@ def extract_library_tag_evidence(sources, evidence_scope="library"):
     """
     found = []
     field_types = {}
-    for _path, raw in sources:
+    for _path, raw in list(sources) + list(type_sources or []):
         for name, types in declaration_type_index(mask_c_comments(raw)).items():
             field_types.setdefault(name, set()).update(types)
 
@@ -2075,7 +2114,17 @@ def collect_source_reports(which):
             analyze_reachable_helpers(e, ast_config, sources,
                                       helper_cache, helper_definition_cache,
                                       public_symbols)
-        library_tags = extract_library_tag_evidence(sources)
+        type_sources = []
+        include_root = os.path.join(ast_config["sysroot"], "include")
+        for header in record_layouts.get("headers", []):
+            path = os.path.join(include_root, header)
+            try:
+                type_sources.append((path, open(
+                    path, encoding="utf-8", errors="replace").read()))
+            except OSError:
+                pass
+        library_tags = extract_library_tag_evidence(
+            sources, type_sources=type_sources)
         used_names = set()
         for e in evidence:
             used_names.update(tag["name"] for tag in e.get("tags", []))
@@ -2591,8 +2640,20 @@ def build_import_manifest(report):
 
     accepted_ownership = []
     for pair in report.get("ownership_candidates", []):
-        if pair.get("confidence") == "high":
-            accepted_ownership.append(pair)
+        producer_policy = POLICY.get("functions", {}).get(
+            "%s.%s" % (lib, pair["producer"]), {})
+        result = producer_policy.get("result", {})
+        result_object = (POLICY.get("object_types", {}).get(result.get("type"), {})
+                         if result.get("kind") == "object" else {})
+        reviewed_destructor = result_object.get("destructor") == "%s.%s" % (
+            lib, pair["consumer"])
+        if pair.get("confidence") == "high" or reviewed_destructor:
+            accepted = dict(pair)
+            if reviewed_destructor and pair.get("confidence") != "high":
+                accepted["confidence"] = "high"
+                accepted["evidence"] = sorted(set(
+                    pair.get("evidence", []) + ["active-object-destructor-policy"]))
+            accepted_ownership.append(accepted)
         else:
             add_review("ownership-pair", pair["producer"], pair["consumer"],
                        "producer/releaser relationship is not high confidence", [pair])
@@ -2944,7 +3005,8 @@ def import_library(name, output_dir=None, check=False):
 TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
              "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT",
              "null": "EMU_TAG_NULL", "u16_ffff": "EMU_TAG_U16_FFFF",
-             "rgb32": "EMU_TAG_RGB32", "object": "EMU_TAG_OBJECT"}
+             "rgb32": "EMU_TAG_RGB32", "object": "EMU_TAG_OBJECT",
+             "out_u32": "EMU_TAG_OUT_U32"}
 
 
 def policy_key(lib, f):
@@ -3720,10 +3782,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             if d not in used_domains:
                 used_domains.append(d)
         for sp in p.get("tagged_structs", {}).values():
-            if sp.get("header") not in used_headers:
+            if sp.get("header") and sp.get("header") not in used_headers:
                 used_headers.append(sp.get("header"))
         for sp in p.get("record_arrays", {}).values():
-            if sp.get("header") not in used_headers:
+            if sp.get("header") and sp.get("header") not in used_headers:
                 used_headers.append(sp.get("header"))
         for op in p.get("objects", {}).values():
             if op.get("type") not in used_objects:
@@ -3766,6 +3828,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     w("")
     w("#include <exec/types.h>")
     w("#include <%s>" % hdr)
+    emitted_headers = {"exec/types.h", hdr}
     if uses_structs:
         w("#include <string.h>")
     if (used_headers or uses_nested_fields or
@@ -3774,11 +3837,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 for f in funcs)):
         w("#include <stdio.h>")
     for h in used_headers:
-        w("#include <%s>" % h)
+        if h not in emitted_headers:
+            w("#include <%s>" % h)
+            emitted_headers.add(h)
     for d in used_domains:
         for h in domains[d].get("headers", []):
-            if h not in used_headers:
+            if h not in emitted_headers:
                 w("#include <%s>" % h)
+                emitted_headers.add(h)
     w("")
     w('#include "emu68k_gen.h"')
     if uses_structs:
@@ -3893,6 +3959,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         heap_tag_scratch = []
         heap_array_scratch = []
         heap_record_scratch = []
+        tag_copybacks = []
         # A "how much of this structure do you want" argument is clamped before
         # anything else: it bounds the guest range check as well as the copy, so
         # it cannot be computed inside the block that already needs it. The
@@ -4361,9 +4428,13 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                             if t.get("kind") == "u16_ffff"]
             rgb32_sizes = [t["max_longs"] for t in domains[dname]["tags"]
                            if t.get("kind") == "rgb32"]
+            has_outputs = any(t.get("kind") == "out_u32"
+                              for t in domains[dname]["tags"])
             scratch_parts = (["(sizeof(struct %s) + 7) / 8" % s for s in structs] +
                              ["(sizeof(UWORD) * %d + 7) / 8" % n for n in array_counts] +
-                             ["(sizeof(ULONG) * %d + 7) / 8" % n for n in rgb32_sizes])
+                             ["(sizeof(ULONG) * %d + 7) / 8" % n for n in rgb32_sizes] +
+                             (["%d * ((sizeof(struct EmuTagOutSlot) + 7) / 8)" % cap]
+                              if has_outputs else []))
             heap_scratch = bool(array_counts or rgb32_sizes)
             scratch_quads = " + ".join(scratch_parts)
             if heap_scratch:
@@ -4376,14 +4447,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 heap_tag_scratch.append(ai)
             elif scratch_parts:
                 w("        UQUAD emu_tagscratch_%d[%s];" % (ai, scratch_quads))
-            w("        if (emu68k_tags_to_native(guest0, %s, &emu_tagdomain_%s,"
-              % (src, ident))
-            w("                                     emu_tags_%d, %d, %s, err, errlen) < 0)"
-              % (ai, cap + 1,
-                 "emu_tagscratch_%d, emu_tagscratch_size_%d" % (ai, ai)
-                 if heap_scratch else
-                 "emu_tagscratch_%d, sizeof emu_tagscratch_%d" % (ai, ai)
-                 if scratch_parts else "NULL, 0"))
+            tag_call = ("emu68k_tags_to_native(guest0, %s, &emu_tagdomain_%s, "
+                        "emu_tags_%d, %d, %s, err, errlen)" %
+                        (src, ident, ai, cap + 1,
+                         "emu_tagscratch_%d, emu_tagscratch_size_%d" % (ai, ai)
+                         if heap_scratch else
+                         "emu_tagscratch_%d, sizeof emu_tagscratch_%d" % (ai, ai)
+                         if scratch_parts else "NULL, 0"))
+            if has_outputs:
+                w("        LONG emu_tagcount_%d = %s;" % (ai, tag_call))
+                w("        if (emu_tagcount_%d < 0)" % ai)
+                tag_copybacks.append((ai, ident))
+            else:
+                w("        if (%s < 0)" % tag_call)
             if heap_scratch:
                 w("        {")
                 w("            emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
@@ -4543,6 +4619,26 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         def emit_heap_cleanup():
+            for copy_ai, copy_ident in tag_copybacks:
+                w("        if (emu68k_tags_to_guest(guest0, emu_tags_%d,"
+                  % copy_ai)
+                w("                (ULONG)emu_tagcount_%d, &emu_tagdomain_%s,"
+                  % (copy_ai, copy_ident))
+                w("                err, errlen) < 0)")
+                w("        {")
+                for scratch_ai in heap_tag_scratch:
+                    w("            emu68k_scratch_free(emu_tagscratch_%d, "
+                      "emu_tagscratch_size_%d);" % (scratch_ai, scratch_ai))
+                for scratch_ai in heap_array_scratch:
+                    w("            if (emu_array_scratch_%d)" % scratch_ai)
+                    w("                emu68k_scratch_free(emu_array_scratch_%d, "
+                      "emu_array_size_%d);" % (scratch_ai, scratch_ai))
+                for scratch_ai in heap_record_scratch:
+                    w("            if (emu_record_array_%d)" % scratch_ai)
+                    w("                emu68k_scratch_free(emu_record_array_%d, "
+                      "emu_record_size_%d);" % (scratch_ai, scratch_ai))
+                w("            return 1;")
+                w("        }")
             for scratch_ai in heap_tag_scratch:
                 w("        emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
                   % (scratch_ai, scratch_ai))
@@ -4928,6 +5024,12 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_U16_FFFF 5  /* guest UWORD array terminated by 0xffff           */
 #define EMU_TAG_RGB32    6  /* LoadRGB32 block stream terminated by zero         */
 #define EMU_TAG_OBJECT   7  /* typed native object represented by a guest token  */
+#define EMU_TAG_OUT_U32  8  /* ti_Data points at a guest ULONG copyback slot      */
+struct EmuTagOutSlot
+{
+    IPTR value;             /* first: native ti_Data can point at the whole slot */
+    ULONG guest_addr;
+};
 struct EmuTagDesc
 {
     ULONG tag;
@@ -4955,6 +5057,9 @@ LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
                            struct TagItem *native_tags, ULONG capacity,
                            APTR scratch, ULONG scratch_size,
                            char *err, ULONG errlen);
+LONG emu68k_tags_to_guest(APTR guest0, struct TagItem *native_tags,
+                          ULONG count, const struct EmuTagDomain *domain,
+                          char *err, ULONG errlen);
 LONG emu68k_rgb32_to_native(APTR guest0, ULONG guest_table,
                             ULONG *native_table, ULONG capacity,
                             const char *what, char *err, ULONG errlen);

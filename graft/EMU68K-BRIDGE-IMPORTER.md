@@ -146,6 +146,14 @@ creation/setter API does not automatically describe an output/query API: in the
 latter, `ti_Data` can instead be a guest pointer to result storage. Direction
 must be proved before a candidate domain is activated.
 
+For a proven scalar query, a derived domain maps an approved input `u32` tag to
+`out_u32` and refuses every pointer-shaped or otherwise unsupported payload.
+Generated code validates the guest destination, gives the native function an
+aligned `IPTR` scratch slot, and copies the low 32-bit result back in guest byte
+order after the call. This is the reusable `GT_GetGadgetAttrsA` pattern; it is
+not a GadTools-only emitter branch. String pointers, object results, and other
+output shapes remain refused until their own copyback contracts exist.
+
 Record layouts are compiler results, not hand-counted offsets. The same public
 headers are compiled for `m68k-unknown-elf` with Amiga two-byte packing and for
 `aarch64-unknown-aros`. Header files contributing layouts are input-hashed. A
@@ -379,6 +387,16 @@ that family destruction invalidated the child before another native call can
 observe it. The implementation is driven by reusable `linked_field`,
 `linked_limit`, `store_arg`, nested-structure field, and `consume_family`
 metadata rather than GadTools-specific generator branches.
+The positive Gadget program also exercises generated `GT_SetGadgetAttrsA` and
+queries immutable `GA_ID` through `GT_GetGadgetAttrsA`, proving scalar output
+tag copyback. Gadget tests run in their own boot to avoid carrying native GUI
+state between otherwise independent lifecycle fixtures.
+
+`genmenuitem.s` proves the generated guest-readable `Menu` facade and its typed
+`FirstItem` field. It reads the classic field at its compiler-probed offset,
+passes the resulting `MenuItem` facade to `LayoutMenuItemsA`, and then frees the
+owning menu. It likewise runs in a separate boot so `LayoutMenusA` and
+`LayoutMenuItemsA` never mutate the same native menu during one fixture.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:
@@ -411,13 +429,28 @@ sits beside the import packet and records auditable per-review-ID decisions.
 ### Current GadTools checkpoint
 
 At this checkpoint all 19 public GadTools vectors parse and their reachable C
-helpers analyze successfully. Sixteen crossings are active in generated code.
-The menu lifecycle and the `CreateContext`/`CreateGadgetA`/`FreeGadgets` linked
-Gadget lifecycle pass in booted AROS, including nested record fields and
-family-wide stale-token rejection. The deterministic review queue is down to
-five items: `GT_GetGadgetAttrsA`, `GT_SetGadgetAttrsA`, `LayoutMenuItemsA`, the
-conservative ownership-pair finding for `CreateContext`/`FreeGadgets`, and the
-unproved `GTMN_FrontPen` payload for `LayoutMenuItemsA`.
+helpers analyze successfully. Fifteen vectors have active generated policies;
+the four IntuiMessage/filter vectors have explicit reviewed fail-closed
+refusals. The deterministic review queue is zero and the manifest status is
+`ready-for-generation`. `--check-import gadtools` reproduces that packet from
+the current source, headers, generated build inputs, compiler configuration,
+and policy.
+
+The generated bridge contains all 19 dispatch outcomes. The menu lifecycle,
+the `Menu.FirstItem`/`LayoutMenuItemsA` facade crossing, scalar
+`GT_GetGadgetAttrsA` copyback, and the
+`CreateContext`/`CreateGadgetA`/`FreeGadgets` linked Gadget lifecycle have each
+reached their positive boot fixture, including nested record fields and
+family-wide stale-token rejection. `GTMN_FrontPen` is now high-confidence `u32`
+evidence derived from the public record field type used by the implementation.
+
+This is not yet a certification claim. The complete combined T3GEN boot exposed
+a delayed hosted `Macaros` crash after GUI fixtures: trace instrumentation proved
+the final 68k call, per-run object cleanup, host-run free, and DOS-base release
+all returned, while the macOS reports fault later in native stdio/file flushing.
+The non-GUI T3LHA regression passes. The hosted crash must be resolved (or the
+same contracts rerun in a demonstrably stable harness) before GadTools is marked
+certified and before this iteration retires any remaining equivalent crossing.
 
 The current PhotoDemo image passes `GetVisualInfoA`, `CreateMenusA`, and
 `LayoutMenusA`. Source analysis now recognizes both direct zero/nonzero payload

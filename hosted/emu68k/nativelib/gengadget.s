@@ -12,10 +12,14 @@ INT_CloseScreen      equ -66
 INT_OpenScreenTags   equ -612
 GT_CreateGadgetA     equ -30
 GT_FreeGadgets       equ -36
+GT_SetGadgetAttrsA   equ -42
+GT_GetGadgetAttrsA   equ -174
 GT_CreateContext     equ -114
 GT_GetVisualInfoA    equ -126
 GT_FreeVisualInfo    equ -132
 BUTTON_KIND          equ 1
+GA_Disabled          equ $8003000e
+GA_ID                equ $80030010
 
     move.l  4.w,a6
     lea     dosname(pc),a1
@@ -74,6 +78,24 @@ BUTTON_KIND          equ 1
     jsr     GT_CreateGadgetA(a6)
     tst.l   d0
     beq.w   free_context_failed
+    move.l  d0,d4
+
+    move.l  d4,a0
+    suba.l  a1,a1
+    suba.l  a2,a2
+    lea     gadgettags(pc),a3
+    jsr     GT_SetGadgetAttrsA(a6)
+
+    clr.l   gadgetvalue
+    move.l  d4,a0
+    suba.l  a1,a1
+    suba.l  a2,a2
+    lea     gadgetgettags(pc),a3
+    jsr     GT_GetGadgetAttrsA(a6)
+    tst.l   d0
+    beq.w   free_context_failed
+    cmp.l   #77,gadgetvalue
+    bne.w   free_context_failed
 
     move.l  d7,a0
     jsr     GT_FreeGadgets(a6)
@@ -134,6 +156,15 @@ failmsg:       dc.b "[T3GADGET] FAIL",10,0
     even
 
 glist: dc.l 0
+
+gadgettags:
+    dc.l GA_Disabled,1
+    dc.l 0,0
+
+gadgetgettags:
+    dc.l GA_ID,gadgetvalue
+    dc.l 0,0
+gadgetvalue: dc.l 0
 
 ; Classic TextAttr layout: pointer, UWORD size, UBYTE style, UBYTE flags.
 textattr:
