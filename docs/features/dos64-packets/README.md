@@ -27,12 +27,14 @@ them is **not** part of this work, and the `#if defined(ACTION_…)` guards in t
 handler and in `List` are therefore already satisfied: that code compiles and runs
 today.
 
-What is missing:
+What was missing, and its current state:
 
-- A **verified `struct DosPacket64` layout**. Nothing in the tree defines one.
-- **Plumbing.** `rom/dos/` contains zero references to any of the four actions, so
-  nothing in `dos.library` allocates, sends, waits on or replies to these packets.
-- **Correct semantics in the existing consumers.** See below.
+- A **verified `struct DosPacket64` layout**. Now present: taken from master and
+  corrected, see the status note above.
+- **Plumbing.** `rom/dos/` had zero references to any of the four actions. Now provided
+  by `dos64.library` (`rom/dos64/`), a separate library rather than additions to
+  `dos.library`.
+- **Correct semantics in the existing consumers.** Still outstanding. See below.
 
 ## The published ABI
 
