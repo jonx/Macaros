@@ -2,6 +2,12 @@
 
 > Status: **Phase 0, in progress.** Branch `dos64-packets` on `../aros-upstream`,
 > off `aarch64-darwin-graft`. Contains no exFAT code or assumptions.
+>
+> `dos64.library` has been taken from master (`7cb141bdfd`) and its 32-bit
+> `DosPacket64` field widths corrected against the ABI (`d17e88f4b3`). The full
+> upstream merge is deferred: it produces 26 conflicted files, two of which are
+> design divergences over the console input handler and the emul-handler
+> notification scheme, and needs its own session with a boot verification.
 
 Files above 4 GB are unreachable through `dos.library` on every AROS filesystem. This
 is the prerequisite for [exfat](../exfat/README.md), and it independently unblocks
@@ -155,9 +161,63 @@ path). Nothing else produces or consumes these packets.
 That is the entire Phase 0 blast radius: two handlers, one consumer, one definition
 site, one redundant redefinition.
 
-## Secondary corroboration: the Free Pascal transcription
+## RESOLVED: the confirmed layout, and upstream already has a dos64 module
 
-**Not `[PUB]`. Corroboration only, pending the oracle.**
+**The oracle is no longer needed.** The official SDK header was located vendored in a
+public toolchain repository, and three independent sources agree exactly.
+
+`[PUB]`, official OS4 SDK `dos/dosextens.h`. Its own comments state *"Only dp_Type
+packets between 8000-8999 range use this structure"* and *"#pragma pack() used here to
+obtain default alignment padding"*, i.e. natural alignment:
+
+| field | type | offset | size |
+|---|---|---|---|
+| `dp_Link` | `struct Message *` | 0 | 4 |
+| `dp_Port` | `struct MsgPort *` | 4 | 4 |
+| `dp_Type` | `int32` | 8 | 4 |
+| `dp_Res0` | `int32` | 12 | 4 |
+| `dp_Res2` | `int32` | 16 | 4 |
+| `dp_Res1` | `int64` | 24 | 8 |
+| `dp_Arg1` | **`int32`** | 32 | **4** |
+| `dp_Arg2` | `int64` | 40 | 8 |
+| `dp_Arg3` | `int32` | 48 | 4 |
+| `dp_Arg4` | `int32` | 52 | 4 |
+| `dp_Arg5` | **`int64`** | 56 | **8** |
+| | | **total** | **64** |
+
+Corroborated independently by a STABS debug string in `adtools/db101`
+(`DosPacket64:T(32,8)=s64…`), which is the *compiler's own emission* of the real SDK
+struct and reproduces every offset and width above, and by the Free Pascal
+transcription's documented 64-byte total. The earlier `{$PACKRECORDS 4}` arithmetic
+that yielded 56 is confirmed as the transcription error.
+
+### Upstream AROS added `rom/dos64/` on 2026-07-19
+
+Two days after this branch's merge-base (2026-07-17), which is why it was not visible
+here. It is much larger than this Phase 0's scope: `read64`, `write64`, `seek64`,
+`examine64`, `exnext64`, `examinefh64`, `info64`, `lockrecord64`, `setfilesize64`,
+`allocdosobject64`, plus `posixc` and `stdc` integration.
+
+**Phase 0 is therefore no longer a design task. It is: merge upstream, then correct
+two width errors in `compiler/include/dos/dos64.h`.**
+
+| field | official OS4 | upstream AROS | consequence |
+|---|---|---|---|
+| `dp_Arg1` | `int32`, 4 bytes | `QUAD`, 8 bytes | On **big-endian 32-bit** (m68k) the meaningful value lands at bytes 36-39; a conforming reader takes `int32` at 32-35 and gets the high half, i.e. zero |
+| `dp_Arg5` | `int64`, 8 bytes | `ULONG`, 4 bytes | `dp_Arg5` is the **CHANGE-pair sentinel**. Writing 4 bytes leaves 60-63 uninitialised, so a handler testing a 64-bit zero can see garbage and refuse to validate the `FileHandle` in `dp_Arg4`, silently falling back to the legacy path |
+
+Field *offsets* coincide by luck of alignment, so the errors are invisible to a
+`sizeof` check and to any offset-only assertion. Only the widths differ. Note the
+`dp_Arg1` error is the same one pfs3's disqualified struct made.
+
+Upstream also requires the originator to additionally store `fh_Arg1` in the *standard*
+packet's `dp_Arg1` at offset 20, which in `DosPacket64` is padding. That is additive
+rather than corrupting, but it is an AROS-private side channel an OS4 handler will
+never read.
+
+## Earlier corroboration: the Free Pascal transcription
+
+**Superseded by the SDK header above. Retained for the record.**
 
 Free Pascal's `os4units` transcribes `TDosPacket64`
 ([source](https://gitlab.com/freepascal.org/fpc/source/-/blob/main/packages/os4units/src/amigados.pas#L1016))
@@ -194,7 +254,7 @@ widths were transcribed, so the order needs confirming too.
 If it holds, the common prefix with `struct DosPacket` runs through `dp_Res2`
 (offsets 0-19), with `dp_Res0` occupying the slot where `DosPacket` has `dp_Res1`.
 
-### `DP64_INIT`: a hypothesis, not a finding
+### `DP64_INIT`: CONFIRMED
 
 That prefix suggests a purpose for `DP64_INIT = -3`. A **legacy** handler replies by
 writing offset 12, which it believes is `dp_Res1`, and in a `DosPacket64` that is
@@ -202,10 +262,13 @@ writing offset 12, which it believes is `dp_Res1`, and in a `DosPacket64` that i
 return through the real 64-bit `dp_Res1`. A caller that pre-seeds `-3` could then read
 offset 12 afterwards to tell the two apart.
 
-**This direction is inferred and must not be encoded before it is confirmed**, either
-from the oracle or from published documentation. Nothing in the autodocs states it. If
-the polarity is backwards, or the value is written rather than preserved by a
-conforming handler, every legacy-detection path built on it inverts.
+**Confirmed** by upstream's own implementation in `rom/dos64/dos64_packet.c`, which
+states it directly: *"The overlay's dp_Res0 (holding the DP64_INIT marker) shares its
+offset with the standard packet's dp_Res1. A handler that understands the 64-bit packet
+preserves the marker and answers through the overlay fields; a plain 32-bit handler
+answers through the standard fields, overwriting the marker. This is what tells the two
+reply forms apart."* An assertion now pins the `dp_Res0` to `dp_Res1` aliasing this
+depends on.
 
 ## Sequence
 
