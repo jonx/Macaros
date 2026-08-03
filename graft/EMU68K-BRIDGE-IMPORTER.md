@@ -169,6 +169,23 @@ This mechanism is reusable by another library whose source proves the same
 terminated-array shape; neither the emitter nor the layout generator contains a
 `CreateMenusA` special case.
 
+### Explicit function refusals
+
+Some source-proven contracts cannot be represented by the mechanisms available
+in the current bridge. `refused_functions` records those outcomes separately
+from active crossings. Each refusal names a public `.conf` vector, carries a
+bounded diagnostic reason and exact source lines, and may not overlap an active
+function policy. Validation rejects stale vector names or evidence shapes.
+
+The generated dispatcher emits a case for every reviewed refusal. Calling it
+returns a named capability gap immediately, so a certified library never falls
+through to an anonymous LVO and never forwards an unsafe native pointer. The
+manifest counts this as `explicitly-refused`, its source observations remain
+auditable, and its generated negative contract is runnable. A refusal closes a
+review decision but does not claim functional compatibility; it can later be
+replaced by a generated crossing once the missing generic representation is
+implemented and tested.
+
 ## Confidence and fail-closed rules
 
 The analyzer produces evidence; it does not silently make uncertain evidence a
@@ -270,6 +287,9 @@ lifecycle. `genrecordbad.s` passes an image-valued record and must terminate wit
 the named `CreateMenusA.newmenu[0].nm_Type` capability gap before native GadTools
 sees it. `genlayoutbad.s` independently proves that an Image-valued layout tag is
 refused by `gadtools.layout_menus` before native `LayoutMenusA` runs.
+`genrefused.s` calls a reviewed whole-function refusal with an otherwise unsafe
+NULL argument and must terminate with the policy's exact
+`gadtools.library.GT_GetIMsg refused` diagnostic before native GadTools runs.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:

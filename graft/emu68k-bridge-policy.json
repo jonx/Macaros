@@ -342,6 +342,32 @@
       ]
     }
   },
+  "refused_functions": {
+    "gadtools.library.GT_GetIMsg": {
+      "reason": "IntuiMessage results need a guest-readable facade and paired reply ownership",
+      "evidence": [
+        {"source": "workbench/libs/gadtools/gt_getimsg.c", "line_start": 53, "line_end": 70}
+      ]
+    },
+    "gadtools.library.GT_ReplyIMsg": {
+      "reason": "reply must consume the paired filtered-message facade and recover its original message",
+      "evidence": [
+        {"source": "workbench/libs/gadtools/gt_replyimsg.c", "line_start": 49, "line_end": 56}
+      ]
+    },
+    "gadtools.library.GT_FilterIMsg": {
+      "reason": "filter returns an embedded or allocated mutable message with context-owned lifetime",
+      "evidence": [
+        {"source": "workbench/libs/gadtools/gt_filterimsg.c", "line_start": 91, "line_end": 112}
+      ]
+    },
+    "gadtools.library.GT_PostFilterIMsg": {
+      "reason": "post-filter copies guest-visible mutations and releases embedded or allocated wrapper state",
+      "evidence": [
+        {"source": "workbench/libs/gadtools/gt_postfilterimsg.c", "line_start": 49, "line_end": 83}
+      ]
+    }
+  },
   "functions": {
     "intuition.library.CurrentTime": {
       "pointers": {

@@ -2202,7 +2202,10 @@ def build_import_manifest(report):
         f = by_name[evidence["name"]]
         tier, blocker = f.tier(lib)
         policy = function_policy(lib, f)
-        if policy:
+        refusal = refusal_policy(lib, f)
+        if refusal:
+            outcome = "explicitly-refused"
+        elif policy:
             outcome = "covered-by-policy"
         elif tier in (1, 2):
             outcome = "generated-from-abi"
@@ -2227,16 +2230,21 @@ def build_import_manifest(report):
                            helper["ast"].get("error", "AST compilation failed"),
                            [{"source": helper["source"], "line": helper["line"],
                              "via": helper["via"]}])
-        for callback in evidence.get("propagated_callbacks", []):
-            add_review("callback-contract", f.name, callback["name"],
-                       "native-to-68k callback behavior requires an explicit contract",
-                       [callback])
-        for argument, facts in evidence.get("propagated_arguments", {}).items():
-            retained = [fact for fact in facts if fact["kind"] == "stored_in_fields"]
-            if retained:
-                add_review("retained-pointer-lifetime", f.name, argument,
-                           "reachable helper stores this public argument in native state",
-                           retained)
+        if not refusal:
+            for callback in evidence.get("propagated_callbacks", []):
+                add_review("callback-contract", f.name, callback["name"],
+                           "native-to-68k callback behavior requires an explicit contract",
+                           [callback])
+            for argument, facts in evidence.get("propagated_arguments", {}).items():
+                retained = [fact for fact in facts if fact["kind"] == "stored_in_fields"]
+                if retained:
+                    add_review("retained-pointer-lifetime", f.name, argument,
+                               "reachable helper stores this public argument in native state",
+                               retained)
+
+        def add_tag_review(*args):
+            if not refusal:
+                add_review(*args)
 
         functions.append({
             "name": f.name, "lvo": f.lvo, "offset": f.offset,
@@ -2244,13 +2252,14 @@ def build_import_manifest(report):
             "source": evidence.get("source"), "line": evidence.get("line"),
             "outcome": outcome, "blocker": blocker,
             "existing_policy": policy,
+            "existing_refusal": refusal,
             "reachable_helpers": len(evidence.get("reachable_helpers", [])),
             "record_contracts": function_record_contracts(
                 evidence, report.get("record_layouts", {}).get("types", {})),
             "record_arrays": function_record_arrays(
                 evidence, report.get("record_layouts", {}).get("types", {})),
             "object_contracts": function_object_contracts(evidence, object_candidates),
-            "tag_domains": synthesize_function_tags(evidence, add_review, policy),
+            "tag_domains": synthesize_function_tags(evidence, add_tag_review, policy),
             "argument_evidence": evidence.get("arguments", {}),
             "propagated_arguments": evidence.get("propagated_arguments", {}),
             "memory": evidence.get("memory", {}),
@@ -2344,6 +2353,9 @@ def policy_subset_for_library(manifest):
     lib, short = manifest["library"], manifest["library"].split(".")[0]
     functions = {key: value for key, value in POLICY.get("functions", {}).items()
                  if key.startswith(lib + ".")}
+    refusals = {key: value for key, value in
+                POLICY.get("refused_functions", {}).items()
+                if key.startswith(lib + ".")}
     domain_names, object_names = set(), set()
     for spec in functions.values():
         domain_names.update(spec.get("taglists", {}).values())
@@ -2420,6 +2432,7 @@ def policy_subset_for_library(manifest):
         },
         "tag_domains": domains,
         "functions": functions,
+        "refused_functions": refusals,
         "candidate_tag_domains": candidates,
         "proposed_functions": proposed_functions,
         "accepted_ownership": manifest["accepted"]["ownership"],
@@ -2437,9 +2450,15 @@ def generated_test_plan(manifest):
     for function in manifest["functions"]:
         outcome = function["outcome"]
         crossing_ready = outcome in ("generated-from-abi", "covered-by-policy")
+        dispatch_ready = crossing_ready or outcome == "explicitly-refused"
         add("lvo-dispatch", function["name"],
-            "ready" if crossing_ready else "blocked",
+            "ready" if dispatch_ready else "blocked",
             {"lvo": function["lvo"], "expected": outcome})
+        if outcome == "explicitly-refused":
+            add("explicit-refusal", function["name"], "ready",
+                {"reason": function["existing_refusal"]["reason"],
+                 "expected": "named-fail-closed"})
+            continue
         policy = function.get("existing_policy") or {}
         for argument, obj in sorted(policy.get("objects", {}).items()):
             add("invalid-object-token", function["name"], "ready",
@@ -2588,6 +2607,10 @@ def policy_key(lib, f):
 
 def function_policy(lib, f):
     return POLICY.get("functions", {}).get(policy_key(lib, f))
+
+
+def refusal_policy(lib, f):
+    return POLICY.get("refused_functions", {}).get(policy_key(lib, f))
 
 
 def c_ident(s):
@@ -2743,6 +2766,38 @@ def validate_policy(targets):
             if tag_fallback is not None and tag_fallback != "omit":
                 errors.append("tag domain %s tag %s has invalid fallback"
                               % (name, macro))
+
+    for key, refusal in POLICY.get("refused_functions", {}).items():
+        f = bykey.get(key)
+        if not f:
+            errors.append("function refusal %s does not name a public .conf vector" % key)
+            continue
+        if f.private:
+            errors.append("function refusal %s names a private vector" % key)
+        if key in POLICY.get("functions", {}):
+            errors.append("function refusal %s also has an active crossing policy" % key)
+        if not isinstance(refusal, dict):
+            errors.append("function refusal %s must be an object" % key)
+            continue
+        reason = refusal.get("reason")
+        if (not isinstance(reason, str) or not reason.strip() or
+                len(reason) > 240 or "\0" in reason):
+            errors.append("function refusal %s needs a reason of 1..240 characters" % key)
+        evidence = refusal.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            errors.append("function refusal %s needs source evidence" % key)
+            continue
+        for item in evidence:
+            source = item.get("source") if isinstance(item, dict) else None
+            first = item.get("line_start") if isinstance(item, dict) else None
+            last = item.get("line_end", first) if isinstance(item, dict) else None
+            if (not isinstance(source, str) or not re.fullmatch(
+                    r"[A-Za-z0-9_./-]+", source) or source.startswith("/") or
+                    ".." in source.split("/")):
+                errors.append("function refusal %s has invalid evidence source" % key)
+            if (not isinstance(first, int) or not isinstance(last, int) or
+                    first < 1 or last < first):
+                errors.append("function refusal %s has invalid evidence lines" % key)
 
     for key, p in POLICY.get("functions", {}).items():
         f = bykey.get(key)
@@ -3254,6 +3309,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     if uses_structs:
         w("#include <string.h>")
     if (used_headers or uses_nested_fields or
+            any(refusal_policy(lib, f) for f in funcs) or
             any(function_policy(lib, f) and function_policy(lib, f).get("null_args")
                 for f in funcs)):
         w("#include <stdio.h>")
@@ -3327,7 +3383,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     for f in funcs:
         t = f.tier(lib)[0]
         policy = function_policy(lib, f)
-        if t not in (1, 2) and not policy:
+        refusal = refusal_policy(lib, f)
+        if not refusal and t not in (1, 2) and not policy:
+            continue
+        if refusal:
+            w("    case %d:  /* %s: explicit reviewed refusal [%d] */" %
+              (f.lvo, f.name, f.offset))
+            w("        if (err && errlen)")
+            message = "capability gap: %s.%s refused: %s" % (
+                lib, f.name, refusal["reason"])
+            w("            snprintf(err, errlen, %s);" % json.dumps(message))
+            w("        r->d[0] = 0;")
+            w("        return 1;")
+            n += 1
             continue
         regs = [reg_expr(x) or reg_pair(x) for x in f.regs]
         if any(x is None for x in regs):
