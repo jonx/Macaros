@@ -622,7 +622,73 @@ def infer_source_tag_kind(access, cast, default):
         return ("cstr", "high")
     if re.search(r"\bNULL\b", default or ""):
         return ("pointer:unknown", "medium")
-    return ("u32", "high")
+    # An uncast GetTagData result is IPTR-sized and a literal default does not
+    # distinguish an integer from a pointer encoded as zero.  Calling it u32
+    # here would make pointer-valued tags unsafe.  A later AST use-site pass may
+    # promote this evidence after proving arithmetic/boolean-only use.
+    return ("unknown", "medium")
+
+
+def extract_tag_evidence(raw, base_line):
+    """Return source-located tag-domain evidence from one function body."""
+    code = mask_c_comments(raw)
+    tags = []
+    for m in TAG_CALL_RE.finditer(code):
+        opening = code.find("(", m.start())
+        args, _end = call_arguments(code, opening)
+        if not args:
+            continue
+        tag = args[0].strip()
+        if not TAG_MACRO_RE.fullmatch(tag):
+            continue
+        default = args[1].strip() if len(args) > 1 else ""
+        list_expression = ""
+        if m.group(1) == "GetTagData" and len(args) > 2:
+            list_expression = args[2].strip()
+        elif m.group(1) == "FindTagItem" and len(args) > 1:
+            list_expression = args[1].strip()
+        cast = source_cast_before(code, m.start())
+        kind, confidence = infer_source_tag_kind(m.group(1), cast, default)
+        tags.append({
+            "name": tag,
+            "access": m.group(1),
+            "kind": kind,
+            "confidence": confidence,
+            "line": base_line + code.count("\n", 0, m.start()),
+            "cast": cast,
+            "default": re.sub(r"\s+", " ", default)[:120],
+            "list_expression": re.sub(r"\s+", " ", list_expression)[:120],
+            "list_parameters": sorted(set(re.findall(
+                r"\b[A-Za-z_]\w*\b", list_expression)))
+        })
+
+    # A NextTagItem loop generally dispatches on ti_Tag.  These cases are
+    # valid domain evidence but payload typing needs data-flow, so keep them
+    # distinct and low confidence rather than pretending every case is u32.
+    if "NextTagItem" in code:
+        for m in re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code):
+            tag = m.group(1)
+            if not (tag.startswith(("GA_", "GTM", "GTC", "GTS", "GTLV_", "GT_",
+                                    "PGA_", "STRINGA_", "MX_", "CYCLE_"))):
+                continue
+            tags.append({
+                "name": tag, "access": "NextTagItem/case", "kind": "unknown",
+                "confidence": "low",
+                "line": base_line + code.count("\n", 0, m.start()),
+                "cast": None, "default": "", "list_expression": "",
+                "list_parameters": []
+            })
+
+    # Deduplicate repeated reads but preserve the strongest evidence and first
+    # source location.  A cast beats a NULL-derived pointer: high > medium > low.
+    strength = {"low": 0, "medium": 1, "high": 2}
+    tag_by_key = {}
+    for tag in tags:
+        key = (tag["name"], tag["access"])
+        old = tag_by_key.get(key)
+        if not old or strength[tag["confidence"]] > strength[old["confidence"]]:
+            tag_by_key[key] = tag
+    return sorted(tag_by_key.values(), key=lambda x: (x["name"], x["line"]))
 
 
 def source_function_chunk(src, name):
@@ -639,6 +705,45 @@ def source_function_chunk(src, name):
         nxt = re.search(r"\bAROS_LH\d+[A-Z]*\s*\(", src[m.end():])
         stop = m.end() + (nxt.start() if nxt else len(src) - m.end())
     return (m.start(), src[m.start():stop])
+
+
+def generic_function_chunk(src, name):
+    """Find a normal C function definition, excluding calls and prototypes."""
+    code = mask_c_comments(src)
+    for m in re.finditer(r"\b%s\s*\(" % re.escape(name), code):
+        opening = code.find("(", m.start())
+        _args, after = call_arguments(code, opening)
+        if after == opening:
+            continue
+        # Attributes and old-style declaration details may sit between the
+        # closing parenthesis and body.  A semicolon/assignment/comma proves
+        # this occurrence is not the definition we want.
+        brace = code.find("{", after, min(len(code), after + 512))
+        if brace < 0 or re.search(r"[;=,]", code[after:brace]):
+            continue
+        depth, i, state = 1, brace + 1, "code"
+        while i < len(code) and depth:
+            ch = code[i]
+            if state == "code":
+                if ch == '"':
+                    state = "string"
+                elif ch == "'":
+                    state = "char"
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+            elif state in ("string", "char"):
+                quote = '"' if state == "string" else "'"
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    state = "code"
+            i += 1
+        if depth == 0:
+            return (m.start(), src[m.start():i])
+    return None
 
 
 def source_files_for_target(rel):
@@ -669,54 +774,7 @@ def analyze_function_source(lib, rel, f, sources):
     path, whole, start, raw = found
     code = mask_c_comments(raw)
     base_line = whole.count("\n", 0, start) + 1
-    tags = []
-    for m in TAG_CALL_RE.finditer(code):
-        opening = code.find("(", m.start())
-        args, _end = call_arguments(code, opening)
-        if not args:
-            continue
-        tag = args[0].strip()
-        if not TAG_MACRO_RE.fullmatch(tag):
-            continue
-        default = args[1].strip() if len(args) > 1 else ""
-        cast = source_cast_before(code, m.start())
-        kind, confidence = infer_source_tag_kind(m.group(1), cast, default)
-        tags.append({
-            "name": tag,
-            "access": m.group(1),
-            "kind": kind,
-            "confidence": confidence,
-            "line": base_line + code.count("\n", 0, m.start()),
-            "cast": cast,
-            "default": re.sub(r"\s+", " ", default)[:120]
-        })
-
-    # A NextTagItem loop generally dispatches on ti_Tag.  These cases are
-    # valid domain evidence but payload typing needs data-flow, so keep them
-    # distinct and low confidence rather than pretending every case is u32.
-    if "NextTagItem" in code:
-        for m in re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code):
-            tag = m.group(1)
-            if not (tag.startswith(("GA_", "GTM", "GTC", "GTS", "GTLV_", "GT_",
-                                    "PGA_", "STRINGA_", "MX_", "CYCLE_"))):
-                continue
-            tags.append({
-                "name": tag, "access": "NextTagItem/case", "kind": "unknown",
-                "confidence": "low",
-                "line": base_line + code.count("\n", 0, m.start()),
-                "cast": None, "default": ""
-            })
-
-    # Deduplicate repeated reads but preserve the strongest evidence and first
-    # source location.  A cast beats a NULL-derived pointer: high > medium > low.
-    strength = {"low": 0, "medium": 1, "high": 2}
-    tag_by_key = {}
-    for tag in tags:
-        key = (tag["name"], tag["access"])
-        old = tag_by_key.get(key)
-        if not old or strength[tag["confidence"]] > strength[old["confidence"]]:
-            tag_by_key[key] = tag
-    tags = sorted(tag_by_key.values(), key=lambda x: (x["name"], x["line"]))
+    tags = extract_tag_evidence(raw, base_line)
 
     arguments = {}
     for atype, aname in f.args:
@@ -775,7 +833,8 @@ def ownership_candidates(functions, evidence):
 
     for producer in functions:
         pe = evname.get(producer.name, {})
-        if not pe.get("memory", {}).get("allocators"):
+        memory = pe.get("memory", {})
+        if not (memory.get("allocators") or memory.get("reachable_allocators")):
             continue
         if classify(producer.ret) not in ("struct", "aptr", "string"):
             continue
@@ -903,7 +962,18 @@ def summarize_ast(ast, symbol):
         if kind == "CallExpr":
             callee = ast_callee(node)
             if callee:
-                calls.append({"name": callee, "line": ast_line(node)})
+                # Clang places the callee expression first and the actual C
+                # arguments after it.  Recording which caller parameters feed
+                # each position lets helper evidence flow back to a public ABI
+                # parameter without guessing from variable names.
+                arguments = node.get("inner", [])[1:]
+                calls.append({
+                    "name": callee,
+                    "line": ast_line(node),
+                    "argument_parameters": [
+                        sorted(ast_referenced_parameters(arg)) for arg in arguments
+                    ]
+                })
             else:
                 inner = node.get("inner", [])
                 indirect.append({
@@ -931,12 +1001,21 @@ def summarize_ast(ast, symbol):
     unique_calls = []
     seen = set()
     for call in calls:
-        key = (call["name"], call["line"])
+        key = (call["name"], call["line"],
+               tuple(tuple(x) for x in call["argument_parameters"]))
         if key not in seen:
             unique_calls.append(call)
             seen.add(key)
+    parameters = []
+    for child in ast.get("inner", []):
+        if child.get("kind") == "ParmVarDecl":
+            parameters.append({
+                "name": child.get("name"),
+                "type": child.get("type", {}).get("qualType")
+            })
     return {
         "symbol": symbol,
+        "parameters": parameters,
         "direct_calls": unique_calls,
         "parameter_fields": {k: sorted(v) for k, v in sorted(param_fields.items())},
         "parameter_casts": {k: sorted(v) for k, v in sorted(param_casts.items())},
@@ -945,8 +1024,33 @@ def summarize_ast(ast, symbol):
     }
 
 
-def compile_function_ast(config, basename, f, source):
-    symbol = "%s_%d_%s" % (basename, f.lvo, f.name)
+def json_stream(text):
+    """Decode Clang's one-or-more top-level AST JSON objects."""
+    decoder, offset, values = json.JSONDecoder(), 0, []
+    while offset < len(text):
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if offset >= len(text):
+            break
+        value, offset = decoder.raw_decode(text, offset)
+        values.append(value)
+    return values
+
+
+def ast_function_definition(values, symbol):
+    """Select the requested definition, not a prototype matched by the filter."""
+    candidates = []
+    for value in values:
+        for node in ast_nodes(value):
+            if node.get("kind") != "FunctionDecl" or node.get("name") != symbol:
+                continue
+            if any(child.get("kind") == "CompoundStmt"
+                   for child in node.get("inner", [])):
+                candidates.append(node)
+    return candidates[0] if candidates else None
+
+
+def compile_named_ast(config, symbol, source):
     if not os.path.isfile(config["compiler"]):
         return {"status": "unavailable", "symbol": symbol,
                 "error": "AROS cross compiler not found"}
@@ -967,13 +1071,213 @@ def compile_function_ast(config, basename, f, source):
         return {"status": "error", "symbol": symbol,
                 "error": proc.stderr.strip()[-2000:]}
     try:
-        ast = json.loads(proc.stdout)
+        values = json_stream(proc.stdout)
     except ValueError as exc:
         return {"status": "error", "symbol": symbol,
                 "error": "invalid clang AST JSON: %s" % exc}
+    ast = ast_function_definition(values, symbol)
+    if not ast:
+        return {"status": "error", "symbol": symbol,
+                "error": "clang AST did not contain the function definition"}
     summary = summarize_ast(ast, symbol)
     summary["status"] = "ok"
     return summary
+
+
+def compile_function_ast(config, basename, f, source):
+    symbol = "%s_%d_%s" % (basename, f.lvo, f.name)
+    return compile_named_ast(config, symbol, source)
+
+
+def local_function_definition(sources, name, preferred=None):
+    """Locate a helper definition, preferring the caller's translation unit."""
+    ordered = sources
+    if preferred:
+        ordered = ([item for item in sources if item[0] == preferred] +
+                   [item for item in sources if item[0] != preferred])
+    for path, whole in ordered:
+        chunk = generic_function_chunk(whole, name)
+        if chunk:
+            start, raw = chunk
+            return {
+                "name": name,
+                "path": path,
+                "source": os.path.relpath(path, AROS),
+                "line": whole.count("\n", 0, start) + 1,
+                "raw": raw
+            }
+    return None
+
+
+def roots_for_call(call, caller_aliases):
+    """Map each call argument position back to public-vector parameters."""
+    roots = []
+    for referenced in call.get("argument_parameters", []):
+        origins = set()
+        for name in referenced:
+            origins.update(caller_aliases.get(name, set()))
+        roots.append(origins)
+    return roots
+
+
+def helper_aliases(ast, argument_roots):
+    params = ast.get("parameters", [])
+    return {
+        param.get("name"): set(argument_roots[i])
+        for i, param in enumerate(params)
+        if param.get("name") and i < len(argument_roots) and argument_roots[i]
+    }
+
+
+def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
+                              definition_cache=None, max_helpers=128, max_depth=12):
+    """Follow local direct calls and propagate their semantics to one vector.
+
+    This is a bounded call-graph/data-flow pass, not name-based guesswork.  A
+    helper parameter is associated with a public ABI argument only when Clang's
+    AST shows that argument flowing into the corresponding call position.
+    """
+    public_ast = evidence.get("ast", {})
+    if public_ast.get("status") != "ok" or not evidence.get("source"):
+        return
+    public_path = os.path.join(AROS, evidence["source"])
+    public_aliases = {arg["name"]: {arg["name"]}
+                      for arg in evidence.get("signature", {}).get("arguments", [])}
+    cache = shared_cache if shared_cache is not None else {}
+    definition_cache = definition_cache if definition_cache is not None else {}
+    reports, queued_states = {}, set()
+    queue = []
+    for call in public_ast.get("direct_calls", []):
+        queue.append((call, public_aliases,
+                      [evidence["name"], call["name"]], public_path, 1))
+
+    while queue and len(reports) < max_helpers:
+        call, caller_aliases, path, caller_source, depth = queue.pop(0)
+        if depth > max_depth:
+            continue
+        definition_key = (call["name"], caller_source)
+        if definition_key not in definition_cache:
+            definition_cache[definition_key] = local_function_definition(
+                sources, call["name"], caller_source)
+        definition = definition_cache[definition_key]
+        if not definition:
+            continue
+        key = (definition["name"], definition["path"])
+        if key not in cache:
+            ast = compile_named_ast(config, definition["name"], definition["path"])
+            item = dict(definition)
+            item["ast"] = ast
+            item["tags"] = extract_tag_evidence(item["raw"], item["line"])
+            code = mask_c_comments(item["raw"])
+            item["memory"] = {
+                "allocators": sorted(set(m.group(1) for m in ALLOC_CALL_RE.finditer(code))),
+                "releasers": sorted(set(m.group(1) for m in FREE_CALL_RE.finditer(code)))
+            }
+            item["callbacks"] = sorted(
+                set(m.group(1) for m in CALLBACK_SOURCE_RE.finditer(code)))
+            cache[key] = item
+        item = cache[key]
+        ast = item["ast"]
+        if ast.get("status") != "ok":
+            aliases = {}
+        else:
+            aliases = helper_aliases(ast, roots_for_call(call, caller_aliases))
+        state = (key, tuple((name, tuple(sorted(values)))
+                            for name, values in sorted(aliases.items())))
+        if state in queued_states:
+            continue
+        queued_states.add(state)
+
+        report = reports.get(key)
+        if report is None:
+            report = {
+                "name": item["name"], "source": item["source"],
+                "line": item["line"], "via": path,
+                "root_argument_aliases": {}, "tags": item["tags"],
+                "memory": item["memory"], "callbacks": item["callbacks"],
+                "ast": ast
+            }
+            reports[key] = report
+        elif len(path) < len(report["via"]):
+            report["via"] = path
+        for name, values in aliases.items():
+            current = set(report["root_argument_aliases"].get(name, []))
+            report["root_argument_aliases"][name] = sorted(current | values)
+
+        if ast.get("status") == "ok":
+            merged_aliases = {name: set(values) for name, values in
+                              report["root_argument_aliases"].items()}
+            for child in ast.get("direct_calls", []):
+                queue.append((child, merged_aliases, path + [child["name"]],
+                              item["path"], depth + 1))
+
+    helpers = sorted(reports.values(), key=lambda x: (x["source"], x["line"], x["name"]))
+    propagated_tags, propagated_callbacks = [], []
+    propagated_arguments = {}
+    reachable_allocators, reachable_releasers = set(), set()
+    for helper in helpers:
+        for tag in helper["tags"]:
+            root_arguments = set()
+            for local in tag.get("list_parameters", []):
+                root_arguments.update(helper["root_argument_aliases"].get(local, []))
+            propagated_tags.append(dict(
+                tag, source=helper["source"], via=helper["via"],
+                root_arguments=sorted(root_arguments)))
+        reachable_allocators.update(helper["memory"]["allocators"])
+        reachable_releasers.update(helper["memory"]["releasers"])
+        for callback in helper["callbacks"]:
+            propagated_callbacks.append({
+                "name": callback, "helper": helper["name"],
+                "source": helper["source"], "via": helper["via"]
+            })
+        ast = helper["ast"]
+        if ast.get("status") != "ok":
+            continue
+        for indirect in ast.get("indirect_calls", []):
+            propagated_callbacks.append({
+                "name": "<indirect-call>", "helper": helper["name"],
+                "source": helper["source"], "via": helper["via"],
+                "line": indirect.get("line"), "type": indirect.get("type")
+            })
+        categories = (
+            ("dereferenced_fields", ast.get("parameter_fields", {})),
+            ("concrete_casts", ast.get("parameter_casts", {})),
+            ("stored_in_fields", ast.get("retained_parameters", {})),
+        )
+        for local, roots in helper["root_argument_aliases"].items():
+            for category, facts in categories:
+                for fact in facts.get(local, []):
+                    for root in roots:
+                        propagated_arguments.setdefault(root, []).append({
+                            "kind": category, "value": fact,
+                            "helper": helper["name"], "source": helper["source"],
+                            "via": helper["via"]
+                        })
+    for root, facts in propagated_arguments.items():
+        unique = {}
+        for fact in facts:
+            key = (fact["kind"], fact["value"], fact["helper"], fact["source"])
+            unique[key] = fact
+        propagated_arguments[root] = sorted(
+            unique.values(), key=lambda x: (x["kind"], x["value"], x["helper"]))
+    tag_unique = {}
+    for tag in propagated_tags:
+        key = (tag["name"], tag["access"], tag["kind"], tag["source"], tag["line"])
+        tag_unique[key] = tag
+    evidence["reachable_helpers"] = helpers
+    evidence["propagated_tags"] = sorted(
+        tag_unique.values(), key=lambda x: (x["name"], x["source"], x["line"]))
+    evidence["propagated_arguments"] = dict(sorted(propagated_arguments.items()))
+    callback_unique = {}
+    for callback in propagated_callbacks:
+        key = (callback["name"], callback["helper"], callback.get("line"),
+               callback.get("type"))
+        callback_unique[key] = callback
+    evidence["propagated_callbacks"] = sorted(
+        callback_unique.values(),
+        key=lambda x: (x["name"], x["source"], x.get("line") or 0))
+    evidence["memory"]["reachable_allocators"] = sorted(reachable_allocators)
+    evidence["memory"]["reachable_releasers"] = sorted(reachable_releasers)
 
 
 def analyze_sources(which):
@@ -996,6 +1300,7 @@ def analyze_sources(which):
                 pass
         evidence = [analyze_function_source(lib, rel, f, sources) for f in funcs]
         ast_ok = ast_errors = 0
+        helper_cache, helper_definition_cache = {}, {}
         for f, e in zip(funcs, evidence):
             if not e.get("source") or not basename:
                 continue
@@ -1005,6 +1310,8 @@ def analyze_sources(which):
                 ast_ok += 1
             else:
                 ast_errors += 1
+            analyze_reachable_helpers(e, ast_config, sources,
+                                      helper_cache, helper_definition_cache)
         pairs = ownership_candidates(funcs, evidence)
         for e in evidence:
             e.pop("_raw", None)

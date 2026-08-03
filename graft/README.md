@@ -34,6 +34,11 @@ seed commit; the branch has many more (the bootstrap loader's AArch64 relocation
 the Apple-Silicon `mmap` fixes, the static-C-runtime force-load, `arch/aarch64-all/
 exec/`, etc.).
 
+The source-driven 68k compatibility work is documented in
+**[EMU68K-BRIDGE-IMPORTER.md](EMU68K-BRIDGE-IMPORTER.md)**. It explains how the
+library importer discovers ABI/build inputs, follows implementation helpers, and
+keeps uncertain pointer and callback behavior fail-closed.
+
 ## Build and run it
 
 See **[GETTING-STARTED.md](../GETTING-STARTED.md)** for the newcomer path and
