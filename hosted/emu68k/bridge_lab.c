@@ -13,6 +13,7 @@
 static FILE     *g_out;
 static int       g_level = -1;
 static unsigned long g_seq;
+static int       g_run;      /* which run in this trace file we are in */
 
 /* One identity table per namespace, numbered in first-seen order. */
 static struct {
@@ -60,7 +61,13 @@ const char *bl_id(const char *kind, uint32_t addr)
     i = g_nids++;
     snprintf(g_ids[i].kind, sizeof g_ids[i].kind, "%s", kind);
     g_ids[i].addr = addr;
-    snprintf(g_ids[i].text, sizeof g_ids[i].text, "%s:%d", kind, ++g_counts[k]);
+    /* NAMESPACED BY RUN. A sweep appends several programs to one trace, and a
+     * bump allocator hands out the same guest addresses to each of them - so
+     * without this, one program's port:1 and another's are the same string for
+     * different objects, and any check that groups by identity silently merges
+     * two programs' evidence. */
+    snprintf(g_ids[i].text, sizeof g_ids[i].text, "r%d/%s:%d",
+             g_run, kind, ++g_counts[k]);
     return g_ids[i].text;
 }
 
@@ -76,6 +83,9 @@ void bl_open(const char *program)
      * is delimited by its own run.start/run.end. */
     g_out = fopen(to, "a");
     if (!g_out) { g_level = BL_OFF; return; }
+    g_run++;
+    g_nids = 0;                  /* identities are per run, see bl_id */
+    g_nkinds = 0;
     /* Unconditional, so "no file" and "no events" are different answers. */
     bl_event(BL_SUMMARY, -1, 0, 0, "run.start", "\"program\":\"%s\"",
              program ? program : "");
@@ -96,7 +106,7 @@ void bl_event(int level, int context, uint32_t task, uint32_t pc,
               const char *event, const char *fields, ...)
 {
     if (!g_out || bl_level() < level) return;
-    fprintf(g_out, "{\"schema\":1,\"seq\":%lu", ++g_seq);
+    fprintf(g_out, "{\"schema\":1,\"seq\":%lu,\"run\":%d", ++g_seq, g_run);
     if (context >= 0) fprintf(g_out, ",\"context\":%d", context);
     if (task)         fprintf(g_out, ",\"task\":\"%s\"", bl_id("task", task));
     if (pc)           fprintf(g_out, ",\"pc\":\"0x%08x\"", pc);

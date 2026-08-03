@@ -27,8 +27,8 @@ GADGET_SIZE         equ 56              ; struct ExtGadget on m68k
 GFLG_EXTENDED       equ $8000
 GTYP_BOOLGADGET     equ 1
 
-WA_Width            equ $80000090
-WA_Height           equ $80000091
+WA_Width            equ $80000066
+WA_Height           equ $80000067
 TAG_DONE            equ 0
 
     move.l  4.w,a6

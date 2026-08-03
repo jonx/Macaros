@@ -67,174 +67,289 @@ def seq_range(rows):
     return [min(s), max(s)]
 
 
-def finding(contract, status, invariant, summary, evidence, next_action=None):
-    f = {"contract": contract, "status": status, "invariant": invariant,
-         "summary": summary, "evidence": evidence}
+# The two axes. MATURITY is what the reviewed registry says we support, and only
+# a person changes it. OBSERVATION is what THIS trace showed. Collapsing them
+# into one "status" let a trace report "supported" for a contract the registry
+# still calls needs-review - the tool announcing a decision it has no authority
+# to make.
+OBSERVATIONS = ("not-exercised", "exercised-conformant", "exercised-violated",
+                "exercised-incomplete", "invalid-trace")
+
+_REG = None
+
+
+def registry_status(contract):
+    global _REG
+    if _REG is None:
+        _REG = {c["id"]: c for c in load_registry()}
+    return _REG.get(contract, {}).get("status", "unregistered")
+
+
+# A fixture proves the MECHANISM works. It is not a second legacy program
+# proving the shape GENERALIZES, so the two are counted apart and never summed:
+# promoting a contract on fixture evidence alone would be certifying our own
+# test rather than the behaviour it stands for.
+def split_evidence(programs):
+    fixtures = [p for p in programs if p and p.startswith("gen")]
+    return len(programs) - len(fixtures), len(fixtures)
+
+
+def finding(contract, observation, invariant, summary, evidence,
+            next_action=None, counts=(0, 0)):
+    assert observation in OBSERVATIONS, observation
+    f = {"contract": contract,
+         "maturity": registry_status(contract),
+         "observation": observation,
+         "program_evidence": counts[0],
+         "fixture_evidence": counts[1],
+         "invariant": invariant,
+         "summary": summary,
+         "evidence": evidence}
     if next_action:
         f["next_action"] = next_action
     return f
 
 
-def not_exercised(contract, invariant, triggers):
+def no_evidence(rows):
+    return {"seq_range": None, "aggregate": [], "sample_seq": []}
+
+
+def not_exercised(contract, invariant, triggers, counts):
     """A run that never triggered a contract has said NOTHING about it.
 
-    Reporting "supported" there is the worst answer this tool can give: it is
+    Reporting it as conformant is the worst answer this tool can give: it is
     indistinguishable from a run that exercised the contract and satisfied it,
-    so an agent would conclude a capability is proven when nothing tested it.
-    A program that stops early - at a capability gap, say - produces exactly
-    that shape, and one did."""
+    so an agent would conclude a capability is proven when nothing tested it."""
     return finding(
         contract, "not-exercised", invariant,
-        "no %s event in this trace: the run says nothing about this contract"
+        "no %s in this trace: the run says nothing about this contract"
         % " or ".join(triggers),
-        {"seq_range": None, "aggregate": [], "sample_seq": []},
+        no_evidence(None),
         {"kind": "need-evidence",
          "hypothesis": "the program stopped before reaching this behaviour",
          "confirms_if": "the trace holds a bridge.gap or an early run.end",
-         "command": "graft/bridge-lab report <trace> --text"})
+         "command": "graft/bridge-lab report <trace> --text"}, counts)
 
 
-# ---- the invariant checks. The registry holds status and metadata; an
-# invariant is behaviour, so it is code, and each one names the events it read.
+def incomplete(contract, invariant, what, evidence, counts):
+    """A trigger fired but the expected sequence never finished, because the
+    program died at an UNRELATED gap. That is neither conformance nor a
+    violation: the contract was reached and then abandoned."""
+    return finding(
+        contract, "exercised-incomplete", invariant, what, evidence,
+        {"kind": "need-evidence",
+         "hypothesis": "the run ended at an unrelated capability gap before the "
+                       "contract's sequence completed",
+         "confirms_if": "capability_gaps is non-empty and names an unrelated vector",
+         "command": "graft/bridge-lab report <trace> --text"}, counts)
 
-def check_port_lifecycle(ev, contracts):
-    if not any(ev.get(t) for t in ["port.create", "port.delete"]):
-        return not_exercised("port.lifecycle", "a created port names its creating task and owns an allocated signal bit; deleting it releases that bit", ["port.create", "port.delete"])
+
+def check_port_lifecycle(ev, counts, gaps):
     created = ev.get("port.create", [])
     deleted = ev.get("port.delete", [])
+    inv = ("a created port names its creating task and owns an allocated signal "
+           "bit; deleting it releases that bit")
+    if not created and not deleted:
+        return not_exercised("port.lifecycle", inv,
+                             ["port.create", "port.delete"], counts)
     bad_owner = [e for e in created if not e.get("owner")]
     bad_bit = [e for e in created if not e.get("signal_bit")]
     bits = {e["port"]: e.get("signal_bit") for e in created}
     unreleased = [e for e in deleted
                   if e.get("port") in bits and e.get("signal_bit") != bits[e["port"]]]
-    violations = bad_owner + bad_bit + unreleased
-    ok = not violations
-    return finding(
-        "port.lifecycle",
-        "supported" if ok else "violation",
-        "a created port names its creating task and owns an allocated signal bit; "
-        "deleting it releases that bit",
-        "%d ports created, %d deleted, %d without an owner, %d without a bit"
-        % (len(created), len(deleted), len(bad_owner), len(bad_bit)),
-        {"seq_range": seq_range(created + deleted),
-         "aggregate": [{"event": "port.create", "count": len(created)},
-                       {"event": "port.delete", "count": len(deleted)}],
-         "sample_seq": [e["seq"] for e in (violations or created)[:3]]},
-        None if ok else {
-            "kind": "fix-invariant",
-            "hypothesis": "a port is being created without an owner or a signal bit",
-            "confirms_if": "the named seq events show owner or signal_bit missing",
-            "command": "graft/bridge-lab events <trace> --seq %s" %
-                       ("..".join(str(x) for x in seq_range(violations)) if violations else ""),
-        })
+    bad = bad_owner + bad_bit + unreleased
+    ev_block = {"seq_range": seq_range(created + deleted),
+                "aggregate": [{"event": "port.create", "count": len(created)},
+                              {"event": "port.delete", "count": len(deleted)}],
+                "sample_seq": [e["seq"] for e in (bad or created)[:3]]}
+    summary = ("%d ports created, %d deleted, %d without an owner, %d without a bit"
+               % (len(created), len(deleted), len(bad_owner), len(bad_bit)))
+    if bad:
+        return finding("port.lifecycle", "exercised-violated", inv, summary,
+                       ev_block,
+                       {"kind": "fix-invariant",
+                        "hypothesis": "a port was created without an owner or a bit",
+                        "confirms_if": "the named seq events lack owner or signal_bit",
+                        "command": "graft/bridge-lab events <trace> --seq %s"
+                                   % "..".join(str(x) for x in seq_range(bad))},
+                       counts)
+    return finding("port.lifecycle", "exercised-conformant", inv, summary,
+                   ev_block, None, counts)
 
 
-def check_binding(ev, contracts):
-    if not any(ev.get(t) for t in ["port.bind", "port.pump"]):
-        return not_exercised("event.native_port_binding", "only an explicitly bound destination may receive a pumped native message; a pumped message reaches exactly one guest destination; reply pairing is released exactly once", ["port.bind", "port.pump"])
+def check_binding(ev, counts, gaps):
     binds = ev.get("port.bind", [])
     pumps = ev.get("port.pump", [])
+    gets = ev.get("port.get", [])
+    replies = ev.get("port.reply", [])
+    inv = ("only an explicitly bound destination may receive a pumped native "
+           "message; a pumped message reaches exactly one guest destination; "
+           "reply pairing is released exactly once")
+    if not binds and not pumps:
+        return not_exercised("event.native_port_binding", inv,
+                             ["port.bind", "port.pump"], counts)
     bound = {b.get("destination") for b in binds}
     unsolicited = [p for p in pumps if p.get("destination") not in bound]
-    replies = ev.get("port.reply", [])
     doubled = [m for m, n in
                collections.Counter(r.get("message") for r in replies).items() if n > 1]
-    ok = not unsolicited and not doubled
     dests = collections.Counter(b.get("destination") for b in binds)
-    return finding(
-        "event.native_port_binding",
-        "supported" if ok else "violation",
-        "only an explicitly bound destination may receive a pumped native message; "
-        "a pumped message reaches exactly one guest destination; "
-        "reply pairing is released exactly once",
-        "%d bindings to %d destination port(s), %d pumped, %d unsolicited, "
-        "%d double replies"
-        % (len(binds), len(dests), len(pumps), len(unsolicited), len(doubled)),
-        {"seq_range": seq_range(binds + pumps),
-         "aggregate": [{"destination": d, "windows_bound": n}
-                       for d, n in sorted(dests.items())],
-         "sample_seq": [e["seq"] for e in (unsolicited or binds)[:3]]},
-        None if ok else {
-            "kind": "fix-invariant",
-            "hypothesis": "a native message reached a port nothing bound to a window",
-            "confirms_if": "the named seq events show a pump to an unbound destination",
-            "command": "graft/bridge-lab events <trace> --seq %s" %
-                       ("..".join(str(x) for x in seq_range(unsolicited)) if unsolicited else ""),
-        })
+    ev_block = {"seq_range": seq_range(binds + pumps),
+                "aggregate": [{"destination": d, "windows_bound": n}
+                              for d, n in sorted(dests.items())]
+                             + [{"pumped": len(pumps), "got": len(gets),
+                                 "replied": len(replies)}],
+                "sample_seq": [e["seq"] for e in (unsolicited or binds)[:3]]}
+    summary = ("%d bindings to %d destination port(s), %d pumped, %d unsolicited, "
+               "%d double replies"
+               % (len(binds), len(dests), len(pumps), len(unsolicited), len(doubled)))
+    if unsolicited or doubled:
+        return finding("event.native_port_binding", "exercised-violated", inv,
+                       summary, ev_block,
+                       {"kind": "fix-invariant",
+                        "hypothesis": "a native message reached a port nothing bound",
+                        "confirms_if": "a port.pump names an unbound destination",
+                        "command": "graft/bridge-lab events <trace> --seq %s"
+                                   % ("..".join(str(x) for x in seq_range(unsolicited))
+                                      if unsolicited else "")},
+                       counts)
+    # Bound, but nothing was ever delivered or replied: reached and abandoned.
+    if binds and not pumps and gaps:   # `gaps` = the run did not finish
+        return incomplete("event.native_port_binding", inv,
+                          summary + " - bound but nothing delivered before the run ended",
+                          ev_block, counts)
+    return finding("event.native_port_binding", "exercised-conformant", inv,
+                   summary, ev_block, None, counts)
 
 
-def check_mailbox(ev, contracts):
-    if not any(ev.get(t) for t in ["process.create"]):
-        return not_exercised("process.mailbox", "a process's own pr_MsgPort never receives native input", ["process.create"])
+def check_mailbox(ev, counts, gaps):
     procs = ev.get("process.create", [])
+    inv = "a process's own pr_MsgPort never receives native input"
+    if not procs:
+        return not_exercised("process.mailbox", inv, ["process.create"], counts)
     mailboxes = {p.get("port") for p in procs}
-    pumps = ev.get("port.pump", [])
-    leaked = [p for p in pumps if p.get("destination") in mailboxes]
-    ok = not leaked
-    return finding(
-        "process.mailbox",
-        "supported" if ok else "violation",
-        "a process's own pr_MsgPort never receives native input",
-        "%d process mailbox(es) identified, %d native deliveries into one"
-        % (len(mailboxes), len(leaked)),
-        {"seq_range": seq_range(procs + leaked),
-         "aggregate": [{"mailbox": m} for m in sorted(x for x in mailboxes if x)],
-         "sample_seq": [e["seq"] for e in (leaked or procs)[:3]]},
-        None if ok else {
-            "kind": "fix-invariant",
-            "hypothesis": "native input is being broadcast to a worker mailbox",
-            "confirms_if": "a port.pump names a destination that is a process port",
-            "command": "graft/bridge-lab events <trace> --seq %s" %
-                       ("..".join(str(x) for x in seq_range(leaked)) if leaked else ""),
-        })
+    leaked = [p for p in ev.get("port.pump", [])
+              if p.get("destination") in mailboxes]
+    ev_block = {"seq_range": seq_range(procs + leaked),
+                "aggregate": [{"mailbox": m} for m in sorted(x for x in mailboxes if x)],
+                "sample_seq": [e["seq"] for e in (leaked or procs)[:3]]}
+    summary = ("%d process mailbox(es) identified, %d native deliveries into one"
+               % (len(mailboxes), len(leaked)))
+    if leaked:
+        return finding("process.mailbox", "exercised-violated", inv, summary,
+                       ev_block,
+                       {"kind": "fix-invariant",
+                        "hypothesis": "native input is broadcast to a worker mailbox",
+                        "confirms_if": "a port.pump destination is a process port",
+                        "command": "graft/bridge-lab events <trace> --seq %s"
+                                   % "..".join(str(x) for x in seq_range(leaked))},
+                       counts)
+    return finding("process.mailbox", "exercised-conformant", inv, summary,
+                   ev_block, None, counts)
 
 
-def check_scheduler(ev, contracts):
+def check_scheduler(ev, counts, gaps):
     """Did a context that owns work never get to run, while a sibling spun?"""
+    inv = ("a context that never calls a blocking primitive must not starve "
+           "its siblings")
     polls = collections.Counter()
     for e in ev.get("port.get", []) + ev.get("port.wait", []):
         if "context" in e:
             polls[e["context"]] += 1
-    yields = collections.Counter(e.get("context") for e in ev.get("scheduler.yield", []))
-    contexts = set(polls) | set(yields)
-    if len(contexts) < 2:
-        return not_exercised(
-            "scheduler.yield.frame_wait",
-            "a context that never calls a blocking primitive must not starve "
-            "its siblings",
-            ["a second context"])
-    starved = sorted(c for c in contexts
-                     if polls.get(c, 0) <= 2 and any(polls.get(o, 0) > 1000
-                                                     for o in contexts if o != c))
-    # A single yield in twenty thousand polls is not yielding. The invariant is
-    # about PROPORTION: a context that hands its turn back once per thousand
-    # polls starves a sibling just as completely as one that never does.
-    spinning = sorted(c for c in contexts
-                      if polls.get(c, 0) > 1000
-                      and yields.get(c, 0) * 100 < polls.get(c, 0))
-    ok = not (starved and spinning)
-    return finding(
-        "scheduler.yield.frame_wait",
-        "supported" if ok else "needs-review",
-        "a context that never calls a blocking primitive must not starve its siblings",
-        "contexts %s poll without ever yielding; context(s) %s ran at most twice"
-        % (spinning or "none", starved or "none"),
-        {"seq_range": seq_range(ev.get("port.get", [])),
-         "aggregate": [{"context": c, "port_polls": polls.get(c, 0),
-                        "yields": yields.get(c, 0)} for c in sorted(contexts)],
-         "sample_seq": [e["seq"] for e in ev.get("port.get", [])[:3]]},
-        None if ok else {
-            "kind": "propose-contract",
-            "hypothesis": "a frame wait blocks until vertical blank on real hardware "
-                          "and is therefore a yield point",
-            "confirms_if": "the starved context's port_polls rises above 2 once that "
-                           "call declares a yield",
-            "refutes_if": "the spinning context stops making progress it needs",
-            "command": "graft/bridge-lab compare <trace> <baseline.json>",
-        })
+    yields = ev.get("scheduler.yield", [])
+    resumes = ev.get("scheduler.resume", [])
+    known = set(polls) | {e.get("context") for e in yields + resumes}
+    known.discard(None)
+    if len(known) < 2:
+        return not_exercised("scheduler.yield.frame_wait", inv,
+                             ["a second context"], counts)
+
+    # Threshold-free, and by ORDERING rather than by a poll count tuned to one
+    # program. Take the last moment the scheduler did anything; everything after
+    # it is a window in which nothing switched. If ONE context ran through that
+    # window while another existed and never got a turn, the machine was
+    # monopolized - which is the same fact whether the idle context is parked in
+    # a wait or suspended inside a nested call, and those look different.
+    last_sched = max([e["seq"] for e in yields + resumes], default=0)
+    tail = [e for e in ev.get("port.get", []) + ev.get("port.wait", [])
+            if e.get("seq", 0) > last_sched and "context" in e]
+    tail_ctx = {e["context"] for e in tail}
+    tail_yields = [e for e in yields if e.get("seq", 0) > last_sched]
+    monopolist = sorted(tail_ctx)
+    idle = sorted(known - tail_ctx)
+    ev_block = {"seq_range": [last_sched, max([e["seq"] for e in tail],
+                                              default=last_sched)],
+                "aggregate": [{"context": c, "port_polls": polls.get(c, 0),
+                               "yields": sum(1 for y in yields
+                                             if y.get("context") == c),
+                               "resumes": sum(1 for y in resumes
+                                              if y.get("context") == c)}
+                              for c in sorted(known)],
+                "sample_seq": [e["seq"] for e in tail[:3]]}
+    spinning = monopolist if (len(monopolist) == 1 and len(tail) >= 20
+                              and not tail_yields and idle) else []
+    starved = idle if spinning else []
+
+    if spinning and starved:
+        return finding("scheduler.yield.frame_wait", "exercised-violated", inv,
+                       "after the last scheduler event, context(s) %s ran %d "
+                       "calls with no yield while context(s) %s never got a turn"
+                       % (spinning, len(tail), starved), ev_block,
+                       {"kind": "propose-contract",
+                        "hypothesis": "a frame wait blocks until vertical blank on "
+                                      "real hardware and is therefore a yield point",
+                        "confirms_if": "the starved context's port_polls rises above 2 "
+                                       "once that call declares a yield",
+                        "refutes_if": "the spinning context stops making progress",
+                        "command": "graft/bridge-lab compare <trace> <baseline.json>"},
+                       counts)
+    return finding("scheduler.yield.frame_wait", "exercised-conformant", inv,
+                   "%d contexts ran; none monopolized the machine" % len(known),
+                   ev_block, None, counts)
 
 
 CHECKS = [check_port_lifecycle, check_binding, check_mailbox, check_scheduler]
+
+
+# An observation is only meaningful for ONE run. Aggregating several programs
+# into one surface hides the very thing a focused fixture exists to isolate: a
+# violation in one run is diluted by conformance in the next, and an ordering
+# check reads one program's tail as the next program's head. So every check runs
+# PER RUN and the report keeps the worst answer, with each run's own result
+# beside it.
+SEVERITY = {"not-exercised": 0, "exercised-conformant": 1,
+            "exercised-incomplete": 2, "exercised-violated": 3,
+            "invalid-trace": 4}
+
+
+def split_runs(events):
+    runs, cur = [], []
+    for e in events:
+        if e.get("event") == "run.start" and cur:
+            runs.append(cur)
+            cur = []
+        cur.append(e)
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def worst_across_runs(check, events, counts):
+    per_run, worst = [], None
+    for rows in split_runs(events):
+        ev = by_event(rows)
+        starts = ev.get("run.start", [])
+        name = starts[0].get("program") if starts else None
+        unfinished = (bool(ev.get("bridge.gap")) or
+                      not any(x.get("result") == "ok" for x in ev.get("run.end", [])))
+        f = check(ev, counts, unfinished)
+        per_run.append({"program": name, "observation": f["observation"],
+                        "summary": f["summary"]})
+        if worst is None or SEVERITY[f["observation"]] > SEVERITY[worst["observation"]]:
+            worst = f
+    if worst is None:
+        return None
+    worst["per_run"] = per_run
+    return worst
 
 
 def report(path, as_text=False):
@@ -242,7 +357,7 @@ def report(path, as_text=False):
     if err is not None:
         # The tool's own failure is a finding with the same shape as any other.
         out = {"schema": 1, "trace": path, "findings": [
-            finding("tool.trace_readable", "violation",
+            finding("tool.trace_readable", "invalid-trace",
                     "a trace named on the command line can be read and parsed",
                     err, {"seq_range": None, "aggregate": [], "sample_seq": []},
                     {"kind": "fix-input",
@@ -258,7 +373,7 @@ def report(path, as_text=False):
     if not starts:
         # Distinguishable by construction: run.start is unconditional.
         findings.append(finding(
-            "tool.trace_readable", "violation",
+            "tool.trace_readable", "invalid-trace",
             "an enabled recorder always emits run.start",
             "no run.start: the recorder never ran, so this trace describes nothing",
             {"seq_range": None, "aggregate": [], "sample_seq": []},
@@ -266,8 +381,10 @@ def report(path, as_text=False):
              "hypothesis": "EMU68K_BRIDGE_TRACE did not reach the process",
              "confirms_if": "the file is empty",
              "command": "EMU68K_BRIDGE_TRACE=<file> <run the program>"}))
+    counts = split_evidence([x.get("program") for x in starts])
+
     for check in CHECKS:
-        findings.append(check(ev, load_registry()))
+        findings.append(worst_across_runs(check, events, counts))
 
     gaps = ev.get("bridge.gap", [])
     out = {
@@ -276,7 +393,9 @@ def report(path, as_text=False):
         # Every run in the file. Contracts are about the SUBSTRATE, not about
         # one program, so the checks read all of them - and a sweep is exactly
         # where a contract one program never reaches gets exercised by another.
-        "programs": [s.get("program") for s in starts],
+        "programs": [x.get("program") for x in starts],
+        "program_evidence": counts[0],
+        "fixture_evidence": counts[1],
         "results": [e.get("result") for e in ev.get("run.end", [])],
         "events": len(events),
         "malformed_lines": bad,
@@ -294,17 +413,22 @@ def emit(out, as_text):
         sys.stdout.write("\n")
         return
     print("trace   : %s (%s events)" % (out.get("trace"), out.get("events")))
-    print("programs: %s   results: %s"
+    print("programs: %s   results: %s   (%d program / %d fixture evidence)"
           % (", ".join(x or "?" for x in out.get("programs") or []) or "none",
-             ", ".join(x or "?" for x in out.get("results") or []) or "none"))
+             ", ".join(x or "?" for x in out.get("results") or []) or "none",
+             out.get("program_evidence", 0), out.get("fixture_evidence", 0)))
     for g in out.get("capability_gaps", []):
         print("GAP     : LVO %s (offset %s) at seq %s"
               % (g["lvo"], g["offset"], g["seq"]))
     for f in out["findings"]:
-        print("\n%-12s %s" % (f["status"].upper(), f["contract"]))
+        print("\n%-22s %s  [registry: %s]"
+              % (f["observation"].upper(), f["contract"], f["maturity"]))
         print("  %s" % f["summary"])
         for a in f["evidence"]["aggregate"][:8]:
             print("    %s" % json.dumps(a, sort_keys=True))
+        for r in f.get("per_run", []):
+            if len(f.get("per_run", [])) > 1:
+                print("    per-run: %-14s %s" % (r["program"], r["observation"]))
         if f.get("next_action"):
             print("  next: %s - %s" % (f["next_action"]["kind"],
                                        f["next_action"].get("hypothesis", "")))
@@ -330,17 +454,20 @@ def compare(path, baseline):
     with open(baseline, encoding="utf-8") as fh:
         base = json.load(fh)
     ev = by_event(events)
+    counts = split_evidence([x.get("program") for x in ev.get("run.start", [])])
+    unfinished = (bool(ev.get("bridge.gap")) or
+                  not any(x.get("result") == "ok" for x in ev.get("run.end", [])))
     now = {f["contract"]: f for f in
-           (check(ev, load_registry()) for check in CHECKS)}
+           (check(ev, counts, unfinished) for check in CHECKS)}
     was = {f["contract"]: f for f in base.get("findings", [])}
     diff = []
     for cid in sorted(set(now) | set(was)):
         a, b = was.get(cid), now.get(cid)
         if not a or not b:
             diff.append({"contract": cid, "change": "added" if b else "removed"})
-        elif a["status"] != b["status"]:
-            diff.append({"contract": cid, "change": "status",
-                         "from": a["status"], "to": b["status"]})
+        elif a.get("observation") != b.get("observation"):
+            diff.append({"contract": cid, "change": "observation",
+                         "from": a.get("observation"), "to": b.get("observation")})
         elif a["evidence"]["aggregate"] != b["evidence"]["aggregate"]:
             diff.append({"contract": cid, "change": "evidence",
                          "from": a["evidence"]["aggregate"],
