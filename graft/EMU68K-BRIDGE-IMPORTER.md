@@ -4,27 +4,48 @@ The importer turns an AROS native library implementation into evidence for the
 68k-to-native bridge. Its unit of work is a library, not the next missing LVO
 encountered by an application.
 
-The intended stable command is:
+The stable import command is:
 
 ```sh
 graft/gen-emu68k-bridge --import-library gadtools
 ```
 
-That command is being built in independently testable stages. The current
-source-analysis stage can be inspected with:
+It writes three artifacts under `build/emu68k-import/gadtools/` by default:
+
+- `analysis.json` is the complete public-vector and reachable-helper evidence.
+- `manifest.json` is the deterministic import contract: source/build hashes,
+  accepted facts, per-vector outcome, and unresolved review items.
+- `review.md` is the same finite review queue in a human-readable form.
+
+Use another output root when needed:
+
+```sh
+graft/gen-emu68k-bridge --import-library gadtools --output-dir /tmp/gadtools-import
+```
+
+Verify that checked artifacts still describe the current source and build:
+
+```sh
+graft/gen-emu68k-bridge --check-import gadtools
+```
+
+The check regenerates all three artifacts in memory and fails if any file is
+missing or stale. The lower-level source-analysis stream can be inspected with:
 
 ```sh
 graft/gen-emu68k-bridge --analyze-source gadtools > /tmp/gadtools-analysis.json
 ```
 
-`--import-library` is not yet a released interface. This document distinguishes
-implemented behavior from the remaining pipeline so a prototype is not mistaken
-for a certified bridge.
+The command currently stops after manifest and review generation. It does not
+yet mutate the live bridge policy or claim certification. This document
+distinguishes implemented behavior from the remaining pipeline so a successful
+import is not mistaken for a certified bridge.
 
 ## Inputs and discovery
 
-The library name is resolved through the same AROS tree scan used by bridge code
-generation. From there the tool discovers:
+The library name is resolved by scanning every `.conf` in the AROS source tree;
+it is deliberately not restricted by the runtime bridge's existing `GEN_LIBS`
+allowlist. From there the tool discovers:
 
 1. The library `.conf`, which is authoritative for public function names, LVOs,
    return and argument types, and 68k argument registers.
@@ -84,18 +105,16 @@ pointer. Guessing `u32` there could pass a guest address to native code. The
 importer must leave such a tag closed until another use site or an explicit
 review proves its representation.
 
-## Planned import and certification pipeline
+## Import artifacts and remaining certification pipeline
 
-`--import-library <name>` will consume the analysis and produce deterministic,
-source-hashed artifacts:
+`--import-library <name>` now produces the source-hashed analysis, manifest, and
+review report. The remaining stages will consume them to produce:
 
-1. A per-library bridge manifest containing accepted facts and full provenance.
-2. A finite review report containing every unresolved or conflicting fact.
-3. Generated bridge policy and crossing code for accepted facts.
-4. Generated negative tests for unsupported tags and invalid object types.
-5. Lifecycle tests for inferred producer/releaser pairs.
-6. Callback/re-entry tests when callback contracts are accepted.
-7. A certification result proving all public vectors are either generated or
+1. Generated bridge policy and crossing code for accepted facts.
+2. Generated negative tests for unsupported tags and invalid object types.
+3. Lifecycle tests for inferred producer/releaser pairs.
+4. Callback/re-entry tests when callback contracts are accepted.
+5. A certification result proving all public vectors are either generated or
    explicitly fail closed.
 
 Certification is stronger than successful code generation. A library is
@@ -112,4 +131,3 @@ describe: polymorphic pointers, undocumented retained lifetimes, private
 assembly, binary-only third-party libraries, native callbacks with unusual
 calling conventions, and direct hardware access. The tool reports these cases;
 it never invents a translation to make coverage numbers look complete.
-

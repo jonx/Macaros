@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import json
+import hashlib
 import subprocess
 
 AROS = os.environ.get("AROS_SRC", os.path.expanduser("~/Source/aros-upstream"))
@@ -149,6 +150,33 @@ def all_targets():
     nothing is compiled, only counted."""
     return [(short + ".library", rel, None, None, None)
             for short, rel in sorted(find_confs().items())]
+
+
+def analysis_targets(which):
+    """Resolve requested libraries without the runtime emission allowlist.
+
+    GEN_LIBS deliberately limits what the bridge links by default.  An importer
+    must instead be able to inspect any source library, including one that has
+    never been imported before.  A generated proto header is recorded when
+    present but is not required merely to discover and report the source.
+    """
+    if not which:
+        return gen_targets()
+    confs, out, missing = find_confs(), [], []
+    for requested in sorted(set(which)):
+        short = requested[:-8] if requested.endswith(".library") else requested
+        rel = confs.get(short)
+        if not rel:
+            missing.append(requested)
+            continue
+        pb = proto_base(short)
+        out.append((short + ".library", rel,
+                    pb[0] if pb else None, pb[1] if pb else None,
+                    "proto/%s.h" % short if pb else None))
+    if missing:
+        raise ValueError("no AROS library .conf matches: %s" %
+                         ", ".join(missing))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1280,11 +1308,11 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
     evidence["memory"]["reachable_releasers"] = sorted(reachable_releasers)
 
 
-def analyze_sources(which):
-    """Emit JSON evidence mined from AROS library implementations."""
+def collect_source_reports(which):
+    """Return evidence mined from AROS library implementations."""
     wanted = set(which)
     reports = []
-    for lib, rel, _base, _btype, _hdr in gen_targets():
+    for lib, rel, _base, _btype, _hdr in analysis_targets(which):
         short = lib.split(".")[0]
         if wanted and short not in wanted and lib not in wanted:
             continue
@@ -1331,9 +1359,377 @@ def analyze_sources(which):
             "ownership_candidates": pairs
         })
     if wanted and not reports:
-        print("no generated library matches: %s" % ", ".join(sorted(wanted)), file=sys.stderr)
+        raise ValueError("no generated library matches: %s" %
+                         ", ".join(sorted(wanted)))
+    return reports
+
+
+def analyze_sources(which):
+    """Emit JSON evidence mined from AROS library implementations."""
+    try:
+        reports = collect_source_reports(which)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
     print(json.dumps({"schema": 1, "libraries": reports}, indent=2, sort_keys=False))
+    return 0
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                block = fh.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def logical_path(path):
+    """Stable, relocatable spelling for an importer input path."""
+    path = os.path.abspath(path)
+    roots = ((os.path.abspath(AROS), "AROS_SRC"),
+             (os.path.abspath(AROS_BUILD), "AROS_BUILD"))
+    for root, label in roots:
+        try:
+            if os.path.commonpath((root, path)) == root:
+                return label + "/" + os.path.relpath(path, root)
+        except ValueError:
+            pass
+    return path
+
+
+def input_file(path, role):
+    if not path or not os.path.isfile(path):
+        return None
+    return {"role": role, "path": logical_path(path), "sha256": sha256_file(path)}
+
+
+def discover_public_headers(short, config):
+    include = os.path.join(config["sysroot"], "include")
+    candidates = [
+        os.path.join(include, "libraries", short + ".h"),
+        os.path.join(include, "proto", short + ".h"),
+        os.path.join(include, "clib", short + "_protos.h"),
+        os.path.join(include, "defines", short + ".h"),
+        os.path.join(include, "inline", short + ".h"),
+        os.path.join(include, "inline", short + "_protos.h"),
+        os.path.join(include, "pragmas", short + "_pragmas.h"),
+        os.path.join(GENINC, "proto", short + ".h"),
+    ]
+    records = [input_file(path, "public-header") for path in candidates]
+    return sorted((x for x in records if x), key=lambda x: x["path"])
+
+
+def compiler_identity(config):
+    try:
+        proc = subprocess.run([config["compiler"], "--version"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              encoding="utf-8", errors="replace", timeout=10)
+        version = proc.stdout.splitlines()[0] if proc.stdout else ""
+    except (OSError, subprocess.TimeoutExpired):
+        version = "unavailable"
+    return {"path": config["compiler"], "version": version,
+            "arguments": config["arguments"]}
+
+
+def tag_arguments_for(evidence):
+    return [arg["name"] for arg in evidence.get("signature", {}).get("arguments", [])
+            if "TagItem" in arg.get("type", "")]
+
+
+def tag_observations(evidence):
+    """Normalize direct and helper tag evidence onto public arguments."""
+    public_args = {arg["name"] for arg in
+                   evidence.get("signature", {}).get("arguments", [])}
+    tag_args = tag_arguments_for(evidence)
+    observations = []
+    for tag in evidence.get("tags", []):
+        roots = sorted(public_args.intersection(tag.get("list_parameters", [])))
+        if not roots and len(tag_args) == 1:
+            roots = tag_args
+        observations.append(dict(tag, source=evidence.get("source"),
+                                 via=[evidence["name"]], root_arguments=roots))
+    for tag in evidence.get("propagated_tags", []):
+        item = dict(tag)
+        if not item.get("root_arguments") and len(tag_args) == 1:
+            item["root_arguments"] = tag_args
+        observations.append(item)
+    return observations
+
+
+def evidence_provenance(item):
+    return {key: item.get(key) for key in
+            ("source", "line", "via", "access", "kind", "confidence",
+             "cast", "default", "list_expression") if item.get(key) not in (None, "")}
+
+
+def synthesize_function_tags(evidence, add_review):
+    grouped, orphaned = {}, []
+    for item in tag_observations(evidence):
+        roots = item.get("root_arguments", [])
+        if not roots:
+            orphaned.append(item)
+            continue
+        for root in roots:
+            grouped.setdefault((root, item["name"]), []).append(item)
+    for item in orphaned:
+        add_review("taglist-origin-unresolved", evidence["name"], item["name"],
+                   "tag access could not be mapped to a public TagItem argument",
+                   [evidence_provenance(item)])
+
+    domains = {}
+    strength = {"low": 0, "medium": 1, "high": 2}
+    for (argument, name), items in sorted(grouped.items()):
+        high_kinds = sorted(set(x["kind"] for x in items
+                                if x.get("confidence") == "high" and
+                                x.get("kind") not in (None, "unknown")))
+        provenance = [evidence_provenance(x) for x in sorted(
+            items, key=lambda x: (x.get("source") or "", x.get("line") or 0,
+                                  x.get("kind") or ""))]
+        domain = domains.setdefault(argument, {"argument": argument,
+                                                "accepted": [], "unresolved": []})
+        if len(high_kinds) == 1:
+            domain["accepted"].append({"name": name, "kind": high_kinds[0],
+                                       "confidence": "high",
+                                       "provenance": provenance})
+        else:
+            best = max((strength.get(x.get("confidence"), -1) for x in items),
+                       default=-1)
+            reason = "conflicting high-confidence payload kinds" if high_kinds else \
+                     "payload representation is not proved"
+            unresolved = {"name": name, "reason": reason,
+                          "best_confidence": next(
+                              (k for k, v in strength.items() if v == best), "none"),
+                          "observed_kinds": sorted(set(x.get("kind", "unknown")
+                                                       for x in items)),
+                          "provenance": provenance}
+            domain["unresolved"].append(unresolved)
+            add_review("tag-payload-conflict" if high_kinds else
+                       "tag-payload-unresolved", evidence["name"],
+                       "%s:%s" % (argument, name), reason, provenance)
+    return [domains[name] for name in sorted(domains)]
+
+
+def build_import_manifest(report):
+    lib, rel = report["library"], report["conf"]
+    short = lib.split(".")[0]
+    config = ast_compile_config(rel, short)
+    source_root, source_paths = source_files_for_target(rel)
+    conf_path = os.path.join(AROS, rel)
+    forced = input_file(config.get("forced_include"), "generated-deflibdefs")
+    source_inputs = []
+    for path in source_paths:
+        role = "implementation-header" if path.endswith(".h") else "implementation-source"
+        source_inputs.append(input_file(path, role))
+    source_inputs = sorted((x for x in source_inputs if x), key=lambda x: x["path"])
+    public_headers = discover_public_headers(short, config)
+
+    review = []
+    def add_review(kind, function, subject, detail, evidence=None):
+        review.append({"kind": kind, "function": function, "subject": subject,
+                       "detail": detail, "evidence": evidence or []})
+
+    if not public_headers:
+        add_review("missing-public-header", None, short,
+                   "no generated or installed public header was found")
+    if not forced:
+        add_review("missing-build-input", None, short,
+                   "generated *_deflibdefs.h is absent; AST compilation is incomplete")
+
+    parsed = parse_conf(conf_path) or []
+    by_name = {f.name: f for f in parsed if not f.private}
+    functions = []
+    outcomes = {"generated-from-abi": 0, "covered-by-policy": 0,
+                "explicitly-refused": 0, "review-required": 0}
+    for evidence in report["functions"]:
+        f = by_name[evidence["name"]]
+        tier, blocker = f.tier(lib)
+        policy = function_policy(lib, f)
+        if policy:
+            outcome = "covered-by-policy"
+        elif tier in (1, 2):
+            outcome = "generated-from-abi"
+        elif blocker and (blocker.startswith("refused:") or "allowlist" in blocker):
+            outcome = "explicitly-refused"
+        else:
+            outcome = "review-required"
+            add_review("crossing-semantics-required", f.name, norm(f.ret),
+                       blocker or "signature requires semantic translation")
+        outcomes[outcome] += 1
+
+        if not evidence.get("source"):
+            add_review("missing-implementation", f.name, f.name,
+                       "public vector implementation was not found in C sources")
+        ast = evidence.get("ast", {})
+        if evidence.get("source") and ast.get("status") != "ok":
+            add_review("public-ast-failure", f.name, ast.get("symbol", f.name),
+                       ast.get("error", "AST compilation failed"))
+        for helper in evidence.get("reachable_helpers", []):
+            if helper.get("ast", {}).get("status") != "ok":
+                add_review("helper-ast-failure", f.name, helper["name"],
+                           helper["ast"].get("error", "AST compilation failed"),
+                           [{"source": helper["source"], "line": helper["line"],
+                             "via": helper["via"]}])
+        for callback in evidence.get("propagated_callbacks", []):
+            add_review("callback-contract", f.name, callback["name"],
+                       "native-to-68k callback behavior requires an explicit contract",
+                       [callback])
+        for argument, facts in evidence.get("propagated_arguments", {}).items():
+            retained = [fact for fact in facts if fact["kind"] == "stored_in_fields"]
+            if retained:
+                add_review("retained-pointer-lifetime", f.name, argument,
+                           "reachable helper stores this public argument in native state",
+                           retained)
+
+        functions.append({
+            "name": f.name, "lvo": f.lvo, "offset": f.offset,
+            "signature": evidence.get("signature"),
+            "source": evidence.get("source"), "line": evidence.get("line"),
+            "outcome": outcome, "blocker": blocker,
+            "existing_policy": policy,
+            "reachable_helpers": len(evidence.get("reachable_helpers", [])),
+            "tag_domains": synthesize_function_tags(evidence, add_review),
+            "argument_evidence": evidence.get("arguments", {}),
+            "propagated_arguments": evidence.get("propagated_arguments", {}),
+            "memory": evidence.get("memory", {}),
+            "callbacks": evidence.get("callbacks", []),
+            "propagated_callbacks": evidence.get("propagated_callbacks", [])
+        })
+
+    accepted_ownership = []
+    for pair in report.get("ownership_candidates", []):
+        if pair.get("confidence") == "high":
+            accepted_ownership.append(pair)
+        else:
+            add_review("ownership-pair", pair["producer"], pair["consumer"],
+                       "producer/releaser relationship is not high confidence", [pair])
+
+    # Collapse exact duplicate review findings before assigning stable IDs.
+    unique = {}
+    for item in review:
+        key = (item["kind"], item.get("function") or "", item["subject"], item["detail"])
+        unique[key] = item
+    review = [unique[key] for key in sorted(unique)]
+    for i, item in enumerate(review, 1):
+        item["id"] = "R%04d" % i
+    unresolved_vectors = sum(1 for f in functions if f["outcome"] == "review-required")
+    status = "review-required" if review or unresolved_vectors else "ready-for-generation"
+    inputs = {
+        "generator": input_file(os.path.abspath(__file__), "importer"),
+        "current_policy": input_file(POLICY_PATH, "bridge-policy"),
+        "conf": input_file(conf_path, "library-conf"),
+        "public_headers": public_headers,
+        "implementation": source_inputs,
+        "generated_build_header": forced,
+        "compiler": compiler_identity(config),
+        "sysroot": logical_path(config["sysroot"]),
+        "source_root": logical_path(source_root)
+    }
+    return {
+        "schema": 1,
+        "generator": "graft/gen-emu68k-bridge",
+        "library": lib,
+        "status": status,
+        "inputs": inputs,
+        "analysis": {
+            "backend": report["analysis_backend"],
+            "public_vectors": len(functions),
+            "outcomes": outcomes,
+            "review_items": len(review)
+        },
+        "accepted": {"abi_vectors": len(functions),
+                     "ownership": accepted_ownership},
+        "functions": functions,
+        "review": review,
+        "certification": {"status": "not-run", "checks": []}
+    }
+
+
+def import_review_markdown(manifest):
+    a = manifest["analysis"]
+    lines = [
+        "# 68k bridge import review: %s" % manifest["library"], "",
+        "Status: **%s**" % manifest["status"], "",
+        "- Public vectors: %d" % a["public_vectors"],
+        "- Generated from ABI: %d" % a["outcomes"]["generated-from-abi"],
+        "- Already covered by policy: %d" % a["outcomes"]["covered-by-policy"],
+        "- Explicitly refused: %d" % a["outcomes"]["explicitly-refused"],
+        "- Crossing semantics requiring review: %d" % a["outcomes"]["review-required"],
+        "- Review items: %d" % a["review_items"], "",
+        "## Vector outcomes", "",
+        "| LVO | Function | Outcome |", "|---:|---|---|"
+    ]
+    for f in manifest["functions"]:
+        lines.append("| %d | `%s` | %s |" % (f["lvo"], f["name"], f["outcome"]))
+    lines += ["", "## Review queue", ""]
+    if not manifest["review"]:
+        lines.append("No unresolved findings.")
+    for item in manifest["review"]:
+        where = ("`%s`: " % item["function"]) if item.get("function") else ""
+        lines += ["### %s · %s" % (item["id"], item["kind"]), "",
+                  "%s%s — %s" % (where, item["subject"], item["detail"]), ""]
+    lines += ["## Safety rule", "",
+              "Only explicit high-confidence facts are candidates for generated policy. "
+              "Every item above remains fail-closed until resolved.", ""]
+    return "\n".join(lines)
+
+
+def import_artifacts(name):
+    reports = collect_source_reports([name])
+    if len(reports) != 1:
+        raise ValueError("library import must resolve exactly one library")
+    analysis = {"schema": 1, "libraries": reports}
+    manifest = build_import_manifest(reports[0])
+    return {
+        "analysis.json": json.dumps(analysis, indent=2, sort_keys=False) + "\n",
+        "manifest.json": json.dumps(manifest, indent=2, sort_keys=False) + "\n",
+        "review.md": import_review_markdown(manifest)
+    }, manifest
+
+
+def import_library(name, output_dir=None, check=False):
+    short = name[:-8] if name.endswith(".library") else name
+    output_dir = output_dir or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "build", "emu68k-import", short)
+    try:
+        artifacts, manifest = import_artifacts(name)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    stale = []
+    if check:
+        for filename, content in artifacts.items():
+            path = os.path.join(output_dir, filename)
+            try:
+                current = open(path, encoding="utf-8").read()
+            except OSError:
+                current = None
+            if current != content:
+                stale.append(path)
+        if stale:
+            print("STALE - regenerate library import:")
+            for path in stale:
+                print("  %s" % path)
+            return 1
+        print("library import is in sync: %s" % output_dir)
+        return 0
+    os.makedirs(output_dir, exist_ok=True)
+    for filename, content in artifacts.items():
+        path = os.path.join(output_dir, filename)
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(temporary, path)
+    print("imported %s: %d vectors, %d review items (%s)" %
+          (manifest["library"], manifest["analysis"]["public_vectors"],
+           manifest["analysis"]["review_items"], manifest["status"]))
+    print("artifacts: %s" % output_dir)
     return 0
 
 
@@ -2915,6 +3311,21 @@ def main():
         for e in errors:
             print("  ! %s" % e)
         return 1
+    if "--import-library" in sys.argv or "--check-import" in sys.argv:
+        option = "--import-library" if "--import-library" in sys.argv else "--check-import"
+        i = sys.argv.index(option)
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("-"):
+            print("%s requires one AROS library name" % option, file=sys.stderr)
+            return 2
+        output_dir = None
+        if "--output-dir" in sys.argv:
+            oi = sys.argv.index("--output-dir")
+            if oi + 1 >= len(sys.argv):
+                print("--output-dir requires a path", file=sys.stderr)
+                return 2
+            output_dir = sys.argv[oi + 1]
+        return import_library(sys.argv[i + 1], output_dir,
+                              check=(option == "--check-import"))
     if "--analyze-source" in sys.argv:
         i = sys.argv.index("--analyze-source")
         which = []
