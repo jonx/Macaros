@@ -1427,6 +1427,13 @@ def ast_compile_config(rel, short):
         AROS_CC,
         "--sysroot", sysroot,
         "-iquote", source_root,
+        # The library's own directory. Its private headers live beside its
+        # implementation, and the GENERATED libdefs header includes them by
+        # quoted name from the object directory, where they are not. Without
+        # this the analyzer cannot compile any module with a private header,
+        # which is most of graphics, and a vector with no AST is a vector the
+        # importer must refuse for lack of evidence.
+        "-iquote", os.path.join(source_root, os.path.dirname(rel)),
         "-iquote", mirror,
         "-I", os.path.join(objdir, "include"),
     ]
