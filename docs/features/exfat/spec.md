@@ -289,9 +289,34 @@ already in tree, and is driven headlessly by `aros-ctl`.
 **T-neg** No test may pass by the handler declining to mount. T9 and T10 assert refusal;
 every other test asserts a successful mount first.
 
-## 13. Open questions for Role B
+## 13. Resolved: the test harness needs work before T2 can run
 
-1. Whether `fdsk.device` can present an image large enough for T13, or whether that
-   test needs a sparse image plus a device shim.
-2. Whether the FAT handler's cache hash distributes acceptably once keyed on `UQUAD`,
-   or wants rehashing for large volumes.
+**`fdsk.device` is capped at 4 GB.** `[AROS]` It advertises `NSCMD_DEVICEQUERY` and
+reports `DRIVE_NEWSTYLE`, but its supported-command list contains neither `TD_READ64`
+nor `NSCMD_TD_READ64`, and it has no 64-bit read or write handler. Both `read32()` and
+`write32()` take `iotd_Req.io_Offset` straight to `Seek(file, offset, OFFSET_BEGINNING)`,
+which is a 32-bit offset into a 32-bit `Seek()`.
+
+This blocks more than T13. **T2, the 4 GiB boundary, is the single most important
+vector in the plan and it cannot run**, because a file of 4 GiB requires a volume larger
+than 4 GiB to hold it.
+
+**H1** Before Phase 1 can be gated, `fdsk.device` gains a 64-bit path: advertise
+`NSCMD_TD_READ64` / `NSCMD_TD_WRITE64`, and seek with `Seek64()` from `dos64.library`
+rather than `Seek()`. `[OURS]` `dos64.library` is in the tree as of Phase 0, so this is
+now a small change rather than a blocker. Note the pleasing consequence that Phase 0
+turns out to be the enabler for Phase 1's *testing*, not only for exFAT itself.
+
+**H2** Until H1 lands, T1, T3 to T12 are runnable on sub-4 GB images. T2 and T13 are
+blocked and must not be recorded as passing.
+
+**Cache hash: no rehash needed.** `[AROS]` `Cache_GetBlock()` indexes with
+`(blockNum >> RANGE_SHIFT) & (hash_size - 1)`, `RANGE_SHIFT` is 5 and `hash_size` is 64,
+so the mask bounds the result regardless of magnitude and collision behaviour depends on
+the working set rather than on how large the block numbers get. The only requirement is
+**S6**: the shift must be evaluated on the `UQUAD` value, not on a truncated copy.
+
+`[DERIVED]` Separately, and not a correctness issue: the FAT handler creates its cache
+with 64 blocks, which is 32 KB at a 512-byte sector size. That is small for exFAT on a
+large volume and is likely to show up as a throughput problem in Phase 2. Flagged here
+so it is a measured decision later rather than a surprise.
