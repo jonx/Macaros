@@ -2,7 +2,7 @@
  * Boot sector validation tests, against the production exfat_boot.h.
  *
  * Covers spec.md 3.1 (accepted/rejected conditions, G1 ordering) and 3.2
- * (boot region checksum, including B3: every repeated word).
+ * (boot region checksum, and B3: every repeated word in sector 11).
  *
  *     ./build.sh && ./t_boot
  */
@@ -215,11 +215,11 @@ static ULONG boot_region_sum(const UBYTE *sector0)
     ULONG sum = 0;
     int i;
 
-    sum = exfat_boot_checksum(sum, sector0, 512, 1);
+    sum = exfat_boot_checksum(sum, sector0, 512, 0);
     for (i = 1; i < 11; i++)
     {
         make_filler(filler, i);
-        sum = exfat_boot_checksum(sum, filler, 512, 0);
+        sum = exfat_boot_checksum(sum, filler, 512, (ULONG)i);
     }
     return sum;
 }
@@ -260,13 +260,13 @@ static void test_checksum(void)
         int i;
 
         make_good(sec);
-        sum = exfat_boot_checksum(sum, sec, 512, 1);
+        sum = exfat_boot_checksum(sum, sec, 512, 0);
         for (i = 1; i < 11; i++)
         {
             make_filler(filler, i);
             if (i == 5)
                 filler[100] ^= 0xFF;
-            sum = exfat_boot_checksum(sum, filler, 512, 0);
+            sum = exfat_boot_checksum(sum, filler, 512, (ULONG)i);
         }
         check("a change in sector 5 is caught", sum != base);
     }
@@ -278,16 +278,83 @@ static void test_checksum(void)
         int i;
 
         make_good(sec);
-        sum = exfat_boot_checksum(sum, sec, 512, 1);
+        sum = exfat_boot_checksum(sum, sec, 512, 0);
         for (i = 1; i < 11; i++)
         {
             make_filler(filler, i);
             if (i == 3)
                 filler[EXFAT_BOOT_PERCENTINUSE] ^= 0xFF;
-            sum = exfat_boot_checksum(sum, filler, 512, 0);
+            sum = exfat_boot_checksum(sum, filler, 512, (ULONG)i);
         }
         check("the same offset in a later sector is NOT excluded", sum != base);
     }
+}
+
+static void test_b3(void)
+{
+    UBYTE sec11[512];
+    ULONG expected = 0xDEADBEEFu;
+    unsigned i;
+
+    puts("\nB3   every repeated word in sector 11");
+
+    for (i = 0; i < 512; i += 4)
+        wr32(sec11, i, expected);
+    check("all copies matching is accepted",
+        exfat_verify_boot_checksum(sec11, 512, expected));
+
+    check("a wrong expected value is rejected",
+        !exfat_verify_boot_checksum(sec11, 512, expected + 1));
+
+    /* The one that a first-word-only check would wave through. */
+    wr32(sec11, 508, expected ^ 0xFF);
+    check("LAST copy differing is rejected",
+        !exfat_verify_boot_checksum(sec11, 512, expected));
+
+    for (i = 0; i < 512; i += 4)
+        wr32(sec11, i, expected);
+    wr32(sec11, 256, expected ^ 1);
+    check("a middle copy differing is rejected",
+        !exfat_verify_boot_checksum(sec11, 512, expected));
+
+    for (i = 0; i < 512; i += 4)
+        wr32(sec11, i, expected);
+    wr32(sec11, 0, expected ^ 1);
+    check("the first copy differing is rejected",
+        !exfat_verify_boot_checksum(sec11, 512, expected));
+
+    for (i = 0; i < 512; i += 4)
+        wr32(sec11, i, expected);
+    check("4096-byte sector fully verified",
+        exfat_verify_boot_checksum(sec11, 512, expected));
+    check("a sector size that is not a multiple of 4 is refused",
+        !exfat_verify_boot_checksum(sec11, 510, expected));
+    check("a sector smaller than one word is refused",
+        !exfat_verify_boot_checksum(sec11, 2, expected));
+}
+
+static void test_no_partial_geometry(void)
+{
+    UBYTE b[512];
+    struct exfat_geometry g;
+    unsigned i;
+    const UBYTE *raw = (const UBYTE *)&g;
+    int untouched = 1;
+
+    puts("\n3.1  geometry is not written on failure");
+
+    /* Poison the output, then fail late: the root cluster check is the very
+       last one, so everything before it has already been computed. */
+    memset(&g, 0xA5, sizeof g);
+    make_good(b);
+    wr32(b, EXFAT_BOOT_ROOTCLUSTER, 0);
+    check("late failure reported",
+        exfat_validate_boot(b, sizeof b, &g) == EXFAT_BOOT_BAD_GEOMETRY);
+
+    for (i = 0; i < sizeof g; i++)
+        if (raw[i] != 0xA5)
+            untouched = 0;
+    check("the caller's geometry is left untouched", untouched);
 }
 
 int main(void)
@@ -298,6 +365,8 @@ int main(void)
     test_geometry();
     test_ordering();
     test_checksum();
+    test_b3();
+    test_no_partial_geometry();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
     return failures != 0;

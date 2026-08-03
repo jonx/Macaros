@@ -173,12 +173,16 @@ way to present that choice. Test T9b asserts the refusal holds when the backup i
 **A1** `[PUB]` Every on-disk field is little-endian and read through the AROS byte-order
 macros. No structure is dereferenced directly for a multi-byte field.
 
-**A2** `[DERIVED]` exFAT structures are packed with fields at unaligned offsets:
-`VolumeLength` at 72 in the boot sector, and `DataLength` at **offset 24 within the
-Stream Extension entry**, which is offset 56 within the entry set. A 68000 or 68010
-takes an address error on an odd-address word access, so every multi-byte read is
-byte-wise or through an accessor that is byte-wise on m68k. The AROS `amiga-m68k` target
-includes 68000-class machines; this is not optional there.
+**A2** `[DERIVED]` What comes off the device is a **raw little-endian byte buffer**.
+Neither its base alignment nor any C structure layout laid over it may be assumed: the
+buffer's own alignment depends on the cache allocator, and a `struct` mapped onto it
+depends on the compiler's padding decisions on every target. Casting a pointer into it
+and dereferencing is therefore wrong twice over, and on a 68000 or 68010 an
+odd-address word access is an address error rather than a slow path.
+
+Every multi-byte read is consequently byte-wise, through the accessors in
+`exfat_boot.h`. The AROS `amiga-m68k` target includes 68000-class machines, so this is
+a correctness requirement there and not a portability nicety.
 
 **A3** Reserved and `MustBeZero` fields are never written and never interpreted beyond
 §3.1.
