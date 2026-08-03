@@ -256,6 +256,65 @@ walks). MatchFirst therefore calls the native MatchFirst into a native
 AnchorPath and copies back the fields the program reads - it does NOT
 reimplement AmigaDOS pattern matching.
 
+## STATUS 2026-08-03: a program that builds its own Intuition structures runs; the next stop is a second 68k context
+
+PhotoDemo (a 1995 commercial paint demo) now gets through its whole GUI setup:
+it opens its screen and window, builds a `Gadget` family in memory it allocated
+itself, attaches it with `AddGList`, refreshes it, draws, and reaches its
+helper library.
+
+Three things it needed, all of which were general rather than specific to it:
+
+- **Guest-owned object adoption.** Classic Intuition code allocates its own
+  `Gadget` list and hands it over; nothing issued a handle, so the crossing had
+  nothing to resolve. A structure the program owns is now mirrored natively
+  under its guest address, re-validated and converted on every crossing, adopted
+  whole as a family, with the library's relinking written back as guest
+  addresses. See `emu68k_object_adopt_guest`; the gate is `T3OWNGAD` plus the
+  uncarryable-field and cycle controls.
+- **Generated guest-structure offsets.** `tc_SPLower` was two bytes out, so any
+  program reading its own stack bounds read a wrong pointer. Those offsets are
+  now derived from the headers and locked by the layout tool's self-check.
+- **Importer reach.** A structure the program owns crosses by value; a pointer
+  stored into a helper's own scratch is not a lifetime obligation; nullability
+  is read from the library testing the pointer; a fully resolved tag domain
+  crosses and carries itself into the policy; and an entry the importer wrote
+  stays derivable, so later rules reach vectors already promoted.
+
+### The next piece: a 68k process
+
+`dos.CreateNewProc` is the current stop, and it is a subsystem rather than a
+capability gap. PhotoDemo's helper library asks for `NP_Entry` (68k code),
+`NP_StackSize` 16K and `NP_Name`. The spawned code is a textbook worker:
+
+```
+FindTask(NULL) -> a3
+loop:  WaitPort(&a3->pr_MsgPort)
+       GetMsg  -> a2 ; exit when a2->offset24 == -1
+       ...do the work...
+       ReplyMsg(a2)
+```
+
+So it spends nearly all its time blocked, which is what makes this tractable:
+
+- create a real AROS process whose entry is a native thunk, and enter the run at
+  the guest `NP_Entry` on a guest stack of the requested size (the nested-entry
+  path `emu68k_run_call_hook` already proves re-entry works);
+- serialize 68k execution in one sandbox with a lock, since two contexts share
+  guest memory and one JIT arena. They need to make progress, not to run at the
+  same instant;
+- release that lock around the vectors that BLOCK (`Wait`, `WaitPort`,
+  `GetMsg`-with-wait), marked as such in the policy. Without this the first
+  `WaitPort` deadlocks the pair, which is the whole risk of the design;
+- give each context its own guest `Task`/`Process`, because `FindTask(NULL)` and
+  `pr_MsgPort` are per-process and the run currently has exactly one at a fixed
+  guest address.
+
+Open question worth deciding first: whether a vector the bridge cannot serve
+should always abort the run, or whether some (`CreateNewProc` among them) should
+return the failure the API already defines, which is what a real Amiga does when
+it is out of memory and what programs are written to handle.
+
 ## STATUS 2026-08-02: T3e complete; a real disk-library chain runs unchanged
 
 9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
