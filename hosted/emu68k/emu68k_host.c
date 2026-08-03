@@ -1483,6 +1483,27 @@ static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
  * fixed guest Process was right only while there was one. */
 #define LVO_IDCMP_PUMP 9001
 
+/* Who is waiting on what. A port value alone cannot say whether the context
+ * that OWNS a port ever runs; only the context identity can, and that is the
+ * difference between "input is not being delivered" and "this program has not
+ * reached its interactive state". Opt-in: EMU68K_TRACE_TASKS=1. */
+static uint32_t ctx_task(struct emu68k_run *r);
+
+static int trace_tasks(void)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
+    return on;
+}
+
+static void trace_port_call(struct emu68k_run *r, const char *what,
+                            struct j5d_m68k_state *st, uint32_t arg)
+{
+    if (!trace_tasks()) return;
+    fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x %s %08x\n",
+            r->cur_ctx, ctx_task(r), st->pc, what, arg);
+}
+
 /* Drain into `port` whatever native port is bound to it, if any. Called before
  * a wait is answered and before a look, because the ordinary Amiga event loop
  * is Wait -> GetMsg -> ReplyMsg and a program blocked in Wait never reaches
@@ -2049,6 +2070,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * machine. */
         uint32_t port = st->a[0];
         uint32_t list = port + MP_MSGLIST;
+        trace_port_call(r, "WaitPort port", st, port);
         for (;;) {
             uint32_t head;
             idcmp_pump(r, st, port);
@@ -2070,6 +2092,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
+        trace_port_call(r, "GetMsg port", st, port);
         idcmp_pump(r, st, port);        /* a program may poll instead of wait */
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
@@ -2103,6 +2126,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * would have to be killed from outside to find out why. */
         uint32_t want = st->d[0];
         uint32_t got;
+        trace_port_call(r, "Wait mask", st, want);
         /* Before answering, give every port bound to a window a chance to
          * deliver. This is the point the ordinary event loop reaches - Wait
          * comes BEFORE GetMsg - so pumping only at GetMsg would serve a program
@@ -2568,6 +2592,10 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
      * on before the parent sends to it. */
     if (run_context_nested(r, sb, idx, e, el) != 0)
         return 1;
+    if (trace_tasks())
+        fprintf(stderr, "[68k/task] ctx=%d CREATED task=%08x entry=%08x "
+                "pr_MsgPort=%08x stack=%08x+%u\n", idx, ctx->task, entry,
+                ctx->task + PROC_MSGPORT, ctx->stack, (unsigned)stacksize);
     st->d[0] = ctx->task;
     return 0;
 }
@@ -2662,6 +2690,12 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                         r->idcmp_port[r->nidcmp].mask = 1u << bit;
                         r->nidcmp++;
                     }
+                    if (trace_tasks())
+                        fprintf(stderr, "[68k/task] IDCMP bind window=%08x "
+                                "port=%08x mp_SigTask=%08x mp_SigBit=%u "
+                                "(bound by ctx=%d task=%08x)\n", win, port,
+                                gread32(c->sb, port + MP_SIGTASK),
+                                (unsigned)bit, r->cur_ctx, ctx_task(r));
                 }
             }
             if (!strcmp(r->openlib[i].name, "utility.library") &&
