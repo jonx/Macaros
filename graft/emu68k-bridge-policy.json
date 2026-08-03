@@ -116,6 +116,12 @@
       "id": 15,
       "c_type": "struct ViewPort *",
       "kind": "opaque"
+    },
+    "VisualInfo": {
+      "id": 16,
+      "c_type": "APTR",
+      "kind": "opaque",
+      "destructor": "gadtools.library.FreeVisualInfo"
     }
   },
   "tag_domains": {
@@ -254,6 +260,10 @@
         {"name": "ASLFR_Activate", "kind": "u32"},
         {"name": "ASLFO_SampleText", "kind": "cstr"}
       ]
+    },
+    "gadtools.visual_info": {
+      "max_items": 8,
+      "tags": []
     },
     "intuition.new_object": {
       "headers": [
@@ -533,6 +543,16 @@
     "graphics.library.XorRectRegion": {
       "objects": {"Reg": {"type": "Region", "nullable": false}},
       "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+    },
+    "gadtools.library.GetVisualInfoA": {
+      "objects": {"screen": {"type": "Screen", "nullable": false}},
+      "taglists": {"tagList": "gadtools.visual_info"},
+      "result": {"kind": "object", "type": "VisualInfo"}
+    },
+    "gadtools.library.FreeVisualInfo": {
+      "objects": {
+        "vi": {"type": "VisualInfo", "nullable": true, "consume": true}
+      }
     },
     "cybergraphics.library.BestCModeIDTagList": {
       "taglists": {"tags": "cybergraphics.best_mode"}
