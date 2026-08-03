@@ -112,6 +112,31 @@ corrected to the published ABI as part of Phase 0. This is a **deliberate behavi
 change to existing working code**, not a review of dead paths, and it is gated on the
 regression pass.
 
+## Why the object goes in the standard `dp_Arg1` slot
+
+`dos64_packet.c` writes the object to the **standard** packet's `dp_Arg1` (offset 20),
+not to `DosPacket64.dp_Arg1` (offset 32) where the published layout puts it. This is
+deliberate, and confirmed by the maintainer.
+
+`dos64.library` is built to probe a heterogeneous population of handlers and degrade
+safely, not to talk to OS4 handlers. Almost every handler AROS sends these packets to
+is 32-bit only and reads `struct DosPacket`. Three upstream commits establish the
+pattern:
+
+- `bfdd15ebbe` handlers canonically reply `res1=DOSFALSE`, `res2=ERROR_ACTION_NOT_KNOWN`
+  to unknown packets; treating only `-1` as unsupported made `GetFileSize64()` report 0.
+- `5a9e230d60` the `dp_Res0` / `dp_Res1` aliasing exists to detect a handler that
+  replied through the standard fields, overwriting the marker.
+- `887b06db1c` `ExamineFH64()` falls back to 32-bit `ExamineFH()` when the filesystem
+  lacks 64-bit examination.
+
+Offset 20 is padding inside `DosPacket64`, so this is additive: it corrupts no field of
+the published layout. The cost is that a conforming OS4 handler reading offset 32 finds
+nothing there.
+
+**Do not "fix" this.** If full conformance is ever wanted, populate the overlay's
+`dp_Arg1` *as well*, which is one assignment and disturbs nothing.
+
 ## Why the pfs3 definitions cannot be adopted
 
 pfs3's private `struct DosPacket64OS4` is disqualified as a reference:
