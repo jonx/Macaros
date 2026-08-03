@@ -1248,14 +1248,35 @@ def ownership_candidates(functions, evidence):
     return sorted(out, key=lambda x: (x["producer"], x["consumer"]))
 
 
-def conf_basename(path):
-    """The basename is the prefix genmodule puts on expanded AROS_LH symbols."""
+def conf_basename(path, config=None):
+    """The basename is the prefix genmodule puts on expanded AROS_LH symbols.
+
+    Only the library's first config block is relevant. A single .conf can also
+    define many BOOPSI classes, each with its own later ``basename``; scanning
+    the whole file would silently select the first class instead of the public
+    library. When the library block uses genmodule's default, the generated
+    libdefs header is the exact authority on GM_UNIQUENAME.
+    """
     try:
         src = open(path, encoding="utf-8", errors="replace").read()
     except OSError:
         return None
-    m = re.search(r"^basename\s+([A-Za-z_]\w*)\s*$", src, re.M)
-    return m.group(1) if m else None
+    block = re.search(r"##begin\s+config\b(.*?)##end\s+config", src,
+                      re.S | re.I)
+    m = re.search(r"^basename\s+([A-Za-z_]\w*)\s*$",
+                  block.group(1) if block else "", re.M)
+    if m:
+        return m.group(1)
+    for generated in (config or {}).get("generated_inputs", []):
+        try:
+            raw = open(generated, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        m = re.search(r"^#define\s+GM_UNIQUENAME\(n\)\s+"
+                      r"([A-Za-z_]\w*)\s*_?\s*##\s*n\s*$", raw, re.M)
+        if m:
+            return m.group(1).rstrip("_")
+    return None
 
 
 def ast_compile_config(rel, short):
@@ -1273,6 +1294,17 @@ def ast_compile_config(rel, short):
     sysroot = os.path.join(AROS_BUILD, "bin", "darwin-aarch64", "AROS",
                            "Developer")
     forced = os.path.join(objdir, "include", "%s_deflibdefs.h" % short)
+    generated_inputs = []
+    if os.path.exists(forced):
+        generated_inputs.append(forced)
+        try:
+            forced_raw = open(forced, encoding="utf-8", errors="replace").read()
+        except OSError:
+            forced_raw = ""
+        match = re.search(r'^#define\s+LC_LIBDEFS_FILE\s+"([^"]+)"',
+                          forced_raw, re.M)
+        if match and os.path.isfile(match.group(1)):
+            generated_inputs.append(match.group(1))
     args = [
         AROS_CC,
         "--sysroot", sysroot,
@@ -1284,7 +1316,7 @@ def ast_compile_config(rel, short):
         args += ["-include", forced]
     args += [
         "-DAROS_BUILD_TYPE=AROS_BUILD_TYPE_PERSONAL",
-        "-DUSE_EXEC_DEBUG", "-D__NOLIBBASE__", "-D__arm64__",
+        "-DUSE_EXEC_DEBUG", "-D__arm64__",
         "-Wno-everything", "-fsyntax-only"
     ]
     return {
@@ -1293,6 +1325,7 @@ def ast_compile_config(rel, short):
         "source_root": source_root,
         "object_dir": objdir,
         "forced_include": forced if os.path.exists(forced) else None,
+        "generated_inputs": generated_inputs,
         "arguments": args
     }
 
@@ -1358,8 +1391,14 @@ def probe_record_layouts(funcs, config):
         return {"status": "error", "headers": headers, "types": {},
                 "error": str(exc)}
     if proc.returncode != 0:
+        # gen-struct-layouts names its temporary translation unit with the
+        # current process id.  Compiler diagnostics must not leak that random
+        # filename into checked-in/import artifacts, otherwise an identical
+        # analysis is reported stale on every replay.
+        error = re.sub(r"(?:/[^\s:]+)?/\.structprobe-\d+\.c",
+                       "<record-layout-probe>", proc.stderr + proc.stdout)
         return {"status": "error", "headers": headers, "types": {},
-                "error": (proc.stderr + proc.stdout)[-4000:]}
+                "error": error[-4000:]}
     try:
         result = json.loads(proc.stdout)
     except ValueError as exc:
@@ -1747,8 +1786,8 @@ def collect_source_reports(which):
         if wanted and short not in wanted and lib not in wanted:
             continue
         funcs = [f for f in (parse_conf(os.path.join(AROS, rel)) or []) if not f.private]
-        basename = conf_basename(os.path.join(AROS, rel))
         ast_config = ast_compile_config(rel, short)
+        basename = conf_basename(os.path.join(AROS, rel), ast_config)
         record_layouts = probe_record_layouts(funcs, ast_config)
         root, paths = source_files_for_target(rel)
         sources = []
@@ -2146,6 +2185,9 @@ def build_import_manifest(report):
     source_root, source_paths = source_files_for_target(rel)
     conf_path = os.path.join(AROS, rel)
     forced = input_file(config.get("forced_include"), "generated-deflibdefs")
+    generated_build_inputs = [input_file(path, "generated-build-header")
+                              for path in config.get("generated_inputs", [])]
+    generated_build_inputs = [item for item in generated_build_inputs if item]
     source_inputs = []
     for path in source_paths:
         role = "implementation-header" if path.endswith(".h") else "implementation-source"
@@ -2294,6 +2336,7 @@ def build_import_manifest(report):
         "external_tag_consumers": external_inputs,
         "record_layout_headers": layout_header_inputs,
         "generated_build_header": forced,
+        "generated_build_inputs": generated_build_inputs,
         "compiler": compiler_identity(config),
         "sysroot": logical_path(config["sysroot"]),
         "source_root": logical_path(source_root)

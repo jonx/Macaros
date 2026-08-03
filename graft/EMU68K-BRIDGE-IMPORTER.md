@@ -62,12 +62,22 @@ allowlist. From there the tool discovers:
 3. Public and private C headers below the library source root.
 4. C implementation files below that source root.
 5. The current AROS build's generated `*_deflibdefs.h`, include directories, and
-   target sysroot.
+   target sysroot. The importer follows `LC_LIBDEFS_FILE` into the generated
+   libdefs header as well; `GM_UNIQUENAME` there is authoritative when a library
+   relies on genmodule's default basename.
 6. The AROS cross-Clang configured for `aarch64-unknown-aros`.
 
 The explicit current sysroot is important: a cross compiler can retain a stale
 build path in its defaults. The analyzer therefore reconstructs the real compile
 environment instead of invoking a host compiler over isolated source snippets.
+It also leaves normal AROS library-base selection enabled. Defining
+`__NOLIBBASE__` for analysis would not reproduce the build: inline proto calls
+would instead demand undeclared local base variables and could make otherwise
+valid implementation files fail AST compilation.
+A library `.conf` may contain later class configs with unrelated basenames. The
+importer scopes a declared basename to the library's first config block and
+otherwise derives it from generated libdefs, preventing class names from being
+mistaken for public-vector symbol prefixes.
 
 ## Implemented analysis
 
