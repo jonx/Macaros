@@ -167,6 +167,9 @@
 #define LVO_ENABLE        28    /* -168 */
 #define LVO_FINDTASK      49    /* -294 */
 #define LVO_SETSIGNAL     51    /* -306 */
+#define LVO_ALLOCSIGNAL   55    /* -330 */
+#define LVO_FREESIGNAL    56    /* -336 */
+#define LVO_OPENDEVICE    74    /* -444 */
 #define LVO_OLDOPENLIB    68    /* -408: what pre-2.0 programs still call      */
 #define LVO_AVAILMEM      36    /* -216 */
 #define LVO_ALLOCVEC     114    /* -684: the most-wanted call in the corpus    */
@@ -201,6 +204,7 @@
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
 #define LVO_STACKSWAP    122    /* -732 */
+#define TASK_SIGALLOC_OFF M68K_Task_tc_SigAlloc
 #define TASK_SPREG_OFF    M68K_Task_tc_SPReg
 #define TASK_SPLOWER_OFF  M68K_Task_tc_SPLower
 #define TASK_SPUPPER_OFF  M68K_Task_tc_SPUpper
@@ -1831,6 +1835,37 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * signals a guest task yet, so the honest answer is a clean zero. */
         st->d[0] = 0;
         return 0;
+    /* A signal BIT is bookkeeping: a program reserves one for a port it is
+     * about to create, long before anything is ever sent to it. Refusing the
+     * reservation stopped programs during startup, at their ARexx port, over a
+     * bit nobody had signalled yet. What a guest still cannot do is WAIT on
+     * one, and that stays a named gap rather than a hang. */
+    case LVO_ALLOCSIGNAL: {
+        uint32_t alloc = gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF);
+        int want = (int32_t)st->d[0];
+        int bit = -1;
+        if (want >= 0 && want < 32) {
+            if (!(alloc & (1u << want))) bit = want;
+        } else {
+            for (bit = 31; bit >= 16; bit--)
+                if (!(alloc & (1u << bit))) break;
+            if (bit < 16) bit = -1;
+        }
+        if (bit >= 0)
+            gwrite32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF,
+                     alloc | (1u << bit));
+        st->d[0] = (uint32_t)(int32_t)bit;
+        return 0;
+    }
+    case LVO_FREESIGNAL: {
+        int bit = (int32_t)st->d[0];
+        if (bit >= 0 && bit < 32) {
+            uint32_t alloc = gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF);
+            gwrite32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF,
+                     alloc & ~(1u << bit));
+        }
+        return 0;
+    }
     case LVO_STACKSWAP: {
         /* struct StackSwapStruct is three guest pointers: lower, upper and
          * switch-point SP. Swap those values here; a second call restores the
@@ -2030,8 +2065,21 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                      e, el) == 0)
             return 0;
         ledger_record(lvo, r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: exec.library function LVO %d (offset %d) "
-                        "is not available yet", lvo, -6 * lvo);
+        {
+            /* Name what the program ASKED for where the vector says. An LVO
+             * number tells the reader to go and look it up; "timer.device" or
+             * "console.device" tells them what the program wanted and whether
+             * it matters. OpenLibrary already does this. */
+            const char *what = NULL;
+            if (lvo == LVO_OPENDEVICE) what = guest_cstr(c->sb, st->a[0]);
+            if (what && *what)
+                snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") "
+                                "is not available yet", what);
+            else
+                snprintf(e, el, "capability gap: exec.library function LVO %d "
+                                "(offset %d) is not available yet",
+                         lvo, -6 * lvo);
+        }
         return 1;
     }
     if (r) {
