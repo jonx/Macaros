@@ -1925,7 +1925,27 @@ def evidence_provenance(item):
              "cast", "default", "list_expression") if item.get(key) not in (None, "")}
 
 
-def synthesize_function_tags(evidence, add_review):
+def active_tag_resolution(policy, argument, tag_name):
+    """Return the explicit bridge decision for one function/tag pair.
+
+    Source inference and active policy are deliberately separate authorities:
+    inference explains what was observed, while policy records the reviewed
+    conversion (including a deliberate refusal).  Once a policy decision
+    exists it must close the corresponding review item instead of making an
+    already-generated crossing look unresolved forever.
+    """
+    domain_name = (policy or {}).get("taglists", {}).get(argument)
+    domain = POLICY.get("tag_domains", {}).get(domain_name, {})
+    for tag in domain.get("tags", []):
+        if tag.get("name") == tag_name:
+            resolution = {key: value for key, value in tag.items()
+                          if key != "name"}
+            resolution["domain"] = domain_name
+            return resolution
+    return None
+
+
+def synthesize_function_tags(evidence, add_review, policy=None):
     grouped, orphaned = {}, []
     for item in tag_observations(evidence):
         roots = item.get("root_arguments", [])
@@ -1942,6 +1962,7 @@ def synthesize_function_tags(evidence, add_review):
     domains = {}
     strength = {"low": 0, "medium": 1, "high": 2}
     for (argument, name), items in sorted(grouped.items()):
+        resolution = active_tag_resolution(policy, argument, name)
         high_kinds = sorted(set(x["kind"] for x in items
                                 if x.get("confidence") == "high" and
                                 x.get("kind") not in (None, "unknown")))
@@ -1951,9 +1972,11 @@ def synthesize_function_tags(evidence, add_review):
         domain = domains.setdefault(argument, {"argument": argument,
                                                 "accepted": [], "unresolved": []})
         if len(high_kinds) == 1:
-            domain["accepted"].append({"name": name, "kind": high_kinds[0],
-                                       "confidence": "high",
-                                       "provenance": provenance})
+            accepted = {"name": name, "kind": high_kinds[0],
+                        "confidence": "high", "provenance": provenance}
+            if resolution:
+                accepted["policy_resolution"] = resolution
+            domain["accepted"].append(accepted)
         else:
             best = max((strength.get(x.get("confidence"), -1) for x in items),
                        default=-1)
@@ -1965,10 +1988,13 @@ def synthesize_function_tags(evidence, add_review):
                           "observed_kinds": sorted(set(x.get("kind", "unknown")
                                                        for x in items)),
                           "provenance": provenance}
+            if resolution:
+                unresolved["policy_resolution"] = resolution
             domain["unresolved"].append(unresolved)
-            add_review("tag-payload-conflict" if high_kinds else
-                       "tag-payload-unresolved", evidence["name"],
-                       "%s:%s" % (argument, name), reason, provenance)
+            if not resolution:
+                add_review("tag-payload-conflict" if high_kinds else
+                           "tag-payload-unresolved", evidence["name"],
+                           "%s:%s" % (argument, name), reason, provenance)
     return [domains[name] for name in sorted(domains)]
 
 
@@ -2224,7 +2250,7 @@ def build_import_manifest(report):
             "record_arrays": function_record_arrays(
                 evidence, report.get("record_layouts", {}).get("types", {})),
             "object_contracts": function_object_contracts(evidence, object_candidates),
-            "tag_domains": synthesize_function_tags(evidence, add_review),
+            "tag_domains": synthesize_function_tags(evidence, add_review, policy),
             "argument_evidence": evidence.get("arguments", {}),
             "propagated_arguments": evidence.get("propagated_arguments", {}),
             "memory": evidence.get("memory", {}),
@@ -2410,8 +2436,9 @@ def generated_test_plan(manifest):
 
     for function in manifest["functions"]:
         outcome = function["outcome"]
+        crossing_ready = outcome in ("generated-from-abi", "covered-by-policy")
         add("lvo-dispatch", function["name"],
-            "ready" if outcome in ("generated-from-abi", "covered-by-policy") else "blocked",
+            "ready" if crossing_ready else "blocked",
             {"lvo": function["lvo"], "expected": outcome})
         policy = function.get("existing_policy") or {}
         for argument, obj in sorted(policy.get("objects", {}).items()):
@@ -2419,18 +2446,30 @@ def generated_test_plan(manifest):
                 {"argument": argument, "object_type": obj["type"],
                  "expected": "fail-closed"})
         for domain in function["tag_domains"]:
-            add("unknown-tag", function["name"], "ready",
+            add("unknown-tag", function["name"],
+                "ready" if crossing_ready else "blocked",
                 {"argument": domain["argument"], "expected": "fail-closed"})
             for tag in domain["accepted"]:
-                ready = tag["kind"] in ("u32", "cstr") and outcome != "review-required"
+                resolution = tag.get("policy_resolution")
+                effective_kind = resolution.get("kind") if resolution else tag["kind"]
+                ready = crossing_ready and bool(resolution)
                 add("tag-payload", function["name"], "ready" if ready else "blocked",
                     {"argument": domain["argument"], "tag": tag["name"],
-                     "kind": tag["kind"],
-                     "expected": "translated" if ready else "fail-closed"})
+                     "kind": effective_kind,
+                     "expected": ("fail-closed" if ready and effective_kind in
+                                  ("refuse", "null") else
+                                  "translated" if ready else "not-generated")})
             for tag in domain["unresolved"]:
-                add("unresolved-tag", function["name"], "ready",
+                resolution = tag.get("policy_resolution")
+                effective_kind = resolution.get("kind") if resolution else None
+                ready = crossing_ready and bool(resolution)
+                add("resolved-tag" if resolution else "unresolved-tag",
+                    function["name"], "ready" if ready else "blocked",
                     {"argument": domain["argument"], "tag": tag["name"],
-                     "expected": "fail-closed"})
+                     "kind": effective_kind,
+                     "expected": ("fail-closed" if ready and effective_kind in
+                                  ("refuse", "null") else
+                                  "translated" if ready else "not-generated")})
     for pair in manifest["accepted"]["ownership"]:
         producer = next((f for f in manifest["functions"]
                          if f["name"] == pair["producer"]), None)

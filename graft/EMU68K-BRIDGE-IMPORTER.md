@@ -174,6 +174,15 @@ terminated-array shape; neither the emitter nor the layout generator contains a
 The analyzer produces evidence; it does not silently make uncertain evidence a
 bridge policy.
 
+Source observations and active policy decisions remain distinct in the import
+manifest. When a reviewed function/tag policy already names an observed tag, the
+manifest records that decision as `policy_resolution` and removes the finding
+from the review queue. The original conflicting or under-specified observations
+remain present for auditability. A policy `refuse` is a resolved, fail-closed
+decision; it is not an unresolved finding. Generated test contracts use that
+effective policy kind and never claim an unavailable vector has a runnable tag
+test.
+
 - **High confidence** requires an explicit type-bearing construct, such as a C
   cast to a concrete pointer type or a string literal.
 - **Medium confidence** identifies a real behavior whose bridge representation
