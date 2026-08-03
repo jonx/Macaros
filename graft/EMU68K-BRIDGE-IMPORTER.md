@@ -10,12 +10,21 @@ The stable import command is:
 graft/gen-emu68k-bridge --import-library gadtools
 ```
 
-It writes three artifacts under `build/emu68k-import/gadtools/` by default:
+It writes six artifacts under `build/emu68k-import/gadtools/` by default:
 
 - `analysis.json` is the complete public-vector and reachable-helper evidence.
 - `manifest.json` is the deterministic import contract: source/build hashes,
   accepted facts, per-vector outcome, and unresolved review items.
 - `review.md` is the same finite review queue in a human-readable form.
+- `policy.generated.json` contains the active, already-approved policy subset and
+  non-activating candidate tag domains. Payloads without an approved conversion
+  are emitted as `refuse`.
+- `bridge.generated.c` is the compilable crossing source produced from the
+  currently approved policy and ABI-only vectors. Its default path remains
+  fail-closed for every other LVO.
+- `tests.generated.json` contains deterministic positive, negative, object-token,
+  tag-refusal, and lifecycle contracts. Contracts whose crossing is incomplete
+  remain marked `blocked`; they are not reported as passing tests.
 
 Use another output root when needed:
 
@@ -36,8 +45,8 @@ missing or stale. The lower-level source-analysis stream can be inspected with:
 graft/gen-emu68k-bridge --analyze-source gadtools > /tmp/gadtools-analysis.json
 ```
 
-The command currently stops after manifest and review generation. It does not
-yet mutate the live bridge policy or claim certification. This document
+The command currently stops after candidate/code/test-contract generation. It
+does not yet mutate the live bridge policy or claim certification. This document
 distinguishes implemented behavior from the remaining pipeline so a successful
 import is not mistaken for a certified bridge.
 
@@ -116,13 +125,15 @@ import regression because confusing the two would falsely classify tags as
 
 ## Import artifacts and remaining certification pipeline
 
-`--import-library <name>` now produces the source-hashed analysis, manifest, and
-review report. The remaining stages will consume them to produce:
+`--import-library <name>` now produces the source-hashed analysis, manifest,
+review report, policy candidate, approved bridge C, and test contracts. The
+remaining stages will consume them to produce:
 
-1. Generated bridge policy and crossing code for accepted facts.
-2. Generated negative tests for unsupported tags and invalid object types.
-3. Lifecycle tests for inferred producer/releaser pairs.
-4. Callback/re-entry tests when callback contracts are accepted.
+1. Executable negative tests from the generated unsupported-tag and invalid
+   object-token contracts.
+2. Executable lifecycle tests for inferred producer/releaser pairs.
+3. Callback/re-entry tests when callback contracts are accepted.
+4. Promotion of reviewed candidates into the active bridge policy.
 5. A certification result proving all public vectors are either generated or
    explicitly fail closed.
 

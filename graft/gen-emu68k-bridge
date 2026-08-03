@@ -1845,16 +1845,162 @@ def import_review_markdown(manifest):
     return "\n".join(lines)
 
 
+def policy_subset_for_library(manifest):
+    """Build a non-activating policy candidate from proved import facts."""
+    lib, short = manifest["library"], manifest["library"].split(".")[0]
+    functions = {key: value for key, value in POLICY.get("functions", {}).items()
+                 if key.startswith(lib + ".")}
+    domain_names, object_names = set(), set()
+    for spec in functions.values():
+        domain_names.update(spec.get("taglists", {}).values())
+        object_names.update(x.get("type") for x in spec.get("objects", {}).values())
+        result = spec.get("result", {})
+        if result.get("kind") == "object":
+            object_names.add(result.get("type"))
+    domains = {name: POLICY["tag_domains"][name] for name in sorted(domain_names)}
+    objects = {}
+    pending = set(x for x in object_names if x)
+    while pending:
+        name = sorted(pending)[0]
+        pending.remove(name)
+        if name in objects or name not in POLICY.get("object_types", {}):
+            continue
+        spec = POLICY["object_types"][name]
+        objects[name] = spec
+        for nested in spec.get("nested_fields", []):
+            if nested.get("type"):
+                pending.add(nested["type"])
+
+    candidates = {}
+    proposed_functions = {}
+    for function in manifest["functions"]:
+        taglists = {}
+        for domain in function["tag_domains"]:
+            name = "import.%s.%s.%s" % (short, function["name"], domain["argument"])
+            tags = []
+            for tag in domain["accepted"]:
+                bridge_kind = tag["kind"] if tag["kind"] in ("u32", "cstr") else "refuse"
+                item = {"name": tag["name"], "kind": bridge_kind,
+                        "inferred_kind": tag["kind"],
+                        "confidence": tag["confidence"],
+                        "provenance": tag["provenance"]}
+                if bridge_kind == "refuse":
+                    item["reason"] = "typed payload has no approved bridge conversion"
+                tags.append(item)
+            for tag in domain["unresolved"]:
+                tags.append({"name": tag["name"], "kind": "refuse",
+                             "reason": tag["reason"],
+                             "provenance": tag["provenance"]})
+            candidates[name] = {"max_items": max(8, min(128, len(tags) + 4)),
+                                "tags": sorted(tags, key=lambda x: x["name"])}
+            taglists[domain["argument"]] = name
+        if taglists:
+            proposed_functions[lib + "." + function["name"]] = {
+                "taglists": taglists,
+                "activation": "blocked-until-complete-function-contract"
+            }
+    return {
+        "schema": 1,
+        "library": lib,
+        "status": "candidate-not-active",
+        "object_types": objects,
+        "tag_domains": domains,
+        "functions": functions,
+        "candidate_tag_domains": candidates,
+        "proposed_functions": proposed_functions,
+        "accepted_ownership": manifest["accepted"]["ownership"],
+        "safety": "refuse entries and incomplete functions must not be activated"
+    }
+
+
+def generated_test_plan(manifest):
+    """Produce deterministic contracts consumed by the executable-test stage."""
+    tests = []
+    def add(kind, function, status, contract):
+        tests.append({"kind": kind, "function": function,
+                      "status": status, "contract": contract})
+
+    for function in manifest["functions"]:
+        outcome = function["outcome"]
+        add("lvo-dispatch", function["name"],
+            "ready" if outcome in ("generated-from-abi", "covered-by-policy") else "blocked",
+            {"lvo": function["lvo"], "expected": outcome})
+        policy = function.get("existing_policy") or {}
+        for argument, obj in sorted(policy.get("objects", {}).items()):
+            add("invalid-object-token", function["name"], "ready",
+                {"argument": argument, "object_type": obj["type"],
+                 "expected": "fail-closed"})
+        for domain in function["tag_domains"]:
+            add("unknown-tag", function["name"], "ready",
+                {"argument": domain["argument"], "expected": "fail-closed"})
+            for tag in domain["accepted"]:
+                ready = tag["kind"] in ("u32", "cstr") and outcome != "review-required"
+                add("tag-payload", function["name"], "ready" if ready else "blocked",
+                    {"argument": domain["argument"], "tag": tag["name"],
+                     "kind": tag["kind"],
+                     "expected": "translated" if ready else "fail-closed"})
+            for tag in domain["unresolved"]:
+                add("unresolved-tag", function["name"], "ready",
+                    {"argument": domain["argument"], "tag": tag["name"],
+                     "expected": "fail-closed"})
+    for pair in manifest["accepted"]["ownership"]:
+        producer = next((f for f in manifest["functions"]
+                         if f["name"] == pair["producer"]), None)
+        consumer = next((f for f in manifest["functions"]
+                         if f["name"] == pair["consumer"]), None)
+        ready = bool(producer and consumer and
+                     producer["outcome"] != "review-required" and
+                     consumer["outcome"] != "review-required")
+        add("object-lifecycle", pair["producer"], "ready" if ready else "blocked",
+            {"consumer": pair["consumer"], "type": pair["type"],
+             "expected": "create-use-release-stale-token-rejected"})
+    tests.sort(key=lambda x: (x["function"], x["kind"],
+                              json.dumps(x["contract"], sort_keys=True)))
+    for index, test in enumerate(tests, 1):
+        test["id"] = "T%04d" % index
+    return {"schema": 1, "library": manifest["library"],
+            "summary": {"total": len(tests),
+                        "ready": sum(x["status"] == "ready" for x in tests),
+                        "blocked": sum(x["status"] == "blocked" for x in tests)},
+            "tests": tests}
+
+
+def approved_bridge_source(report):
+    lib, rel = report["library"], report["conf"]
+    target = analysis_targets([lib])[0]
+    _lib, _rel, base, btype, hdr = target
+    if not base or not btype or not hdr:
+        short = lib.split(".")[0]
+        return (("/* GENERATED fail-closed placeholder for %s.\n"
+                 " * Native proto/base metadata is absent, so no crossing can be emitted. */\n"
+                 "int emu68k_import_%s_unavailable(void) { return 1; }\n" %
+                 (lib, c_ident(short))), 0)
+    funcs = parse_conf(os.path.join(AROS, rel)) or []
+    return emit_lib(lib, rel, base, btype, hdr, funcs)
+
+
 def import_artifacts(name):
     reports = collect_source_reports([name])
     if len(reports) != 1:
         raise ValueError("library import must resolve exactly one library")
     analysis = {"schema": 1, "libraries": reports}
     manifest = build_import_manifest(reports[0])
+    bridge_source, crossings = approved_bridge_source(reports[0])
+    test_plan = generated_test_plan(manifest)
+    policy_candidate = policy_subset_for_library(manifest)
+    manifest["generated"] = {
+        "approved_bridge_crossings": crossings,
+        "test_contracts": test_plan["summary"],
+        "policy_status": policy_candidate["status"]
+    }
     return {
         "analysis.json": json.dumps(analysis, indent=2, sort_keys=False) + "\n",
         "manifest.json": json.dumps(manifest, indent=2, sort_keys=False) + "\n",
-        "review.md": import_review_markdown(manifest)
+        "review.md": import_review_markdown(manifest),
+        "policy.generated.json": json.dumps(
+            policy_candidate, indent=2, sort_keys=False) + "\n",
+        "tests.generated.json": json.dumps(test_plan, indent=2, sort_keys=False) + "\n",
+        "bridge.generated.c": bridge_source
     }, manifest
 
 
