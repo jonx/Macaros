@@ -780,6 +780,49 @@ def declared_array_before(code, name, offset):
     return bool(list(pattern.finditer(code, 0, offset)))
 
 
+TAG_PAYLOAD_RE = re.compile(r"(?:[A-Za-z_]\w*\s*->\s*ti_Data|tidata)")
+TAG_PAYLOAD_MARKER = "__EMU68K_TAG_PAYLOAD__"
+TAG_TRUTH_CONDITION_RE = re.compile(
+    r"\bif\s*\(\s*(?:!\s*)?" + re.escape(TAG_PAYLOAD_MARKER) +
+    r"\s*(?:(?:==|!=)\s*(?:0|NULL|FALSE|TRUE))?\s*\)")
+
+
+def truth_only_payload_use(code):
+    """Whether every visible tag payload use only tests zero/nonzero."""
+    marked, count = TAG_PAYLOAD_RE.subn(TAG_PAYLOAD_MARKER, code)
+    if not count:
+        return False
+    reduced = TAG_TRUTH_CONDITION_RE.sub("if (0)", marked)
+    return TAG_PAYLOAD_MARKER not in reduced
+
+
+def scalar_payload_macros(code):
+    """Return function-like macros that consume ``ti_Data`` only as truth.
+
+    Some AROS tag switches hide the payload use behind a local macro.  Clang's
+    expansion location points at the invocation and the spelling location at
+    the macro body, while the lightweight source pass used for deterministic
+    import packets previously saw neither as a typed assignment.  A truth-only
+    use is nevertheless representation-safe: the native side observes zero or
+    nonzero and never dereferences, stores, or calls through the value.
+
+    Be deliberately narrow.  Every payload occurrence in the logical macro
+    body must be the complete condition of an ``if`` (optionally negated or
+    compared with a Boolean/null constant).  Any additional occurrence leaves
+    the macro unclassified and therefore fail-closed.
+    """
+    logical = re.sub(r"\\\r?\n", " ", code)
+    definitions = re.compile(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)"
+        r"[ \t]*\([^\n)]*\)[ \t]+([^\n]*)$")
+    result = set()
+    for match in definitions.finditer(logical):
+        body = match.group(2)
+        if truth_only_payload_use(body):
+            result.add(match.group(1))
+    return result
+
+
 def extract_library_tag_evidence(sources, evidence_scope="library"):
     """Find type-bearing uses of tags anywhere in a library implementation.
 
@@ -806,6 +849,7 @@ def extract_library_tag_evidence(sources, evidence_scope="library"):
 
     for path, raw in sources:
         code = mask_c_comments(raw)
+        truth_macros = scalar_payload_macros(code)
         # Include explicit casts on direct GetTagData uses throughout the
         # library, including class implementations reached through dispatch.
         for item in extract_tag_evidence(raw, 1):
@@ -893,6 +937,28 @@ def extract_library_tag_evidence(sources, evidence_scope="library"):
                 if kind:
                     add_case(tag, kind, target_type, path, code,
                              match.end() + assignment.start(), "case-local-target-type")
+
+            # A local function-like macro can hide an otherwise explicit
+            # Boolean use of ti_Data.  Classify every case invoking the same
+            # proved truth-only macro in one pass.  Preprocessor definition
+            # lines are excluded so the case immediately preceding a local
+            # #define is not accidentally attributed to the macro.
+            for macro in sorted(truth_macros):
+                invocation = re.search(
+                    r"(?m)^[ \t]*(?!#)[^\n]*\b%s\s*\(" % re.escape(macro),
+                    block)
+                if invocation:
+                    add_case(tag, "u32", macro, path, code,
+                             match.end() + invocation.start(),
+                             "case-payload-truth-macro")
+
+            # The non-macro form is common in class and extension switches.
+            # Again, every payload occurrence in the case must be consumed as
+            # truth; a cast, assignment, dereference, or retention keeps the
+            # case unresolved.
+            if truth_only_payload_use(block):
+                add_case(tag, "u32", "zero/nonzero", path, code,
+                         match.end(), "case-payload-truth")
     unique = {}
     for item in found:
         key = (item["name"], item["kind"], item["source"], item["line"],
@@ -2622,17 +2688,38 @@ def policy_subset_for_library(manifest):
             object_names.add(result.get("type"))
     domains = {name: POLICY["tag_domains"][name] for name in sorted(domain_names)}
     objects = {}
-    pending = set(x for x in object_names if x)
-    while pending:
-        name = sorted(pending)[0]
-        pending.remove(name)
-        if name in objects or name not in POLICY.get("object_types", {}):
-            continue
-        spec = POLICY["object_types"][name]
-        objects[name] = spec
-        for nested in spec.get("nested_fields", []):
-            if nested.get("type"):
-                pending.add(nested["type"])
+    def include_objects(names):
+        pending = set(x for x in names if x)
+        while pending:
+            object_name = sorted(pending)[0]
+            pending.remove(object_name)
+            if (object_name in objects or
+                    object_name not in POLICY.get("object_types", {})):
+                continue
+            spec = POLICY["object_types"][object_name]
+            objects[object_name] = spec
+            for nested in spec.get("nested_fields", []):
+                if nested.get("type"):
+                    pending.add(nested["type"])
+    include_objects(object_names)
+
+    object_by_pointer = {}
+    for object_name, spec in POLICY.get("object_types", {}).items():
+        canonical = object_canon(spec.get("c_type", ""))
+        if canonical:
+            object_by_pointer.setdefault(canonical, []).append(object_name)
+
+    def inferred_bridge_tag(tag):
+        kind = tag["kind"]
+        if kind in ("u32", "cstr"):
+            return {"kind": kind}
+        if kind.startswith("pointer:"):
+            matches = object_by_pointer.get(object_canon(kind.split(":", 1)[1]), [])
+            if len(matches) == 1:
+                include_objects(matches)
+                return {"kind": "object", "type": matches[0], "nullable": True}
+        return {"kind": "refuse",
+                "reason": "typed payload has no approved bridge conversion"}
 
     candidates = {}
     proposed_functions = {}
@@ -2642,13 +2729,11 @@ def policy_subset_for_library(manifest):
             name = "import.%s.%s.%s" % (short, function["name"], domain["argument"])
             tags = []
             for tag in domain["accepted"]:
-                bridge_kind = tag["kind"] if tag["kind"] in ("u32", "cstr") else "refuse"
-                item = {"name": tag["name"], "kind": bridge_kind,
+                bridge = inferred_bridge_tag(tag)
+                item = {"name": tag["name"], **bridge,
                         "inferred_kind": tag["kind"],
                         "confidence": tag["confidence"],
                         "provenance": tag["provenance"]}
-                if bridge_kind == "refuse":
-                    item["reason"] = "typed payload has no approved bridge conversion"
                 tags.append(item)
             for tag in domain["unresolved"]:
                 tags.append({"name": tag["name"], "kind": "refuse",

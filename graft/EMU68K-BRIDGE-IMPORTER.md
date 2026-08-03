@@ -420,11 +420,20 @@ conservative ownership-pair finding for `CreateContext`/`FreeGadgets`, and the
 unproved `GTMN_FrontPen` payload for `LayoutMenuItemsA`.
 
 The current PhotoDemo image passes `GetVisualInfoA`, `CreateMenusA`, and
-`LayoutMenusA`. Its next named gap is in Intuition rather than GadTools:
-`OpenWindowTagList` receives `WA_NewLookMenus`. The source consumes that value
-through the `MODIFY_FLAG` macro, so the next importer iteration is to infer the
-Boolean flag-macro pattern for the whole tag domain rather than adding a
-PhotoDemo-specific tag exception.
+`LayoutMenusA`. Source analysis now recognizes both direct zero/nonzero payload
+tests and function-like macros such as `MODIFY_FLAG` when every visible
+`ti_Data` occurrence is truth-only. Any assignment, cast, dereference, call, or
+retention in the same case keeps it unresolved. This classified the Window flag
+family in one pass and reduced the Intuition review packet from 264 to 224
+findings.
+
+Imported tag candidates also map a pointer payload to an existing object class
+when its canonical C pointer type has exactly one match. Thus a proven
+`struct Window *` becomes a Window-token conversion while an unmatched Image,
+Hook, or private pointer stays refused. The current PhotoDemo image passes both
+`WA_NewLookMenus` and the following `WA_HelpGroupWindow` object payload. Its next
+named boundary is Intuition LVO 25, `InitRequester`, rather than another
+GadTools or Window-tag crossing.
 
 ## What cannot be completely automatic
 
