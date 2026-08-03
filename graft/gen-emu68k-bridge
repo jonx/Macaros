@@ -29,6 +29,7 @@ This script emits tier 1 and reports the rest as the work queue.
 
 import os
 import re
+import collections
 import sys
 import json
 import hashlib
@@ -2507,6 +2508,134 @@ def function_object_contracts(evidence, candidates):
     return contracts
 
 
+STRUCT_PTR_RE = re.compile(r"^(?:const\s+)?struct\s+(\w+)\s*\*$")
+
+
+def described_object_types():
+    """struct name -> policy object type, for every type the bridge can already
+    carry. This is the vocabulary the importer is allowed to apply on its own."""
+    out = {}
+    for name, spec in POLICY.get("object_types", {}).items():
+        m = STRUCT_PTR_RE.match(norm(spec.get("c_type", "")))
+        if m:
+            out[m.group(1)] = name
+        if spec.get("facade_struct"):
+            out[spec["facade_struct"]] = name
+    return out
+
+
+def published_detachers(report):
+    """(owner struct, field) -> the vectors that let a program take it back.
+
+    A pointer the callee keeps is only a hazard if nothing can undo it. When the
+    same library publishes a vector that touches the very field the pointer was
+    stored in and keeps nothing itself, the lifetime is managed by the library's
+    own API, and the program is responsible for the ordering exactly as it is on
+    a real Amiga: SetMenuStrip stores window->MenuStrip, ClearMenuStrip takes it
+    back, and the bridge adds no hazard the machine did not already have.
+
+    Derived, not listed. Nothing here names a library or a function."""
+    index = collections.defaultdict(set)
+    for evidence in report["functions"]:
+        ast = evidence.get("ast", {}) or {}
+        if ast.get("status") != "ok":
+            continue
+        if ast.get("retained_parameters"):
+            continue                       # it keeps something: not a detach
+        for argument, facts in (evidence.get("arguments", {}) or {}).items():
+            m = STRUCT_PTR_RE.match(norm(facts.get("declared_type", "")))
+            if not m:
+                continue
+            for field in facts.get("dereferenced_fields", []) or []:
+                index[(m.group(1), field)].add(evidence["name"])
+    return index
+
+
+def infer_object_crossing(f, evidence, detachers=None):
+    """A crossing the importer may write without asking, or None.
+
+    The rule is deliberately narrow, and it is about EVIDENCE rather than
+    coverage. Every pointer argument must be a type the bridge already carries,
+    the result must not be a pointer (whose owner and destructor the signature
+    cannot state), and the analyzer must not have seen the callee keep any of
+    those pointers: `retained_parameters` is what separates ActivateWindow,
+    which only looks at the window, from SetMenuStrip, which stores the menu in
+    it and therefore needs a lifetime decision a human makes.
+
+    Nullability is NOT inferred as "must not be NULL". The signature does not
+    say, and refusing NULL would turn a legal call into a failure; passing it
+    leaves the native function to answer, which it already does.
+
+    This applies to any library. Nothing here names one."""
+    known = described_object_types()
+    ast = evidence.get("ast", {}) or {}
+    if ast.get("status") != "ok":
+        return None                      # no evidence, no inference
+    retained = ast.get("retained_parameters", {}) or {}
+    locals_from = ast.get("local_parameter_dependencies", {}) or {}
+    arg_evidence = evidence.get("arguments", {}) or {}
+
+    def kept_past_the_call(argument):
+        """Does the callee still hold this pointer when it returns?
+
+        `retained_parameters` says the pointer was written into some field, but
+        it does not say whose. An implementation that packs its arguments into a
+        message on its own stack and posts it synchronously writes fields too,
+        and that is not retention: ActivateWindow, MoveWindow and a dozen others
+        look identical to SetMenuStrip at that level of detail.
+
+        The separation the analyzer already provides: a local that depends on
+        this argument explains the write, UNLESS one of the other arguments
+        exposes the same field, which is what SetMenuStrip's window->MenuStrip
+        does. Then the owner outlives the call and a person decides."""
+        fields = set(retained.get(argument, []))
+        if not fields:
+            return False
+        explained_by_local = any(argument in sources
+                                 for sources in locals_from.values())
+        owner_struct = None
+        for other, facts in arg_evidence.items():
+            if other == argument:
+                continue
+            if fields & set(facts.get("dereferenced_fields", []) or []):
+                m = STRUCT_PTR_RE.match(norm(facts.get("declared_type", "")))
+                owner_struct = m.group(1) if m else ""
+                break
+        if owner_struct is not None:
+            # The owner outlives the call. That is only a hazard if the library
+            # publishes no way to take the pointer back.
+            return not all((owner_struct, field) in (detachers or {})
+                           for field in fields)
+        return not explained_by_local
+
+    if classify(f.ret) not in ("scalar", "widen", "void"):
+        return None
+    objects = {}
+    for atype, aname in f.args:
+        c = classify(atype)
+        if c in ("scalar", "widen", "string"):
+            continue
+        m = STRUCT_PTR_RE.match(norm(atype))
+        if not m or m.group(1) not in known:
+            return None                  # a type nobody has described yet
+        if kept_past_the_call(aname):
+            return None                  # the callee keeps it: a lifetime call
+        objects[aname] = {"type": known[m.group(1)], "nullable": True}
+    if not objects:
+        return None                      # nothing to infer; tier 1 covers it
+    for argument, propagated in evidence.get("propagated_arguments", {}).items():
+        # Only a POINTER can be kept. RectFill's helper stores its four WORD
+        # coordinates into a rectangle, which the evidence reports the same way
+        # as storing a pointer, and a number copied into a struct has no
+        # identity and nothing to outlive. Treating the two alike refused every
+        # drawing call in the library.
+        if argument not in objects:
+            continue
+        if any(fact["kind"] == "stored_in_fields" for fact in propagated):
+            return None                  # a helper keeps it: same decision
+    return {"objects": objects}
+
+
 def build_import_manifest(report):
     lib, rel = report["library"], report["conf"]
     short = lib.split(".")[0]
@@ -2564,11 +2693,14 @@ def build_import_manifest(report):
                        "consumer traverses a linked family; invalidate every related token",
                        [{"fields": candidate["linked_fields"]}])
 
+    detach_index = published_detachers(report)
     parsed = parse_conf(conf_path) or []
     by_name = {f.name: f for f in parsed if not f.private}
     functions = []
+    inferred_functions = {}
     outcomes = {"generated-from-abi": 0, "covered-by-policy": 0,
-                "explicitly-refused": 0, "review-required": 0}
+                "explicitly-refused": 0, "inferred-from-source": 0,
+                "review-required": 0}
     for evidence in report["functions"]:
         f = by_name[evidence["name"]]
         tier, blocker = f.tier(lib)
@@ -2583,9 +2715,14 @@ def build_import_manifest(report):
         elif blocker and (blocker.startswith("refused:") or "allowlist" in blocker):
             outcome = "explicitly-refused"
         else:
-            outcome = "review-required"
-            add_review("crossing-semantics-required", f.name, norm(f.ret),
-                       blocker or "signature requires semantic translation")
+            inferred = infer_object_crossing(f, evidence, detach_index)
+            if inferred:
+                outcome = "inferred-from-source"
+                inferred_functions["%s.%s" % (lib, f.name)] = inferred
+            else:
+                outcome = "review-required"
+                add_review("crossing-semantics-required", f.name, norm(f.ret),
+                           blocker or "signature requires semantic translation")
         outcomes[outcome] += 1
 
         if not evidence.get("source"):
@@ -2696,6 +2833,7 @@ def build_import_manifest(report):
         },
         "accepted": {"abi_vectors": len(functions),
                      "ownership": accepted_ownership},
+        "inferred_functions": inferred_functions,
         "object_candidates": object_candidates,
         "functions": functions,
         "review": review,
@@ -2712,6 +2850,7 @@ def import_review_markdown(manifest):
         "- Generated from ABI: %d" % a["outcomes"]["generated-from-abi"],
         "- Already covered by policy: %d" % a["outcomes"]["covered-by-policy"],
         "- Explicitly refused: %d" % a["outcomes"]["explicitly-refused"],
+        "- Inferred from source: %d" % a["outcomes"].get("inferred-from-source", 0),
         "- Crossing semantics requiring review: %d" % a["outcomes"]["review-required"],
         "- Review items: %d" % a["review_items"], "",
         "## Vector outcomes", "",
@@ -5222,7 +5361,93 @@ def report_all():
     return 0
 
 
+POLICY_ORIGIN_KEY = "origin"
+
+
+def promote_import(name, apply_changes=True):
+    """Merge a library's source-inferred crossings into the ACTIVE policy.
+
+    The active policy is where hand decisions live, and a regeneration must
+    never cost one. So every entry carries its provenance:
+
+      origin "import"  - written by this command, refreshed by this command
+      origin "review"  - decided by a person; the importer will not touch it
+      (absent)         - treated as "review", because everything written before
+                         provenance existed was written by hand
+
+    A proposal that disagrees with a review-owned entry is REPORTED, not
+    applied. That is the whole point: the tool can be re-run at any time, and
+    the only thing it can lose is its own previous opinion."""
+    short = name[:-8] if name.endswith(".library") else name
+    packet = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "build", "emu68k-import", short, "manifest.json")
+    if not os.path.exists(packet):
+        print("no import packet for %s; run --import-library %s first"
+              % (name, name), file=sys.stderr)
+        return 2
+    with open(packet, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    inferred = manifest.get("inferred_functions", {})
+
+    with open(POLICY_PATH, encoding="utf-8") as fh:
+        active = json.load(fh)
+    functions = active.setdefault("functions", {})
+
+    added, refreshed, kept, unchanged = [], [], [], []
+    for key, proposal in sorted(inferred.items()):
+        existing = functions.get(key)
+        if existing is None:
+            entry = dict(proposal)
+            entry[POLICY_ORIGIN_KEY] = "import"
+            functions[key] = entry
+            added.append(key)
+            continue
+        if existing.get(POLICY_ORIGIN_KEY) != "import":
+            kept.append(key)                      # a person owns this one
+            continue
+        current = {k: v for k, v in existing.items() if k != POLICY_ORIGIN_KEY}
+        if current == proposal:
+            unchanged.append(key)
+            continue
+        entry = dict(proposal)
+        entry[POLICY_ORIGIN_KEY] = "import"
+        functions[key] = entry
+        refreshed.append(key)
+
+    print("%s: %d inferred crossings" % (name, len(inferred)))
+    print("  added      %d" % len(added))
+    print("  refreshed  %d" % len(refreshed))
+    print("  unchanged  %d" % len(unchanged))
+    print("  kept (a review decision owns the entry) %d" % len(kept))
+    for key in kept:
+        print("    ! %s" % key)
+
+    if not apply_changes:
+        drift = added or refreshed
+        if drift:
+            print("STALE: the active policy is missing %d inferred crossings"
+                  % len(drift))
+            return 1
+        return 0
+    if added or refreshed:
+        with open(POLICY_PATH, "w", encoding="utf-8") as fh:
+            json.dump(active, fh, indent=2)
+            fh.write("\n")
+        print("  wrote %s" % POLICY_PATH)
+    return 0
+
+
 def main():
+    if "--promote-import" in sys.argv or "--check-promotion" in sys.argv:
+        option = ("--promote-import" if "--promote-import" in sys.argv
+                  else "--check-promotion")
+        i = sys.argv.index(option)
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("-"):
+            print("%s requires one AROS library name" % option, file=sys.stderr)
+            return 2
+        return promote_import(sys.argv[i + 1],
+                              apply_changes=(option == "--promote-import"))
     errors = validate_policy(gen_targets())
     if errors:
         print("BRIDGE POLICY INVALID:")

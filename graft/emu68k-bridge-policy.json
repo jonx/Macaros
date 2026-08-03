@@ -110,7 +110,11 @@
           "count_field": "dri_NumPens",
           "max_count": 256
         },
-        {"field": "dri_Font", "kind": "object", "type": "TextFont"}
+        {
+          "field": "dri_Font",
+          "kind": "object",
+          "type": "TextFont"
+        }
       ]
     },
     "ColorMap": {
@@ -135,7 +139,11 @@
       "kind": "facade",
       "facade_struct": "Menu",
       "nested_fields": [
-        {"field": "FirstItem", "kind": "object", "type": "MenuItem"}
+        {
+          "field": "FirstItem",
+          "kind": "object",
+          "type": "MenuItem"
+        }
       ],
       "destructor": "gadtools.library.FreeMenus"
     },
@@ -152,13 +160,41 @@
       "facade_struct": "Window",
       "facade_size": 156,
       "nested_fields": [
-        {"field": "MenuStrip", "kind": "object", "type": "Menu"},
-        {"field": "WScreen", "kind": "object", "type": "Screen"},
-        {"field": "RPort", "kind": "object", "type": "RastPort"},
-        {"field": "BorderRPort", "kind": "object", "type": "RastPort"},
-        {"field": "UserPort", "kind": "object", "type": "MsgPort"},
-        {"field": "WindowPort", "kind": "object", "type": "MsgPort"},
-        {"field": "IFont", "kind": "object", "type": "TextFont"}
+        {
+          "field": "MenuStrip",
+          "kind": "object",
+          "type": "Menu"
+        },
+        {
+          "field": "WScreen",
+          "kind": "object",
+          "type": "Screen"
+        },
+        {
+          "field": "RPort",
+          "kind": "object",
+          "type": "RastPort"
+        },
+        {
+          "field": "BorderRPort",
+          "kind": "object",
+          "type": "RastPort"
+        },
+        {
+          "field": "UserPort",
+          "kind": "object",
+          "type": "MsgPort"
+        },
+        {
+          "field": "WindowPort",
+          "kind": "object",
+          "type": "MsgPort"
+        },
+        {
+          "field": "IFont",
+          "kind": "object",
+          "type": "TextFont"
+        }
       ],
       "destructor": "intuition.library.CloseWindow"
     },
@@ -179,139 +215,467 @@
   },
   "tag_domains": {
     "graphics.best_mode": {
-      "headers": ["graphics/modeid.h"],
+      "headers": [
+        "graphics/modeid.h"
+      ],
       "max_items": 32,
       "tags": [
-        {"name": "BIDTAG_DIPFMustHave", "kind": "u32"},
-        {"name": "BIDTAG_DIPFMustNotHave", "kind": "u32"},
-        {"name": "BIDTAG_ViewPort", "kind": "refuse"},
-        {"name": "BIDTAG_NominalWidth", "kind": "u32"},
-        {"name": "BIDTAG_NominalHeight", "kind": "u32"},
-        {"name": "BIDTAG_DesiredWidth", "kind": "u32"},
-        {"name": "BIDTAG_DesiredHeight", "kind": "u32"},
-        {"name": "BIDTAG_Depth", "kind": "u32"},
-        {"name": "BIDTAG_MonitorID", "kind": "u32"},
-        {"name": "BIDTAG_SourceID", "kind": "u32"},
-        {"name": "BIDTAG_RedBits", "kind": "u32"},
-        {"name": "BIDTAG_BlueBits", "kind": "u32"},
-        {"name": "BIDTAG_GreenBits", "kind": "u32"}
+        {
+          "name": "BIDTAG_DIPFMustHave",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_DIPFMustNotHave",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_ViewPort",
+          "kind": "refuse"
+        },
+        {
+          "name": "BIDTAG_NominalWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_NominalHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_DesiredWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_DesiredHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_Depth",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_MonitorID",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_SourceID",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_RedBits",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_BlueBits",
+          "kind": "u32"
+        },
+        {
+          "name": "BIDTAG_GreenBits",
+          "kind": "u32"
+        }
       ]
     },
     "cybergraphics.best_mode": {
-      "headers": ["cybergraphx/cybergraphics.h"],
+      "headers": [
+        "cybergraphx/cybergraphics.h"
+      ],
       "max_items": 16,
       "tags": [
-        {"name": "CYBRBIDTG_Depth", "kind": "u32"},
-        {"name": "CYBRBIDTG_NominalWidth", "kind": "u32"},
-        {"name": "CYBRBIDTG_NominalHeight", "kind": "u32"},
-        {"name": "CYBRBIDTG_MonitorID", "kind": "u32"},
-        {"name": "CYBRBIDTG_BoardName", "kind": "cstr"}
+        {
+          "name": "CYBRBIDTG_Depth",
+          "kind": "u32"
+        },
+        {
+          "name": "CYBRBIDTG_NominalWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "CYBRBIDTG_NominalHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "CYBRBIDTG_MonitorID",
+          "kind": "u32"
+        },
+        {
+          "name": "CYBRBIDTG_BoardName",
+          "kind": "cstr"
+        }
       ]
     },
     "locale.open_catalog": {
-      "headers": ["libraries/locale.h"],
+      "headers": [
+        "libraries/locale.h"
+      ],
       "max_items": 8,
       "tags": [
-        {"name": "OC_BuiltInLanguage", "kind": "cstr"},
-        {"name": "OC_BuiltInCodeSet", "kind": "u32"},
-        {"name": "OC_Version", "kind": "u32"},
-        {"name": "OC_Language", "kind": "cstr"}
+        {
+          "name": "OC_BuiltInLanguage",
+          "kind": "cstr"
+        },
+        {
+          "name": "OC_BuiltInCodeSet",
+          "kind": "u32"
+        },
+        {
+          "name": "OC_Version",
+          "kind": "u32"
+        },
+        {
+          "name": "OC_Language",
+          "kind": "cstr"
+        }
       ]
     },
     "icon.duplicate": {
-      "headers": ["workbench/icon.h"],
+      "headers": [
+        "workbench/icon.h"
+      ],
       "max_items": 8,
       "tags": [
-        {"name": "ICONDUPA_DuplicateDrawerData", "kind": "u32"},
-        {"name": "ICONDUPA_DuplicateImages", "kind": "u32"},
-        {"name": "ICONDUPA_DuplicateImageData", "kind": "u32"},
-        {"name": "ICONDUPA_DuplicateDefaultTool", "kind": "u32"},
-        {"name": "ICONDUPA_DuplicateToolTypes", "kind": "u32"},
-        {"name": "ICONDUPA_DuplicateToolWindow", "kind": "u32"},
-        {"name": "ICONDUPA_ActivateImageData", "kind": "u32"}
+        {
+          "name": "ICONDUPA_DuplicateDrawerData",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_DuplicateImages",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_DuplicateImageData",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_DuplicateDefaultTool",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_DuplicateToolTypes",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_DuplicateToolWindow",
+          "kind": "u32"
+        },
+        {
+          "name": "ICONDUPA_ActivateImageData",
+          "kind": "u32"
+        }
       ]
     },
     "asl.request": {
-      "headers": ["libraries/asl.h"],
+      "headers": [
+        "libraries/asl.h"
+      ],
       "max_items": 64,
       "tags": [
-        {"name": "ASLFR_TitleText", "kind": "cstr"},
-        {"name": "ASLFR_Window", "kind": "refuse"},
-        {"name": "ASLFR_InitialLeftEdge", "kind": "u32"},
-        {"name": "ASLFR_InitialTopEdge", "kind": "u32"},
-        {"name": "ASLFR_InitialWidth", "kind": "u32"},
-        {"name": "ASLFR_InitialHeight", "kind": "u32"},
-        {"name": "ASLFR_HookFunc", "kind": "refuse"},
-        {"name": "ASLFR_InitialFile", "kind": "cstr"},
-        {"name": "ASLFR_InitialDrawer", "kind": "cstr"},
-        {"name": "ASLFR_InitialPattern", "kind": "cstr"},
-        {"name": "ASLFO_InitialSize", "kind": "u32"},
-        {"name": "ASLFO_InitialStyle", "kind": "u32"},
-        {"name": "ASLFO_InitialFlags", "kind": "u32"},
-        {"name": "ASLFO_InitialFrontPen", "kind": "u32"},
-        {"name": "ASLFO_InitialBackPen", "kind": "u32"},
-        {"name": "ASLFO_MinHeight", "kind": "u32"},
-        {"name": "ASLFO_MaxHeight", "kind": "u32"},
-        {"name": "ASLFR_PositiveText", "kind": "cstr"},
-        {"name": "ASLFR_NegativeText", "kind": "cstr"},
-        {"name": "ASLFR_Flags1", "kind": "u32"},
-        {"name": "ASLFO_ModeList", "kind": "refuse"},
-        {"name": "ASLFR_Flags2", "kind": "u32"},
-        {"name": "ASLFR_Screen", "kind": "refuse"},
-        {"name": "ASLFR_PubScreenName", "kind": "cstr"},
-        {"name": "ASLFR_PrivateIDCMP", "kind": "u32"},
-        {"name": "ASLFR_SleepWindow", "kind": "u32"},
-        {"name": "ASLFR_DoSaveMode", "kind": "u32"},
-        {"name": "ASLFR_DoMultiSelect", "kind": "u32"},
-        {"name": "ASLFR_DoPatterns", "kind": "u32"},
-        {"name": "ASLFR_DrawersOnly", "kind": "u32"},
-        {"name": "ASLFO_FixedWidthOnly", "kind": "u32"},
-        {"name": "ASLFR_FilterFunc", "kind": "refuse"},
-        {"name": "ASLFR_Locale", "kind": "refuse"},
-        {"name": "ASLFR_TextAttr", "kind": "refuse"},
-        {"name": "ASLFR_UserData", "kind": "u32"},
-        {"name": "ASLFO_InitialDrawMode", "kind": "u32"},
-        {"name": "ASLFR_RejectIcons", "kind": "u32"},
-        {"name": "ASLFR_RejectPattern", "kind": "cstr"},
-        {"name": "ASLFR_AcceptPattern", "kind": "cstr"},
-        {"name": "ASLFR_FilterDrawers", "kind": "u32"},
-        {"name": "ASLFO_FrontPens", "kind": "refuse"},
-        {"name": "ASLFO_BackPens", "kind": "refuse"},
-        {"name": "ASLFO_MaxFrontPen", "kind": "u32"},
-        {"name": "ASLFO_MaxBackPen", "kind": "u32"},
-        {"name": "ASLFR_IntuiMsgFunc", "kind": "refuse"},
-        {"name": "ASLSM_InitialDisplayID", "kind": "u32"},
-        {"name": "ASLSM_InitialDisplayWidth", "kind": "u32"},
-        {"name": "ASLSM_InitialDisplayHeight", "kind": "u32"},
-        {"name": "ASLSM_InitialDisplayDepth", "kind": "u32"},
-        {"name": "ASLSM_InitialOverscanType", "kind": "u32"},
-        {"name": "ASLSM_InitialAutoScroll", "kind": "u32"},
-        {"name": "ASLSM_InitialInfoOpened", "kind": "u32"},
-        {"name": "ASLSM_InitialInfoLeftEdge", "kind": "u32"},
-        {"name": "ASLSM_InitialInfoTopEdge", "kind": "u32"},
-        {"name": "ASLSM_DoWidth", "kind": "u32"},
-        {"name": "ASLSM_DoHeight", "kind": "u32"},
-        {"name": "ASLSM_DoDepth", "kind": "u32"},
-        {"name": "ASLSM_DoOverscanType", "kind": "u32"},
-        {"name": "ASLSM_DoAutoScroll", "kind": "u32"},
-        {"name": "ASLSM_PropertyFlags", "kind": "u32"},
-        {"name": "ASLSM_PropertyMask", "kind": "u32"},
-        {"name": "ASLSM_MinWidth", "kind": "u32"},
-        {"name": "ASLSM_MaxWidth", "kind": "u32"},
-        {"name": "ASLSM_MinHeight", "kind": "u32"},
-        {"name": "ASLSM_MaxDepth", "kind": "u32"},
-        {"name": "ASLSM_FilterFunc", "kind": "refuse"},
-        {"name": "ASLSM_CustomSMList", "kind": "refuse"},
-        {"name": "ASLFR_SetSortBy", "kind": "u32"},
-        {"name": "ASLFR_GetSortBy", "kind": "refuse"},
-        {"name": "ASLFR_SetSortDrawers", "kind": "u32"},
-        {"name": "ASLFR_GetSortDrawers", "kind": "refuse"},
-        {"name": "ASLFR_SetSortOrder", "kind": "u32"},
-        {"name": "ASLFR_GetSortOrder", "kind": "refuse"},
-        {"name": "ASLFR_InitialShowVolumes", "kind": "u32"},
-        {"name": "ASLFR_PopToFront", "kind": "u32"},
-        {"name": "ASLFR_Activate", "kind": "u32"},
-        {"name": "ASLFO_SampleText", "kind": "cstr"}
+        {
+          "name": "ASLFR_TitleText",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_Window",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_InitialLeftEdge",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_InitialTopEdge",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_InitialWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_InitialHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_HookFunc",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_InitialFile",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_InitialDrawer",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_InitialPattern",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFO_InitialSize",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_InitialStyle",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_InitialFlags",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_InitialFrontPen",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_InitialBackPen",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_MinHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_MaxHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_PositiveText",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_NegativeText",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_Flags1",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_ModeList",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_Flags2",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_Screen",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_PubScreenName",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_PrivateIDCMP",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_SleepWindow",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_DoSaveMode",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_DoMultiSelect",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_DoPatterns",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_DrawersOnly",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_FixedWidthOnly",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_FilterFunc",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_Locale",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_TextAttr",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_UserData",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_InitialDrawMode",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_RejectIcons",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_RejectPattern",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_AcceptPattern",
+          "kind": "cstr"
+        },
+        {
+          "name": "ASLFR_FilterDrawers",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_FrontPens",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFO_BackPens",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFO_MaxFrontPen",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_MaxBackPen",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_IntuiMsgFunc",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLSM_InitialDisplayID",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialDisplayWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialDisplayHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialDisplayDepth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialOverscanType",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialAutoScroll",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialInfoOpened",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialInfoLeftEdge",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_InitialInfoTopEdge",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_DoWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_DoHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_DoDepth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_DoOverscanType",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_DoAutoScroll",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_PropertyFlags",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_PropertyMask",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_MinWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_MaxWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_MinHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_MaxDepth",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLSM_FilterFunc",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLSM_CustomSMList",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_SetSortBy",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_GetSortBy",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_SetSortDrawers",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_GetSortDrawers",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_SetSortOrder",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_GetSortOrder",
+          "kind": "refuse"
+        },
+        {
+          "name": "ASLFR_InitialShowVolumes",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_PopToFront",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFR_Activate",
+          "kind": "u32"
+        },
+        {
+          "name": "ASLFO_SampleText",
+          "kind": "cstr"
+        }
       ]
     },
     "gadtools.visual_info": {
@@ -319,33 +683,79 @@
       "tags": []
     },
     "gadtools.create_menus": {
-      "headers": ["libraries/gadtools.h"],
+      "headers": [
+        "libraries/gadtools.h"
+      ],
       "max_items": 16,
       "tags": [
-        {"name": "GTMN_FullMenu", "kind": "u32"},
-        {"name": "GTMN_NewLookMenus", "kind": "u32"},
-        {"name": "GTMN_FrontPen", "kind": "u32"},
-        {"name": "GTMN_SecondaryError", "kind": "refuse"}
+        {
+          "name": "GTMN_FullMenu",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMN_NewLookMenus",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMN_FrontPen",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMN_SecondaryError",
+          "kind": "refuse"
+        }
       ]
     },
     "gadtools.layout_menus": {
-      "headers": ["libraries/gadtools.h", "graphics/text.h"],
+      "headers": [
+        "libraries/gadtools.h",
+        "graphics/text.h"
+      ],
       "max_items": 16,
       "tags": [
-        {"name": "GTMN_TextAttr", "kind": "struct", "type": "TextAttr"},
-        {"name": "GTMN_NewLookMenus", "kind": "u32"},
-        {"name": "GTMN_Checkmark", "kind": "refuse"},
-        {"name": "GTMN_AmigaKey", "kind": "refuse"},
-        {"name": "GTMN_FrontPen", "kind": "u32"}
+        {
+          "name": "GTMN_TextAttr",
+          "kind": "struct",
+          "type": "TextAttr"
+        },
+        {
+          "name": "GTMN_NewLookMenus",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMN_Checkmark",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTMN_AmigaKey",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTMN_FrontPen",
+          "kind": "u32"
+        }
       ]
     },
     "gadtools.draw_bevel": {
-      "headers": ["libraries/gadtools.h"],
+      "headers": [
+        "libraries/gadtools.h"
+      ],
       "max_items": 8,
       "tags": [
-        {"name": "GT_VisualInfo", "kind": "object", "type": "VisualInfo", "nullable": false},
-        {"name": "GTBB_Recessed", "kind": "u32"},
-        {"name": "GTBB_FrameType", "kind": "u32"}
+        {
+          "name": "GT_VisualInfo",
+          "kind": "object",
+          "type": "VisualInfo",
+          "nullable": false
+        },
+        {
+          "name": "GTBB_Recessed",
+          "kind": "u32"
+        },
+        {
+          "name": "GTBB_FrameType",
+          "kind": "u32"
+        }
       ]
     },
     "intuition.new_object": {
@@ -362,176 +772,627 @@
           "type": "DrawInfo",
           "nullable": false
         },
-        {"name": "SYSIA_Size", "kind": "u32"},
-        {"name": "SYSIA_Which", "kind": "u32"},
-        {"name": "POINTERA_BitMap", "kind": "struct", "type": "BitMap"},
-        {"name": "POINTERA_XOffset", "kind": "u32"},
-        {"name": "POINTERA_YOffset", "kind": "u32"},
-        {"name": "POINTERA_WordWidth", "kind": "u32"},
-        {"name": "POINTERA_XResolution", "kind": "u32"},
-        {"name": "POINTERA_YResolution", "kind": "u32"}
+        {
+          "name": "SYSIA_Size",
+          "kind": "u32"
+        },
+        {
+          "name": "SYSIA_Which",
+          "kind": "u32"
+        },
+        {
+          "name": "POINTERA_BitMap",
+          "kind": "struct",
+          "type": "BitMap"
+        },
+        {
+          "name": "POINTERA_XOffset",
+          "kind": "u32"
+        },
+        {
+          "name": "POINTERA_YOffset",
+          "kind": "u32"
+        },
+        {
+          "name": "POINTERA_WordWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "POINTERA_XResolution",
+          "kind": "u32"
+        },
+        {
+          "name": "POINTERA_YResolution",
+          "kind": "u32"
+        }
       ]
     },
     "intuition.open_screen": {
-      "headers": ["intuition/screens.h"],
+      "headers": [
+        "intuition/screens.h"
+      ],
       "max_items": 24,
       "tags": [
-        {"name": "SA_AutoScroll", "kind": "u32"},
-        {"name": "SA_Pens", "kind": "u16_ffff", "max_count": 32},
-        {"name": "SA_Width", "kind": "u32"},
-        {"name": "SA_Height", "kind": "u32"},
-        {"name": "SA_Depth", "kind": "u32"},
-        {"name": "SA_Overscan", "kind": "u32"},
-        {"name": "SA_DisplayID", "kind": "u32", "fallback": "omit"},
-        {"name": "SA_Interleaved", "kind": "u32"},
-        {"name": "SA_Title", "kind": "cstr"},
-        {"name": "SA_ShowTitle", "kind": "u32"},
-        {"name": "SA_Colors32", "kind": "rgb32", "max_longs": 1024},
-        {"name": "SA_SharePens", "kind": "u32"},
-        {"name": "SA_PubName", "kind": "cstr"},
+        {
+          "name": "SA_AutoScroll",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Pens",
+          "kind": "u16_ffff",
+          "max_count": 32
+        },
+        {
+          "name": "SA_Width",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Height",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Depth",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Overscan",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_DisplayID",
+          "kind": "u32",
+          "fallback": "omit"
+        },
+        {
+          "name": "SA_Interleaved",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Title",
+          "kind": "cstr"
+        },
+        {
+          "name": "SA_ShowTitle",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_Colors32",
+          "kind": "rgb32",
+          "max_longs": 1024
+        },
+        {
+          "name": "SA_SharePens",
+          "kind": "u32"
+        },
+        {
+          "name": "SA_PubName",
+          "kind": "cstr"
+        },
         {
           "name": "SA_Font",
           "kind": "struct",
           "type": "TextAttr",
-          "fallback_cstr_field": {"field": "ta_Name", "value": "Vera Mono.font"}
+          "fallback_cstr_field": {
+            "field": "ta_Name",
+            "value": "Vera Mono.font"
+          }
         }
       ]
     },
     "intuition.open_window": {
-      "headers": ["intuition/intuition.h", "intuition/extensions.h"],
+      "headers": [
+        "intuition/intuition.h",
+        "intuition/extensions.h"
+      ],
       "max_items": 64,
       "tags": [
-        {"name": "WA_Left", "kind": "u32"},
-        {"name": "WA_Top", "kind": "u32"},
-        {"name": "WA_Width", "kind": "u32"},
-        {"name": "WA_Height", "kind": "u32"},
-        {"name": "WA_DetailPen", "kind": "u32"},
-        {"name": "WA_BlockPen", "kind": "u32"},
-        {"name": "WA_IDCMP", "kind": "u32"},
-        {"name": "WA_Flags", "kind": "u32"},
-        {"name": "WA_Title", "kind": "cstr"},
-        {"name": "WA_ScreenTitle", "kind": "cstr"},
-        {"name": "WA_CustomScreen", "kind": "object", "type": "Screen", "nullable": false},
-        {"name": "WA_MinWidth", "kind": "u32"},
-        {"name": "WA_MinHeight", "kind": "u32"},
-        {"name": "WA_MaxWidth", "kind": "u32"},
-        {"name": "WA_MaxHeight", "kind": "u32"},
-        {"name": "WA_InnerWidth", "kind": "u32"},
-        {"name": "WA_InnerHeight", "kind": "u32"},
-        {"name": "WA_PubScreenName", "kind": "cstr"},
-        {"name": "WA_PubScreen", "kind": "object", "type": "Screen", "nullable": true},
-        {"name": "WA_MouseQueue", "kind": "u32"},
-        {"name": "WA_RptQueue", "kind": "u32"},
-        {"name": "WA_DragBar", "kind": "u32"},
-        {"name": "WA_DepthGadget", "kind": "u32"},
-        {"name": "WA_CloseGadget", "kind": "u32"},
-        {"name": "WA_Backdrop", "kind": "u32"},
-        {"name": "WA_NoCareRefresh", "kind": "u32"},
-        {"name": "WA_Borderless", "kind": "u32"},
-        {"name": "WA_SizeGadget", "kind": "u32"},
-        {"name": "WA_Activate", "kind": "u32"},
-        {"name": "WA_RMBTrap", "kind": "u32"},
-        {"name": "WA_ReportMouse", "kind": "u32"},
-        {"name": "WA_WBenchWindow", "kind": "u32"},
-        {"name": "WA_SimpleRefresh", "kind": "u32"},
-        {"name": "WA_SmartRefresh", "kind": "u32"},
-        {"name": "WA_SizeBRight", "kind": "u32"},
-        {"name": "WA_SizeBBottom", "kind": "u32"},
-        {"name": "WA_AutoAdjust", "kind": "u32"},
-        {"name": "WA_GimmeZeroZero", "kind": "u32"},
-        {"name": "WA_MenuHelp", "kind": "u32"},
-        {"name": "WA_NewLookMenus", "kind": "u32"},
-        {"name": "WA_NotifyDepth", "kind": "u32"},
-        {"name": "WA_PointerDelay", "kind": "u32"},
-        {"name": "WA_TabletMessages", "kind": "u32"},
-        {"name": "WA_HelpGroup", "kind": "u32"},
-        {"name": "WA_HelpGroupWindow", "kind": "object", "type": "Window", "nullable": true},
-        {"name": "WA_Hidden", "kind": "u32"},
-        {"name": "WA_ToolBox", "kind": "u32"},
-        {"name": "WA_Parent", "kind": "object", "type": "Window", "nullable": false},
-        {"name": "WA_ExtraTitlebarGadgets", "kind": "u32"},
-        {"name": "WA_ExtraGadgetsStartID", "kind": "u32"},
-        {"name": "WA_ExtraGadget_Iconify", "kind": "u32"},
-        {"name": "WA_ExtraGadget_Lock", "kind": "u32"},
-        {"name": "WA_ExtraGadget_MUI", "kind": "u32"},
-        {"name": "WA_ExtraGadget_PopUp", "kind": "u32"},
-        {"name": "WA_ExtraGadget_Snapshot", "kind": "u32"},
-        {"name": "WA_ExtraGadget_Jump", "kind": "u32"},
-        {"name": "WA_Gadgets", "kind": "object", "type": "Gadget", "nullable": true},
-        {"name": "WA_BackFill", "kind": "refuse"},
-        {"name": "WA_ShapeHook", "kind": "refuse"},
-        {"name": "WA_ShapeRegion", "kind": "refuse"}
+        {
+          "name": "WA_Left",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Top",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Width",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Height",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_DetailPen",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_BlockPen",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_IDCMP",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Flags",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Title",
+          "kind": "cstr"
+        },
+        {
+          "name": "WA_ScreenTitle",
+          "kind": "cstr"
+        },
+        {
+          "name": "WA_CustomScreen",
+          "kind": "object",
+          "type": "Screen",
+          "nullable": false
+        },
+        {
+          "name": "WA_MinWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_MinHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_MaxWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_MaxHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_InnerWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_InnerHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_PubScreenName",
+          "kind": "cstr"
+        },
+        {
+          "name": "WA_PubScreen",
+          "kind": "object",
+          "type": "Screen",
+          "nullable": true
+        },
+        {
+          "name": "WA_MouseQueue",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_RptQueue",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_DragBar",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_DepthGadget",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_CloseGadget",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Backdrop",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_NoCareRefresh",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Borderless",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_SizeGadget",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Activate",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_RMBTrap",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ReportMouse",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_WBenchWindow",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_SimpleRefresh",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_SmartRefresh",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_SizeBRight",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_SizeBBottom",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_AutoAdjust",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_GimmeZeroZero",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_MenuHelp",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_NewLookMenus",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_NotifyDepth",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_PointerDelay",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_TabletMessages",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_HelpGroup",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_HelpGroupWindow",
+          "kind": "object",
+          "type": "Window",
+          "nullable": true
+        },
+        {
+          "name": "WA_Hidden",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ToolBox",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Parent",
+          "kind": "object",
+          "type": "Window",
+          "nullable": false
+        },
+        {
+          "name": "WA_ExtraTitlebarGadgets",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadgetsStartID",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_Iconify",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_Lock",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_MUI",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_PopUp",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_Snapshot",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_ExtraGadget_Jump",
+          "kind": "u32"
+        },
+        {
+          "name": "WA_Gadgets",
+          "kind": "object",
+          "type": "Gadget",
+          "nullable": true
+        },
+        {
+          "name": "WA_BackFill",
+          "kind": "refuse"
+        },
+        {
+          "name": "WA_ShapeHook",
+          "kind": "refuse"
+        },
+        {
+          "name": "WA_ShapeRegion",
+          "kind": "refuse"
+        }
       ]
     },
     "gadtools.create_gadget": {
-      "headers": ["libraries/gadtools.h", "intuition/gadgetclass.h"],
+      "headers": [
+        "libraries/gadtools.h",
+        "intuition/gadgetclass.h"
+      ],
       "max_items": 128,
       "tags": [
-        {"name": "GA_Disabled", "kind": "u32"},
-        {"name": "GA_Height", "kind": "u32"},
-        {"name": "GA_ID", "kind": "u32"},
-        {"name": "GA_Immediate", "kind": "u32"},
-        {"name": "GA_Left", "kind": "u32"},
-        {"name": "GA_Previous", "kind": "object", "type": "Gadget", "nullable": true},
-        {"name": "GA_RelVerify", "kind": "u32"},
-        {"name": "GA_TabCycle", "kind": "u32"},
-        {"name": "GA_Top", "kind": "u32"},
-        {"name": "GA_Width", "kind": "u32"},
-        {"name": "GTCB_Checked", "kind": "u32"},
-        {"name": "GTCB_Scaled", "kind": "u32"},
-        {"name": "GTCY_Active", "kind": "u32"},
-        {"name": "GTCY_Labels", "kind": "refuse"},
-        {"name": "GTIN_MaxChars", "kind": "u32"},
-        {"name": "GTIN_Number", "kind": "u32"},
-        {"name": "GTLV_CallBack", "kind": "refuse"},
-        {"name": "GTLV_ItemHeight", "kind": "u32"},
-        {"name": "GTLV_Labels", "kind": "refuse"},
-        {"name": "GTLV_MakeVisible", "kind": "u32"},
-        {"name": "GTLV_MaxPen", "kind": "u32"},
-        {"name": "GTLV_ReadOnly", "kind": "u32"},
-        {"name": "GTLV_ScrollWidth", "kind": "u32"},
-        {"name": "GTLV_Selected", "kind": "u32"},
-        {"name": "GTLV_ShowSelected", "kind": "object", "type": "Gadget", "nullable": true},
-        {"name": "GTLV_Top", "kind": "u32"},
-        {"name": "GTMX_Active", "kind": "u32"},
-        {"name": "GTMX_Labels", "kind": "refuse"},
-        {"name": "GTMX_Scaled", "kind": "u32"},
-        {"name": "GTMX_Spacing", "kind": "u32"},
-        {"name": "GTMX_TitlePlace", "kind": "u32"},
-        {"name": "GTNM_Border", "kind": "u32"},
-        {"name": "GTNM_Number", "kind": "u32"},
-        {"name": "GTPA_IndicatorHeight", "kind": "u32"},
-        {"name": "GTPA_NumColors", "kind": "u32"},
-        {"name": "GTSC_Arrows", "kind": "u32"},
-        {"name": "GTSC_Top", "kind": "u32"},
-        {"name": "GTSC_Total", "kind": "u32"},
-        {"name": "GTSC_Visible", "kind": "u32"},
-        {"name": "GTSL_DispFunc", "kind": "refuse"},
-        {"name": "GTSL_Justification", "kind": "u32"},
-        {"name": "GTSL_Level", "kind": "u32"},
-        {"name": "GTSL_LevelFormat", "kind": "cstr"},
-        {"name": "GTSL_LevelPlace", "kind": "u32"},
-        {"name": "GTSL_Max", "kind": "u32"},
-        {"name": "GTSL_MaxLevelLen", "kind": "u32"},
-        {"name": "GTSL_MaxPixelLen", "kind": "u32"},
-        {"name": "GTSL_Min", "kind": "u32"},
-        {"name": "GTST_EditHook", "kind": "refuse"},
-        {"name": "GTST_MaxChars", "kind": "u32"},
-        {"name": "GTST_String", "kind": "cstr"},
-        {"name": "GTTX_Border", "kind": "u32"},
-        {"name": "GTTX_CopyText", "kind": "u32"},
-        {"name": "GTTX_Text", "kind": "cstr"},
-        {"name": "GT_Underscore", "kind": "u32"},
-        {"name": "PGA_Freedom", "kind": "u32"},
-        {"name": "STRINGA_ExitHelp", "kind": "u32"},
-        {"name": "STRINGA_Justification", "kind": "u32"},
-        {"name": "STRINGA_ReplaceMode", "kind": "u32"}
+        {
+          "name": "GA_Disabled",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Height",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_ID",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Immediate",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Left",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Previous",
+          "kind": "object",
+          "type": "Gadget",
+          "nullable": true
+        },
+        {
+          "name": "GA_RelVerify",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_TabCycle",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Top",
+          "kind": "u32"
+        },
+        {
+          "name": "GA_Width",
+          "kind": "u32"
+        },
+        {
+          "name": "GTCB_Checked",
+          "kind": "u32"
+        },
+        {
+          "name": "GTCB_Scaled",
+          "kind": "u32"
+        },
+        {
+          "name": "GTCY_Active",
+          "kind": "u32"
+        },
+        {
+          "name": "GTCY_Labels",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTIN_MaxChars",
+          "kind": "u32"
+        },
+        {
+          "name": "GTIN_Number",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_CallBack",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTLV_ItemHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_Labels",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTLV_MakeVisible",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_MaxPen",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_ReadOnly",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_ScrollWidth",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_Selected",
+          "kind": "u32"
+        },
+        {
+          "name": "GTLV_ShowSelected",
+          "kind": "object",
+          "type": "Gadget",
+          "nullable": true
+        },
+        {
+          "name": "GTLV_Top",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMX_Active",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMX_Labels",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTMX_Scaled",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMX_Spacing",
+          "kind": "u32"
+        },
+        {
+          "name": "GTMX_TitlePlace",
+          "kind": "u32"
+        },
+        {
+          "name": "GTNM_Border",
+          "kind": "u32"
+        },
+        {
+          "name": "GTNM_Number",
+          "kind": "u32"
+        },
+        {
+          "name": "GTPA_IndicatorHeight",
+          "kind": "u32"
+        },
+        {
+          "name": "GTPA_NumColors",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSC_Arrows",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSC_Top",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSC_Total",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSC_Visible",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_DispFunc",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTSL_Justification",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_Level",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_LevelFormat",
+          "kind": "cstr"
+        },
+        {
+          "name": "GTSL_LevelPlace",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_Max",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_MaxLevelLen",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_MaxPixelLen",
+          "kind": "u32"
+        },
+        {
+          "name": "GTSL_Min",
+          "kind": "u32"
+        },
+        {
+          "name": "GTST_EditHook",
+          "kind": "refuse"
+        },
+        {
+          "name": "GTST_MaxChars",
+          "kind": "u32"
+        },
+        {
+          "name": "GTST_String",
+          "kind": "cstr"
+        },
+        {
+          "name": "GTTX_Border",
+          "kind": "u32"
+        },
+        {
+          "name": "GTTX_CopyText",
+          "kind": "u32"
+        },
+        {
+          "name": "GTTX_Text",
+          "kind": "cstr"
+        },
+        {
+          "name": "GT_Underscore",
+          "kind": "u32"
+        },
+        {
+          "name": "PGA_Freedom",
+          "kind": "u32"
+        },
+        {
+          "name": "STRINGA_ExitHelp",
+          "kind": "u32"
+        },
+        {
+          "name": "STRINGA_Justification",
+          "kind": "u32"
+        },
+        {
+          "name": "STRINGA_ReplaceMode",
+          "kind": "u32"
+        }
       ]
     },
     "gadtools.get_gadget": {
       "derive": {
         "from": "gadtools.create_gadget",
-        "map": {"u32": "out_u32"},
+        "map": {
+          "u32": "out_u32"
+        },
         "otherwise": "refuse"
       }
     }
@@ -540,175 +1401,394 @@
     "gadtools.library.GT_GetIMsg": {
       "reason": "IntuiMessage results need a guest-readable facade and paired reply ownership",
       "evidence": [
-        {"source": "workbench/libs/gadtools/gt_getimsg.c", "line_start": 53, "line_end": 70}
+        {
+          "source": "workbench/libs/gadtools/gt_getimsg.c",
+          "line_start": 53,
+          "line_end": 70
+        }
       ]
     },
     "gadtools.library.GT_ReplyIMsg": {
       "reason": "reply must consume the paired filtered-message facade and recover its original message",
       "evidence": [
-        {"source": "workbench/libs/gadtools/gt_replyimsg.c", "line_start": 49, "line_end": 56}
+        {
+          "source": "workbench/libs/gadtools/gt_replyimsg.c",
+          "line_start": 49,
+          "line_end": 56
+        }
       ]
     },
     "gadtools.library.GT_FilterIMsg": {
       "reason": "filter returns an embedded or allocated mutable message with context-owned lifetime",
       "evidence": [
-        {"source": "workbench/libs/gadtools/gt_filterimsg.c", "line_start": 91, "line_end": 112}
+        {
+          "source": "workbench/libs/gadtools/gt_filterimsg.c",
+          "line_start": 91,
+          "line_end": 112
+        }
       ]
     },
     "gadtools.library.GT_PostFilterIMsg": {
       "reason": "post-filter copies guest-visible mutations and releases embedded or allocated wrapper state",
       "evidence": [
-        {"source": "workbench/libs/gadtools/gt_postfilterimsg.c", "line_start": 49, "line_end": 83}
+        {
+          "source": "workbench/libs/gadtools/gt_postfilterimsg.c",
+          "line_start": 49,
+          "line_end": 83
+        }
       ]
     }
   },
   "functions": {
     "intuition.library.CurrentTime": {
       "pointers": {
-        "seconds": {"kind": "u32", "direction": "out"},
-        "micros": {"kind": "u32", "direction": "out"}
+        "seconds": {
+          "kind": "u32",
+          "direction": "out"
+        },
+        "micros": {
+          "kind": "u32",
+          "direction": "out"
+        }
       }
     },
     "exec.library.FindSemaphore": {
-      "result": {"kind": "object", "type": "SignalSemaphore", "owned": false}
+      "result": {
+        "kind": "object",
+        "type": "SignalSemaphore",
+        "owned": false
+      }
     },
     "exec.library.ObtainSemaphore": {
-      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+      "objects": {
+        "sigSem": {
+          "type": "SignalSemaphore",
+          "nullable": false
+        }
+      }
     },
     "exec.library.ReleaseSemaphore": {
-      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+      "objects": {
+        "sigSem": {
+          "type": "SignalSemaphore",
+          "nullable": false
+        }
+      }
     },
     "exec.library.AttemptSemaphore": {
-      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+      "objects": {
+        "sigSem": {
+          "type": "SignalSemaphore",
+          "nullable": false
+        }
+      }
     },
     "exec.library.ObtainSemaphoreShared": {
-      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+      "objects": {
+        "sigSem": {
+          "type": "SignalSemaphore",
+          "nullable": false
+        }
+      }
     },
     "exec.library.AttemptSemaphoreShared": {
-      "objects": {"sigSem": {"type": "SignalSemaphore", "nullable": false}}
+      "objects": {
+        "sigSem": {
+          "type": "SignalSemaphore",
+          "nullable": false
+        }
+      }
     },
     "dos.library.DateStamp": {
       "structs": {
-        "date": {"type": "DateStamp", "direction": "out"}
+        "date": {
+          "type": "DateStamp",
+          "direction": "out"
+        }
       },
-      "result": {"kind": "guest_arg", "arg": "date"}
+      "result": {
+        "kind": "guest_arg",
+        "arg": "date"
+      }
     },
     "dos.library.CompareDates": {
       "structs": {
-        "date1": {"type": "DateStamp", "direction": "in"},
-        "date2": {"type": "DateStamp", "direction": "in"}
+        "date1": {
+          "type": "DateStamp",
+          "direction": "in"
+        },
+        "date2": {
+          "type": "DateStamp",
+          "direction": "in"
+        }
       }
     },
     "dos.library.Examine": {
       "structs": {
-        "fib": {"type": "FileInfoBlock", "direction": "out", "copy_on": "nonzero"}
+        "fib": {
+          "type": "FileInfoBlock",
+          "direction": "out",
+          "copy_on": "nonzero"
+        }
       }
     },
     "dos.library.ExNext": {
       "structs": {
-        "fileInfoBlock": {"type": "FileInfoBlock", "direction": "inout", "copy_on": "nonzero"}
+        "fileInfoBlock": {
+          "type": "FileInfoBlock",
+          "direction": "inout",
+          "copy_on": "nonzero"
+        }
       }
     },
     "dos.library.Info": {
       "structs": {
-        "parameterBlock": {"type": "InfoData", "direction": "out", "copy_on": "nonzero"}
+        "parameterBlock": {
+          "type": "InfoData",
+          "direction": "out",
+          "copy_on": "nonzero"
+        }
       }
     },
     "utility.library.CallHookPkt": {
       "callbacks": {
-        "hook": {"kind": "hook", "object_arg": "object", "message_arg": "paramPacket"}
+        "hook": {
+          "kind": "hook",
+          "object_arg": "object",
+          "message_arg": "paramPacket"
+        }
       },
-      "guest_values": ["object", "paramPacket"]
+      "guest_values": [
+        "object",
+        "paramPacket"
+      ]
+    },
+    "intuition.library.ModifyIDCMP": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": false
+        }
+      }
+    },
+    "intuition.library.InitRequester": {
+      "structs": {
+        "requester": {
+          "type": "Requester",
+          "direction": "out"
+        }
+      }
     },
     "intuition.library.GetPrefs": {
       "structs": {
-        "prefbuffer": {"type": "Preferences", "direction": "out", "size_arg": "size"}
+        "prefbuffer": {
+          "type": "Preferences",
+          "direction": "out",
+          "size_arg": "size"
+        }
       },
-      "result": {"kind": "guest_arg", "arg": "prefbuffer"}
+      "result": {
+        "kind": "guest_arg",
+        "arg": "prefbuffer"
+      }
     },
     "intuition.library.GetDefPrefs": {
       "structs": {
-        "prefbuffer": {"type": "Preferences", "direction": "out", "size_arg": "size"}
+        "prefbuffer": {
+          "type": "Preferences",
+          "direction": "out",
+          "size_arg": "size"
+        }
       },
-      "result": {"kind": "guest_arg", "arg": "prefbuffer"}
+      "result": {
+        "kind": "guest_arg",
+        "arg": "prefbuffer"
+      }
     },
     "intuition.library.LockPubScreen": {
-      "strings": ["name"],
-      "result": {"kind": "object", "type": "Screen", "owned": false}
+      "strings": [
+        "name"
+      ],
+      "result": {
+        "kind": "object",
+        "type": "Screen",
+        "owned": false
+      }
     },
     "intuition.library.UnlockPubScreen": {
-      "strings": ["name"],
+      "strings": [
+        "name"
+      ],
       "objects": {
-        "screen": {"type": "Screen", "nullable": true, "release": true}
+        "screen": {
+          "type": "Screen",
+          "nullable": true,
+          "release": true
+        }
       }
     },
     "intuition.library.OpenScreenTagList": {
-      "null_args": ["newScreen"],
-      "taglists": {"tagList": "intuition.open_screen"},
-      "result": {"kind": "object", "type": "Screen"}
+      "null_args": [
+        "newScreen"
+      ],
+      "taglists": {
+        "tagList": "intuition.open_screen"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Screen"
+      }
     },
     "intuition.library.CloseScreen": {
-      "objects": {"screen": {"type": "Screen", "nullable": false, "consume": true}}
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": false,
+          "consume": true
+        }
+      }
     },
     "intuition.library.OpenWindowTagList": {
-      "null_args": ["newWindow"],
-      "taglists": {"tagList": "intuition.open_window"},
-      "result": {"kind": "object", "type": "Window"}
+      "null_args": [
+        "newWindow"
+      ],
+      "taglists": {
+        "tagList": "intuition.open_window"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Window"
+      }
     },
     "intuition.library.CloseWindow": {
-      "objects": {"window": {"type": "Window", "nullable": false, "consume": true}}
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": false,
+          "consume": true
+        }
+      }
     },
     "intuition.library.PubScreenStatus": {
-      "objects": {"Scr": {"type": "Screen", "nullable": false}}
+      "objects": {
+        "Scr": {
+          "type": "Screen",
+          "nullable": false
+        }
+      }
     },
     "intuition.library.GetScreenDrawInfo": {
-      "objects": {"screen": {"type": "Screen", "nullable": false}},
-      "result": {"kind": "object", "type": "DrawInfo", "owned": false}
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": false
+        }
+      },
+      "result": {
+        "kind": "object",
+        "type": "DrawInfo",
+        "owned": false
+      }
     },
     "intuition.library.FreeScreenDrawInfo": {
       "objects": {
-        "screen": {"type": "Screen", "nullable": false},
-        "drawInfo": {"type": "DrawInfo", "nullable": false, "release": true}
+        "screen": {
+          "type": "Screen",
+          "nullable": false
+        },
+        "drawInfo": {
+          "type": "DrawInfo",
+          "nullable": false,
+          "release": true
+        }
       }
     },
     "intuition.library.MakeClass": {
-      "strings": ["classID", "superClassID"],
+      "strings": [
+        "classID",
+        "superClassID"
+      ],
       "objects": {
-        "superClassPtr": {"type": "Class", "nullable": true}
+        "superClassPtr": {
+          "type": "Class",
+          "nullable": true
+        }
       },
-      "result": {"kind": "object", "type": "Class"}
+      "result": {
+        "kind": "object",
+        "type": "Class"
+      }
     },
     "intuition.library.AddClass": {
-      "objects": {"classPtr": {"type": "Class", "nullable": false}}
+      "objects": {
+        "classPtr": {
+          "type": "Class",
+          "nullable": false
+        }
+      }
     },
     "intuition.library.RemoveClass": {
-      "objects": {"classPtr": {"type": "Class", "nullable": false}}
+      "objects": {
+        "classPtr": {
+          "type": "Class",
+          "nullable": false
+        }
+      }
     },
     "intuition.library.FreeClass": {
-      "objects": {"iclass": {"type": "Class", "nullable": false, "consume": true}}
+      "objects": {
+        "iclass": {
+          "type": "Class",
+          "nullable": false,
+          "consume": true
+        }
+      }
     },
     "intuition.library.NewObjectA": {
       "objects": {
-        "classPtr": {"type": "Class", "nullable": true}
+        "classPtr": {
+          "type": "Class",
+          "nullable": true
+        }
       },
-      "taglists": {"tagList": "intuition.new_object"},
-      "boopsi": {"class_arg": "classPtr"},
-      "result": {"kind": "object", "type": "Object"}
+      "taglists": {
+        "tagList": "intuition.new_object"
+      },
+      "boopsi": {
+        "class_arg": "classPtr"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Object"
+      }
     },
     "intuition.library.DisposeObject": {
       "objects": {
-        "object": {"type": "Object", "nullable": true, "consume": true}
+        "object": {
+          "type": "Object",
+          "nullable": true,
+          "consume": true
+        }
       }
     },
     "graphics.library.BestModeIDA": {
-      "taglists": {"TagItems": "graphics.best_mode"}
+      "taglists": {
+        "TagItems": "graphics.best_mode"
+      }
     },
     "graphics.library.FindDisplayInfo": {
-      "result": {"kind": "object", "type": "DisplayInfoHandle", "owned": false}
+      "result": {
+        "kind": "object",
+        "type": "DisplayInfoHandle",
+        "owned": false
+      }
     },
     "graphics.library.GetDisplayInfoData": {
       "objects": {
-        "handle": {"type": "DisplayInfoHandle", "nullable": true}
+        "handle": {
+          "type": "DisplayInfoHandle",
+          "nullable": true
+        }
       },
       "tagged_structs": {
         "buf": {
@@ -716,19 +1796,36 @@
           "tag_arg": "tagID",
           "size_arg": "size",
           "header": "graphics/displayinfo.h",
-          "variants": {"DTAG_DIMS": "DimensionInfo"},
+          "variants": {
+            "DTAG_DIMS": "DimensionInfo"
+          },
           "copy_on": "nonzero"
         }
       }
     },
     "graphics.library.ObtainPen": {
-      "objects": {"cm": {"type": "ColorMap", "nullable": false}}
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": false
+        }
+      }
     },
     "graphics.library.ReleasePen": {
-      "objects": {"cm": {"type": "ColorMap", "nullable": false}}
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": false
+        }
+      }
     },
     "graphics.library.LoadRGB32": {
-      "objects": {"vp": {"type": "ViewPort", "nullable": false}},
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": false
+        }
+      },
       "arrays": {
         "table": {
           "kind": "rgb32",
@@ -740,69 +1837,167 @@
     },
     "graphics.library.InitRastPort": {
       "structs": {
-        "rp": {"type": "RastPort", "direction": "out"}
+        "rp": {
+          "type": "RastPort",
+          "direction": "out"
+        }
       }
     },
     "graphics.library.InitBitMap": {
       "structs": {
-        "bm": {"type": "BitMap", "direction": "out", "clear": false}
+        "bm": {
+          "type": "BitMap",
+          "direction": "out",
+          "clear": false
+        }
       }
     },
     "graphics.library.OpenFont": {
       "structs": {
-        "textAttr": {"type": "TextAttr", "direction": "in"}
+        "textAttr": {
+          "type": "TextAttr",
+          "direction": "in"
+        }
       },
-      "result": {"kind": "object", "type": "TextFont"}
+      "result": {
+        "kind": "object",
+        "type": "TextFont"
+      }
     },
     "graphics.library.CloseFont": {
       "objects": {
-        "textFont": {"type": "TextFont", "nullable": false, "consume": true}
+        "textFont": {
+          "type": "TextFont",
+          "nullable": false,
+          "consume": true
+        }
       }
     },
     "graphics.library.NewRegion": {
-      "result": {"kind": "object", "type": "Region"}
+      "result": {
+        "kind": "object",
+        "type": "Region"
+      }
     },
     "graphics.library.DisposeRegion": {
-      "objects": {"region": {"type": "Region", "nullable": true, "consume": true}}
+      "objects": {
+        "region": {
+          "type": "Region",
+          "nullable": true,
+          "consume": true
+        }
+      }
     },
     "graphics.library.ClearRegion": {
-      "objects": {"region": {"type": "Region", "nullable": false}}
+      "objects": {
+        "region": {
+          "type": "Region",
+          "nullable": false
+        }
+      }
     },
     "graphics.library.IsPointInRegion": {
-      "objects": {"Reg": {"type": "Region", "nullable": false}}
+      "objects": {
+        "Reg": {
+          "type": "Region",
+          "nullable": false
+        }
+      }
     },
     "graphics.library.SetRegion": {
       "objects": {
-        "src": {"type": "Region", "nullable": false},
-        "dest": {"type": "Region", "nullable": false}
+        "src": {
+          "type": "Region",
+          "nullable": false
+        },
+        "dest": {
+          "type": "Region",
+          "nullable": false
+        }
       }
     },
     "graphics.library.AreRegionsEqual": {
       "objects": {
-        "R1": {"type": "Region", "nullable": false},
-        "R2": {"type": "Region", "nullable": false}
+        "R1": {
+          "type": "Region",
+          "nullable": false
+        },
+        "R2": {
+          "type": "Region",
+          "nullable": false
+        }
       }
     },
     "graphics.library.AndRectRegion": {
-      "objects": {"Reg": {"type": "Region", "nullable": false}},
-      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+      "objects": {
+        "Reg": {
+          "type": "Region",
+          "nullable": false
+        }
+      },
+      "structs": {
+        "Rect": {
+          "type": "Rectangle",
+          "direction": "in"
+        }
+      }
     },
     "graphics.library.OrRectRegion": {
-      "objects": {"Reg": {"type": "Region", "nullable": false}},
-      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+      "objects": {
+        "Reg": {
+          "type": "Region",
+          "nullable": false
+        }
+      },
+      "structs": {
+        "Rect": {
+          "type": "Rectangle",
+          "direction": "in"
+        }
+      }
     },
     "graphics.library.ClearRectRegion": {
-      "objects": {"Reg": {"type": "Region", "nullable": false}},
-      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+      "objects": {
+        "Reg": {
+          "type": "Region",
+          "nullable": false
+        }
+      },
+      "structs": {
+        "Rect": {
+          "type": "Rectangle",
+          "direction": "in"
+        }
+      }
     },
     "graphics.library.XorRectRegion": {
-      "objects": {"Reg": {"type": "Region", "nullable": false}},
-      "structs": {"Rect": {"type": "Rectangle", "direction": "in"}}
+      "objects": {
+        "Reg": {
+          "type": "Region",
+          "nullable": false
+        }
+      },
+      "structs": {
+        "Rect": {
+          "type": "Rectangle",
+          "direction": "in"
+        }
+      }
     },
     "gadtools.library.GetVisualInfoA": {
-      "objects": {"screen": {"type": "Screen", "nullable": false}},
-      "taglists": {"tagList": "gadtools.visual_info"},
-      "result": {"kind": "object", "type": "VisualInfo"}
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": false
+        }
+      },
+      "taglists": {
+        "tagList": "gadtools.visual_info"
+      },
+      "result": {
+        "kind": "object",
+        "type": "VisualInfo"
+      }
     },
     "gadtools.library.CreateMenusA": {
       "record_arrays": {
@@ -810,66 +2005,131 @@
           "type": "NewMenu",
           "header": "libraries/gadtools.h",
           "direction": "in",
-          "sentinel": {"field": "nm_Type", "value": "NM_END", "width": 1},
+          "sentinel": {
+            "field": "nm_Type",
+            "value": "NM_END",
+            "width": 1
+          },
           "max_count": 1024,
-          "reject": {"field": "nm_Type", "mask": 128, "width": 1},
+          "reject": {
+            "field": "nm_Type",
+            "mask": 128,
+            "width": 1
+          },
           "fields": {
-            "nm_Label": {"kind": "cstr_sentinel", "sentinel": "NM_BARLABEL"},
-            "nm_CommKey": {"kind": "cstr"},
-            "nm_UserData": {"kind": "guest_value"}
+            "nm_Label": {
+              "kind": "cstr_sentinel",
+              "sentinel": "NM_BARLABEL"
+            },
+            "nm_CommKey": {
+              "kind": "cstr"
+            },
+            "nm_UserData": {
+              "kind": "guest_value"
+            }
           }
         }
       },
-      "taglists": {"tagList": "gadtools.create_menus"},
-      "result": {"kind": "object", "type": "Menu"}
+      "taglists": {
+        "tagList": "gadtools.create_menus"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Menu"
+      }
     },
     "gadtools.library.FreeMenus": {
       "objects": {
-        "menu": {"type": "Menu", "nullable": true, "consume": true}
+        "menu": {
+          "type": "Menu",
+          "nullable": true,
+          "consume": true
+        }
       }
     },
     "gadtools.library.LayoutMenusA": {
       "objects": {
-        "menu": {"type": "Menu", "nullable": true},
-        "vi": {"type": "VisualInfo", "nullable": false}
+        "menu": {
+          "type": "Menu",
+          "nullable": true
+        },
+        "vi": {
+          "type": "VisualInfo",
+          "nullable": false
+        }
       },
-      "taglists": {"tagList": "gadtools.layout_menus"}
+      "taglists": {
+        "tagList": "gadtools.layout_menus"
+      }
     },
     "gadtools.library.LayoutMenuItemsA": {
       "objects": {
-        "menuitem": {"type": "MenuItem", "nullable": true},
-        "vi": {"type": "VisualInfo", "nullable": false}
+        "menuitem": {
+          "type": "MenuItem",
+          "nullable": true
+        },
+        "vi": {
+          "type": "VisualInfo",
+          "nullable": false
+        }
       },
-      "taglists": {"tagList": "gadtools.layout_menus"}
+      "taglists": {
+        "tagList": "gadtools.layout_menus"
+      }
     },
     "gadtools.library.CreateContext": {
-      "result": {"kind": "object", "type": "Gadget", "store_arg": "glistpointer"}
+      "result": {
+        "kind": "object",
+        "type": "Gadget",
+        "store_arg": "glistpointer"
+      }
     },
     "gadtools.library.CreateGadgetA": {
       "objects": {
-        "previous": {"type": "Gadget", "nullable": false}
+        "previous": {
+          "type": "Gadget",
+          "nullable": false
+        }
       },
       "structs": {
         "ng": {
           "type": "NewGadget",
           "direction": "in",
           "fields": {
-            "ng_GadgetText": {"kind": "cstr", "nullable": true},
+            "ng_GadgetText": {
+              "kind": "cstr",
+              "nullable": true
+            },
             "ng_TextAttr": {
               "kind": "struct",
               "type": "TextAttr",
               "nullable": true,
               "fields": {
-                "ta_Name": {"kind": "cstr", "nullable": false}
+                "ta_Name": {
+                  "kind": "cstr",
+                  "nullable": false
+                }
               }
             },
-            "ng_VisualInfo": {"kind": "object", "type": "VisualInfo", "nullable": false},
-            "ng_UserData": {"kind": "guest_value"}
+            "ng_VisualInfo": {
+              "kind": "object",
+              "type": "VisualInfo",
+              "nullable": false
+            },
+            "ng_UserData": {
+              "kind": "guest_value"
+            }
           }
         }
       },
-      "taglists": {"taglist": "gadtools.create_gadget"},
-      "result": {"kind": "object", "type": "Gadget", "owned": false}
+      "taglists": {
+        "taglist": "gadtools.create_gadget"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Gadget",
+        "owned": false
+      }
     },
     "gadtools.library.FreeGadgets": {
       "objects": {
@@ -883,96 +2143,200 @@
     },
     "gadtools.library.GT_SetGadgetAttrsA": {
       "objects": {
-        "gad": {"type": "Gadget", "nullable": true},
-        "win": {"type": "Window", "nullable": true}
+        "gad": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "win": {
+          "type": "Window",
+          "nullable": true
+        }
       },
-      "null_args": ["req"],
-      "taglists": {"tagList": "gadtools.create_gadget"}
+      "null_args": [
+        "req"
+      ],
+      "taglists": {
+        "tagList": "gadtools.create_gadget"
+      }
     },
     "gadtools.library.GT_GetGadgetAttrsA": {
       "objects": {
-        "gad": {"type": "Gadget", "nullable": true},
-        "win": {"type": "Window", "nullable": true}
+        "gad": {
+          "type": "Gadget",
+          "nullable": true
+        },
+        "win": {
+          "type": "Window",
+          "nullable": true
+        }
       },
-      "null_args": ["req"],
-      "taglists": {"taglist": "gadtools.get_gadget"}
+      "null_args": [
+        "req"
+      ],
+      "taglists": {
+        "taglist": "gadtools.get_gadget"
+      }
     },
     "gadtools.library.GT_RefreshWindow": {
       "noop": true,
       "evidence": [
-        {"source": "workbench/libs/gadtools/gt_refreshwindow.c", "line_start": 51, "line_end": 59}
+        {
+          "source": "workbench/libs/gadtools/gt_refreshwindow.c",
+          "line_start": 51,
+          "line_end": 59
+        }
       ]
     },
     "gadtools.library.GT_BeginRefresh": {
-      "objects": {"win": {"type": "Window", "nullable": false, "sync": true}}
+      "objects": {
+        "win": {
+          "type": "Window",
+          "nullable": false,
+          "sync": true
+        }
+      }
     },
     "gadtools.library.GT_EndRefresh": {
-      "objects": {"win": {"type": "Window", "nullable": false, "sync": true}}
+      "objects": {
+        "win": {
+          "type": "Window",
+          "nullable": false,
+          "sync": true
+        }
+      }
     },
     "gadtools.library.DrawBevelBoxA": {
       "objects": {
-        "rport": {"type": "RastPort", "nullable": false, "sync": true}
+        "rport": {
+          "type": "RastPort",
+          "nullable": false,
+          "sync": true
+        }
       },
-      "taglists": {"taglist": "gadtools.draw_bevel"}
+      "taglists": {
+        "taglist": "gadtools.draw_bevel"
+      }
     },
     "gadtools.library.FreeVisualInfo": {
       "objects": {
-        "vi": {"type": "VisualInfo", "nullable": true, "consume": true}
+        "vi": {
+          "type": "VisualInfo",
+          "nullable": true,
+          "consume": true
+        }
       }
     },
     "cybergraphics.library.BestCModeIDTagList": {
-      "taglists": {"tags": "cybergraphics.best_mode"}
+      "taglists": {
+        "tags": "cybergraphics.best_mode"
+      }
     },
     "locale.library.OpenLocale": {
-      "result": {"kind": "object", "type": "Locale"}
+      "result": {
+        "kind": "object",
+        "type": "Locale"
+      }
     },
     "locale.library.CloseLocale": {
       "objects": {
-        "locale": {"type": "Locale", "nullable": false, "release": true}
+        "locale": {
+          "type": "Locale",
+          "nullable": false,
+          "release": true
+        }
       }
     },
     "locale.library.ConvToLower": {
       "objects": {
-        "locale": {"type": "Locale", "nullable": false}
+        "locale": {
+          "type": "Locale",
+          "nullable": false
+        }
       }
     },
     "locale.library.ConvToUpper": {
       "objects": {
-        "locale": {"type": "Locale", "nullable": false}
+        "locale": {
+          "type": "Locale",
+          "nullable": false
+        }
       }
     },
     "locale.library.OpenCatalogA": {
       "objects": {
-        "locale": {"type": "Locale", "nullable": true}
+        "locale": {
+          "type": "Locale",
+          "nullable": true
+        }
       },
-      "taglists": {"tags": "locale.open_catalog"},
-      "result": {"kind": "object", "type": "Catalog"}
+      "taglists": {
+        "tags": "locale.open_catalog"
+      },
+      "result": {
+        "kind": "object",
+        "type": "Catalog"
+      }
     },
     "locale.library.CloseCatalog": {
       "objects": {
-        "catalog": {"type": "Catalog", "nullable": false, "release": true}
+        "catalog": {
+          "type": "Catalog",
+          "nullable": false,
+          "release": true
+        }
       }
     },
     "asl.library.AllocAslRequest": {
-      "taglists": {"tagList": "asl.request"},
-      "result": {"kind": "object", "type": "AslRequest"}
+      "taglists": {
+        "tagList": "asl.request"
+      },
+      "result": {
+        "kind": "object",
+        "type": "AslRequest"
+      }
     },
     "asl.library.FreeAslRequest": {
-      "objects": {"requester": {"type": "AslRequest", "nullable": true, "consume": true}}
+      "objects": {
+        "requester": {
+          "type": "AslRequest",
+          "nullable": true,
+          "consume": true
+        }
+      }
     },
     "asl.library.AslRequest": {
-      "objects": {"requester": {"type": "AslRequest", "nullable": false}},
-      "taglists": {"tagList": "asl.request"}
+      "objects": {
+        "requester": {
+          "type": "AslRequest",
+          "nullable": false
+        }
+      },
+      "taglists": {
+        "tagList": "asl.request"
+      }
     },
     "asl.library.AbortAslRequest": {
-      "objects": {"requester": {"type": "AslRequest", "nullable": false}}
+      "objects": {
+        "requester": {
+          "type": "AslRequest",
+          "nullable": false
+        }
+      }
     },
     "asl.library.ActivateAslRequest": {
-      "objects": {"requester": {"type": "AslRequest", "nullable": false}}
+      "objects": {
+        "requester": {
+          "type": "AslRequest",
+          "nullable": false
+        }
+      }
     },
     "diskfont.library.OpenDiskFont": {
       "structs": {
-        "textAttr": {"type": "TextAttr", "direction": "in"}
+        "textAttr": {
+          "type": "TextAttr",
+          "direction": "in"
+        }
       },
       "result": {
         "kind": "object",
@@ -985,28 +2349,1029 @@
       }
     },
     "icon.library.GetDiskObject": {
-      "result": {"kind": "object", "type": "DiskObject"}
+      "result": {
+        "kind": "object",
+        "type": "DiskObject"
+      }
     },
     "icon.library.GetDefDiskObject": {
-      "result": {"kind": "object", "type": "DiskObject"}
+      "result": {
+        "kind": "object",
+        "type": "DiskObject"
+      }
     },
     "icon.library.GetDiskObjectNew": {
-      "result": {"kind": "object", "type": "DiskObject"}
+      "result": {
+        "kind": "object",
+        "type": "DiskObject"
+      }
     },
     "icon.library.NewDiskObject": {
-      "result": {"kind": "object", "type": "DiskObject"}
+      "result": {
+        "kind": "object",
+        "type": "DiskObject"
+      }
     },
     "icon.library.FreeDiskObject": {
       "objects": {
-        "diskobj": {"type": "DiskObject", "nullable": true, "consume": true}
+        "diskobj": {
+          "type": "DiskObject",
+          "nullable": true,
+          "consume": true
+        }
       }
     },
     "icon.library.DupDiskObjectA": {
       "objects": {
-        "icon": {"type": "DiskObject", "nullable": false}
+        "icon": {
+          "type": "DiskObject",
+          "nullable": false
+        }
       },
-      "taglists": {"tags": "icon.duplicate"},
-      "result": {"kind": "object", "type": "DiskObject"}
+      "taglists": {
+        "tags": "icon.duplicate"
+      },
+      "result": {
+        "kind": "object",
+        "type": "DiskObject"
+      }
+    },
+    "intuition.library.BeginRefresh": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ClearMenuStrip": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ClearPointer": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.DisplayBeep": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.EndRefresh": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.HelpControl": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.IsWindowVisible": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.MakeScreen": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.OffMenu": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.OnMenu": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ReleaseGIRPort": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ReportMouse": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ScreenPosition": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.SetMouseQueue": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.WindowLimits": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ActivateWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.AddGadget": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ChangeWindowBox": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.HideWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.MoveWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.MoveWindowInFrontOf": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "behindwindow": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.RemoveGList": {
+      "objects": {
+        "remPtr": {
+          "type": "Window",
+          "nullable": true
+        },
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ScrollWindowRaster": {
+      "objects": {
+        "win": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ScrollWindowRasterNoFill": {
+      "objects": {
+        "win": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.SetWindowTitles": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ShowTitle": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ShowWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "other": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.WindowToBack": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.WindowToFront": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ZipWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ResetMenuStrip": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "menu": {
+          "type": "Menu",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.SetMenuStrip": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "menu": {
+          "type": "Menu",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AddFont": {
+      "objects": {
+        "textFont": {
+          "type": "TextFont",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AndRegionRegion": {
+      "objects": {
+        "R1": {
+          "type": "Region",
+          "nullable": true
+        },
+        "R2": {
+          "type": "Region",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AreaDraw": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AreaEllipse": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AreaEnd": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AreaMove": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AskSoftStyle": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.AttachPalExtra": {
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": true
+        },
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ClearEOL": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ClearRegionRegion": {
+      "objects": {
+        "R1": {
+          "type": "Region",
+          "nullable": true
+        },
+        "R2": {
+          "type": "Region",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ClearScreen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.CoerceMode": {
+      "objects": {
+        "RealViewPort": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.DoCollision": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.DrawEllipse": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.DrawGList": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.FindColor": {
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.Flood": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.FreeColorMap": {
+      "objects": {
+        "colormap": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetAPen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetBPen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetDrMd": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetOutlinePen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetRGB4": {
+      "objects": {
+        "colormap": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.InitVPort": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.Move": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.OrRegionRegion": {
+      "objects": {
+        "R1": {
+          "type": "Region",
+          "nullable": true
+        },
+        "R2": {
+          "type": "Region",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ReadPixel": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ReadPixelArray8": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "temprp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.RemFont": {
+      "objects": {
+        "textFont": {
+          "type": "TextFont",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ScrollVPort": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetABPenDrMd": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetAPen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetBPen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetDrMd": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetFont": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "textFont": {
+          "type": "TextFont",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetMaxPen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetOutlinePen": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetRGB32": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetRGB32CM": {
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetRGB4": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetRGB4CM": {
+      "objects": {
+        "cm": {
+          "type": "ColorMap",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetRast": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetSoftStyle": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SetWriteMask": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.SortGList": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.StripFont": {
+      "objects": {
+        "font": {
+          "type": "TextFont",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.Text": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.TextLength": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.WaitBOVP": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.WritePixel": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.WritePixelLine8": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "tempRP": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.XorRegionRegion": {
+      "objects": {
+        "R1": {
+          "type": "Region",
+          "nullable": true
+        },
+        "R2": {
+          "type": "Region",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.MoveScreen": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.EraseRect": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.FillRectPenDrMd": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ReadPixelLine8": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "tempRP": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.RectFill": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ScrollRaster": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ScrollRasterBF": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.WriteChunkyPixels": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.WritePixelArray8": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "temprp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "icon.library.PutDefDiskObject": {
+      "objects": {
+        "icon": {
+          "type": "DiskObject",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "icon.library.PutDiskObject": {
+      "objects": {
+        "icon": {
+          "type": "DiskObject",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "workbench.library.UnregisterWorkbench": {
+      "objects": {
+        "messageport": {
+          "type": "MsgPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.FillPixelArray": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.InvertPixelArray": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.MovePixelArray": {
+      "objects": {
+        "RastPort": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.ReadRGBPixel": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.WriteRGBPixel": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
     }
   }
 }
