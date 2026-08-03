@@ -14,11 +14,27 @@ DIR="${1:?usage: 68k-corpus <folder> [out]}"
 CORPUS_ARGS="${CORPUS_ARGS:-}"      # arguments appended to every program
 CORPUS_BEFORE="${CORPUS_BEFORE:-}"  # optional native/setup command(s)
 CORPUS_ORACLE="${CORPUS_ORACLE:-}"  # optional native command; capture its output
+CORPUS_DESKTOP="${CORPUS_DESKTOP:-0}" # keep Wanderer's public screen behind GUI tests
 # CORPUS_MANIFEST: "program : arguments" per line. Running a CLI tool with no
 # arguments proves nothing - it exits immediately and tells you nothing about
 # whether it works. Give each one real work and the result means something.
 MANIFEST="${CORPUS_MANIFEST:-}"
 OUT="${2:-$ROOT/run/darwin-aarch64/corpus-$(date +%H%M%S).txt}"
+# Which TREE produced this run, carried into the trace so a result says what it
+# was measured on. A checkout can sit on a branch that does not contain the
+# commits being reasoned about - same file path, different content - and every
+# conclusion drawn from it is void. Recording it costs one command; not
+# recording it cost an hour.
+if [ -z "${EMU68K_BRIDGE_TREE:-}" ]; then
+    _os="$ROOT/../aros-upstream"
+    if [ -d "$_os/.git" ]; then
+        _b=$(git -C "$_os" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        _h=$(git -C "$_os" rev-parse --short HEAD 2>/dev/null)
+        _d=$(git -C "$_os" status --porcelain 2>/dev/null | head -1)
+        EMU68K_BRIDGE_TREE="$_b@$_h${_d:+ +dirty}"
+        export EMU68K_BRIDGE_TREE
+    fi
+fi
 SHARE="$HOME/AROS/Shared"; SUB="corpus"
 RUN="$ROOT/run/darwin-aarch64/corpus-$$"; mkdir -p "$RUN"
 ENTRIES="$RUN/entries"; : >"$ENTRIES"
@@ -98,8 +114,17 @@ done
 } > "$RUN/startup"
 pkill -f Macaros 2>/dev/null; sleep 1
 rm -f "$SHARE/corpus-out.txt"; : > /tmp/aros-window.log
-AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
-  EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
+if [ "$CORPUS_DESKTOP" = 1 ]; then
+  cp "$RUN/startup" "$SHARE/corpus-startup"
+  AROS_CTL_STARTUP_MODE=desktop \
+    AROS_CTL_DESKTOP_EXTRA='Execute MacRW:corpus-startup' \
+    AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
+    EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" \
+    "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
+else
+  AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
+    EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
+fi
 i=0; LIMIT="${CORPUS_TIMEOUT:-900}"
 while [ $i -lt $LIMIT ]; do
   [ -f "$SHARE/corpus-out.txt" ] && grep -q '=== DONE ===' "$SHARE/corpus-out.txt" && break

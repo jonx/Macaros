@@ -86,9 +86,20 @@ void bl_open(const char *program)
     g_run++;
     g_nids = 0;                  /* identities are per run, see bl_id */
     g_nkinds = 0;
-    /* Unconditional, so "no file" and "no events" are different answers. */
-    bl_event(BL_SUMMARY, -1, 0, 0, "run.start", "\"program\":\"%s\"",
-             program ? program : "");
+    /* Unconditional, so "no file" and "no events" are different answers.
+     *
+     * The TREE this was measured on travels with the result. An hour was spent
+     * reasoning about commits while the checkout sat on a branch that did not
+     * contain them - same file path, different content - and every conclusion
+     * drawn in that hour was void. A result that does not say which tree
+     * produced it cannot be trusted later, and neither can a comparison
+     * between two of them. */
+    {
+        const char *tree = getenv("EMU68K_BRIDGE_TREE");
+        bl_event(BL_SUMMARY, -1, 0, 0, "run.start",
+                 "\"program\":\"%s\",\"tree\":\"%s\"",
+                 program ? program : "", tree ? tree : "unrecorded");
+    }
 }
 
 void bl_close(const char *result)

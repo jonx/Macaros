@@ -457,8 +457,24 @@ static void dump_fault_code(struct emu68k_run *r)
     fprintf(stderr, "\n");
 }
 
+/* Nonzero while a bridge call is running NATIVE code on the guest's behalf. */
+static int g_in_bridge;
+
 static int classify_hardware(void *fault_addr, void *user)
 {
+    /* A crash inside a bridge call is OURS, not the program addressing the
+     * machine. The address window below is generous by necessity - it has to
+     * catch a guest access computed at run time - and native allocations fall
+     * inside it easily, so a native null-ish dereference was being reported as
+     * "this program needs a full Amiga emulator". That reads as a routing
+     * verdict about the program when it is a bug in the bridge, and it hides
+     * the crash bundle that would say where. */
+    if (g_in_bridge) {
+        if (getenv("EMU68K_TRACE_FAULT"))
+            fprintf(stderr, "[emu68k] fault at %p inside a bridge call: ours, "
+                    "not a guest hardware access\n", fault_addr);
+        return 0;
+    }
     struct emu68k_run *r = user;
     unsigned long long host = (unsigned long long)(uintptr_t)fault_addr;
     unsigned long long base = (unsigned long long)(uintptr_t)r->sb.host_mem;
@@ -2648,7 +2664,20 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     return 0;
 }
 
-static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
+static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user,
+                        char *e, unsigned el);
+
+static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e,
+                  unsigned el)
+{
+    int rc;
+    g_in_bridge++;
+    rc = bridge_inner(lvo, st, user, e, el);
+    g_in_bridge--;
+    return rc;
+}
+
+static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
     struct emu68k_run *r = c->run;
