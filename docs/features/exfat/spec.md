@@ -156,10 +156,12 @@ they differ.
 
 The mount therefore proceeds in two stages:
 
-- **U1** Read the **first 512 bytes** using the **device's** block geometry. 512 is
-  safe as a fixed quantity here because `BytesPerSectorShift` is at offset 108 and the
-  boot signature at 510, so everything §3.1 needs is inside the first 512 bytes
-  whatever the logical sector size turns out to be.
+- **U1** **Obtain** the first 512 bytes using **device-aligned transfers**. This is not
+  a literal 512-byte I/O: on a device with 4096-byte blocks the handler reads one whole
+  4096-byte block and inspects its leading 512 bytes. 512 is the right amount to
+  *inspect* because `BytesPerSectorShift` sits at offset 108 and the boot signature at
+  510, so everything §3.1 needs is inside it whatever the logical sector size proves to
+  be. It is not necessarily the right amount to *request*.
 - **U2** Validate `BytesPerSectorShift` per §3.1, which establishes the logical sector
   size.
 - **U3** **Phase 1 requires the logical sector size to equal the device block size**,
@@ -176,6 +178,27 @@ The mount therefore proceeds in two stages:
 device blocks and logical sectors being equal by U3. Any future relaxation of U3 must
 introduce a separate field rather than redefine these, because `exfat_byte_range()`
 multiplies them by the block size and would silently change meaning.
+
+### 3.1b The volume must fit inside its partition
+
+`[DERIVED]` `VolumeLength` is a field in the volume being validated, so it is exactly as
+trustworthy as the volume. The Mountlist, by contrast, states what the administrator
+actually allocated. Believing the former without checking it against the latter lets a
+corrupt or hostile VBR claim a volume larger than its partition, and every subsequent
+read past the real end lands in **whatever partition follows**. That is a disclosure of
+another filesystem's contents, not merely a wrong answer, which is why it is a mount
+refusal and not a clip.
+
+- **U6** The partition extent is computed from the Mountlist under the same
+  overflow-safe rules as everything else (S2): `exfat_geometry_ok()` on the start block
+  and block count before either is used.
+- **U7** `geo.volume_length` must be **less than or equal to** the Mountlist partition
+  block count. A volume claiming more is refused with `ERROR_BAD_NUMBER`.
+- **U8** The runtime access boundary, `FSSuper.total_sectors`, is set from the
+  **validated** `geo.volume_length`, never from the raw VBR field and never from the
+  partition size alone. A volume smaller than its partition is legitimate and normal:
+  the trailing blocks simply are not part of the filesystem, and must not become
+  readable through it.
 
 ### 3.2 Boot region checksum
 
@@ -426,6 +449,7 @@ handler returned the address of its own size field for `ACTION_GET_FILE_SIZE64`;
 | Geometry out of range (§3.1) | `ERROR_BAD_NUMBER` |
 | Device cannot address the volume | `ERROR_SEEK_ERROR` |
 | Logical sector size differs from the device block size (U3) | `ERROR_BAD_NUMBER` |
+| `VolumeLength` exceeds the Mountlist partition (U7) | `ERROR_BAD_NUMBER` |
 
 ## 11. Acceptance tests
 
@@ -453,7 +477,10 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T12 | Every mutating action from R1, plus `ACTION_CHANGE_FILE_SIZE64` | `ERROR_DISK_WRITE_PROTECTED` |
 | T13a | **Unit test**: bounds and `SECTOR_FROM_CLUSTER` around `2^32` sectors against a fake backend | No wrap; S2 and S4 hold |
 | T13b | **Integration**: device shim recording 64-bit offsets, exposing synthetic sectors | Offsets issued match those computed |
-| T15 | Volume whose `BytesPerSectorShift` gives 4096 on a 512-byte device | Refused with `ERROR_BAD_NUMBER` (U3), not mounted at a wrong offset |
+| T15a | Logical sector 4096 on a 512-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
+| T15b | Logical sector 512 on a 4096-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
+| T16a | `VolumeLength` larger than the Mountlist partition | Refused, `ERROR_BAD_NUMBER` (U7). No read may be issued past the partition |
+| T16b | `VolumeLength` smaller than the partition | Mounts; the trailing blocks are not readable through the filesystem (U8) |
 | T14 | Cache key distribution below and above `2^32` | Chain lengths comparable; equality on `UQUAD` keys is exact |
 
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert

@@ -357,6 +357,54 @@ static void test_no_partial_geometry(void)
     check("the caller's geometry is left untouched", untouched);
 }
 
+static void test_mount_boundary(void)
+{
+    UBYTE b[512];
+    struct exfat_geometry g;
+
+    puts("\nU3, U7  mount boundary");
+
+    make_good(b);                       /* 131072 sectors of 512 bytes */
+    check("boot sector still valid",
+        exfat_validate_boot(b, sizeof b, &g) == EXFAT_BOOT_OK);
+
+    /* U3: units must match. */
+    check("matching sector and device block size accepted",
+        exfat_check_sector_units(&g, 512) == EXFAT_BOOT_OK);
+    check("T15a: logical 512 on a 4096-byte device refused",
+        exfat_check_sector_units(&g, 4096) == EXFAT_BOOT_BAD_GEOMETRY);
+    check("zero device block size refused",
+        exfat_check_sector_units(&g, 0) == EXFAT_BOOT_BAD_GEOMETRY);
+    {
+        UBYTE c[512];
+        struct exfat_geometry g4;
+
+        make_good(c);
+        c[EXFAT_BOOT_SECTORSHIFT] = 12;         /* 4096-byte logical */
+        exfat_validate_boot(c, sizeof c, &g4);
+        check("T15b: logical 4096 on a 512-byte device refused",
+            exfat_check_sector_units(&g4, 512) == EXFAT_BOOT_BAD_GEOMETRY);
+    }
+
+    /* U7: the volume must fit the partition. */
+    check("volume exactly filling its partition accepted",
+        exfat_check_partition_fit(&g, 2048, 131072) == EXFAT_BOOT_OK);
+    check("T16b: volume smaller than its partition accepted",
+        exfat_check_partition_fit(&g, 2048, 200000) == EXFAT_BOOT_OK);
+    check("T16a: volume one sector larger than its partition REFUSED",
+        exfat_check_partition_fit(&g, 2048, 131071)
+            == EXFAT_BOOT_BAD_GEOMETRY);
+    check("volume far larger than its partition refused",
+        exfat_check_partition_fit(&g, 2048, 100) == EXFAT_BOOT_BAD_GEOMETRY);
+
+    /* U6: the partition extent itself is checked overflow-safely. */
+    check("zero-length partition refused",
+        exfat_check_partition_fit(&g, 2048, 0) == EXFAT_BOOT_BAD_GEOMETRY);
+    check("partition whose end overflows the domain refused",
+        exfat_check_partition_fit(&g, EXFAT_UQUAD_MAX - 10, 1000)
+            == EXFAT_BOOT_BAD_GEOMETRY);
+}
+
 int main(void)
 {
     test_accept();
@@ -367,6 +415,7 @@ int main(void)
     test_checksum();
     test_b3();
     test_no_partial_geometry();
+    test_mount_boundary();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
     return failures != 0;
