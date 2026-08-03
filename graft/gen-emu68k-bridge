@@ -422,8 +422,6 @@ class Func:
         if len(self.regs) != len(self.args):
             return (None, "register/argument count mismatch")
         rc = classify(self.ret)
-        if rc == "bptr":
-            return (None, "returns BPTR")
         # A returned pointer is a 64-bit HOST address. There is no 32-bit
         # register to put it in, and truncating one is how a guest gets handed
         # a pointer that dereferences to nothing. This includes STRPTR: a
@@ -441,7 +439,12 @@ class Func:
                 blockers.append("APTR %s" % n)
             elif c == "other":
                 blockers.append("%s %s" % (norm(t), n))
-        if not blockers:
+        # A BPTR RESULT is never tier 1: the native BPTR means nothing to the
+        # guest, so it has to become a token from the same handle table a BPTR
+        # argument comes from. Returning early here refused the whole lock
+        # family - Lock, ParentDir, DupLock, CurrentDir - over a direction of
+        # the table that was already built.
+        if not blockers and rc != "bptr":
             return (1, None)
 
         # TIER 2a: the only thing standing in the way is a BPTR, and a BPTR
@@ -4492,7 +4495,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         boopsi = policy.get("boopsi") if policy else None
         result_policy = policy.get("result") if policy else None
         result_store_arg = (result_policy or {}).get("store_arg")
-        if policy:
+        # A case body that DECLARES anything needs a block of its own; C does
+        # not allow a declaration straight after a case label, and two cases
+        # declaring the same name collide.
+        needs_block = bool(policy) or any(
+            classify(t) == "bptr" for t, _n in f.args)
+        if needs_block:
             w("    {")
         call_args = []
         post = []
@@ -5005,7 +5013,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 call_args.append("(%s)NULL" % norm(atype))
                 continue
             if aname not in taglists:
-                call_args.append(arg_expr(atype, reg))
+                if classify(atype) == "bptr":
+                    # Resolved BEFORE the call so an unknown handle is a named
+                    # gap. Inline resolution turned one into BNULL, which is a
+                    # legitimate argument, and the native library dereferenced
+                    # it - a fail-open on the one table that had no check.
+                    w("        BPTR emu_bptr_%d;" % ai)
+                    w("        if (emu68k_handle_require(guest0, %s," % reg_expr(reg))
+                    w('                                 "%s.%s", &emu_bptr_%d, err, errlen) < 0)'
+                      % (f.name, aname, ai))
+                    w("            return 1;")
+                    call_args.append("emu_bptr_%d" % ai)
+                else:
+                    call_args.append(arg_expr(atype, reg))
                 continue
             dname = taglists[aname]
             cap = domains[dname]["max_items"]
@@ -5480,7 +5500,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             emit_heap_cleanup()
             emit_post(post, "r->d[0]")
         w("        %sreturn 0;" % ("    " if policy else ""))
-        if policy:
+        if needs_block:
             w("    }")
         n += 1
     w("    }")
@@ -5611,6 +5631,10 @@ struct EmuMirror
  * passed through (big-endian, 32-bit pointers), so the run mirrors it natively
  * under its guest address and converts in and back out around the call. A
  * linked family is adopted whole, since the library walks the native chain. */
+/* A BPTR argument, resolved or refused by name. A token this run never issued
+ * is not "no lock": it is a mistake, and it used to become BNULL. */
+LONG emu68k_handle_require(APTR guest0, ULONG token, const char *what,
+                           BPTR *out, char *err, ULONG errlen);
 LONG emu68k_object_adopt_guest(APTR guest0, ULONG addr, UWORD type,
                                const char *type_name,
                                const struct EmuMirror *m, APTR *native,
