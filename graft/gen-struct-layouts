@@ -23,6 +23,7 @@ refuses to emit if they do not hold.
 """
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -56,6 +57,7 @@ TYPES = [
     "TextAttr", "TextFont",
     "DimensionInfo", "DrawInfo",
     "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester",
+    "Gadget", "ExtGadget",
 ]
 
 # Not marshalled, read by OFFSET: the structures the 68k execution service
@@ -345,11 +347,34 @@ def scalar_width(typetext, native):
     return None
 
 
+# Pointer-shaped fields the OWNING LIBRARY never dereferences: they are the
+# program's own value, handed back untouched. Carrying them as opaque scalars
+# is what lets a structure the program allocated cross at all; refusing them
+# would refuse the structure over a field nobody reads. This is a per-field
+# statement about the library, so it is written down, not inferred.
+def _opaque_value_fields():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "emu68k-bridge-policy.json")
+    try:
+        with open(path) as fh:
+            meta = json.load(fh).get("struct_metadata", {})
+    except (OSError, ValueError):
+        return set()
+    return {(struct, field)
+            for struct, fields in meta.get("opaque_value_fields", {}).items()
+            for field in fields}
+
+
+OPAQUE_VALUE_FIELDS = _opaque_value_fields()
+
+
 def field_kind(struct_name, field_name, guest_type, native_type):
     """-> (kind, guest_width, native_width, count) or None when the field is
     something this cannot convert and must not pretend to. The widths are of
     ONE element; count says how many there are."""
     gt, nt = guest_type.strip(), native_type.strip()
+    if (struct_name, field_name) in OPAQUE_VALUE_FIELDS:
+        return ("SCALAR", 4, 8, 1)
     if (struct_name, field_name) in GUEST_BYTE_POINTER_FIELDS:
         m = ARRAY_RE.match(gt)
         return ("GPTR", 4, 8, int(m.group(2)) if m else 1)

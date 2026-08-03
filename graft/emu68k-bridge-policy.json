@@ -204,7 +204,17 @@
       "kind": "opaque",
       "linked_field": "NextGadget",
       "linked_limit": 4096,
-      "destructor": "gadtools.library.FreeGadgets"
+      "destructor": "gadtools.library.FreeGadgets",
+      "guest_owned": {
+        "struct": "ExtGadget",
+        "linked_field": "NextGadget",
+        "linked_limit": 4096,
+        "variant": {
+          "base_struct": "Gadget",
+          "flag_field": "Flags",
+          "flag_mask": 32768
+        }
+      }
     },
     "MenuItem": {
       "id": 21,
@@ -3481,7 +3491,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3500,7 +3512,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3515,7 +3529,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3534,7 +3550,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3553,7 +3571,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3572,7 +3592,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3591,7 +3613,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3600,7 +3624,9 @@
       "structs": {
         "rect": {
           "type": "Rectangle",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3619,7 +3645,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3638,7 +3666,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3653,7 +3683,9 @@
       "structs": {
         "requester": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3668,7 +3700,9 @@
       "structs": {
         "dmrequest": {
           "type": "Requester",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3695,7 +3729,9 @@
       "structs": {
         "AP": {
           "type": "AnchorPath",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3704,7 +3740,9 @@
       "structs": {
         "AP": {
           "type": "AnchorPath",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3713,7 +3751,9 @@
       "structs": {
         "AP": {
           "type": "AnchorPath",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3728,7 +3768,9 @@
       "structs": {
         "SingleMap": {
           "type": "BitMap",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3737,7 +3779,9 @@
       "structs": {
         "modeList": {
           "type": "List",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
@@ -3746,10 +3790,117 @@
       "structs": {
         "bitMap": {
           "type": "BitMap",
-          "direction": "inout"
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
         }
       },
       "origin": "import"
+    },
+    "graphics.library.AskFont": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "textAttr": {
+          "type": "TextAttr",
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.BltBitMapRastPort": {
+      "objects": {
+        "destRP": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "srcBitMap": {
+          "type": "BitMap",
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ClipBlit": {
+      "objects": {
+        "srcRP": {
+          "type": "RastPort",
+          "nullable": true
+        },
+        "destRP": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.FreeBitMap": {
+      "structs": {
+        "bm": {
+          "type": "BitMap",
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetBitMapAttr": {
+      "structs": {
+        "bitmap": {
+          "type": "BitMap",
+          "direction": "inout",
+          "nullable": false,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.ScrollRegion": {
+      "objects": {
+        "region": {
+          "type": "Region",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "rect": {
+          "type": "Rectangle",
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.UpdateBitMap": {
+      "structs": {
+        "bitmap": {
+          "type": "BitMap",
+          "direction": "inout",
+          "nullable": true,
+          "clear": false
+        }
+      },
+      "origin": "import"
+    }
+  },
+  "struct_metadata": {
+    "opaque_value_fields": {
+      "ExtGadget": [
+        "UserData",
+        "MutualExclude"
+      ]
     }
   }
 }

@@ -1296,6 +1296,16 @@ def analyze_function_source(lib, rel, f, sources):
             re.escape(aname), code)))
         if retained:
             ev["stored_in_fields"] = retained
+        # Whether NULL is an accepted value is the library's statement, not the
+        # pointer type's: a call that tests the argument handles NULL, and one
+        # that never does dereferences it. Assuming every pointer is nullable
+        # would forward NULL into a call that cannot take it; assuming none is
+        # would refuse the ordinary "no requester" argument.
+        if re.search(r"\bif\s*\(\s*!\s*%s\s*\)" % re.escape(aname), code) or \
+           re.search(r"\b%s\s*(?:==|!=)\s*NULL\b" % re.escape(aname), code) or \
+           re.search(r"\bif\s*\(\s*%s\s*\)" % re.escape(aname), code) or \
+           re.search(r"\b%s\s*(?:&&|\?)" % re.escape(aname), code):
+            ev["null_tested"] = True
         if ev:
             ev["declared_type"] = norm(atype)
             arguments[aname] = ev
@@ -1649,6 +1659,7 @@ def ast_line(node):
 def summarize_ast(ast, symbol):
     calls, param_fields, param_casts, retained, indirect = [], {}, {}, {}, []
     stack_retained, retained_via, retained_direct = {}, {}, {}
+    null_tested = set()
     parameters = []
     for child in ast.get("inner", []):
         if child.get("kind") == "ParmVarDecl":
@@ -1745,6 +1756,19 @@ def summarize_ast(ast, symbol):
                     "callee_parameters": sorted(parameter_origins(inner[0]))
                     if inner else []
                 })
+        elif kind in ("IfStmt", "WhileStmt", "ConditionalOperator"):
+            # A call that TESTS a pointer handles its absence; one that never
+            # does dereferences it. That is the library's own statement about
+            # whether NULL is an argument, and the only evidence there is.
+            inner = node.get("inner", [])
+            if inner:
+                null_tested.update(parameter_origins(inner[0]))
+        elif (kind == "BinaryOperator" and
+              node.get("opcode") in ("&&", "||", "==", "!=")):
+            for child in node.get("inner", [])[:1]:
+                null_tested.update(parameter_origins(child))
+        elif kind == "UnaryOperator" and node.get("opcode") == "!":
+            null_tested.update(parameter_origins(node))
         elif kind == "MemberExpr" and node.get("name"):
             for param in parameter_origins(node):
                 param_fields.setdefault(param, set()).add(node["name"])
@@ -1799,6 +1823,7 @@ def summarize_ast(ast, symbol):
             for k, v in sorted(retained_via.items())},
         "retained_direct_parameters": {k: sorted(v)
                                        for k, v in sorted(retained_direct.items())},
+        "null_tested_parameters": {k: ["tested"] for k in sorted(null_tested)},
         "local_parameter_dependencies": {
             name: sorted(origins) for name, origins in sorted(local_origins.items())
             if origins
@@ -2194,6 +2219,8 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
             # of that public pointer and must not inherit its lifetime.
             ("stored_in_fields", retention_that_outlives(helper, ast),
              helper["identity_root_argument_aliases"]),
+            ("null_tested", ast.get("null_tested_parameters", {}),
+             helper["root_argument_aliases"]),
         )
         for category, facts, category_aliases in categories:
             for local, roots in category_aliases.items():
@@ -2805,7 +2832,15 @@ def infer_object_crossing(f, evidence, detachers=None):
         # source states outright.
         structs[aname] = {
             "type": m.group(1),
-            "direction": "in" if norm(atype).startswith("const ") else "inout"
+            "direction": "in" if norm(atype).startswith("const ") else "inout",
+            "nullable": (bool(arg_evidence.get(aname, {}).get("null_tested")) or
+                         any(fact["kind"] == "null_tested" for fact in
+                             evidence.get("propagated_arguments", {})
+                             .get(aname, []))),
+            # Only the fields the table converts are written back. A structure
+            # the bridge understands in part is still the program's, and
+            # blanking it would destroy what the bridge chose not to describe.
+            "clear": False
         }
     if not objects and not structs:
         return None                      # nothing to infer; tier 1 covers it
@@ -2901,6 +2936,15 @@ def build_import_manifest(report):
             outcome = "explicitly-refused"
         elif policy:
             outcome = "covered-by-policy"
+            # An entry this tool wrote stays derivable. Otherwise the first
+            # promotion freezes it, and every later rule improvement reaches
+            # only the vectors that had not been promoted yet - which is the
+            # opposite of what regenerating is for. A person's entry is never
+            # re-derived; promotion refuses to touch those anyway.
+            if policy.get(POLICY_ORIGIN_KEY) == "import":
+                again = infer_object_crossing(f, evidence, detach_index)
+                if again:
+                    inferred_functions["%s.%s" % (lib, f.name)] = again
         elif tier in (1, 2):
             outcome = "generated-from-abi"
         elif blocker and (blocker.startswith("refused:") or "allowlist" in blocker):
@@ -4232,6 +4276,30 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
         w("}")
         w("")
+    for oname in used_objects:
+        owned = object_types[oname].get("guest_owned")
+        if not owned:
+            continue
+        mirror = owned["struct"]
+        link = owned.get("linked_field")
+        variant = owned.get("variant") or {}
+        w("/* A %s the program allocated itself: mirrored natively under its"
+          % oname)
+        w(" * guest address, converted in and back out around every call. */")
+        w("static const struct EmuMirror emu_mirror_%s =" % c_ident(oname))
+        w("{")
+        w("    emu_fields_%s, EMU_NFIELDS(emu_fields_%s)," % (mirror, mirror))
+        w("    sizeof(struct %s), M68K_%s_SIZEOF," % (mirror, mirror))
+        w("    %s, %s, %s," % (
+            "M68K_%s_SIZEOF" % variant["base_struct"] if variant else "0",
+            "M68K_%s_%s" % (mirror, variant["flag_field"]) if variant else "-1",
+            hex(variant["flag_mask"]) if variant else "0"))
+        w("    %s, %s, %d" % (
+            "offsetof(struct %s, %s)" % (mirror, link) if link else "-1",
+            "M68K_%s_%s" % (mirror, link) if link else "-1",
+            owned.get("linked_limit", 1)))
+        w("};")
+        w("")
     w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base," % short)
     w("                  char *err, ULONG errlen)")
     w("{")
@@ -4392,12 +4460,32 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             if aname in objects:
                 op = objects[aname]
                 oname = op["type"]
+                owned = (POLICY.get("object_types", {})
+                         .get(oname, {}).get("guest_owned"))
                 w("        APTR emu_object_%d;" % ai)
-                w("        if (emu68k_object_from_guest(guest0, %s, EMU_OBJ_%s, %d,"
-                  % (src, c_ident(oname), 1 if op.get("nullable", True) else 0))
-                w('                                        "%s", &emu_object_%d, err, errlen) < 0)'
-                  % (oname, ai))
-                w("            return 1;")
+                if owned:
+                    # One entry point, because the structure the program owns
+                    # has to be re-checked and re-converted on EVERY crossing.
+                    # Resolving the token first and only adopting when it misses
+                    # would validate a mirror once and then trust it forever, so
+                    # a field set after the first call would cross unseen.
+                    w("        if (emu68k_object_adopt_guest(guest0, %s, EMU_OBJ_%s,"
+                      % (src, c_ident(oname)))
+                    w('                        "%s", &emu_mirror_%s, &emu_object_%d, err, errlen) < 0)'
+                      % (oname, c_ident(oname), ai))
+                    w("            return 1;")
+                    post.append(([
+                        "if (emu68k_object_sync_guest(guest0, %s, EMU_OBJ_%s," % (src, c_ident(oname)),
+                        '                             "%s", &emu_mirror_%s, err, errlen) < 0)'
+                        % (oname, c_ident(oname)),
+                        "    return 1;",
+                    ], "always"))
+                else:
+                    w("        if (emu68k_object_from_guest(guest0, %s, EMU_OBJ_%s, %d,"
+                      % (src, c_ident(oname), 1 if op.get("nullable", True) else 0))
+                    w('                                        "%s", &emu_object_%d, err, errlen) < 0)'
+                      % (oname, ai))
+                    w("            return 1;")
                 call_args.append("(%s)emu_object_%d" % (norm(atype), ai))
                 if boopsi and boopsi.get("class_arg") == aname:
                     w("        struct Emu68kBoopsiBridge emu_boopsi_%d;" % ai)
@@ -4490,12 +4578,34 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 sp = structs[aname]
                 stype, direction = sp["type"], sp["direction"]
                 span = size_limits.get(aname, "M68K_%s_SIZEOF" % stype)
+                # A NULL structure pointer is an argument, not an absence: the
+                # library reads it as "no requester", "no filter". Converting
+                # it into a pointer to a zeroed structure changes what the call
+                # means, so NULL crosses as NULL.
+                nullable = sp.get("nullable", False)
+                indent = "    " if nullable else ""
                 w("        struct %s emu_struct_%d;" % (stype, ai))
-                w("        if (emu68k_require_guest_range(%s, %s," % (src, span))
-                w('                                         "%s.%s", err, errlen) < 0)'
-                  % (f.name, aname))
-                w("            return 1;")
-                w("        memset(&emu_struct_%d, 0, sizeof(emu_struct_%d));" % (ai, ai))
+                if nullable:
+                    w("        struct %s *emu_structp_%d = NULL;" % (stype, ai))
+                    w("        if (%s)" % src)
+                    w("        {")
+                    w("            emu_structp_%d = &emu_struct_%d;" % (ai, ai))
+                else:
+                    # No source evidence that this call tests the pointer, so
+                    # NULL is not an argument it was written to take.
+                    w("        if (!%s)" % src)
+                    w("        {")
+                    w("            if (err && errlen)")
+                    w('                snprintf(err, errlen, "capability gap: '
+                      '%s.%s requires a structure");' % (f.name, aname))
+                    w("            return 1;")
+                    w("        }")
+                w("        %sif (emu68k_require_guest_range(%s, %s," % (indent, src, span))
+                w('        %s                                 "%s.%s", err, errlen) < 0)'
+                  % (indent, f.name, aname))
+                w("        %s    return 1;" % indent)
+                w("        %smemset(&emu_struct_%d, 0, sizeof(emu_struct_%d));"
+                  % (indent, ai, ai))
                 if direction in ("in", "inout"):
                     w("        emu68k_from_guest_sized(guest0, %s, &emu_struct_%d,"
                       % (src, ai))
@@ -4643,8 +4753,15 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     lines += ["emu68k_to_guest_sized(guest0, %s, &emu_struct_%d," % (src, ai),
                               "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
                               % (stype, stype, span)]
+                    if nullable:
+                        lines = (["if (emu_structp_%d)" % ai, "{"] +
+                                 ["    " + x for x in lines] + ["}"])
                     post.append((lines, sp.get("copy_on", "always")))
-                call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
+                if nullable:
+                    w("        }")
+                    call_args.append("(%s)emu_structp_%d" % (norm(atype), ai))
+                else:
+                    call_args.append("(%s)&emu_struct_%d" % (norm(atype), ai))
                 continue
             if aname in tagged_structs:
                 call_args.append("(%s)emu_tagged_native_%d" % (norm(atype), ai))
@@ -5331,6 +5448,35 @@ LONG emu68k_object_to_guest_facade(APTR guest0, APTR native, UWORD type,
                                    const char *type_name, ULONG facade_size,
                                    const struct EmuField *fields, int field_count,
                                    ULONG *token, char *err, ULONG errlen);
+/* How one guest-owned structure is mirrored. `base_size`/`flag_off`/`flag_mask`
+ * describe a structure with a short and a long form (a Gadget is 44 bytes
+ * unless GFLG_EXTENDED says 56): converting the long form over the short one
+ * would read past the program's memory. */
+struct EmuMirror
+{
+    const struct EmuField *fields;
+    int   field_count;
+    ULONG native_size;
+    ULONG m68k_size;      /* the full layout                                  */
+    ULONG base_size;      /* the short variant, 0 when there is only one form */
+    LONG  flag_off;       /* guest offset of the UWORD that selects, -1 none  */
+    ULONG flag_mask;
+    LONG  native_link;    /* offset of the family link on each side, -1 none  */
+    LONG  guest_link;
+    ULONG limit;          /* family members, past which it is a cycle         */
+};
+
+/* A structure the PROGRAM allocated and the library will keep. It cannot be
+ * passed through (big-endian, 32-bit pointers), so the run mirrors it natively
+ * under its guest address and converts in and back out around the call. A
+ * linked family is adopted whole, since the library walks the native chain. */
+LONG emu68k_object_adopt_guest(APTR guest0, ULONG addr, UWORD type,
+                               const char *type_name,
+                               const struct EmuMirror *m, APTR *native,
+                               char *err, ULONG errlen);
+LONG emu68k_object_sync_guest(APTR guest0, ULONG addr, UWORD type,
+                              const char *type_name, const struct EmuMirror *m,
+                              char *err, ULONG errlen);
 LONG emu68k_object_alias_to_guest(APTR guest0, ULONG token, APTR native,
                                   UWORD type, const char *type_name,
                                   char *err, ULONG errlen);

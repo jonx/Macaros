@@ -2027,6 +2027,46 @@ static int j5d_exec_pcrel(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t t
             *after = tpc + 2u + ext;
             return 0;
         }
+        /* A PC-relative source with a MEMORY destination: `move.l table(pc),(a0)`
+         * and the pre/post-increment and displacement forms of it. Only the
+         * register destinations were handled, so ordinary code that copies a
+         * constant into a structure it just allocated stopped here. */
+        if (dmode >= 2u && dmode <= 5u) {
+            uint32_t dst;
+            unsigned step = (sz == 1u && dreg == 7u) ? 2u : sz;
+            unsigned dext = 0;
+
+            if (dmode == 2u)      dst = st->a[dreg];
+            else if (dmode == 3u) { dst = st->a[dreg]; st->a[dreg] += step; }
+            else if (dmode == 4u) { st->a[dreg] -= step; dst = st->a[dreg]; }
+            else {
+                dst = st->a[dreg] + (uint32_t)(int32_t)be16s(ih + 2 + ext);
+                dext = 2;
+            }
+            if (dst < sb->origin ||
+                (uint64_t)dst + sz > (uint64_t)sb->origin + sb->size) {
+                snprintf(e, el, "PC-relative MOVE writes %08x, outside the sandbox",
+                         dst);
+                return 1;
+            }
+            {
+                uint8_t *dp = sb->host_mem + (dst - sb->origin);
+                if (sz == 1u)      dp[0] = (uint8_t)v;
+                else if (sz == 2u) { dp[0] = (uint8_t)(v >> 8); dp[1] = (uint8_t)v; }
+                else { dp[0] = (uint8_t)(v >> 24); dp[1] = (uint8_t)(v >> 16);
+                       dp[2] = (uint8_t)(v >> 8);  dp[3] = (uint8_t)v; }
+            }
+            {
+                uint32_t m = (sz == 1u) ? 0x80u : (sz == 2u) ? 0x8000u : 0x80000000u;
+                uint32_t mask = (sz == 1u) ? 0xFFu : (sz == 2u) ? 0xFFFFu : 0xFFFFFFFFu;
+                uint32_t cc = st->ccr & J5D_CCR_X;
+                if ((v & mask) == 0)  cc |= J5D_CCR_Z;
+                if (v & m)            cc |= J5D_CCR_N;
+                st->ccr = cc;
+            }
+            *after = tpc + 2u + ext + dext;
+            return 0;
+        }
         if (dmode != 0u) {
             snprintf(e, el, "PC-relative MOVE to destination mode %u not implemented",
                      dmode);
