@@ -214,7 +214,12 @@ struct j5d_engine_state {
 };
 
 static struct j5d_engine_state  g_default_eng;
-static struct j5d_engine_state *g_eng = &g_default_eng;
+/* PER THREAD. A second 68k context - an AmigaOS process the guest asked for -
+ * runs on its own AROS process with its own instance, over the SAME guest
+ * memory, which is what two tasks sharing RAM means on the real machine. With
+ * one global here the second thread would silently steal the first thread's
+ * block cache and resume state. */
+static _Thread_local struct j5d_engine_state *g_eng = &g_default_eng;
 
 /* The historical names, now views of the ACTIVE instance. Every existing use site —
  * including the translate-time `&g_block_exec_count` / `&g_chain_terminal_idx` bakes —

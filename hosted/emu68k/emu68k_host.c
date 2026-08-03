@@ -1477,9 +1477,18 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 EMU68K_SERVABLE_LIBS(EMU_SERVABLE_ROW)
             };
 #undef EMU_SERVABLE_ROW
+            /* Match on the FILE NAME, because "LIBS:diskfont.library" is an
+             * ordinary way to ask for the system library and an exact compare
+             * sends it to the guest loader to look for a 68k file that is not
+             * there. The guest search above has already had its turn, so a
+             * program that ships its own library still gets that one. */
+            const char *leaf = nm;
+            const char *sep;
+            for (sep = nm; *sep; sep++)
+                if (*sep == '/' || *sep == ':') leaf = sep + 1;
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
-                if (!strcmp(nm, servable[k])) { known = 1; break; }
+                if (!strcmp(leaf, servable[k])) { known = 1; break; }
             if (known && g_oscall) {
                 uint32_t base;
                 if (r->nlib >= LIBBASE_MAX) {
@@ -1487,7 +1496,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 }
                 base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
                 snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
-                         "%s", nm);
+                         "%s", leaf);
                 r->openlib[r->nlib].base = base;
                 r->nlib++;
                 j5d_register_libbase(base);

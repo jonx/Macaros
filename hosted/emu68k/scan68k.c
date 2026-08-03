@@ -4,6 +4,7 @@
  * the published 68000 ISA; it does not decode or translate anything. */
 
 #include "scan68k.h"
+#include "emu68k_genlibs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -55,9 +56,14 @@ static const char *privileged_word(uint16_t w)
 {
     if (w == 0x4E70u) return "RESET";
     if (w == 0x4E72u) return "STOP #imm";
-    if (w == 0x007Cu) return "ORI to SR";
-    if (w == 0x027Cu) return "ANDI to SR";
-    if (w == 0x0A7Cu) return "EORI to SR";
+    /* ORI/ANDI/EORI to SR are NOT here. They are privileged on the real
+     * machine, but the question this list answers is what the ENGINE can
+     * serve, and the bits a program sets in the SR are the interrupt mask -
+     * which has no meaning under translation - plus the condition codes, which
+     * the engine owns. Vetoing them statically routed a whole class of
+     * ordinary applications away over one instruction in their startup code,
+     * and if one ever does something the engine cannot serve, the runtime says
+     * so at the instruction rather than the scanner guessing beforehand. */
     if ((w & 0xFFF0u) == 0x4E60u) return "MOVE USP";
     if (w == 0x4E7Au || w == 0x4E7Bu) return "MOVEC";
     /* MOVE to SR: 0100 0110 11 mmmrrr — any source EA */
@@ -556,8 +562,14 @@ int scan68k_find_resident(const void *image, unsigned long len,
 
 int scan68k_lib_bridged(const char *name)
 {
-    if (!strcmp(name, "exec.library")) return 1;   /* bootstrap + AllocMem      */
-    if (!strcmp(name, "dos.library"))  return 1;   /* console + file I/O        */
+    /* Read the GENERATED list rather than keep one here. A hand list is wrong
+     * the moment a library is imported, and it was: this reported intuition,
+     * graphics, layers, icon, diskfont, workbench, utility and locale as
+     * unbridged long after they were served, so the prediction for every real
+     * GUI program was far bleaker than what actually happens when it runs. */
+#define X(lib) if (!strcmp(name, (lib))) return 1;
+    EMU68K_SERVABLE_LIBS(X)
+#undef X
     return 0;
 }
 
