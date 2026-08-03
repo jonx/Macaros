@@ -702,6 +702,8 @@ def extract_tag_evidence(raw, base_line):
     if "NextTagItem" in code:
         for m in re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code):
             tag = m.group(1)
+            if tag.endswith("_KIND"):
+                continue
             if not (tag.startswith(("GA_", "GTM", "GTC", "GTS", "GTLV_", "GT_",
                                     "PGA_", "STRINGA_", "MX_", "CYCLE_"))):
                 continue
@@ -726,8 +728,11 @@ def extract_tag_evidence(raw, base_line):
 
 
 def explicit_cast_kind(cast):
-    canonical = object_canon(cast)
+    canonical = object_canon(re.sub(r"\b(?:extern|static|register|volatile)\b", "", cast))
+    canonical = norm(canonical)
     if canonical in ("STRPTR", "CONST_STRPTR", "char *", "const char *", "TEXT *"):
+        return "cstr"
+    if classify(canonical) == "string":
         return "cstr"
     if "*" in canonical or canonical in ("APTR", "CONST_APTR"):
         return "pointer:" + canonical
@@ -738,18 +743,27 @@ def explicit_cast_kind(cast):
 
 def declaration_type_index(code):
     found = {}
-    pattern = re.compile(r"\b(%s)\s*([A-Za-z_]\w*)\s*(?=[=;,\[])" %
+    pattern = re.compile(r"\b(%s)\s*([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*(?=[=;,])" %
                          C_TYPE_TOKEN_RE)
     for match in pattern.finditer(code):
-        found.setdefault(match.group(2), set()).add(norm(match.group(1)))
+        declared = norm(match.group(1)) + (" *" if match.group(3) else "")
+        found.setdefault(match.group(2), set()).add(norm(declared))
     return found
 
 
 def declared_type_before(code, name, offset):
-    pattern = re.compile(r"\b(%s)\s*%s\s*(?=[=;,\[])" %
+    pattern = re.compile(r"\b(%s)\s*%s\s*(\[[^\]]*\])?\s*(?=[=;,])" %
                          (C_TYPE_TOKEN_RE, re.escape(name)))
     matches = list(pattern.finditer(code, 0, offset))
-    return norm(matches[-1].group(1)) if matches else None
+    if not matches:
+        return None
+    return norm(matches[-1].group(1) + (" *" if matches[-1].group(2) else ""))
+
+
+def declared_array_before(code, name, offset):
+    pattern = re.compile(r"\b(%s)\s*%s\s*(\[[^\]]*\])\s*(?=[=;,])" %
+                         (C_TYPE_TOKEN_RE, re.escape(name)))
+    return bool(list(pattern.finditer(code, 0, offset)))
 
 
 def extract_library_tag_evidence(sources, evidence_scope="library"):
@@ -877,7 +891,7 @@ def source_tree_tag_evidence(tag_names, existing_paths):
     """Corroborate forwarded tags from their consumers elsewhere in AROS."""
     names = sorted(set(tag_names))
     if not names:
-        return []
+        return [], []
     pattern = r"\b(?:%s)\b" % "|".join(re.escape(name) for name in names)
     try:
         proc = subprocess.run(
@@ -885,7 +899,7 @@ def source_tree_tag_evidence(tag_names, existing_paths):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return [], []
     paths = sorted(set(line for line in proc.stdout.splitlines()
                        if line and line not in existing_paths))
     # A tag prefix accidentally matching a generated/vendor forest must not
@@ -930,8 +944,95 @@ def source_tree_tag_evidence(tag_names, existing_paths):
     for item in evidence:
         key = (item["name"], item["kind"], item["source"], item["line"], item["access"])
         unique[key] = item
-    return sorted((item for item in unique.values() if item["name"] in wanted),
-                  key=lambda x: (x["name"], x["source"], x["line"]))
+    result = sorted((item for item in unique.values() if item["name"] in wanted),
+                    key=lambda x: (x["name"], x["source"], x["line"]))
+    return result, sources
+
+
+def expression_kind(expr, code, offset):
+    """Infer a tag value's representation from an explicit client expression."""
+    expr = expr.strip()
+    if re.search(r'(^|\W)"(?:[^"\\]|\\.)*"', expr):
+        return "cstr", "string-literal"
+    stripped = re.sub(r"^\s*\(\s*(?:IPTR|SIPTR|ULONG)\s*\)\s*", "", expr)
+    if stripped in ("TRUE", "FALSE"):
+        return "u32", "scalar-literal"
+    if re.fullmatch(r"(?:[-+]?\d+[uUlL]*|0x[0-9A-Fa-f]+[uUlL]*)", stripped):
+        numeric = re.sub(r"[uUlL]+$", "", stripped)
+        try:
+            if int(numeric, 0) != 0:
+                return "u32", "nonzero-scalar-literal"
+        except ValueError:
+            pass
+    cast = re.match(r"^\s*\(\s*(%s)\s*\)" % C_TYPE_TOKEN_RE, expr)
+    if cast:
+        kind = explicit_cast_kind(norm(cast.group(1)))
+        if kind:
+            return kind, "explicit-cast"
+    address = re.fullmatch(
+        r"\s*(?:\(\s*IPTR\s*\)\s*)?&\s*([A-Za-z_]\w*)\s*", expr)
+    if address:
+        declared = declared_type_before(code, address.group(1), offset)
+        if declared:
+            if declared_array_before(code, address.group(1), offset):
+                kind = explicit_cast_kind(declared)
+                if kind:
+                    return kind, "address-of-array"
+            return "pointer:" + object_canon(declared + " *"), "address-of-typed-value"
+    value = re.fullmatch(
+        r"\s*(?:\(\s*IPTR\s*\)\s*)?([A-Za-z_]\w*)\s*", expr)
+    if value:
+        declared = declared_type_before(code, value.group(1), offset)
+        kind = explicit_cast_kind(declared) if declared else None
+        if kind:
+            return kind, "declared-value-type"
+    return None, None
+
+
+def function_callsite_tag_evidence(f, evidence, sources):
+    """Type variadic tag/value pairs for this exact public API veneer."""
+    if f.novararg or not f.name.endswith("A"):
+        return []
+    tag_args = tag_arguments_for(evidence)
+    if len(tag_args) != 1:
+        return []
+    tag_arg = tag_args[0]
+    arg_names = [name for _type, name in f.args]
+    try:
+        fixed = arg_names.index(tag_arg)
+    except ValueError:
+        return []
+    veneer = f.name[:-1]
+    found = []
+    for path, raw in sources:
+        code = mask_c_comments(raw)
+        for call in re.finditer(r"\b%s\s*\(" % re.escape(veneer), code):
+            opening = code.find("(", call.start())
+            args, _after = call_arguments(code, opening)
+            if len(args) <= fixed:
+                continue
+            pairs = args[fixed:]
+            for index in range(0, len(pairs) - 1, 2):
+                tag = pairs[index].strip()
+                if tag in ("TAG_DONE", "TAG_END"):
+                    break
+                if not TAG_MACRO_RE.fullmatch(tag) or tag.startswith("TAG_"):
+                    continue
+                kind, reason = expression_kind(pairs[index + 1], code, call.start())
+                if not kind:
+                    continue
+                found.append({
+                    "name": tag, "access": "typed-vararg-callsite", "kind": kind,
+                    "confidence": "high", "line": 1 + code.count("\n", 0, call.start()),
+                    "cast": reason, "default": "", "list_expression": veneer,
+                    "list_parameters": [], "source": os.path.relpath(path, AROS),
+                    "evidence_scope": "api-callsite", "api": f.name
+                })
+    unique = {}
+    for item in found:
+        key = (item["name"], item["kind"], item["source"], item["line"])
+        unique[key] = item
+    return sorted(unique.values(), key=lambda x: (x["name"], x["source"], x["line"]))
 
 
 def source_function_chunk(src, name):
@@ -1560,15 +1661,19 @@ def collect_source_reports(which):
         for e in evidence:
             used_names.update(tag["name"] for tag in e.get("tags", []))
             used_names.update(tag["name"] for tag in e.get("propagated_tags", []))
-        source_tree_tags = source_tree_tag_evidence(
+        source_tree_tags, source_tree_sources = source_tree_tag_evidence(
             used_names, {path for path, _raw in sources})
         corroborating_tags = library_tags + source_tree_tags
-        for e in evidence:
+        callsite_tags = []
+        for f, e in zip(funcs, evidence):
             function_names = {tag["name"] for tag in e.get("tags", [])}
             function_names.update(tag["name"] for tag in e.get("propagated_tags", []))
-            e["corroborating_tag_evidence"] = [
+            function_callsites = function_callsite_tag_evidence(
+                f, e, source_tree_sources)
+            callsite_tags.extend(function_callsites)
+            e["corroborating_tag_evidence"] = ([
                 tag for tag in corroborating_tags if tag["name"] in function_names
-            ]
+            ] + function_callsites)
         pairs = ownership_candidates(funcs, evidence)
         for e in evidence:
             e.pop("_raw", None)
@@ -1587,7 +1692,8 @@ def collect_source_reports(which):
             "functions": evidence,
             "ownership_candidates": pairs,
             "library_tag_evidence": library_tags,
-            "source_tree_tag_evidence": source_tree_tags
+            "source_tree_tag_evidence": source_tree_tags,
+            "callsite_tag_evidence": callsite_tags
         })
     if wanted and not reports:
         raise ValueError("no generated library matches: %s" %
@@ -1763,8 +1869,10 @@ def build_import_manifest(report):
         source_inputs.append(input_file(path, role))
     source_inputs = sorted((x for x in source_inputs if x), key=lambda x: x["path"])
     public_headers = discover_public_headers(short, config)
+    external_evidence = (report.get("source_tree_tag_evidence", []) +
+                         report.get("callsite_tag_evidence", []))
     external_paths = sorted(set(os.path.join(AROS, item["source"])
-                                for item in report.get("source_tree_tag_evidence", [])))
+                                for item in external_evidence))
     external_inputs = [input_file(path, "external-tag-consumer")
                        for path in external_paths]
     external_inputs = sorted((x for x in external_inputs if x), key=lambda x: x["path"])

@@ -90,6 +90,10 @@ For each non-private public vector, the analyzer:
   accepting explicit consumer casts and public-header type annotations as
   corroboration. Every external file that contributes evidence is included in
   the manifest input hashes.
+- derives variadic API veneers from the `.conf` signature and types tag/value
+  pairs at real call sites. The evidence is attached to that exact function, so
+  an input value accepted by `CreateGadget` is not confused with an output
+  storage pointer passed to `GT_GetGadgetAttrs`.
 
 For example, `CreateGadgetA` does not itself spell out every gadget tag. It calls
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
@@ -131,6 +135,12 @@ the `TagItem`, not `ti_Data`. The type of the receiving variable is therefore
 never used as payload evidence. This distinction is covered by the GadTools
 import regression because confusing the two would falsely classify tags as
 `pointer:struct TagItem *`.
+
+Client expressions are held to the same rule. A string literal, explicit cast,
+typed variable, address of typed storage, or nonzero scalar literal can provide
+evidence. Bare numeric zero cannot distinguish a scalar from `NULL` and is never
+accepted as type proof. Array declarations are tracked as array decay, preventing
+an address-of-array spelling from acquiring a fictitious extra pointer level.
 
 ## Import artifacts and remaining certification pipeline
 
