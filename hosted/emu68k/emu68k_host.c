@@ -1908,6 +1908,30 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->a[1] = msg;
         return exec_call(r, sb, LVO_PUTMSG, st, e, el);
     }
+    case LVO_WAIT: {
+        /* Wait(signalSet D0) -> the signals that arrived.
+         *
+         * A signal a program sent to ITSELF is already there, which is the
+         * common shape for "wake me when I have queued my own work" and needs
+         * nothing else to run. Anything else needs a second 68k context to do
+         * the signalling, and until one exists a wait that cannot be satisfied
+         * would be an unbreakable hang inside a translated program. Naming it
+         * is the honest answer: a hang tells the reader nothing, and the run
+         * would have to be killed from outside to find out why. */
+        uint32_t want = st->d[0];
+        uint32_t got = gread32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF) & want;
+        if (got) {
+            gwrite32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF,
+                     gread32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF) & ~got);
+            st->d[0] = got;
+            return 0;
+        }
+        ledger_record(lvo, r->name[0] ? r->name : NULL);
+        snprintf(e, el, "capability gap: Wait($%08lx) cannot be satisfied - "
+                 "nothing else runs in this program yet to send it",
+                 (unsigned long)want);
+        return 1;
+    }
     case LVO_SIGNAL: {
         uint32_t task = st->a[1], sigs = st->d[0];
         if (task)

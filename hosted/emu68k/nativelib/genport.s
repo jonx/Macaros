@@ -11,12 +11,16 @@
 ;      WaitPort return
 ;   3. ReplyMsg sends the message to its reply port, not into a hole
 ;   4. two messages come back in the order they were put on
+;   5. a signal a program sends to its OWN task is waitable, which is the shape
+;      that needs nothing else running
 
 EXEC_OpenLibrary equ -552
 EXEC_PutMsg      equ -366
 EXEC_GetMsg      equ -372
 EXEC_ReplyMsg    equ -378
 EXEC_FindTask    equ -294
+EXEC_Wait        equ -318
+EXEC_Signal      equ -324
 DOS_PutStr       equ -948
 
 MP_SIGBIT    equ 15
@@ -107,7 +111,23 @@ TC_SIGRECVD  equ 26
     cmp.l   a4,d0
     bne.w   badreply
 
+    ; ---- 5: a signal a program sends to ITSELF is waitable ----------------
+    move.l  4.w,a6
+    move.l  a3,a1
+    moveq   #0,d0
+    bset    #12,d0
+    jsr     EXEC_Signal(a6)
+    move.l  4.w,a6
+    moveq   #0,d0
+    bset    #12,d0
+    jsr     EXEC_Wait(a6)
+    btst    #12,d0
+    beq.w   badwait
+
     lea     passmsg(pc),a0
+    bra.w   say
+badwait
+    lea     waitmsg(pc),a0
     bra.w   say
 badsig
     lea     sigmsg(pc),a0
@@ -148,5 +168,6 @@ sigmsg   dc.b "[T3PORT] FAIL: PutMsg did not signal the port's task",10,0
 ordermsg dc.b "[T3PORT] FAIL: messages did not come back in order",10,0
 emptymsg dc.b "[T3PORT] FAIL: the port was not empty after both were taken",10,0
 replymsg dc.b "[T3PORT] FAIL: ReplyMsg did not reach the reply port",10,0
+waitmsg  dc.b "[T3PORT] FAIL: a signal sent to our own task was not waitable",10,0
 dosname  dc.b "dos.library",0
     even
