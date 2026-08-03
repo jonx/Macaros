@@ -359,6 +359,10 @@ struct emu68k_run {
     uint32_t              callback_stack_top;
     uint32_t              poll_quantum;
     /* ctx[0] is the program itself; the rest are what it asked exec for. */
+    /* Guest ports the program bound to a window, and the signal each one
+     * carries, so a Wait knows which of them could answer it. */
+    struct { uint32_t port, mask; } idcmp_port[16];
+    int                    nidcmp;
     struct emu68k_ctx      ctx[EMU68K_MAX_CTX];
     int                    nctx;
     int                    cur_ctx;
@@ -1477,6 +1481,26 @@ static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
 /* The guest Task of the context that is CURRENTLY running. FindTask(NULL),
  * a signal and a wait are all per-context, and answering them from the one
  * fixed guest Process was right only while there was one. */
+#define LVO_IDCMP_PUMP 9001
+
+/* Drain into `port` whatever native port is bound to it, if any. Called before
+ * a wait is answered and before a look, because the ordinary Amiga event loop
+ * is Wait -> GetMsg -> ReplyMsg and a program blocked in Wait never reaches
+ * GetMsg. A port with nothing bound to it is left completely alone: a worker's
+ * own pr_MsgPort is an ordinary mailbox and must never receive native input. */
+static void idcmp_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
+                       uint32_t port)
+{
+    struct j5d_m68k_state probe;
+    char scratch[128];
+    if (!g_oscall || !port) return;
+    probe = *st;
+    probe.a[0] = port;
+    if (g_oscall("exec.library", LVO_IDCMP_PUMP, &probe, r->reserve,
+                 g_oscall_user, scratch, sizeof scratch) != 0)
+        return;
+}
+
 static uint32_t ctx_task(struct emu68k_run *r)
 {
     if (r && r->nctx && r->ctx[r->cur_ctx].live)
@@ -1858,17 +1882,33 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     }
     case LVO_CREATEMSGPORT: {
-        /* A guest MsgPort: the program holds it and may put it in structures,
-         * so it is built in guest memory with a properly initialised (empty)
-         * message list. Nothing signals a guest task, so it stays empty.
-         * Layout: mp_Node(14) mp_Flags(1) mp_SigBit(1) mp_SigTask(4)
-         *         mp_MsgList at 20 { lh_Head 20, lh_Tail 24, lh_TailPred 28 } */
-        uint32_t port = guest_alloc(r, 34);
+        /* A guest MsgPort. The program holds it and puts it in structures, so
+         * it is built in guest memory - but a port is not just an empty list:
+         * a real Exec port OWNS A SIGNAL BIT AND ITS CREATING TASK, which is
+         * what PutMsg sets and what a Wait/WaitPort event loop blocks on.
+         * Without them every ordinary event loop over this port is a wait on
+         * bit zero of nobody. */
+        uint32_t port = guest_alloc(r, M68K_MsgPort_SIZEOF);
+        uint32_t task = ctx_task(r);
+        uint32_t alloc = gread32(sb, task + TASK_SIGALLOC_OFF);
+        int bit;
         if (!port) { st->d[0] = 0; return 0; }
-        j4_sandbox_host(sb, port)[8] = 4;            /* ln_Type = NT_MSGPORT   */
-        gwrite32(sb, port + 20, port + 24);          /* lh_Head = &lh_Tail     */
-        gwrite32(sb, port + 24, 0);                  /* lh_Tail = NULL         */
-        gwrite32(sb, port + 28, port + 20);          /* lh_TailPred = &lh_Head */
+        for (bit = 31; bit >= 16; bit--)
+            if (!(alloc & (1u << bit))) break;
+        if (bit < 16) {
+            snprintf(e, el, "capability gap: no free signal for a message port");
+            return 1;
+        }
+        gwrite32(sb, task + TASK_SIGALLOC_OFF, alloc | (1u << bit));
+        memset(j4_sandbox_host(sb, port), 0, M68K_MsgPort_SIZEOF);
+        j4_sandbox_host(sb, port)[M68K_MsgPort_mp_Node_ln_Type] = 4;  /* NT_MSGPORT */
+        *(uint8_t *)j4_sandbox_host(sb, port + MP_SIGBIT) = (uint8_t)bit;
+        gwrite32(sb, port + MP_SIGTASK, task);
+        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Head,
+                 port + MP_MSGLIST + M68K_List_lh_Tail);
+        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Tail, 0);
+        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_TailPred,
+                 port + MP_MSGLIST + M68K_List_lh_Head);
         st->d[0] = port;
         return 0;
     }
@@ -1901,8 +1941,19 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                               * and NULL is the answer callers are written for */
         st->d[0] = 0;
         return 0;
-    case LVO_DELETEMSGPORT:
-        return 0;                                    /* bump heap: nothing to do */
+    case LVO_DELETEMSGPORT: {
+        /* The memory is a bump heap, but the SIGNAL is a real resource: a
+         * program that creates and deletes ports in a loop runs out of bits. */
+        uint32_t port = st->a[0];
+        if (port) {
+            uint32_t task = gread32(sb, port + MP_SIGTASK);
+            uint32_t bit = gread8(sb, port + MP_SIGBIT);
+            if (task && bit < 32)
+                gwrite32(sb, task + TASK_SIGALLOC_OFF,
+                         gread32(sb, task + TASK_SIGALLOC_OFF) & ~(1u << bit));
+        }
+        return 0;
+    }
     case LVO_SETSIGNAL:
         /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
          * signals a guest task yet, so the honest answer is a clean zero. */
@@ -1999,7 +2050,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t port = st->a[0];
         uint32_t list = port + MP_MSGLIST;
         for (;;) {
-            uint32_t head = gread32(sb, list + M68K_List_lh_Head);
+            uint32_t head;
+            idcmp_pump(r, st, port);
+            head = gread32(sb, list + M68K_List_lh_Head);
             if (head && gread32(sb, head)) { st->d[0] = head; return 0; }
             {
                 uint32_t bit = gread8(sb, port + MP_SIGBIT);
@@ -2017,14 +2070,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
-        /* A window's UserPort is a facade over a NATIVE port, and the messages
-         * on it are Intuition's. Ask the AROS side first: it is the only side
-         * that can take one and rebuild it where the guest can read it. A port
-         * the guest owns is not one it knows, and falls through to the list
-         * walk below. */
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;
+        idcmp_pump(r, st, port);        /* a program may poll instead of wait */
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
         uint32_t succ = head ? gread32(sb, head) : 0;
@@ -2056,7 +2102,19 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * is the honest answer: a hang tells the reader nothing, and the run
          * would have to be killed from outside to find out why. */
         uint32_t want = st->d[0];
-        uint32_t got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
+        uint32_t got;
+        /* Before answering, give every port bound to a window a chance to
+         * deliver. This is the point the ordinary event loop reaches - Wait
+         * comes BEFORE GetMsg - so pumping only at GetMsg would serve a program
+         * that polls and never one that blocks. Only ports the program bound to
+         * a window are touched; a worker's mailbox is not one of them. */
+        {
+            int k;
+            for (k = 0; k < r->nidcmp; k++)
+                if (r->idcmp_port[k].mask & want)
+                    idcmp_pump(r, st, r->idcmp_port[k].port);
+        }
+        got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
         if (got) {
             gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
                      gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & ~got);
@@ -2588,6 +2646,23 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                 if (lvo == 39) { st->d[0] = 0; return 0; }   /* FreeDosObject   */
                 if (lvo == 83)                              /* CreateNewProc   */
                     return dos_create_new_proc(r, c->sb, st, e, el);
+            }
+            if (!strcmp(r->openlib[i].name, "intuition.library") && lvo == 25) {
+                /* ModifyIDCMP: remember the port this window's input goes to,
+                 * and the bit it carries, so a Wait can pump it. */
+                uint32_t win = st->a[0];
+                uint32_t port = gread32(c->sb, win + M68K_Window_UserPort);
+                if (port) {
+                    uint32_t bit = gread8(c->sb, port + MP_SIGBIT);
+                    int k, seen = 0;
+                    for (k = 0; k < r->nidcmp; k++)
+                        if (r->idcmp_port[k].port == port) { seen = 1; break; }
+                    if (!seen && r->nidcmp < 16 && bit < 32) {
+                        r->idcmp_port[r->nidcmp].port = port;
+                        r->idcmp_port[r->nidcmp].mask = 1u << bit;
+                        r->nidcmp++;
+                    }
+                }
             }
             if (!strcmp(r->openlib[i].name, "utility.library") &&
                 utility_guest_call(c->sb, lvo, st) == 0)

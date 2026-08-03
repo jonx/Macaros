@@ -21,6 +21,8 @@ EXEC_ReplyMsg    equ -378
 EXEC_FindTask    equ -294
 EXEC_Wait        equ -318
 EXEC_Signal      equ -324
+EXEC_CreateMsgPort equ -666
+EXEC_DeleteMsgPort equ -672
 DOS_PutStr       equ -948
 
 MP_SIGBIT    equ 15
@@ -111,7 +113,26 @@ TC_SIGRECVD  equ 26
     cmp.l   a4,d0
     bne.w   badreply
 
-    ; ---- 5: a signal a program sends to ITSELF is waitable ----------------
+    ; ---- 5: a port exec MADE owns a signal bit and its creating task -------
+    ; An empty list is not a port: PutMsg has nobody to signal and every
+    ; Wait/WaitPort loop over it waits on bit zero of nobody.
+    move.l  4.w,a6
+    jsr     EXEC_CreateMsgPort(a6)
+    tst.l   d0
+    beq.w   badmade
+    move.l  d0,a2
+    move.l  MP_SIGTASK(a2),d0
+    cmp.l   a3,d0                        ; the task that created it
+    bne.w   badmade
+    moveq   #0,d0
+    move.b  MP_SIGBIT(a2),d0
+    cmp.b   #16,d0
+    blo.w   badmade                      ; a real allocated bit, not zero
+    move.l  4.w,a6
+    move.l  a2,a0
+    jsr     EXEC_DeleteMsgPort(a6)
+
+    ; ---- 6: a signal a program sends to ITSELF is waitable ----------------
     move.l  4.w,a6
     move.l  a3,a1
     moveq   #0,d0
@@ -128,6 +149,9 @@ TC_SIGRECVD  equ 26
     bra.w   say
 badwait
     lea     waitmsg(pc),a0
+    bra.w   say
+badmade
+    lea     mademsg(pc),a0
     bra.w   say
 badsig
     lea     sigmsg(pc),a0
@@ -169,5 +193,6 @@ ordermsg dc.b "[T3PORT] FAIL: messages did not come back in order",10,0
 emptymsg dc.b "[T3PORT] FAIL: the port was not empty after both were taken",10,0
 replymsg dc.b "[T3PORT] FAIL: ReplyMsg did not reach the reply port",10,0
 waitmsg  dc.b "[T3PORT] FAIL: a signal sent to our own task was not waitable",10,0
+mademsg  dc.b "[T3PORT] FAIL: CreateMsgPort gave no signal bit or owner",10,0
 dosname  dc.b "dos.library",0
     even
