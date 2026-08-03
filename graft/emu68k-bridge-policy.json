@@ -140,6 +140,23 @@
       "c_type": "struct RastPort *",
       "kind": "facade",
       "facade_struct": "RastPort"
+    },
+    "Window": {
+      "id": 19,
+      "c_type": "struct Window *",
+      "kind": "facade",
+      "facade_struct": "Window",
+      "facade_size": 156,
+      "nested_fields": [
+        {"field": "MenuStrip", "kind": "object", "type": "Menu"},
+        {"field": "WScreen", "kind": "object", "type": "Screen"},
+        {"field": "RPort", "kind": "object", "type": "RastPort"},
+        {"field": "BorderRPort", "kind": "object", "type": "RastPort"},
+        {"field": "UserPort", "kind": "object", "type": "MsgPort"},
+        {"field": "WindowPort", "kind": "object", "type": "MsgPort"},
+        {"field": "IFont", "kind": "object", "type": "TextFont"}
+      ],
+      "destructor": "intuition.library.CloseWindow"
     }
   },
   "tag_domains": {
@@ -361,6 +378,43 @@
           "fallback_cstr_field": {"field": "ta_Name", "value": "Vera Mono.font"}
         }
       ]
+    },
+    "intuition.open_window": {
+      "headers": ["intuition/intuition.h"],
+      "max_items": 32,
+      "tags": [
+        {"name": "WA_Left", "kind": "u32"},
+        {"name": "WA_Top", "kind": "u32"},
+        {"name": "WA_Width", "kind": "u32"},
+        {"name": "WA_Height", "kind": "u32"},
+        {"name": "WA_DetailPen", "kind": "u32"},
+        {"name": "WA_BlockPen", "kind": "u32"},
+        {"name": "WA_IDCMP", "kind": "u32"},
+        {"name": "WA_Flags", "kind": "u32"},
+        {"name": "WA_Title", "kind": "cstr"},
+        {"name": "WA_CustomScreen", "kind": "object", "type": "Screen", "nullable": false},
+        {"name": "WA_MinWidth", "kind": "u32"},
+        {"name": "WA_MinHeight", "kind": "u32"},
+        {"name": "WA_MaxWidth", "kind": "u32"},
+        {"name": "WA_MaxHeight", "kind": "u32"},
+        {"name": "WA_DragBar", "kind": "u32"},
+        {"name": "WA_DepthGadget", "kind": "u32"},
+        {"name": "WA_CloseGadget", "kind": "u32"},
+        {"name": "WA_SizeGadget", "kind": "u32"},
+        {"name": "WA_Activate", "kind": "u32"},
+        {"name": "WA_RMBTrap", "kind": "u32"},
+        {"name": "WA_ReportMouse", "kind": "u32"},
+        {"name": "WA_SimpleRefresh", "kind": "u32"},
+        {"name": "WA_SmartRefresh", "kind": "u32"},
+        {"name": "WA_SizeBRight", "kind": "u32"},
+        {"name": "WA_SizeBBottom", "kind": "u32"},
+        {"name": "WA_AutoAdjust", "kind": "u32"},
+        {"name": "WA_GimmeZeroZero", "kind": "u32"},
+        {"name": "WA_Gadgets", "kind": "refuse"},
+        {"name": "WA_BackFill", "kind": "refuse"},
+        {"name": "WA_ShapeHook", "kind": "refuse"},
+        {"name": "WA_ShapeRegion", "kind": "refuse"}
+      ]
     }
   },
   "refused_functions": {
@@ -476,6 +530,14 @@
     },
     "intuition.library.CloseScreen": {
       "objects": {"screen": {"type": "Screen", "nullable": false, "consume": true}}
+    },
+    "intuition.library.OpenWindowTagList": {
+      "null_args": ["newWindow"],
+      "taglists": {"tagList": "intuition.open_window"},
+      "result": {"kind": "object", "type": "Window"}
+    },
+    "intuition.library.CloseWindow": {
+      "objects": {"window": {"type": "Window", "nullable": false, "consume": true}}
     },
     "intuition.library.PubScreenStatus": {
       "objects": {"Scr": {"type": "Screen", "nullable": false}}
@@ -659,6 +721,12 @@
       "evidence": [
         {"source": "workbench/libs/gadtools/gt_refreshwindow.c", "line_start": 51, "line_end": 59}
       ]
+    },
+    "gadtools.library.GT_BeginRefresh": {
+      "objects": {"win": {"type": "Window", "nullable": false, "sync": true}}
+    },
+    "gadtools.library.GT_EndRefresh": {
+      "objects": {"win": {"type": "Window", "nullable": false, "sync": true}}
     },
     "gadtools.library.DrawBevelBoxA": {
       "objects": {

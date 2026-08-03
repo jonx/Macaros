@@ -174,6 +174,18 @@ The GadTools import exercises both mechanisms through `Screen.RastPort` and
 the real native RastPort, while the 68k caller sees the classic 100-byte facade
 at offset 84 of its Screen facade.
 
+`OpenWindowTagList` produces a classic 156-byte `Window` facade whose scalar
+fields come from the generated dual-ABI layout. Common guest-read pointers are
+typed nested objects: `MenuStrip`, `WScreen`, `RPort`, `BorderRPort`, `UserPort`,
+`WindowPort`, and `IFont`. Reusing an existing child facade refreshes its scalar
+fields without clearing already-generated nested tokens. `CloseWindow` releases
+those references before consuming the Window identity. GadTools
+`GT_BeginRefresh` and `GT_EndRefresh` unwrap that same Window, invoke the native
+implementation, and synchronize scalar mutations back to the guest facade.
+The public `intuition.open_window` tag domain supports source-proven scalar,
+string, and Screen payloads; Gadget and callback-shaped tags remain explicit
+fail-closed decisions.
+
 ### Terminated record arrays
 
 The importer also recognizes a public structure pointer that a reachable helper
@@ -352,6 +364,11 @@ reading them or calling the native implementation.
 The positive record/menu program also draws a bevel through the classic
 `Screen.RastPort` embedded facade. `gendrawbad.s` proves an arbitrary address
 cannot masquerade as that typed facade and reach native drawing.
+`genwindow.s` opens a Screen and Window entirely through generated crossings,
+checks the guest-readable Width/Height, nested Screen identity, and RastPort
+facade, then executes `GT_BeginRefresh`/`GT_EndRefresh` and closes both objects.
+`genwindowbad.s` supplies a forged Window token and must stop with the exact
+typed-object diagnostic before native GadTools is entered.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:
