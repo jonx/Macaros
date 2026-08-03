@@ -1583,6 +1583,44 @@ def ast_direct_parameter_values(node):
     return ast_referenced_parameters(node)
 
 
+def ast_addressof_stack_local(node, stack_locals):
+    """Is this call argument the address of one of the caller's own objects?"""
+    inner = node
+    while inner.get("kind") in ("ImplicitCastExpr", "ParenExpr", "CStyleCastExpr"):
+        children = inner.get("inner", [])
+        if not children:
+            return False
+        inner = children[0]
+    if inner.get("kind") != "UnaryOperator" or inner.get("opcode") != "&":
+        return False
+    for decl in ast_nodes(inner):
+        if decl.get("kind") == "DeclRefExpr":
+            ref = decl.get("referencedDecl", {})
+            return (ref.get("kind") == "VarDecl" and
+                    ref.get("name") in stack_locals)
+    return False
+
+
+def ast_store_base(node):
+    """The object a `base.field = x` / `base->field = x` store lands in.
+
+    Retention is a property of the DESTINATION, not of the field name: the same
+    `wdp_Window = win` is a lifetime obligation when it lands in a decoration
+    object the library keeps, and nothing at all when it lands in a message
+    struct on the helper's own stack. Clang spells that difference out - the
+    base resolves to a VarDecl or to a ParmVarDecl - so read it rather than
+    treat every store alike."""
+    members = [x for x in ast_nodes(node) if x.get("kind") == "MemberExpr"]
+    if not members:
+        return None
+    for decl in ast_nodes(members[-1]):
+        if decl.get("kind") == "DeclRefExpr":
+            ref = decl.get("referencedDecl", {})
+            if ref.get("kind") in ("VarDecl", "ParmVarDecl"):
+                return ref.get("name")
+    return None
+
+
 def ast_callee(call):
     """Return the direct function declaration used as a CallExpr callee."""
     inner = call.get("inner", [])
@@ -1610,6 +1648,7 @@ def ast_line(node):
 
 def summarize_ast(ast, symbol):
     calls, param_fields, param_casts, retained, indirect = [], {}, {}, {}, []
+    stack_retained, retained_via, retained_direct = {}, {}, {}
     parameters = []
     for child in ast.get("inner", []):
         if child.get("kind") == "ParmVarDecl":
@@ -1625,10 +1664,16 @@ def summarize_ast(ast, symbol):
     # relationship at the local variable.
     dependencies = {}
     local_names = set()
+    # Locals that ARE the object, not a pointer to one. A store into one of
+    # these dies with the frame, so it can never be retention: it is the
+    # "pack the arguments into a message and post it synchronously" shape.
+    stack_locals = set()
     for node in ast_nodes(ast):
         if node.get("kind") == "VarDecl" and node.get("name"):
             name = node["name"]
             local_names.add(name)
+            if not norm(node.get("type", {}).get("qualType", "")).endswith("*"):
+                stack_locals.add(name)
             refs = set()
             for child in node.get("inner", []):
                 refs.update(ast_referenced_declarations(child))
@@ -1682,6 +1727,13 @@ def summarize_ast(ast, symbol):
                     ],
                     "argument_direct_parameters": [
                         sorted(ast_direct_parameter_values(arg)) for arg in arguments
+                    ],
+                    # `&msg` where msg is this frame's own object. A callee that
+                    # writes through such a pointer is writing to the CALLER's
+                    # stack, which no store can outlive.
+                    "argument_addressof_stack": [
+                        ast_addressof_stack_local(arg, stack_locals)
+                        for arg in arguments
                     ]
                 })
             else:
@@ -1709,8 +1761,17 @@ def summarize_ast(ast, symbol):
                 # A field copied *from* a public record is not retention of the
                 # record pointer. Only record identity stores such as
                 # gadget->NextGadget = previous create a lifetime obligation.
+                base = ast_store_base(children[0])
                 for param in ast_direct_parameter_values(children[1]):
-                    retained.setdefault(param, set()).update(lhs_fields)
+                    if base in stack_locals:
+                        stack_retained.setdefault(param, set()).update(lhs_fields)
+                    elif base in parameter_names:
+                        for field in lhs_fields:
+                            retained_via.setdefault(param, set()).add((base, field))
+                        retained.setdefault(param, set()).update(lhs_fields)
+                    else:
+                        retained.setdefault(param, set()).update(lhs_fields)
+                        retained_direct.setdefault(param, set()).update(lhs_fields)
     # Calls appear inside other calls' argument trees; each CallExpr itself is
     # still visited once, so de-duplicate identical source locations only.
     unique_calls = []
@@ -1729,6 +1790,15 @@ def summarize_ast(ast, symbol):
         "parameter_fields": {k: sorted(v) for k, v in sorted(param_fields.items())},
         "parameter_casts": {k: sorted(v) for k, v in sorted(param_casts.items())},
         "retained_parameters": {k: sorted(v) for k, v in sorted(retained.items())},
+        # The trail for what the stack rule dropped, and for the stores that
+        # went through a parameter (whose caller decides whether they outlive).
+        "stack_retained_parameters": {k: sorted(v)
+                                      for k, v in sorted(stack_retained.items())},
+        "retained_through_parameter": {
+            k: sorted([base, field] for base, field in v)
+            for k, v in sorted(retained_via.items())},
+        "retained_direct_parameters": {k: sorted(v)
+                                       for k, v in sorted(retained_direct.items())},
         "local_parameter_dependencies": {
             name: sorted(origins) for name, origins in sorted(local_origins.items())
             if origins
@@ -1893,6 +1963,29 @@ def roots_for_call(call, caller_aliases, field="argument_parameters"):
     return roots
 
 
+def retention_that_outlives(helper, ast):
+    """The retention facts left once the stack destinations are removed.
+
+    A store into an object that dies when the helper returns is not a lifetime
+    obligation. Two shapes say so from the source alone: the destination is one
+    of the helper's own objects (dropped in summarize_ast), or it is a pointer
+    parameter that every reachable caller supplied as `&its_own_object`."""
+    retained = ast.get("retained_parameters", {}) or {}
+    through = ast.get("retained_through_parameter", {}) or {}
+    direct = ast.get("retained_direct_parameters", {}) or {}
+    backed = set(helper.get("stack_backed_parameters", []))
+    if not backed:
+        return retained
+    result = {}
+    for param, fields in retained.items():
+        transient = {field for base, field in through.get(param, [])
+                     if base in backed}
+        remaining = sorted(set(fields) - (transient - set(direct.get(param, []))))
+        if remaining:
+            result[param] = remaining
+    return result
+
+
 def helper_aliases(ast, argument_roots, include_locals=True):
     params = ast.get("parameters", [])
     aliases = {
@@ -1991,11 +2084,27 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
                 "root_argument_aliases": {},
                 "identity_root_argument_aliases": {}, "tags": item["tags"],
                 "memory": item["memory"], "callbacks": item["callbacks"],
-                "ast": ast
+                "ast": ast,
+                # Parameters this helper was handed `&caller_local` for, and
+                # the ones it was handed anything else for. A parameter that is
+                # ALWAYS the address of a caller's own object is a stack
+                # destination one frame up: storing through it is no more
+                # retention than storing into a local.
+                "stack_backed_parameters": set(),
+                "non_stack_parameters": set()
             }
             reports[key] = report
         elif len(path) < len(report["via"]):
             report["via"] = path
+        for index, param in enumerate(ast.get("parameters", [])):
+            name = param.get("name")
+            if not name:
+                continue
+            flags = call.get("argument_addressof_stack", [])
+            if index < len(flags) and flags[index]:
+                report["stack_backed_parameters"].add(name)
+            else:
+                report["non_stack_parameters"].add(name)
         for name, values in aliases.items():
             current = set(report["root_argument_aliases"].get(name, []))
             report["root_argument_aliases"][name] = sorted(current | values)
@@ -2030,6 +2139,10 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
                               item["path"], depth + 1))
 
     helpers = sorted(reports.values(), key=lambda x: (x["source"], x["line"], x["name"]))
+    for helper in helpers:
+        helper["stack_backed_parameters"] = sorted(
+            helper["stack_backed_parameters"] - helper["non_stack_parameters"])
+        helper["non_stack_parameters"] = sorted(helper["non_stack_parameters"])
     propagated_tags, propagated_callbacks = [], []
     propagated_arguments = {}
     reachable_allocators, reachable_releasers = set(), set()
@@ -2079,7 +2192,7 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
             # Pointer retention is an identity property. A local object whose
             # scalar contents depend on a public record/taglist is not an alias
             # of that public pointer and must not inherit its lifetime.
-            ("stored_in_fields", ast.get("retained_parameters", {}),
+            ("stored_in_fields", retention_that_outlives(helper, ast),
              helper["identity_root_argument_aliases"]),
         )
         for category, facts, category_aliases in categories:

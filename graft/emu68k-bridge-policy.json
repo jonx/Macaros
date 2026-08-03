@@ -3372,6 +3372,100 @@
         }
       },
       "origin": "import"
+    },
+    "graphics.library.Draw": {
+      "objects": {
+        "rp": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.FreeVPortCopLists": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "graphics.library.GetVPModeID": {
+      "objects": {
+        "vp": {
+          "type": "ViewPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ClearDMRequest": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.FreeSysRequest": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.RefreshWindowFrame": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.RemoveGadget": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        },
+        "gadget": {
+          "type": "Gadget",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ScreenToBack": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.ScreenToFront": {
+      "objects": {
+        "screen": {
+          "type": "Screen",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "intuition.library.SizeWindow": {
+      "objects": {
+        "window": {
+          "type": "Window",
+          "nullable": true
+        }
+      },
+      "origin": "import"
     }
   }
 }
