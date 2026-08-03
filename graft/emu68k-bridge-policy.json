@@ -256,9 +256,21 @@
       ]
     },
     "intuition.new_object": {
-      "headers": ["intuition/classes.h", "intuition/pointerclass.h"],
+      "headers": [
+        "intuition/classes.h",
+        "intuition/imageclass.h",
+        "intuition/pointerclass.h"
+      ],
       "max_items": 32,
       "tags": [
+        {
+          "name": "SYSIA_DrawInfo",
+          "kind": "object",
+          "type": "DrawInfo",
+          "nullable": false
+        },
+        {"name": "SYSIA_Size", "kind": "u32"},
+        {"name": "SYSIA_Which", "kind": "u32"},
         {"name": "POINTERA_BitMap", "kind": "struct", "type": "BitMap"},
         {"name": "POINTERA_XOffset", "kind": "u32"},
         {"name": "POINTERA_YOffset", "kind": "u32"},

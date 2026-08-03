@@ -493,7 +493,7 @@ def parse_conf(path):
 TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
              "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT",
              "null": "EMU_TAG_NULL", "u16_ffff": "EMU_TAG_U16_FFFF",
-             "rgb32": "EMU_TAG_RGB32"}
+             "rgb32": "EMU_TAG_RGB32", "object": "EMU_TAG_OBJECT"}
 
 
 def policy_key(lib, f):
@@ -636,6 +636,13 @@ def validate_policy(targets):
                                        t["max_longs"] < 1 or t["max_longs"] > 4096):
                 errors.append("tag domain %s tag %s needs max_longs 1..4096"
                               % (name, macro))
+            elif kind == "object":
+                if t.get("type") not in object_types:
+                    errors.append("tag domain %s tag %s uses missing object type %r"
+                                  % (name, macro, t.get("type")))
+                if t.get("nullable", True) not in (True, False):
+                    errors.append("tag domain %s tag %s nullable must be boolean"
+                                  % (name, macro))
             fallback = t.get("fallback_cstr_field")
             if fallback is not None:
                 if kind != "struct" or not isinstance(fallback, dict):
@@ -1118,20 +1125,24 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 st = tag["type"]
                 w('    { %s, %s, "%s", emu_fields_%s, EMU_NFIELDS(emu_fields_%s),'
                   % (tag["name"], TAG_KINDS[tag["kind"]], tag["name"], st, st))
-                w("      M68K_%s_SIZEOF, sizeof(struct %s) }," % (st, st))
+                w("      M68K_%s_SIZEOF, sizeof(struct %s), 0, 0 }," % (st, st))
             elif tag["kind"] == "u16_ffff":
-                w('    { %s, %s, "%s", NULL, 0, %d, 0 },' %
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
                    tag["max_count"]))
             elif tag["kind"] == "rgb32":
-                w('    { %s, %s, "%s", NULL, 0, %d, 0 },' %
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
                    tag["max_longs"]))
+            elif tag["kind"] == "object":
+                w('    { %s, %s, "%s", NULL, 0, 0, 0, EMU_OBJ_%s, %d },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   c_ident(tag["type"]), 1 if tag.get("nullable", True) else 0))
             else:
-                w('    { %s, %s, "%s", NULL, 0, 0, 0 },' %
+                w('    { %s, %s, "%s", NULL, 0, 0, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
         if not tags:
-            w("    { 0, EMU_TAG_REFUSE, NULL, NULL, 0, 0, 0 },")
+            w("    { 0, EMU_TAG_REFUSE, NULL, NULL, 0, 0, 0, 0, 0 },")
         w("};")
         w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
         w("{")
@@ -1856,6 +1867,7 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_NULL    4   /* pointer-valued tag accepted only when NULL       */
 #define EMU_TAG_U16_FFFF 5  /* guest UWORD array terminated by 0xffff           */
 #define EMU_TAG_RGB32    6  /* LoadRGB32 block stream terminated by zero         */
+#define EMU_TAG_OBJECT   7  /* typed native object represented by a guest token  */
 struct EmuTagDesc
 {
     ULONG tag;
@@ -1869,6 +1881,8 @@ struct EmuTagDesc
     UWORD nfields;
     UWORD guest_size;
     UWORD native_size;
+    UWORD object_type;
+    UBYTE object_nullable;
 };
 struct EmuTagDomain
 {
