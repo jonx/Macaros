@@ -86,6 +86,10 @@ For each non-private public vector, the analyzer:
 - builds a library-wide tag-consumer index so payload casts and typed assignments
   inside BOOPSI class dispatchers can corroborate tags forwarded by public
   wrappers even though dispatch is not an ordinary C call edge.
+- searches the rest of the AROS source tree for the exact discovered tag macros,
+  accepting explicit consumer casts and public-header type annotations as
+  corroboration. Every external file that contributes evidence is included in
+  the manifest input hashes.
 
 For example, `CreateGadgetA` does not itself spell out every gadget tag. It calls
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
@@ -96,6 +100,11 @@ Every propagated observation retains the source file, line, and shortest known
 call path in `via`. Repeated observations are retained when their provenance or
 inferred kind differs; later manifest synthesis can choose the strongest
 non-conflicting evidence without losing the audit trail.
+
+Tag domains remain per public function and argument. A tag used for input by a
+creation/setter API does not automatically describe an output/query API: in the
+latter, `ti_Data` can instead be a guest pointer to result storage. Direction
+must be proved before a candidate domain is activated.
 
 ## Confidence and fail-closed rules
 

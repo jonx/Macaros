@@ -752,7 +752,7 @@ def declared_type_before(code, name, offset):
     return norm(matches[-1].group(1)) if matches else None
 
 
-def extract_library_tag_evidence(sources):
+def extract_library_tag_evidence(sources, evidence_scope="library"):
     """Find type-bearing uses of tags anywhere in a library implementation.
 
     A public wrapper often forwards an IPTR unchanged to a BOOPSI class, so the
@@ -773,7 +773,7 @@ def extract_library_tag_evidence(sources):
             "confidence": "high", "line": 1 + code.count("\n", 0, offset),
             "cast": cast, "default": "", "list_expression": "",
             "list_parameters": [], "source": os.path.relpath(path, AROS),
-            "evidence_scope": "library"
+            "evidence_scope": evidence_scope
         })
 
     for path, raw in sources:
@@ -783,7 +783,7 @@ def extract_library_tag_evidence(sources):
         for item in extract_tag_evidence(raw, 1):
             if item.get("confidence") == "high":
                 found.append(dict(item, source=os.path.relpath(path, AROS),
-                                  evidence_scope="library"))
+                                  evidence_scope=evidence_scope))
         for call in TAG_CALL_RE.finditer(code):
             # FindTagItem returns the TagItem itself, so the receiving variable's
             # type says nothing about ti_Data.  Only GetTagData returns payload.
@@ -871,6 +871,67 @@ def extract_library_tag_evidence(sources):
                item["access"])
         unique[key] = item
     return sorted(unique.values(), key=lambda x: (x["name"], x["source"], x["line"]))
+
+
+def source_tree_tag_evidence(tag_names, existing_paths):
+    """Corroborate forwarded tags from their consumers elsewhere in AROS."""
+    names = sorted(set(tag_names))
+    if not names:
+        return []
+    pattern = r"\b(?:%s)\b" % "|".join(re.escape(name) for name in names)
+    try:
+        proc = subprocess.run(
+            ["rg", "-l", "--glob", "*.c", "--glob", "*.h", "-e", pattern, AROS],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    paths = sorted(set(line for line in proc.stdout.splitlines()
+                       if line and line not in existing_paths))
+    # A tag prefix accidentally matching a generated/vendor forest must not
+    # turn one import into an unbounded whole-tree analysis.
+    paths = paths[:512]
+    sources = []
+    for path in paths:
+        try:
+            sources.append((path, open(path, encoding="utf-8", errors="replace").read()))
+        except OSError:
+            pass
+    wanted = set(names)
+    evidence = extract_library_tag_evidence(sources, evidence_scope="source-tree")
+    annotated = []
+    annotation = re.compile(
+        r"/\*(.*?)\*/\s*#\s*define\s+([A-Za-z_]\w*)\s+([^\r\n]+)", re.S)
+    for path, raw in sources:
+        for match in annotation.finditer(raw):
+            lhs, replacement = match.group(2), match.group(3)
+            aliases = wanted.intersection(re.findall(r"\b[A-Za-z_]\w*\b", replacement))
+            tag = lhs if lhs in wanted else (next(iter(aliases)) if len(aliases) == 1 else None)
+            if not tag:
+                continue
+            declared, kind = None, None
+            for type_match in re.finditer(r"\(\s*([^()]{1,80}?)\s*\)", match.group(1)):
+                candidate = norm(type_match.group(1))
+                inferred = explicit_cast_kind(candidate)
+                if inferred:
+                    declared, kind = candidate, inferred
+                    break
+            if not kind:
+                continue
+            annotated.append({
+                "name": tag, "access": "header-type-annotation", "kind": kind,
+                "confidence": "high", "line": 1 + raw.count("\n", 0, match.start()),
+                "cast": declared, "default": "", "list_expression": "",
+                "list_parameters": [], "source": os.path.relpath(path, AROS),
+                "evidence_scope": "source-tree"
+            })
+    evidence.extend(annotated)
+    unique = {}
+    for item in evidence:
+        key = (item["name"], item["kind"], item["source"], item["line"], item["access"])
+        unique[key] = item
+    return sorted((item for item in unique.values() if item["name"] in wanted),
+                  key=lambda x: (x["name"], x["source"], x["line"]))
 
 
 def source_function_chunk(src, name):
@@ -1495,11 +1556,18 @@ def collect_source_reports(which):
             analyze_reachable_helpers(e, ast_config, sources,
                                       helper_cache, helper_definition_cache)
         library_tags = extract_library_tag_evidence(sources)
+        used_names = set()
         for e in evidence:
-            used_names = {tag["name"] for tag in e.get("tags", [])}
+            used_names.update(tag["name"] for tag in e.get("tags", []))
             used_names.update(tag["name"] for tag in e.get("propagated_tags", []))
+        source_tree_tags = source_tree_tag_evidence(
+            used_names, {path for path, _raw in sources})
+        corroborating_tags = library_tags + source_tree_tags
+        for e in evidence:
+            function_names = {tag["name"] for tag in e.get("tags", [])}
+            function_names.update(tag["name"] for tag in e.get("propagated_tags", []))
             e["corroborating_tag_evidence"] = [
-                tag for tag in library_tags if tag["name"] in used_names
+                tag for tag in corroborating_tags if tag["name"] in function_names
             ]
         pairs = ownership_candidates(funcs, evidence)
         for e in evidence:
@@ -1518,7 +1586,8 @@ def collect_source_reports(which):
             },
             "functions": evidence,
             "ownership_candidates": pairs,
-            "library_tag_evidence": library_tags
+            "library_tag_evidence": library_tags,
+            "source_tree_tag_evidence": source_tree_tags
         })
     if wanted and not reports:
         raise ValueError("no generated library matches: %s" %
@@ -1694,6 +1763,11 @@ def build_import_manifest(report):
         source_inputs.append(input_file(path, role))
     source_inputs = sorted((x for x in source_inputs if x), key=lambda x: x["path"])
     public_headers = discover_public_headers(short, config)
+    external_paths = sorted(set(os.path.join(AROS, item["source"])
+                                for item in report.get("source_tree_tag_evidence", [])))
+    external_inputs = [input_file(path, "external-tag-consumer")
+                       for path in external_paths]
+    external_inputs = sorted((x for x in external_inputs if x), key=lambda x: x["path"])
 
     review = []
     def add_review(kind, function, subject, detail, evidence=None):
@@ -1791,6 +1865,7 @@ def build_import_manifest(report):
         "conf": input_file(conf_path, "library-conf"),
         "public_headers": public_headers,
         "implementation": source_inputs,
+        "external_tag_consumers": external_inputs,
         "generated_build_header": forced,
         "compiler": compiler_identity(config),
         "sysroot": logical_path(config["sysroot"]),
