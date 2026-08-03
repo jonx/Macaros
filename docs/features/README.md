@@ -45,6 +45,7 @@ one-look summary. Verified against the code, not just the docs.)
 [feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway).
 
 **⚪ Idea — design/spec only, no implementation yet:**
+[dos64-packets](dos64-packets/README.md) (ABI + verification plan documented; 32-bit `DosPacket64` offsets pending an SDK oracle) ·
 [serial-bridge](serial-bridge/README.md) ·
 [midi-coremidi](midi-coremidi/README.md) ·
 [usb-iokit](usb-iokit/README.md) ·
@@ -97,6 +98,7 @@ one-look summary. Verified against the code, not just the docs.)
 | host-app-shell | Make the window a first-class Mac app (menu/About/icon/Settings) | [README](host-app-shell/README.md) |
 | clipboard-bridge | Two-way macOS NSPasteboard ↔ AROS `clipboard.device` | [README](clipboard-bridge/README.md) |
 | host-volume | A real macOS folder mounted as an AROS volume | [README](host-volume/README.md) |
+| dos64-packets | Verified `DosPacket64` layout + send/reply plumbing for the `8001`–`8004` actions; prerequisite for files > 4 GB | [README](dos64-packets/README.md) |
 | coreaudio-audio | Real sound via a CoreAudio-backed AHI sub-driver (built) | [README](coreaudio-audio/README.md) |
 | bsdsocket-net | TCP/IP by forwarding `bsdsocket.library` to the Mac's sockets (built) | [README](bsdsocket-net/README.md) |
 | printing | `printer.device` → CUPS / print-to-PDF | [README](printing/README.md) |
