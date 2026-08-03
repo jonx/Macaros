@@ -89,8 +89,13 @@ For each non-private public vector, the analyzer:
   pointers stored into fields, allocators, releasers, and callback patterns;
 - finds locally defined functions called by that vector and walks their direct
   call graph, currently bounded to 128 helpers and 12 levels;
+- normalizes generated same-library calls such as
+  `__inline_Intuition_OpenWindow` back to their public implementation and
+  inherits that vector's direct source contract. A public-vector boundary is a
+  deliberate stopping point: internal operations performed on a newly-created
+  native object do not become the caller's entire semantic contract;
 - maps helper parameters back to public ABI parameters using AST call-argument
-  positions; and
+  positions and local-variable origin flow; and
 - propagates helper tag accesses, structure fields, casts, retained pointers,
   ownership calls, and callback evidence back to the public-vector report.
 - builds a library-wide tag-consumer index so payload casts and typed assignments
@@ -116,6 +121,20 @@ For example, `CreateGadgetA` does not itself spell out every gadget tag. It call
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
 pass includes those helpers and records which observations flow from the public
 `taglist` and `ng` arguments.
+
+Semantic origin and pointer identity are tracked separately. A local tag array
+whose values were computed from `ng` semantically depends on `ng`, but it is not
+an alias of the `ng` pointer. Only identity-preserving stores create retained-
+pointer lifetime findings. This prevents call-scoped tag chains and copied
+scalar fields from becoming false ownership blockers while still allowing a
+taglist stored in a local wrapper record to reach a delegated public vector.
+`NextTagItem`/`ti_Tag` switch cases retain the loop's local taglist origin, so a
+wrapper such as `OpenWindowTagList` receives the complete `WA_*` domain from
+`OpenWindow`, not merely tags mentioned by standalone `GetTagData` calls.
+When a public API embeds that list in a record instead of accepting a TagItem
+argument directly, the importer emits one `embedded-tag-domain` decision with
+all observed tags. It does not manufacture dozens of independent “lost origin”
+items; the required decision is conversion of the containing record field.
 
 Every propagated observation retains the source file, line, and shortest known
 call path in `via`. Repeated observations are retained when their provenance or

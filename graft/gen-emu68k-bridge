@@ -702,19 +702,31 @@ def extract_tag_evidence(raw, base_line):
     # valid domain evidence but payload typing needs data-flow, so keep them
     # distinct and low confidence rather than pretending every case is u32.
     if "NextTagItem" in code:
+        next_tag_expressions, next_tag_parameters = [], set()
+        for call in re.finditer(r"\bNextTagItem\s*\(", code):
+            opening = code.find("(", call.start())
+            args, _end = call_arguments(code, opening)
+            if not args:
+                continue
+            expression = re.sub(r"\s+", " ", args[0].strip())[:120]
+            next_tag_expressions.append(expression)
+            next_tag_parameters.update(re.findall(r"\b[A-Za-z_]\w*\b",
+                                                   expression))
+        list_expression = " | ".join(sorted(set(next_tag_expressions)))
         for m in re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code):
             tag = m.group(1)
             if tag.endswith("_KIND"):
                 continue
             if not (tag.startswith(("GA_", "GTM", "GTC", "GTS", "GTLV_", "GT_",
-                                    "PGA_", "STRINGA_", "MX_", "CYCLE_"))):
+                                    "WA_", "SA_", "PGA_", "STRINGA_", "MX_",
+                                    "CYCLE_"))):
                 continue
             tags.append({
                 "name": tag, "access": "NextTagItem/case", "kind": "unknown",
                 "confidence": "low",
                 "line": base_line + code.count("\n", 0, m.start()),
-                "cast": None, "default": "", "list_expression": "",
-                "list_parameters": []
+                "cast": None, "default": "", "list_expression": list_expression,
+                "list_parameters": sorted(next_tag_parameters)
             })
 
     # Deduplicate repeated reads but preserve the strongest evidence and first
@@ -1427,6 +1439,27 @@ def ast_referenced_parameters(node):
     return out
 
 
+def ast_referenced_declarations(node):
+    """Return parameter/local names referenced by an AST subtree."""
+    out = set()
+    for child in ast_nodes(node):
+        if child.get("kind") != "DeclRefExpr":
+            continue
+        ref = child.get("referencedDecl", {})
+        if ref.get("kind") in ("ParmVarDecl", "VarDecl") and ref.get("name"):
+            out.add(ref["name"])
+    return out
+
+
+def ast_direct_parameter_values(node):
+    """Parameters whose pointer value, rather than a derived field, is stored."""
+    disallowed = {"MemberExpr", "BinaryOperator", "CompoundAssignOperator",
+                  "CallExpr", "ConditionalOperator", "ArraySubscriptExpr"}
+    if any(child.get("kind") in disallowed for child in ast_nodes(node)):
+        return set()
+    return ast_referenced_parameters(node)
+
+
 def ast_callee(call):
     """Return the direct function declaration used as a CallExpr callee."""
     inner = call.get("inner", [])
@@ -1454,6 +1487,60 @@ def ast_line(node):
 
 def summarize_ast(ast, symbol):
     calls, param_fields, param_casts, retained, indirect = [], {}, {}, {}, []
+    parameters = []
+    for child in ast.get("inner", []):
+        if child.get("kind") == "ParmVarDecl":
+            parameters.append({
+                "name": child.get("name"),
+                "type": child.get("type", {}).get("qualType")
+            })
+    parameter_names = {x["name"] for x in parameters if x.get("name")}
+
+    # Build a small intraprocedural origin graph. This is what connects a
+    # public TagItem pointer stored in a local ExtNewWindow to the later
+    # OpenWindow(&local) call; direct DeclRefExpr inspection alone loses that
+    # relationship at the local variable.
+    dependencies = {}
+    local_names = set()
+    for node in ast_nodes(ast):
+        if node.get("kind") == "VarDecl" and node.get("name"):
+            name = node["name"]
+            local_names.add(name)
+            refs = set()
+            for child in node.get("inner", []):
+                refs.update(ast_referenced_declarations(child))
+            dependencies.setdefault(name, set()).update(refs - {name})
+        elif (node.get("kind") in ("BinaryOperator", "CompoundAssignOperator") and
+              node.get("opcode") == "="):
+            children = node.get("inner", [])
+            if len(children) < 2:
+                continue
+            lhs = ast_referenced_declarations(children[0])
+            rhs = ast_referenced_declarations(children[1])
+            for name in lhs:
+                if name not in parameter_names:
+                    local_names.add(name)
+                    dependencies.setdefault(name, set()).update(rhs - {name})
+    local_origins = {name: set(dependencies.get(name, set())) & parameter_names
+                     for name in local_names}
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(local_names):
+            origins = set(local_origins[name])
+            for dependency in dependencies.get(name, set()):
+                origins.update(local_origins.get(dependency, set()))
+            if origins != local_origins[name]:
+                local_origins[name] = origins
+                changed = True
+
+    def parameter_origins(node):
+        refs = ast_referenced_declarations(node)
+        origins = refs & parameter_names
+        for name in refs - parameter_names:
+            origins.update(local_origins.get(name, set()))
+        return origins
+
     for node in ast_nodes(ast):
         kind = node.get("kind")
         if kind == "CallExpr":
@@ -1468,7 +1555,10 @@ def summarize_ast(ast, symbol):
                     "name": callee,
                     "line": ast_line(node),
                     "argument_parameters": [
-                        sorted(ast_referenced_parameters(arg)) for arg in arguments
+                        sorted(parameter_origins(arg)) for arg in arguments
+                    ],
+                    "argument_direct_parameters": [
+                        sorted(ast_direct_parameter_values(arg)) for arg in arguments
                     ]
                 })
             else:
@@ -1476,22 +1566,27 @@ def summarize_ast(ast, symbol):
                 indirect.append({
                     "line": ast_line(node),
                     "callee_kind": inner[0].get("kind") if inner else None,
-                    "type": inner[0].get("type", {}).get("qualType") if inner else None
+                    "type": inner[0].get("type", {}).get("qualType") if inner else None,
+                    "callee_parameters": sorted(parameter_origins(inner[0]))
+                    if inner else []
                 })
         elif kind == "MemberExpr" and node.get("name"):
-            for param in ast_referenced_parameters(node):
+            for param in parameter_origins(node):
                 param_fields.setdefault(param, set()).add(node["name"])
         elif kind in ("CStyleCastExpr", "ImplicitCastExpr"):
             cast_type = node.get("type", {}).get("qualType")
             if cast_type:
-                for param in ast_referenced_parameters(node):
+                for param in parameter_origins(node):
                     param_casts.setdefault(param, set()).add(cast_type)
         elif kind in ("BinaryOperator", "CompoundAssignOperator") and node.get("opcode") == "=":
             children = node.get("inner", [])
             if len(children) >= 2:
                 lhs_fields = [x.get("name") for x in ast_nodes(children[0])
                               if x.get("kind") == "MemberExpr" and x.get("name")]
-                for param in ast_referenced_parameters(children[1]):
+                # A field copied *from* a public record is not retention of the
+                # record pointer. Only record identity stores such as
+                # gadget->NextGadget = previous create a lifetime obligation.
+                for param in ast_direct_parameter_values(children[1]):
                     retained.setdefault(param, set()).update(lhs_fields)
     # Calls appear inside other calls' argument trees; each CallExpr itself is
     # still visited once, so de-duplicate identical source locations only.
@@ -1499,17 +1594,11 @@ def summarize_ast(ast, symbol):
     seen = set()
     for call in calls:
         key = (call["name"], call["line"],
-               tuple(tuple(x) for x in call["argument_parameters"]))
+               tuple(tuple(x) for x in call["argument_parameters"]),
+               tuple(tuple(x) for x in call["argument_direct_parameters"]))
         if key not in seen:
             unique_calls.append(call)
             seen.add(key)
-    parameters = []
-    for child in ast.get("inner", []):
-        if child.get("kind") == "ParmVarDecl":
-            parameters.append({
-                "name": child.get("name"),
-                "type": child.get("type", {}).get("qualType")
-            })
     return {
         "symbol": symbol,
         "parameters": parameters,
@@ -1517,6 +1606,10 @@ def summarize_ast(ast, symbol):
         "parameter_fields": {k: sorted(v) for k, v in sorted(param_fields.items())},
         "parameter_casts": {k: sorted(v) for k, v in sorted(param_casts.items())},
         "retained_parameters": {k: sorted(v) for k, v in sorted(retained.items())},
+        "local_parameter_dependencies": {
+            name: sorted(origins) for name, origins in sorted(local_origins.items())
+            if origins
+        },
         "indirect_calls": indirect
     }
 
@@ -1536,15 +1629,25 @@ def json_stream(text):
 
 def ast_function_definition(values, symbol):
     """Select the requested definition, not a prototype matched by the filter."""
-    candidates = []
+    exact, generated = [], []
     for value in values:
         for node in ast_nodes(value):
-            if node.get("kind") != "FunctionDecl" or node.get("name") != symbol:
+            if node.get("kind") != "FunctionDecl":
                 continue
-            if any(child.get("kind") == "CompoundStmt"
-                   for child in node.get("inner", [])):
-                candidates.append(node)
-    return candidates[0] if candidates else None
+            if not any(child.get("kind") == "CompoundStmt"
+                       for child in node.get("inner", [])):
+                continue
+            name = node.get("name", "")
+            if name == symbol:
+                exact.append(node)
+            elif name.endswith("_" + symbol):
+                generated.append(node)
+    if exact:
+        return exact[0]
+    # A public AROS vector expands from OpenWindow to (for example)
+    # Intuition_34_OpenWindow. The suffix is unambiguous because it includes
+    # the complete requested vector name, not a substring match.
+    return generated[0] if len(generated) == 1 else None
 
 
 def compile_named_ast(config, symbol, source):
@@ -1576,7 +1679,7 @@ def compile_named_ast(config, symbol, source):
     if not ast:
         return {"status": "error", "symbol": symbol,
                 "error": "clang AST did not contain the function definition"}
-    summary = summarize_ast(ast, symbol)
+    summary = summarize_ast(ast, ast.get("name", symbol))
     summary["status"] = "ok"
     return summary
 
@@ -1593,7 +1696,13 @@ def local_function_definition(sources, name, preferred=None):
         ordered = ([item for item in sources if item[0] == preferred] +
                    [item for item in sources if item[0] != preferred])
     for path, whole in ordered:
-        chunk = generic_function_chunk(whole, name)
+        # Public vectors use AROS_LH* macros and therefore are not ordinary C
+        # definitions until preprocessing. Follow them as well as local helper
+        # functions so delegation between vectors remains inside the source
+        # graph.
+        chunk = source_function_chunk(whole, name)
+        public_vector = bool(chunk)
+        chunk = chunk or generic_function_chunk(whole, name)
         if chunk:
             start, raw = chunk
             return {
@@ -1601,15 +1710,35 @@ def local_function_definition(sources, name, preferred=None):
                 "path": path,
                 "source": os.path.relpath(path, AROS),
                 "line": whole.count("\n", 0, start) + 1,
-                "raw": raw
+                "raw": raw,
+                "public_vector": public_vector
             }
     return None
 
 
-def roots_for_call(call, caller_aliases):
+def source_call_name(name, public_symbols=None):
+    """Map a generated inline library call back to its source vector name.
+
+    AROS public calls made from inside a library compile as names such as
+    ``__inline_Intuition_OpenWindow``.  The implementation in the source tree
+    is still the public ``OpenWindow`` vector.  Treating the generated wrapper
+    as an opaque external call cuts source analysis at exactly the boundary we
+    most need to follow when one public vector delegates to another.
+    """
+    match = re.match(r"^__inline_[A-Za-z0-9]+_(.+)$", name or "")
+    candidate = match.group(1) if match else name
+    # Only collapse wrappers for public vectors in the library currently being
+    # analyzed. Exec_CopyMem from intuition source, for example, is an external
+    # dependency rather than a local CopyMem helper.
+    if public_symbols is not None and candidate not in public_symbols:
+        return name
+    return candidate
+
+
+def roots_for_call(call, caller_aliases, field="argument_parameters"):
     """Map each call argument position back to public-vector parameters."""
     roots = []
-    for referenced in call.get("argument_parameters", []):
+    for referenced in call.get(field, []):
         origins = set()
         for name in referenced:
             origins.update(caller_aliases.get(name, set()))
@@ -1617,17 +1746,26 @@ def roots_for_call(call, caller_aliases):
     return roots
 
 
-def helper_aliases(ast, argument_roots):
+def helper_aliases(ast, argument_roots, include_locals=True):
     params = ast.get("parameters", [])
-    return {
+    aliases = {
         param.get("name"): set(argument_roots[i])
         for i, param in enumerate(params)
         if param.get("name") and i < len(argument_roots) and argument_roots[i]
     }
+    if include_locals:
+        for local, dependencies in ast.get("local_parameter_dependencies", {}).items():
+            roots = set()
+            for dependency in dependencies:
+                roots.update(aliases.get(dependency, set()))
+            if roots:
+                aliases[local] = roots
+    return aliases
 
 
 def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
-                              definition_cache=None, max_helpers=128, max_depth=12):
+                              definition_cache=None, public_symbols=None,
+                              max_helpers=128, max_depth=12):
     """Follow local direct calls and propagate their semantics to one vector.
 
     This is a bounded call-graph/data-flow pass, not name-based guesswork.  A
@@ -1645,11 +1783,14 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
     reports, queued_states = {}, set()
     queue = []
     for call in public_ast.get("direct_calls", []):
-        queue.append((call, public_aliases,
-                      [evidence["name"], call["name"]], public_path, 1))
+        source_name = source_call_name(call["name"], public_symbols)
+        source_call = dict(call, name=source_name)
+        queue.append((source_call, public_aliases, public_aliases,
+                      [evidence["name"], source_name], public_path, 1))
 
     while queue and len(reports) < max_helpers:
-        call, caller_aliases, path, caller_source, depth = queue.pop(0)
+        call, caller_aliases, caller_identity_aliases, path, caller_source, depth = \
+            queue.pop(0)
         if depth > max_depth:
             continue
         definition_key = (call["name"], caller_source)
@@ -1661,7 +1802,9 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
             continue
         key = (definition["name"], definition["path"])
         if key not in cache:
-            ast = compile_named_ast(config, definition["name"], definition["path"])
+            symbol = (public_symbols or {}).get(definition["name"],
+                                                 definition["name"])
+            ast = compile_named_ast(config, symbol, definition["path"])
             item = dict(definition)
             item["ast"] = ast
             item["tags"] = extract_tag_evidence(item["raw"], item["line"])
@@ -1676,11 +1819,18 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
         item = cache[key]
         ast = item["ast"]
         if ast.get("status") != "ok":
-            aliases = {}
+            aliases, identity_aliases = {}, {}
         else:
             aliases = helper_aliases(ast, roots_for_call(call, caller_aliases))
-        state = (key, tuple((name, tuple(sorted(values)))
-                            for name, values in sorted(aliases.items())))
+            identity_aliases = helper_aliases(
+                ast, roots_for_call(call, caller_identity_aliases,
+                                    "argument_direct_parameters"),
+                include_locals=False)
+        state = (key,
+                 tuple((name, tuple(sorted(values)))
+                       for name, values in sorted(aliases.items())),
+                 tuple((name, tuple(sorted(values)))
+                       for name, values in sorted(identity_aliases.items())))
         if state in queued_states:
             continue
         queued_states.add(state)
@@ -1690,7 +1840,9 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
             report = {
                 "name": item["name"], "source": item["source"],
                 "line": item["line"], "via": path,
-                "root_argument_aliases": {}, "tags": item["tags"],
+                "public_vector": item.get("public_vector", False),
+                "root_argument_aliases": {},
+                "identity_root_argument_aliases": {}, "tags": item["tags"],
                 "memory": item["memory"], "callbacks": item["callbacks"],
                 "ast": ast
             }
@@ -1700,49 +1852,91 @@ def analyze_reachable_helpers(evidence, config, sources, shared_cache=None,
         for name, values in aliases.items():
             current = set(report["root_argument_aliases"].get(name, []))
             report["root_argument_aliases"][name] = sorted(current | values)
+        for name, values in identity_aliases.items():
+            current = set(report["identity_root_argument_aliases"].get(name, []))
+            report["identity_root_argument_aliases"][name] = \
+                sorted(current | values)
 
-        if ast.get("status") == "ok":
+        # Delegation into another public vector inherits that vector's direct
+        # contract. Do not recursively inherit every operation the callee
+        # performs on its newly-created native objects; those are internal
+        # implementation details and would turn one call into a whole-library
+        # semantic explosion.
+        if ast.get("status") == "ok" and not item.get("public_vector"):
             merged_aliases = {name: set(values) for name, values in
                               report["root_argument_aliases"].items()}
+            merged_identity_aliases = {
+                name: set(values) for name, values in
+                report["identity_root_argument_aliases"].items()
+            }
             for child in ast.get("direct_calls", []):
-                queue.append((child, merged_aliases, path + [child["name"]],
+                # Once inside the first callee, continue only along edges that
+                # still carry a public ABI argument. This prevents an ordinary
+                # internal call such as LockPubScreen from pulling the entire
+                # Intuition library into OpenWindowTagList's semantic review.
+                if not any(roots_for_call(child, merged_aliases)):
+                    continue
+                source_name = source_call_name(child["name"], public_symbols)
+                source_child = dict(child, name=source_name)
+                queue.append((source_child, merged_aliases,
+                              merged_identity_aliases, path + [source_name],
                               item["path"], depth + 1))
 
     helpers = sorted(reports.values(), key=lambda x: (x["source"], x["line"], x["name"]))
     propagated_tags, propagated_callbacks = [], []
     propagated_arguments = {}
     reachable_allocators, reachable_releasers = set(), set()
+    public_tag_arguments = {
+        arg["name"] for arg in evidence.get("signature", {}).get("arguments", [])
+        if "TagItem" in arg.get("type", "")
+    }
+    callback_arguments = {
+        arg["name"] for arg in evidence.get("signature", {}).get("arguments", [])
+        if ("Hook" in arg.get("type", "") or
+            re.search(r"\(\s*\*", arg.get("type", "")))
+    }
     for helper in helpers:
         for tag in helper["tags"]:
             root_arguments = set()
             for local in tag.get("list_parameters", []):
                 root_arguments.update(helper["root_argument_aliases"].get(local, []))
-            propagated_tags.append(dict(
-                tag, source=helper["source"], via=helper["via"],
-                root_arguments=sorted(root_arguments)))
+            root_arguments.intersection_update(public_tag_arguments)
+            if root_arguments:
+                propagated_tags.append(dict(
+                    tag, source=helper["source"], via=helper["via"],
+                    root_arguments=sorted(root_arguments)))
         reachable_allocators.update(helper["memory"]["allocators"])
         reachable_releasers.update(helper["memory"]["releasers"])
-        for callback in helper["callbacks"]:
-            propagated_callbacks.append({
-                "name": callback, "helper": helper["name"],
-                "source": helper["source"], "via": helper["via"]
-            })
         ast = helper["ast"]
         if ast.get("status") != "ok":
             continue
         for indirect in ast.get("indirect_calls", []):
+            callback_roots = set()
+            for local in indirect.get("callee_parameters", []):
+                callback_roots.update(
+                    helper["root_argument_aliases"].get(local, []))
+            callback_roots.intersection_update(callback_arguments)
+            if not callback_roots:
+                continue
             propagated_callbacks.append({
                 "name": "<indirect-call>", "helper": helper["name"],
                 "source": helper["source"], "via": helper["via"],
-                "line": indirect.get("line"), "type": indirect.get("type")
+                "line": indirect.get("line"), "type": indirect.get("type"),
+                "root_arguments": sorted(callback_roots)
             })
         categories = (
-            ("dereferenced_fields", ast.get("parameter_fields", {})),
-            ("concrete_casts", ast.get("parameter_casts", {})),
-            ("stored_in_fields", ast.get("retained_parameters", {})),
+            ("dereferenced_fields", ast.get("parameter_fields", {}),
+             helper["root_argument_aliases"]),
+            ("concrete_casts", ast.get("parameter_casts", {}),
+             helper["root_argument_aliases"]),
+            # Pointer retention is an identity property. A local object whose
+            # scalar contents depend on a public record/taglist is not an alias
+            # of that public pointer and must not inherit its lifetime.
+            ("stored_in_fields", ast.get("retained_parameters", {}),
+             helper["identity_root_argument_aliases"]),
         )
-        for local, roots in helper["root_argument_aliases"].items():
-            for category, facts in categories:
+        for category, facts, category_aliases in categories:
+            for local, roots in category_aliases.items():
                 for fact in facts.get(local, []):
                     for root in roots:
                         propagated_arguments.setdefault(root, []).append({
@@ -1799,6 +1993,10 @@ def collect_source_reports(which):
         evidence = [analyze_function_source(lib, rel, f, sources) for f in funcs]
         ast_ok = ast_errors = 0
         helper_cache, helper_definition_cache = {}, {}
+        public_symbols = {
+            f.name: "%s_%d_%s" % (basename, f.lvo, f.name)
+            for f in funcs
+        } if basename else {}
         for f, e in zip(funcs, evidence):
             if not e.get("source") or not basename:
                 continue
@@ -1809,7 +2007,8 @@ def collect_source_reports(which):
             else:
                 ast_errors += 1
             analyze_reachable_helpers(e, ast_config, sources,
-                                      helper_cache, helper_definition_cache)
+                                      helper_cache, helper_definition_cache,
+                                      public_symbols)
         library_tags = extract_library_tag_evidence(sources)
         used_names = set()
         for e in evidence:
@@ -1993,10 +2192,25 @@ def synthesize_function_tags(evidence, add_review, policy=None):
             continue
         for root in roots:
             grouped.setdefault((root, item["name"]), []).append(item)
-    for item in orphaned:
-        add_review("taglist-origin-unresolved", evidence["name"], item["name"],
-                   "tag access could not be mapped to a public TagItem argument",
-                   [evidence_provenance(item)])
+    public_tag_arguments = tag_arguments_for(evidence)
+    if orphaned and not public_tag_arguments:
+        # Some classic APIs hide a taglist inside a public record (notably
+        # OpenWindow's ExtNewWindow.Extension). Reporting every case as an
+        # independent lost origin obscures the actual single crossing decision:
+        # translate the containing record field. Keep every tag as evidence in
+        # one finite review item instead.
+        orphaned_names = {item["name"] for item in orphaned}
+        add_review(
+            "embedded-tag-domain", evidence["name"],
+            "%d source-observed tags" % len(orphaned_names),
+            "tag iteration is rooted in a local or record field rather than a "
+            "public TagItem argument; model the containing record pointer",
+            [evidence_provenance(item) for item in orphaned])
+    else:
+        for item in orphaned:
+            add_review("taglist-origin-unresolved", evidence["name"], item["name"],
+                       "tag access could not be mapped to a public TagItem argument",
+                       [evidence_provenance(item)])
 
     domains = {}
     strength = {"low": 0, "medium": 1, "high": 2}
@@ -2267,7 +2481,7 @@ def build_import_manifest(report):
             add_review("public-ast-failure", f.name, ast.get("symbol", f.name),
                        ast.get("error", "AST compilation failed"))
         for helper in evidence.get("reachable_helpers", []):
-            if helper.get("ast", {}).get("status") != "ok":
+            if not refusal and helper.get("ast", {}).get("status") != "ok":
                 add_review("helper-ast-failure", f.name, helper["name"],
                            helper["ast"].get("error", "AST compilation failed"),
                            [{"source": helper["source"], "line": helper["line"],
