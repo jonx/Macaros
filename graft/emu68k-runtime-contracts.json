@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "_comment": [
+    "Runtime contracts, separate from the library ABI policy in",
+    "emu68k-bridge-policy.json. A contract is about the execution substrate -",
+    "processes, ports, signals, bindings, scheduling - which is hand-served",
+    "because it operates on GUEST memory the native OS cannot touch, and so has",
+    "no .conf and no importer path.",
+    "",
+    "A trace may PROPOSE a contract; only an entry here can change a status.",
+    "Every contract must be expressible without naming a program."
+  ],
+  "contracts": [
+    {
+      "id": "port.lifecycle",
+      "status": "supported",
+      "triggers": ["port.create", "port.delete"],
+      "invariants": [
+        "a created port names its creating task as owner",
+        "a created port owns an allocated signal bit, never bit zero by default",
+        "deleting a port releases the bit it names"
+      ],
+      "tests": ["T3PORT.created_port_owns_bit_and_owner"]
+    },
+    {
+      "id": "event.native_port_binding",
+      "status": "supported",
+      "triggers": ["port.bind", "port.pump", "port.get", "port.reply"],
+      "invariants": [
+        "only an explicitly bound destination may receive a pumped native message",
+        "a pumped message reaches exactly one guest destination",
+        "reply pairing is released exactly once"
+      ],
+      "tests": ["T3EVENT.idcmp_shared_port"]
+    },
+    {
+      "id": "process.mailbox",
+      "status": "supported",
+      "triggers": ["process.create", "port.pump"],
+      "invariants": [
+        "a process's own pr_MsgPort never receives native input",
+        "several windows may share one destination port"
+      ],
+      "tests": ["T3EVENT.worker_mailbox_untouched"]
+    },
+    {
+      "id": "scheduler.yield.frame_wait",
+      "status": "needs-review",
+      "triggers": ["scheduler.yield", "scheduler.resume", "port.get", "signal.wait"],
+      "invariants": [
+        "a context that never calls a blocking primitive must not starve its siblings"
+      ],
+      "evidence_note": [
+        "Observed: a child context polls a port tens of thousands of times and",
+        "never blocks, so a scheduler that only switches at Wait never resumes",
+        "the sibling that owns the input port. On real hardware preemption",
+        "hides this. The open question is which calls declare a yield;",
+        "a frame wait blocks until vertical blank on real hardware and is",
+        "therefore the first candidate."
+      ],
+      "tests": []
+    }
+  ]
+}

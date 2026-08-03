@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""bridge-lab - turn a 68k run's trace into runtime-contract findings.
+
+The consumer is an AGENT, so structured output is the product and the text
+rendering is a convenience. Every finding is self-describing: it carries the
+contract, the invariant in full, the evidence that produced it, and the next
+action as data - because an agent cannot skim a terminal and should not have to
+read this file to act on a result.
+
+Aggregate first. A run produces tens of thousands of events; a report that
+repeated them would cost more to read than the trace. Detail stays addressable
+by seq range.
+
+    bridge-lab report <trace> [--text]
+    bridge-lab events <trace> --seq A..B
+    bridge-lab compare <trace> <baseline.json>
+"""
+
+import json
+import os
+import sys
+import collections
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REGISTRY = os.path.join(HERE, "emu68k-runtime-contracts.json")
+
+
+def load_trace(path):
+    """Events, plus the tool's own failures as findings rather than a crash."""
+    events, bad = [], 0
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    bad += 1
+                    continue
+                if e.get("schema") != 1:
+                    bad += 1
+                    continue
+                events.append(e)
+    except OSError as exc:
+        return None, str(exc), bad
+    return events, None, bad
+
+
+def load_registry():
+    with open(REGISTRY, encoding="utf-8") as fh:
+        return json.load(fh)["contracts"]
+
+
+def by_event(events):
+    out = collections.defaultdict(list)
+    for e in events:
+        out[e.get("event")].append(e)
+    return out
+
+
+def seq_range(rows):
+    if not rows:
+        return None
+    s = [r["seq"] for r in rows]
+    return [min(s), max(s)]
+
+
+def finding(contract, status, invariant, summary, evidence, next_action=None):
+    f = {"contract": contract, "status": status, "invariant": invariant,
+         "summary": summary, "evidence": evidence}
+    if next_action:
+        f["next_action"] = next_action
+    return f
+
+
+# ---- the invariant checks. The registry holds status and metadata; an
+# invariant is behaviour, so it is code, and each one names the events it read.
+
+def check_port_lifecycle(ev, contracts):
+    created = ev.get("port.create", [])
+    deleted = ev.get("port.delete", [])
+    bad_owner = [e for e in created if not e.get("owner")]
+    bad_bit = [e for e in created if not e.get("signal_bit")]
+    bits = {e["port"]: e.get("signal_bit") for e in created}
+    unreleased = [e for e in deleted
+                  if e.get("port") in bits and e.get("signal_bit") != bits[e["port"]]]
+    violations = bad_owner + bad_bit + unreleased
+    ok = not violations
+    return finding(
+        "port.lifecycle",
+        "supported" if ok else "violation",
+        "a created port names its creating task and owns an allocated signal bit; "
+        "deleting it releases that bit",
+        "%d ports created, %d deleted, %d without an owner, %d without a bit"
+        % (len(created), len(deleted), len(bad_owner), len(bad_bit)),
+        {"seq_range": seq_range(created + deleted),
+         "aggregate": [{"event": "port.create", "count": len(created)},
+                       {"event": "port.delete", "count": len(deleted)}],
+         "sample_seq": [e["seq"] for e in (violations or created)[:3]]},
+        None if ok else {
+            "kind": "fix-invariant",
+            "hypothesis": "a port is being created without an owner or a signal bit",
+            "confirms_if": "the named seq events show owner or signal_bit missing",
+            "command": "graft/bridge-lab events <trace> --seq %s" %
+                       ("..".join(str(x) for x in seq_range(violations)) if violations else ""),
+        })
+
+
+def check_binding(ev, contracts):
+    binds = ev.get("port.bind", [])
+    pumps = ev.get("port.pump", [])
+    bound = {b.get("destination") for b in binds}
+    unsolicited = [p for p in pumps if p.get("destination") not in bound]
+    replies = ev.get("port.reply", [])
+    doubled = [m for m, n in
+               collections.Counter(r.get("message") for r in replies).items() if n > 1]
+    ok = not unsolicited and not doubled
+    dests = collections.Counter(b.get("destination") for b in binds)
+    return finding(
+        "event.native_port_binding",
+        "supported" if ok else "violation",
+        "only an explicitly bound destination may receive a pumped native message; "
+        "a pumped message reaches exactly one guest destination; "
+        "reply pairing is released exactly once",
+        "%d bindings to %d destination port(s), %d pumped, %d unsolicited, "
+        "%d double replies"
+        % (len(binds), len(dests), len(pumps), len(unsolicited), len(doubled)),
+        {"seq_range": seq_range(binds + pumps),
+         "aggregate": [{"destination": d, "windows_bound": n}
+                       for d, n in sorted(dests.items())],
+         "sample_seq": [e["seq"] for e in (unsolicited or binds)[:3]]},
+        None if ok else {
+            "kind": "fix-invariant",
+            "hypothesis": "a native message reached a port nothing bound to a window",
+            "confirms_if": "the named seq events show a pump to an unbound destination",
+            "command": "graft/bridge-lab events <trace> --seq %s" %
+                       ("..".join(str(x) for x in seq_range(unsolicited)) if unsolicited else ""),
+        })
+
+
+def check_mailbox(ev, contracts):
+    procs = ev.get("process.create", [])
+    mailboxes = {p.get("port") for p in procs}
+    pumps = ev.get("port.pump", [])
+    leaked = [p for p in pumps if p.get("destination") in mailboxes]
+    ok = not leaked
+    return finding(
+        "process.mailbox",
+        "supported" if ok else "violation",
+        "a process's own pr_MsgPort never receives native input",
+        "%d process mailbox(es) identified, %d native deliveries into one"
+        % (len(mailboxes), len(leaked)),
+        {"seq_range": seq_range(procs + leaked),
+         "aggregate": [{"mailbox": m} for m in sorted(x for x in mailboxes if x)],
+         "sample_seq": [e["seq"] for e in (leaked or procs)[:3]]},
+        None if ok else {
+            "kind": "fix-invariant",
+            "hypothesis": "native input is being broadcast to a worker mailbox",
+            "confirms_if": "a port.pump names a destination that is a process port",
+            "command": "graft/bridge-lab events <trace> --seq %s" %
+                       ("..".join(str(x) for x in seq_range(leaked)) if leaked else ""),
+        })
+
+
+def check_scheduler(ev, contracts):
+    """Did a context that owns work never get to run, while a sibling spun?"""
+    polls = collections.Counter()
+    for e in ev.get("port.get", []) + ev.get("port.wait", []):
+        if "context" in e:
+            polls[e["context"]] += 1
+    yields = collections.Counter(e.get("context") for e in ev.get("scheduler.yield", []))
+    contexts = set(polls) | set(yields)
+    starved = sorted(c for c in contexts
+                     if polls.get(c, 0) <= 2 and any(polls.get(o, 0) > 1000
+                                                     for o in contexts if o != c))
+    # A single yield in twenty thousand polls is not yielding. The invariant is
+    # about PROPORTION: a context that hands its turn back once per thousand
+    # polls starves a sibling just as completely as one that never does.
+    spinning = sorted(c for c in contexts
+                      if polls.get(c, 0) > 1000
+                      and yields.get(c, 0) * 100 < polls.get(c, 0))
+    ok = not (starved and spinning)
+    return finding(
+        "scheduler.yield.frame_wait",
+        "supported" if ok else "needs-review",
+        "a context that never calls a blocking primitive must not starve its siblings",
+        "contexts %s poll without ever yielding; context(s) %s ran at most twice"
+        % (spinning or "none", starved or "none"),
+        {"seq_range": seq_range(ev.get("port.get", [])),
+         "aggregate": [{"context": c, "port_polls": polls.get(c, 0),
+                        "yields": yields.get(c, 0)} for c in sorted(contexts)],
+         "sample_seq": [e["seq"] for e in ev.get("port.get", [])[:3]]},
+        None if ok else {
+            "kind": "propose-contract",
+            "hypothesis": "a frame wait blocks until vertical blank on real hardware "
+                          "and is therefore a yield point",
+            "confirms_if": "the starved context's port_polls rises above 2 once that "
+                           "call declares a yield",
+            "refutes_if": "the spinning context stops making progress it needs",
+            "command": "graft/bridge-lab compare <trace> <baseline.json>",
+        })
+
+
+CHECKS = [check_port_lifecycle, check_binding, check_mailbox, check_scheduler]
+
+
+def report(path, as_text=False):
+    events, err, bad = load_trace(path)
+    if err is not None:
+        # The tool's own failure is a finding with the same shape as any other.
+        out = {"schema": 1, "trace": path, "findings": [
+            finding("tool.trace_readable", "violation",
+                    "a trace named on the command line can be read and parsed",
+                    err, {"seq_range": None, "aggregate": [], "sample_seq": []},
+                    {"kind": "fix-input",
+                     "hypothesis": "the trace was never written, so the recorder was off",
+                     "confirms_if": "the file is absent or empty",
+                     "command": "EMU68K_BRIDGE_TRACE=<file> <run the program>"})]}
+        emit(out, as_text)
+        return 1
+
+    ev = by_event(events)
+    start = ev.get("run.start", [])
+    findings = []
+    if not start:
+        # Distinguishable by construction: run.start is unconditional.
+        findings.append(finding(
+            "tool.trace_readable", "violation",
+            "an enabled recorder always emits run.start",
+            "no run.start: the recorder never ran, so this trace describes nothing",
+            {"seq_range": None, "aggregate": [], "sample_seq": []},
+            {"kind": "fix-input",
+             "hypothesis": "EMU68K_BRIDGE_TRACE did not reach the process",
+             "confirms_if": "the file is empty",
+             "command": "EMU68K_BRIDGE_TRACE=<file> <run the program>"}))
+    for check in CHECKS:
+        findings.append(check(ev, load_registry()))
+
+    gaps = ev.get("bridge.gap", [])
+    out = {
+        "schema": 1,
+        "trace": os.path.basename(path),
+        "program": start[0].get("program") if start else None,
+        "result": (ev.get("run.end") or [{}])[0].get("result"),
+        "events": len(events),
+        "malformed_lines": bad,
+        "capability_gaps": [{"lvo": g.get("lvo"), "offset": g.get("offset"),
+                             "seq": g.get("seq")} for g in gaps],
+        "findings": findings,
+    }
+    emit(out, as_text)
+    return 0
+
+
+def emit(out, as_text):
+    if not as_text:
+        json.dump(out, sys.stdout, indent=2, sort_keys=False)
+        sys.stdout.write("\n")
+        return
+    print("trace   : %s (%s events)" % (out.get("trace"), out.get("events")))
+    print("program : %s   result: %s" % (out.get("program"), out.get("result")))
+    for g in out.get("capability_gaps", []):
+        print("GAP     : LVO %s (offset %s) at seq %s"
+              % (g["lvo"], g["offset"], g["seq"]))
+    for f in out["findings"]:
+        print("\n%-12s %s" % (f["status"].upper(), f["contract"]))
+        print("  %s" % f["summary"])
+        for a in f["evidence"]["aggregate"][:8]:
+            print("    %s" % json.dumps(a, sort_keys=True))
+        if f.get("next_action"):
+            print("  next: %s - %s" % (f["next_action"]["kind"],
+                                       f["next_action"].get("hypothesis", "")))
+
+
+def events_cmd(path, lo, hi):
+    events, err, _ = load_trace(path)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    for e in events:
+        if lo <= e.get("seq", -1) <= hi:
+            print(json.dumps(e, sort_keys=False))
+    return 0
+
+
+def compare(path, baseline):
+    """What changed between a run and a recorded baseline, by contract."""
+    events, err, _ = load_trace(path)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    with open(baseline, encoding="utf-8") as fh:
+        base = json.load(fh)
+    ev = by_event(events)
+    now = {f["contract"]: f for f in
+           (check(ev, load_registry()) for check in CHECKS)}
+    was = {f["contract"]: f for f in base.get("findings", [])}
+    diff = []
+    for cid in sorted(set(now) | set(was)):
+        a, b = was.get(cid), now.get(cid)
+        if not a or not b:
+            diff.append({"contract": cid, "change": "added" if b else "removed"})
+        elif a["status"] != b["status"]:
+            diff.append({"contract": cid, "change": "status",
+                         "from": a["status"], "to": b["status"]})
+        elif a["evidence"]["aggregate"] != b["evidence"]["aggregate"]:
+            diff.append({"contract": cid, "change": "evidence",
+                         "from": a["evidence"]["aggregate"],
+                         "to": b["evidence"]["aggregate"]})
+    json.dump({"schema": 1, "baseline": os.path.basename(baseline),
+               "changes": diff}, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 1 if diff else 0
+
+
+def main(argv):
+    if len(argv) < 3:
+        print(__doc__)
+        return 2
+    cmd, path = argv[1], argv[2]
+    if cmd == "report":
+        return report(path, "--text" in argv)
+    if cmd == "events":
+        rng = None
+        for i, a in enumerate(argv):
+            if a == "--seq" and i + 1 < len(argv):
+                rng = argv[i + 1]
+        if not rng or ".." not in rng:
+            print("events needs --seq A..B", file=sys.stderr)
+            return 2
+        lo, hi = rng.split("..", 1)
+        return events_cmd(path, int(lo), int(hi))
+    if cmd == "compare":
+        if len(argv) < 4:
+            print("compare needs a baseline", file=sys.stderr)
+            return 2
+        return compare(path, argv[3])
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

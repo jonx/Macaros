@@ -16,6 +16,7 @@
 #include "j5d_jit68k.h"
 #include "j3_jit68k.h"
 #include "j5n_diag.h"
+#include "bridge_lab.h"
 #include "emu68k_guest_offsets.h"
 #include "j5n_symbols.h"
 #include "stublib.h"
@@ -509,6 +510,9 @@ static int classify_hardware(void *fault_addr, void *user)
 void emu68k_run_set_name(struct emu68k_run *r, const char *name)
 {
     if (r) snprintf(r->name, sizeof r->name, "%s", name ? name : "");
+    /* The name is what a report is about, and it arrives after the run is
+     * built, so this is the first point a trace can be opened knowing it. */
+    bl_open(name);
 }
 
 /* ---- [T1d] the capability-gap ledger: every library call the bridge cannot
@@ -522,6 +526,8 @@ static int g_ledger_n = 0;
 
 static void ledger_record(int lvo, const char *prog)
 {
+    bl_event(BL_SUMMARY, -1, 0, 0, "bridge.gap",
+             "\"lvo\":%d,\"offset\":%d", lvo, -6 * lvo);
     int i;
     for (i = 0; i < g_ledger_n; i++)
         if (g_ledger[i].lvo == lvo) break;
@@ -1930,6 +1936,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Tail, 0);
         gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_TailPred,
                  port + MP_MSGLIST + M68K_List_lh_Head);
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.create",
+                 "\"port\":\"%s\",\"owner\":\"%s\",\"signal_bit\":%d",
+                 bl_id("port", port), bl_id("task", task), bit);
         st->d[0] = port;
         return 0;
     }
@@ -1972,6 +1981,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (task && bit < 32)
                 gwrite32(sb, task + TASK_SIGALLOC_OFF,
                          gread32(sb, task + TASK_SIGALLOC_OFF) & ~(1u << bit));
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.delete",
+                     "\"port\":\"%s\",\"signal_bit\":%d",
+                     bl_id("port", port), (int)bit);
         }
         return 0;
     }
@@ -2071,6 +2083,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t port = st->a[0];
         uint32_t list = port + MP_MSGLIST;
         trace_port_call(r, "WaitPort port", st, port);
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.wait",
+                 "\"port\":\"%s\"", bl_id("port", port));
         for (;;) {
             uint32_t head;
             idcmp_pump(r, st, port);
@@ -2093,6 +2107,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
         trace_port_call(r, "GetMsg port", st, port);
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.get",
+                 "\"port\":\"%s\"", bl_id("port", port));
         idcmp_pump(r, st, port);        /* a program may poll instead of wait */
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
@@ -2127,6 +2143,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t want = st->d[0];
         uint32_t got;
         trace_port_call(r, "Wait mask", st, want);
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "signal.wait",
+                 "\"mask\":\"0x%08x\"", want);
         /* Before answering, give every port bound to a window a chance to
          * deliver. This is the point the ordinary event loop reaches - Wait
          * comes BEFORE GetMsg - so pumping only at GetMsg would serve a program
@@ -2162,6 +2180,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             me->st = *st;
             me->st.pc = gread32(sb, st->a[7]);
             me->st.a[7] = st->a[7] + 4;
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                     "scheduler.yield", "\"reason\":\"Wait\",\"mask\":\"0x%08x\"",
+                     want);
             longjmp(me->unwind, 1);
         }
         /* Nothing for us yet. Give the other contexts a turn; one of them is
@@ -2446,6 +2467,8 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     nsb.size     = r->sb.size;
     c.lib = &r->lib; c.sb = &r->sb; c.run = r;
 
+    bl_event(BL_RUNTIME, idx, ctx->task, pc, "scheduler.resume",
+             "\"from\":%d", outer);
     ctx->on_stack = 1;
     r->cur_ctx = idx;
     j5d_engine_activate(ctx->eng);
@@ -2592,6 +2615,9 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
      * on before the parent sends to it. */
     if (run_context_nested(r, sb, idx, e, el) != 0)
         return 1;
+    bl_event(BL_RUNTIME, idx, ctx->task, entry, "process.create",
+             "\"port\":\"%s\",\"stack_size\":%u",
+             bl_id("port", ctx->task + PROC_MSGPORT), (unsigned)stacksize);
     if (trace_tasks())
         fprintf(stderr, "[68k/task] ctx=%d CREATED task=%08x entry=%08x "
                 "pr_MsgPort=%08x stack=%08x+%u\n", idx, ctx->task, entry,
@@ -2690,6 +2716,13 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                         r->idcmp_port[r->nidcmp].mask = 1u << bit;
                         r->nidcmp++;
                     }
+                    bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                             "port.bind",
+                             "\"source\":\"native:idcmp:%s\",\"destination\":\"%s\","
+                             "\"owner\":\"%s\",\"signal_bit\":%d,\"reason\":\"ModifyIDCMP\"",
+                             bl_id("window", win), bl_id("port", port),
+                             bl_id("task", gread32(c->sb, port + MP_SIGTASK)),
+                             (int)bit);
                     if (trace_tasks())
                         fprintf(stderr, "[68k/task] IDCMP bind window=%08x "
                                 "port=%08x mp_SigTask=%08x mp_SigBit=%u "
@@ -3104,6 +3137,7 @@ void *emu68k_run_guest0(emu68k_run *r) { return r ? r->reserve : NULL; }
 
 void emu68k_run_free(emu68k_run *r)
 {
+    bl_close(r && r->done ? "ok" : "incomplete");
     if (!r) return;
     j5d_engine_free(r->eng);
     if (r->reserve) munmap(r->reserve, GUEST_RESERVE);

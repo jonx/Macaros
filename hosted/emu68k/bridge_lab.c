@@ -1,0 +1,106 @@
+/* bridge_lab.c - the runtime event recorder. See bridge_lab.h for why. */
+
+#include "bridge_lab.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+
+#define BL_MAX_IDS 512
+#define BL_ID_TEXT 32
+
+static FILE     *g_out;
+static int       g_level = -1;
+static unsigned long g_seq;
+
+/* One identity table per namespace, numbered in first-seen order. */
+static struct {
+    char     kind[16];
+    uint32_t addr;
+    char     text[BL_ID_TEXT];
+} g_ids[BL_MAX_IDS];
+static int g_nids;
+static int g_counts[16];      /* next number per kind, by kind-table index    */
+static char g_kinds[16][16];
+static int g_nkinds;
+
+int bl_level(void)
+{
+    if (g_level < 0) {
+        const char *lv = getenv("EMU68K_BRIDGE_TRACE_LEVEL");
+        const char *to = getenv("EMU68K_BRIDGE_TRACE");
+        if (!to || !*to) { g_level = BL_OFF; return g_level; }
+        g_level = BL_RUNTIME;                       /* the useful default     */
+        if (lv) {
+            if (!strcmp(lv, "off"))          g_level = BL_OFF;
+            else if (!strcmp(lv, "summary")) g_level = BL_SUMMARY;
+            else if (!strcmp(lv, "runtime")) g_level = BL_RUNTIME;
+            else if (!strcmp(lv, "calls"))   g_level = BL_CALLS;
+            else if (!strcmp(lv, "debug"))   g_level = BL_DEBUG;
+        }
+    }
+    return g_level;
+}
+
+const char *bl_id(const char *kind, uint32_t addr)
+{
+    int i, k = -1;
+    for (i = 0; i < g_nids; i++)
+        if (g_ids[i].addr == addr && !strcmp(g_ids[i].kind, kind))
+            return g_ids[i].text;
+    for (i = 0; i < g_nkinds; i++)
+        if (!strcmp(g_kinds[i], kind)) { k = i; break; }
+    if (k < 0 && g_nkinds < 16) {
+        k = g_nkinds++;
+        snprintf(g_kinds[k], sizeof g_kinds[k], "%s", kind);
+        g_counts[k] = 0;
+    }
+    if (g_nids >= BL_MAX_IDS || k < 0) return "?";
+    i = g_nids++;
+    snprintf(g_ids[i].kind, sizeof g_ids[i].kind, "%s", kind);
+    g_ids[i].addr = addr;
+    snprintf(g_ids[i].text, sizeof g_ids[i].text, "%s:%d", kind, ++g_counts[k]);
+    return g_ids[i].text;
+}
+
+void bl_open(const char *program)
+{
+    const char *to;
+    if (bl_level() == BL_OFF) return;
+    to = getenv("EMU68K_BRIDGE_TRACE");
+    g_out = fopen(to, "w");
+    if (!g_out) { g_level = BL_OFF; return; }
+    /* Unconditional, so "no file" and "no events" are different answers. */
+    bl_event(BL_SUMMARY, -1, 0, 0, "run.start", "\"program\":\"%s\"",
+             program ? program : "");
+}
+
+void bl_close(const char *result)
+{
+    if (!g_out) return;
+    bl_event(BL_SUMMARY, -1, 0, 0, "run.end", "\"result\":\"%s\"",
+             result ? result : "unknown");
+    fclose(g_out);
+    g_out = NULL;
+    g_level = BL_OFF;
+}
+
+void bl_event(int level, int context, uint32_t task, uint32_t pc,
+              const char *event, const char *fields, ...)
+{
+    if (!g_out || bl_level() < level) return;
+    fprintf(g_out, "{\"schema\":1,\"seq\":%lu", ++g_seq);
+    if (context >= 0) fprintf(g_out, ",\"context\":%d", context);
+    if (task)         fprintf(g_out, ",\"task\":\"%s\"", bl_id("task", task));
+    if (pc)           fprintf(g_out, ",\"pc\":\"0x%08x\"", pc);
+    fprintf(g_out, ",\"event\":\"%s\"", event);
+    if (fields && *fields) {
+        va_list ap;
+        fputc(',', g_out);
+        va_start(ap, fields);
+        vfprintf(g_out, fields, ap);
+        va_end(ap);
+    }
+    fputs("}\n", g_out);
+}
