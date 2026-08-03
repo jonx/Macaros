@@ -202,6 +202,72 @@ static void test_hash(void)
     check("64-bit keys compare exactly", (((UQUAD)1 << 32) | 7) != (UQUAD)7);
 }
 
+static void test_mountlist(void)
+{
+    UQUAD start, blocks;
+    ULONG bs;
+
+    puts("\nU6  Mountlist geometry promotion");
+
+    check("ordinary geometry",
+        exfat_mountlist_extent(2, 100, 16, 63, 128, &start, &blocks, &bs)
+            == EXFAT_RANGE_OK
+        && start == (UQUAD)2 * 16 * 63
+        && blocks == (UQUAD)99 * 16 * 63 && bs == 512);
+
+    /*
+     * The defect this helper exists to prevent: surfaces * blocks_per_track
+     * computed in 32 bits. 0x10000 * 0x10000 is exactly 2^32, which wraps to
+     * zero, and a zero cylinder makes every later product zero too.
+     */
+    check("surfaces * spt overflowing 32 bits does not wrap to zero",
+        exfat_mountlist_extent(0, 1, 0x10000, 0x10000, 128,
+            &start, &blocks, &bs) == EXFAT_RANGE_OK
+        && blocks == (UQUAD)0x10000 * 0x10000 * 2);
+
+    /* Lands exactly on the domain top, so it is legal and must be accepted. */
+    check("extent ending exactly at the domain top accepted",
+        exfat_mountlist_extent(0xFFFFFFFFu, 0xFFFFFFFFu, 0x10000, 0x10000,
+            128, &start, &blocks, &bs) == EXFAT_RANGE_OK
+        && start == 0xFFFFFFFF00000000ull && blocks == 0x100000000ull);
+
+    /* One past it must not be. */
+    check("start offset overflowing the domain refused",
+        exfat_mountlist_extent(2, 3, 0xFFFFFFFFu, 0xFFFFFFFFu, 128,
+            &start, &blocks, &bs) == EXFAT_RANGE_TOOBIG);
+
+    check("zero surfaces refused",
+        exfat_mountlist_extent(0, 10, 0, 63, 128, &start, &blocks, &bs)
+            == EXFAT_RANGE_BADGEOMETRY);
+    check("HighCyl below LowCyl refused",
+        exfat_mountlist_extent(10, 2, 16, 63, 128, &start, &blocks, &bs)
+            == EXFAT_RANGE_BADGEOMETRY);
+    check("block size not a power of two refused",
+        exfat_mountlist_extent(0, 10, 16, 63, 130, &start, &blocks, &bs)
+            == EXFAT_RANGE_BADGEOMETRY);
+    check("block size below 512 refused",
+        exfat_mountlist_extent(0, 10, 16, 63, 64, &start, &blocks, &bs)
+            == EXFAT_RANGE_BADGEOMETRY);
+    check("4096-byte blocks accepted",
+        exfat_mountlist_extent(0, 10, 16, 63, 1024, &start, &blocks, &bs)
+            == EXFAT_RANGE_OK && bs == 4096);
+}
+
+static void test_offset_fits_32(void)
+{
+    puts("\n     32-bit device addressing limit");
+
+    check("small offset fits", exfat_offset_fits_32(0, 512));
+    check("range ending exactly at 4 GB fits",
+        exfat_offset_fits_32(0xFFFFFFFFull - 511, 512));
+    check("range ending one byte past 4 GB does NOT fit",
+        !exfat_offset_fits_32(0xFFFFFFFFull - 510, 512));
+    check("offset already past 4 GB does not fit",
+        !exfat_offset_fits_32(0x100000000ull, 512));
+    check("zero length at the top still fits",
+        exfat_offset_fits_32(0xFFFFFFFFull, 0));
+}
+
 int main(void)
 {
     test_s4();
@@ -209,6 +275,8 @@ int main(void)
     test_clip();
     test_byte_range();
     test_hash();
+    test_mountlist();
+    test_offset_fits_32();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
     return failures != 0;

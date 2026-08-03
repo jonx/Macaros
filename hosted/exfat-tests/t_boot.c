@@ -371,7 +371,7 @@ static void test_mount_boundary(void)
     /* U3: units must match. */
     check("matching sector and device block size accepted",
         exfat_check_sector_units(&g, 512) == EXFAT_BOOT_OK);
-    check("T15a: logical 512 on a 4096-byte device refused",
+    check("T15b: logical 512 on a 4096-byte device refused",
         exfat_check_sector_units(&g, 4096) == EXFAT_BOOT_BAD_GEOMETRY);
     check("zero device block size refused",
         exfat_check_sector_units(&g, 0) == EXFAT_BOOT_BAD_GEOMETRY);
@@ -382,7 +382,7 @@ static void test_mount_boundary(void)
         make_good(c);
         c[EXFAT_BOOT_SECTORSHIFT] = 12;         /* 4096-byte logical */
         exfat_validate_boot(c, sizeof c, &g4);
-        check("T15b: logical 4096 on a 512-byte device refused",
+        check("T15a: logical 4096 on a 512-byte device refused",
             exfat_check_sector_units(&g4, 512) == EXFAT_BOOT_BAD_GEOMETRY);
     }
 
