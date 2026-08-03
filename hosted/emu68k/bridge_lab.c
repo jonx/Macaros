@@ -69,7 +69,12 @@ void bl_open(const char *program)
     const char *to;
     if (bl_level() == BL_OFF) return;
     to = getenv("EMU68K_BRIDGE_TRACE");
-    g_out = fopen(to, "w");
+    /* APPEND. A sweep runs several programs through one loaded runtime, and
+     * truncating per program left only the last one's evidence - which looked
+     * exactly like a contract that was never exercised. The sequence number is
+     * process-global, so slicing by seq still works across runs, and each run
+     * is delimited by its own run.start/run.end. */
+    g_out = fopen(to, "a");
     if (!g_out) { g_level = BL_OFF; return; }
     /* Unconditional, so "no file" and "no events" are different answers. */
     bl_event(BL_SUMMARY, -1, 0, 0, "run.start", "\"program\":\"%s\"",
@@ -83,7 +88,8 @@ void bl_close(const char *result)
              result ? result : "unknown");
     fclose(g_out);
     g_out = NULL;
-    g_level = BL_OFF;
+    /* Do NOT latch the level off: the next program in this sweep gets its own
+     * run.start appended to the same file. */
 }
 
 void bl_event(int level, int context, uint32_t task, uint32_t pc,

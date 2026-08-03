@@ -75,10 +75,31 @@ def finding(contract, status, invariant, summary, evidence, next_action=None):
     return f
 
 
+def not_exercised(contract, invariant, triggers):
+    """A run that never triggered a contract has said NOTHING about it.
+
+    Reporting "supported" there is the worst answer this tool can give: it is
+    indistinguishable from a run that exercised the contract and satisfied it,
+    so an agent would conclude a capability is proven when nothing tested it.
+    A program that stops early - at a capability gap, say - produces exactly
+    that shape, and one did."""
+    return finding(
+        contract, "not-exercised", invariant,
+        "no %s event in this trace: the run says nothing about this contract"
+        % " or ".join(triggers),
+        {"seq_range": None, "aggregate": [], "sample_seq": []},
+        {"kind": "need-evidence",
+         "hypothesis": "the program stopped before reaching this behaviour",
+         "confirms_if": "the trace holds a bridge.gap or an early run.end",
+         "command": "graft/bridge-lab report <trace> --text"})
+
+
 # ---- the invariant checks. The registry holds status and metadata; an
 # invariant is behaviour, so it is code, and each one names the events it read.
 
 def check_port_lifecycle(ev, contracts):
+    if not any(ev.get(t) for t in ["port.create", "port.delete"]):
+        return not_exercised("port.lifecycle", "a created port names its creating task and owns an allocated signal bit; deleting it releases that bit", ["port.create", "port.delete"])
     created = ev.get("port.create", [])
     deleted = ev.get("port.delete", [])
     bad_owner = [e for e in created if not e.get("owner")]
@@ -109,6 +130,8 @@ def check_port_lifecycle(ev, contracts):
 
 
 def check_binding(ev, contracts):
+    if not any(ev.get(t) for t in ["port.bind", "port.pump"]):
+        return not_exercised("event.native_port_binding", "only an explicitly bound destination may receive a pumped native message; a pumped message reaches exactly one guest destination; reply pairing is released exactly once", ["port.bind", "port.pump"])
     binds = ev.get("port.bind", [])
     pumps = ev.get("port.pump", [])
     bound = {b.get("destination") for b in binds}
@@ -141,6 +164,8 @@ def check_binding(ev, contracts):
 
 
 def check_mailbox(ev, contracts):
+    if not any(ev.get(t) for t in ["process.create"]):
+        return not_exercised("process.mailbox", "a process's own pr_MsgPort never receives native input", ["process.create"])
     procs = ev.get("process.create", [])
     mailboxes = {p.get("port") for p in procs}
     pumps = ev.get("port.pump", [])
@@ -172,6 +197,12 @@ def check_scheduler(ev, contracts):
             polls[e["context"]] += 1
     yields = collections.Counter(e.get("context") for e in ev.get("scheduler.yield", []))
     contexts = set(polls) | set(yields)
+    if len(contexts) < 2:
+        return not_exercised(
+            "scheduler.yield.frame_wait",
+            "a context that never calls a blocking primitive must not starve "
+            "its siblings",
+            ["a second context"])
     starved = sorted(c for c in contexts
                      if polls.get(c, 0) <= 2 and any(polls.get(o, 0) > 1000
                                                      for o in contexts if o != c))
@@ -222,9 +253,9 @@ def report(path, as_text=False):
         return 1
 
     ev = by_event(events)
-    start = ev.get("run.start", [])
+    starts = ev.get("run.start", [])
     findings = []
-    if not start:
+    if not starts:
         # Distinguishable by construction: run.start is unconditional.
         findings.append(finding(
             "tool.trace_readable", "violation",
@@ -242,8 +273,11 @@ def report(path, as_text=False):
     out = {
         "schema": 1,
         "trace": os.path.basename(path),
-        "program": start[0].get("program") if start else None,
-        "result": (ev.get("run.end") or [{}])[0].get("result"),
+        # Every run in the file. Contracts are about the SUBSTRATE, not about
+        # one program, so the checks read all of them - and a sweep is exactly
+        # where a contract one program never reaches gets exercised by another.
+        "programs": [s.get("program") for s in starts],
+        "results": [e.get("result") for e in ev.get("run.end", [])],
         "events": len(events),
         "malformed_lines": bad,
         "capability_gaps": [{"lvo": g.get("lvo"), "offset": g.get("offset"),
@@ -260,7 +294,9 @@ def emit(out, as_text):
         sys.stdout.write("\n")
         return
     print("trace   : %s (%s events)" % (out.get("trace"), out.get("events")))
-    print("program : %s   result: %s" % (out.get("program"), out.get("result")))
+    print("programs: %s   results: %s"
+          % (", ".join(x or "?" for x in out.get("programs") or []) or "none",
+             ", ".join(x or "?" for x in out.get("results") or []) or "none"))
     for g in out.get("capability_gaps", []):
         print("GAP     : LVO %s (offset %s) at seq %s"
               % (g["lvo"], g["offset"], g["seq"]))
