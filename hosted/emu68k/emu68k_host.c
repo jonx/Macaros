@@ -16,6 +16,7 @@
 #include "j5d_jit68k.h"
 #include "j3_jit68k.h"
 #include "j5n_diag.h"
+#include "emu68k_guest_offsets.h"
 #include "j5n_symbols.h"
 #include "stublib.h"
 
@@ -130,7 +131,7 @@
 #define GUEST_COMMAND   (GUEST_CLI + 64u)
 #define PR_TASK_LN_TYPE 8            /* tc_Node.ln_Type: NT_PROCESS = 13       */
 #define PR_CLI_OFFSET   172
-#define CLI_COMMAND_OFF 16           /* BPTR to a BSTR command name            */
+#define CLI_COMMAND_OFF M68K_CommandLineInterface_cli_CommandName
 #define NT_PROCESS      13
 
 /* A 68k program is a CLASSIC AmigaOS program, and there a BPTR is the address
@@ -175,13 +176,13 @@
 #define LVO_ALLOCPOOLED  118    /* -708 */
 #define LVO_FREEPOOLED   119    /* -714 */
 #define LVO_ALLOCENTRY    37    /* -222 */
-#define EXECBASE_THISTASK 276   /* ExecBase->ThisTask, the classic offset      */
+#define EXECBASE_THISTASK M68K_ExecBase_ThisTask
 /* struct Library: ln(14) lib_Flags(14) lib_pad(15) lib_NegSize(16)
  * lib_PosSize(18) lib_Version(20) lib_Revision(22). Programs written for
  * AmigaOS 2.0 and later routinely check lib_Version before doing anything and
  * quit silently if it is too low - which a zeroed base always is. */
-#define LIB_VERSION_OFF   20
-#define LIB_REVISION_OFF  22
+#define LIB_VERSION_OFF   M68K_Library_lib_Version
+#define LIB_REVISION_OFF  M68K_Library_lib_Revision
 #define GUEST_LIB_VERSION 39    /* what an OS 3.0 program expects to find      */
 #define GUEST_LIB_REV     106
 #define LVO_ALLOCATE      31    /* -186: allocate from a specific MemHeader     */
@@ -200,9 +201,9 @@
 #define LVO_REMTAIL       44    /* -264 */
 #define LVO_ENQUEUE       45    /* -270 */
 #define LVO_STACKSWAP    122    /* -732 */
-#define TASK_SPREG_OFF    56
-#define TASK_SPLOWER_OFF  60
-#define TASK_SPUPPER_OFF  64
+#define TASK_SPREG_OFF    M68K_Task_tc_SPReg
+#define TASK_SPLOWER_OFF  M68K_Task_tc_SPLower
+#define TASK_SPUPPER_OFF  M68K_Task_tc_SPUpper
 
 /* Private exec vectors used only by synthesized guest loader continuations.
  * They are inside the engine's vector-recognition window but beyond Exec's
@@ -327,7 +328,66 @@ void emu68k_set_oscall(emu68k_oscall_fn fn, void *user)
  * HOST address; subtracting the sandbox base-adjust recovers the guest address
  * the program actually asked for. If that lands in a hardware window, this was
  * not a crash: the program wants the Amiga hardware. */
-static char g_hw_detail[96];
+static char g_hw_detail[224];
+
+/* Where the access came from, in the program's own terms: the PC the running
+ * block chain was entered at, and the 68k register that was carrying the
+ * address. Without this an address alone says only THAT the program left the
+ * arena, and the reader is back to guessing which pointer went bad. */
+static char g_hw_origin[96];
+
+static void describe_origin(unsigned long long guest)
+{
+    const struct j5d_m68k_state *st = j5n_signal_guest_state();
+    char reg[16] = "";
+    int i;
+
+    g_hw_origin[0] = 0;
+    if (!st)
+        return;
+
+    /* An exact register match names the pointer; a small positive delta names
+     * the base it was derived from, which is what a struct access looks like. */
+    for (i = 0; i < 8 && !reg[0]; i++) {
+        if (st->a[i] == guest)                 snprintf(reg, sizeof reg, "A%d", i);
+        else if (guest > st->a[i] && guest - st->a[i] <= 0x200)
+            snprintf(reg, sizeof reg, "A%d+%llu", i, guest - st->a[i]);
+    }
+    for (i = 0; i < 8 && !reg[0]; i++)
+        if (st->d[i] == guest) snprintf(reg, sizeof reg, "D%d", i);
+
+    snprintf(g_hw_origin, sizeof g_hw_origin, ", from PC $%06X%s%s",
+             st->pc, reg[0] ? " via " : "", reg);
+}
+
+/* The guest code at the fault PC, as raw bytes. A verdict tells you an address
+ * went out of the arena; only the instructions tell you where the pointer was
+ * built, so dump enough of the block to disassemble it. Opt-in: this is a
+ * developer aid, not part of the verdict a user sees. */
+static void dump_fault_code(struct emu68k_run *r)
+{
+    const struct j5d_m68k_state *st = j5n_signal_guest_state();
+    const unsigned char *mem;
+    unsigned long off;
+    int i;
+
+    if (!st || !getenv("EMU68K_TRACE_FAULT"))
+        return;
+    if (st->pc < r->sb.sandbox_origin ||
+        st->pc + 96 >= r->sb.sandbox_origin + r->sb.size)
+        return;
+    mem = (const unsigned char *)r->sb.host_mem;
+    off = st->pc - r->sb.sandbox_origin;
+
+    fprintf(stderr, "[emu68k] code at PC $%06X:", st->pc);
+    for (i = 0; i < 96; i++)
+        fprintf(stderr, "%s%02X", (i % 16) ? "" : "\n  ", mem[off + i]);
+    fprintf(stderr, "\n[emu68k] D0-D7");
+    for (i = 0; i < 8; i++) fprintf(stderr, " %08X", st->d[i]);
+    fprintf(stderr, "\n[emu68k] A0-A7");
+    for (i = 0; i < 8; i++) fprintf(stderr, " %08X", st->a[i]);
+    fprintf(stderr, "\n");
+}
 
 static int classify_hardware(void *fault_addr, void *user)
 {
@@ -343,15 +403,17 @@ static int classify_hardware(void *fault_addr, void *user)
         return 0;
     }
     guest = host - base + r->sb.sandbox_origin;
+    describe_origin(guest);
+    dump_fault_code(r);
 
     if (guest >= HW_CUSTOM_LO && guest <= HW_CUSTOM_HI)
         snprintf(g_hw_detail, sizeof g_hw_detail,
-                 "custom chip register $%06llX", guest);
+                 "custom chip register $%06llX%s", guest, g_hw_origin);
     else if (guest >= HW_CIA_LO && guest <= HW_CIA_HI)
-        snprintf(g_hw_detail, sizeof g_hw_detail, "CIA register $%06llX", guest);
+        snprintf(g_hw_detail, sizeof g_hw_detail, "CIA register $%06llX%s", guest, g_hw_origin);
     else if (guest <= HW_VECTOR_HI)
         snprintf(g_hw_detail, sizeof g_hw_detail,
-                 "exception vector page $%03llX", guest);
+                 "exception vector page $%03llX%s", guest, g_hw_origin);
     else if (guest < r->sb.sandbox_origin ||
              guest >= (unsigned long long)r->sb.sandbox_origin + r->sb.size)
         /* Everything below the arena is reserved and unmapped on purpose: it is
@@ -366,16 +428,18 @@ static int classify_hardware(void *fault_addr, void *user)
          * sandbox created deliberately, and it hides the one thing worth
          * knowing, which is that this program wants the real machine. */
         snprintf(g_hw_detail, sizeof g_hw_detail,
-                 "machine address $%06llX, outside the memory this sandbox "
-                 "provides ($%06X..$%06llX)", guest, r->sb.sandbox_origin,
+                 "machine address $%06llX%s, outside the memory this sandbox "
+                 "provides ($%06X..$%06llX)", guest, g_hw_origin,
+                 r->sb.sandbox_origin,
                  (unsigned long long)r->sb.sandbox_origin + r->sb.size);
     else {
         /* Not one of the regions with a meaning. Say WHICH address, because a
          * fault that cannot be named is a fault that gets diagnosed by
          * guesswork - which has been wrong every time on this port. */
         if (getenv("EMU68K_TRACE_FAULT"))
-            fprintf(stderr, "[emu68k] unclassified fault at guest $%06llX "
-                    "(arena $%06X..$%06llX)\n", guest, r->sb.sandbox_origin,
+            fprintf(stderr, "[emu68k] unclassified fault at guest $%06llX%s "
+                    "(arena $%06X..$%06llX)\n", guest, g_hw_origin,
+                    r->sb.sandbox_origin,
                     (unsigned long long)r->sb.sandbox_origin + r->sb.size);
         return 0;                                  /* a genuine wild access     */
     }

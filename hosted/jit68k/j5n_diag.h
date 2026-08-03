@@ -172,6 +172,11 @@ void j5n_signal_set_classifier(j5n_classify_fn fn, void *user);   /* returns the
                                                         * re-entering j5d_run) restore it */
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);
 
+/* The 68k state the signal net is currently holding, or NULL outside a run. A
+ * classifier uses it to name WHERE the access came from: the PC of the block
+ * chain being executed, and which 68k register was carrying the address. */
+const struct j5d_m68k_state *j5n_signal_guest_state(void);
+
 /* ----- the per-instruction diagnostics hook (the interp oracle calls it at its loop top).
  * It owns the deterministic instruction counter, the flight recorder, replay-to-N break,
  * and (in diff mode) the lockstep compare. Returns 0 to continue, nonzero to STOP the run
