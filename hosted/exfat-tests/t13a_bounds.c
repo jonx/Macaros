@@ -268,6 +268,81 @@ static void test_offset_fits_32(void)
         exfat_offset_fits_32(0xFFFFFFFFull, 0));
 }
 
+/*
+ * A fake transport. Records what a device would actually have been asked for,
+ * so the test can assert that a refused transfer issues nothing at all rather
+ * than issuing a truncated one.
+ */
+struct fake_dev
+{
+    int   dev_64bit;
+    int   issued;          /* how many transfers reached the "device" */
+    UQUAD last_off;        /* the byte offset it was asked for */
+    ULONG last_len;
+    ULONG truncated_off;   /* what a 32-bit command would actually see */
+};
+
+static enum exfat_range fake_read(struct fake_dev *d, UQUAD block,
+    ULONG count, ULONG block_size)
+{
+    UQUAD off;
+    ULONG len;
+    enum exfat_range r = exfat_prepare_transfer(block, count, block_size,
+        d->dev_64bit, &off, &len);
+
+    if (r != EXFAT_RANGE_OK)
+        return r;
+
+    d->issued++;
+    d->last_off = off;
+    d->last_len = len;
+    d->truncated_off = (ULONG)(off & 0xFFFFFFFFull);
+    return EXFAT_RANGE_OK;
+}
+
+static void test_fake_transport(void)
+{
+    struct fake_dev d;
+    UQUAD past4g = 0x100000000ull / 512;    /* first sector at 4 GB */
+
+    puts("\n     boot-region read above 4 GB, fake transport");
+
+    /* A 64-bit device addresses it correctly. */
+    memset(&d, 0, sizeof d); d.dev_64bit = 1;
+    check("64-bit device: transfer issued at the true offset",
+        fake_read(&d, past4g, 1, 512) == EXFAT_RANGE_OK
+        && d.issued == 1 && d.last_off == 0x100000000ull);
+
+    /*
+     * The bug this guards. Without the check the transfer is issued and the
+     * device sees only the low word, which is zero: it would read sector 0 of
+     * the disk and report success, so the boot region "validates" against
+     * entirely the wrong bytes.
+     */
+    memset(&d, 0, sizeof d); d.dev_64bit = 0;
+    check("32-bit device: transfer REFUSED, nothing issued",
+        fake_read(&d, past4g, 1, 512) == EXFAT_RANGE_TOOBIG
+        && d.issued == 0);
+
+    /* Show what would have happened, so the severity is on record. */
+    memset(&d, 0, sizeof d); d.dev_64bit = 1;
+    fake_read(&d, past4g, 1, 512);
+    check("  (unguarded, a 32-bit command would have read offset 0)",
+        d.truncated_off == 0);
+
+    /* Below the limit a 32-bit device is fine. */
+    memset(&d, 0, sizeof d); d.dev_64bit = 0;
+    check("32-bit device: last sector wholly below 4 GB is issued",
+        fake_read(&d, (0x100000000ull / 512) - 1, 1, 512) == EXFAT_RANGE_OK
+        && d.issued == 1 && d.last_off == 0x100000000ull - 512);
+
+    /* A transfer straddling the limit is refused, not clipped. */
+    memset(&d, 0, sizeof d); d.dev_64bit = 0;
+    check("32-bit device: transfer straddling 4 GB refused",
+        fake_read(&d, (0x100000000ull / 512) - 1, 2, 512)
+            == EXFAT_RANGE_TOOBIG && d.issued == 0);
+}
+
 int main(void)
 {
     test_s4();
@@ -277,6 +352,7 @@ int main(void)
     test_hash();
     test_mountlist();
     test_offset_fits_32();
+    test_fake_transport();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
     return failures != 0;
