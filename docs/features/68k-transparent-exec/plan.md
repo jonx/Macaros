@@ -295,6 +295,22 @@ A `Wait` nothing can satisfy is a NAMED gap, not a hang: with one context there
 is nobody to send the signal, and an unbreakable wait inside translated code
 would have to be killed from outside to find out why.
 
+### Before any device I/O: make OpenDevice deterministic
+
+The same build opened `keyboard.device` in one run and failed in the next, with
+no input difference. That has to be settled before command marshalling, because
+an intermittent open makes every result after it untrustworthy - and
+uninitialised request DATA cannot explain the open itself changing outcome, so
+stale slot or request state is the first suspect, ahead of leaked signals.
+
+The contract, its invariants and the determinism matrix that separates the
+causes are in `graft/emu68k-runtime-contracts.json` under `device.open`, which
+is where an agent picks them up. Two negative results already narrow it: the
+guest allocator is a clean bump allocator and does NOT hand out overlapping
+blocks, and an above-arena address must stay a routing verdict - reclassifying
+it as a fault turned two correctly-routed memory scanners into crashes, which
+the legacy corpus caught immediately.
+
 ### The next piece: a 68k process
 
 **Correction to the design below.** Threads are the wrong shape. Both contexts

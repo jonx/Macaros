@@ -14,39 +14,61 @@
     {
       "id": "port.lifecycle",
       "status": "supported",
-      "triggers": ["port.create", "port.delete"],
+      "triggers": [
+        "port.create",
+        "port.delete"
+      ],
       "invariants": [
         "a created port names its creating task as owner",
         "a created port owns an allocated signal bit, never bit zero by default",
         "deleting a port releases the bit it names"
       ],
-      "tests": ["T3PORT.created_port_owns_bit_and_owner"]
+      "tests": [
+        "T3PORT.created_port_owns_bit_and_owner"
+      ]
     },
     {
       "id": "event.native_port_binding",
       "status": "supported",
-      "triggers": ["port.bind", "port.pump", "port.get", "port.reply"],
+      "triggers": [
+        "port.bind",
+        "port.pump",
+        "port.get",
+        "port.reply"
+      ],
       "invariants": [
         "only an explicitly bound destination may receive a pumped native message",
         "a pumped message reaches exactly one guest destination",
         "reply pairing is released exactly once"
       ],
-      "tests": ["T3EVENT.idcmp_shared_port"]
+      "tests": [
+        "T3EVENT.idcmp_shared_port"
+      ]
     },
     {
       "id": "process.mailbox",
       "status": "supported",
-      "triggers": ["process.create", "port.pump"],
+      "triggers": [
+        "process.create",
+        "port.pump"
+      ],
       "invariants": [
         "a process's own pr_MsgPort never receives native input",
         "several windows may share one destination port"
       ],
-      "tests": ["T3EVENT.worker_mailbox_untouched"]
+      "tests": [
+        "T3EVENT.worker_mailbox_untouched"
+      ]
     },
     {
       "id": "scheduler.yield.frame_wait",
       "status": "needs-review",
-      "triggers": ["scheduler.yield", "scheduler.resume", "port.get", "signal.wait"],
+      "triggers": [
+        "scheduler.yield",
+        "scheduler.resume",
+        "port.get",
+        "signal.wait"
+      ],
       "invariants": [
         "a context that never calls a blocking primitive must not starve its siblings"
       ],
@@ -57,6 +79,47 @@
         "hides this. The open question is which calls declare a yield;",
         "a frame wait blocks until vertical blank on real hardware and is",
         "therefore the first candidate."
+      ],
+      "tests": []
+    },
+    {
+      "id": "device.open",
+      "status": "needs-review",
+      "triggers": [
+        "device.open",
+        "device.close",
+        "device.slot"
+      ],
+      "invariants": [
+        "identical input produces an identical OpenDevice result across repeated runs",
+        "a newly allocated slot is empty",
+        "a request is associated with exactly one live port",
+        "a failed open rolls back every native resource it took",
+        "a run that ends leaves no device open and no signal held"
+      ],
+      "evidence_note": [
+        "Observed: the same build opened keyboard.device successfully in one run",
+        "and failed in the next, with no input difference. An ordinary keyboard",
+        "open has no business alternating, and uninitialised request DATA cannot",
+        "explain the open itself changing outcome - only state carried across",
+        "opens can, so stale slot or request state is the first suspect, ahead of",
+        "leaked signals and cross-program runtime state.",
+        "",
+        "Determinism must be settled BEFORE any command marshalling: an",
+        "intermittent open makes every result after it untrustworthy.",
+        "",
+        "The matrix that separates the causes:",
+        "  1. repeatedly after fresh boots      - is it per-boot state?",
+        "  2. repeatedly within one instance    - is it per-run state?",
+        "  3. alone vs after other programs     - is it cross-program state?",
+        "  4. same and reversed open order      - is it slot reuse order?",
+        "",
+        "What the trace has to carry to tell them apart: guest and native",
+        "IORequest addresses; unit, flags, request size, owning context; guest and",
+        "native reply ports with signal bit and signal task; slot index,",
+        "generation, previous state and each lifecycle transition; io_Device,",
+        "io_Unit and io_Error before and after the open; and the cleanup performed",
+        "on BOTH the success and the failure path."
       ],
       "tests": []
     }
