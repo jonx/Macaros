@@ -132,11 +132,14 @@ named, which is the test every contract has to pass.
 
 ## Rollout
 
-1. Recorder + schema, no behaviour change.
-2. Normalized report (JSON first) + contract registry
-   (`graft/emu68k-runtime-contracts.json`, separate from library ABI policy).
+1. Recorder + schema, no behaviour change. **DONE** — `hosted/emu68k/bridge_lab.[ch]`.
+2. Normalized report (JSON first) + contract registry. **DONE** —
+   `graft/bridge-lab`, `graft/emu68k-runtime-contracts.json`.
 3. `T3EVENT` gate over the already-supported ports/IDCMP/process behaviour.
-4. Trace PhotoDemo and one unrelated GUI program.
+   **DONE** — `make hosted-emu68k-t3event`, asserted from the run's own trace.
+4. Trace PhotoDemo and one unrelated GUI program. **PhotoDemo done**; the second
+   program is the next step, and is what stops one program's shape being
+   mistaken for a general contract.
 5. Only then propose a new contract from shared evidence.
 6. Land the reviewed capability, its regression test, and a baseline trace.
 
