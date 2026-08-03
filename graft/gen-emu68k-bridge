@@ -3188,8 +3188,13 @@ def generated_test_plan(manifest):
             "ready" if dispatch_ready else "blocked",
             {"lvo": function["lvo"], "expected": outcome})
         if outcome == "explicitly-refused":
+            # A refusal comes either from a policy entry that states a reason or
+            # from the ABI blocker itself (an allowlist, an unsupported shape).
+            # Both must still fail closed by name; only the wording differs.
+            refusal = function.get("existing_refusal") or {}
             add("explicit-refusal", function["name"], "ready",
-                {"reason": function["existing_refusal"]["reason"],
+                {"reason": refusal.get("reason") or function.get("blocker")
+                 or "refused by the ABI classifier",
                  "expected": "named-fail-closed"})
             continue
         policy = function.get("existing_policy") or {}

@@ -3672,6 +3672,84 @@
         }
       },
       "origin": "import"
+    },
+    "dos.library.DoPkt": {
+      "objects": {
+        "port": {
+          "type": "MsgPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "dos.library.ErrorReport": {
+      "objects": {
+        "device": {
+          "type": "MsgPort",
+          "nullable": true
+        }
+      },
+      "origin": "import"
+    },
+    "dos.library.MatchEnd": {
+      "structs": {
+        "AP": {
+          "type": "AnchorPath",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "dos.library.MatchFirst": {
+      "structs": {
+        "AP": {
+          "type": "AnchorPath",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "dos.library.MatchNext": {
+      "structs": {
+        "AP": {
+          "type": "AnchorPath",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.ExtractColor": {
+      "objects": {
+        "RastPort": {
+          "type": "RastPort",
+          "nullable": true
+        }
+      },
+      "structs": {
+        "SingleMap": {
+          "type": "BitMap",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.FreeCModeList": {
+      "structs": {
+        "modeList": {
+          "type": "List",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
+    },
+    "cybergraphics.library.GetCyberMapAttr": {
+      "structs": {
+        "bitMap": {
+          "type": "BitMap",
+          "direction": "inout"
+        }
+      },
+      "origin": "import"
     }
   }
 }
