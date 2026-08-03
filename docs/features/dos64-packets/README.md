@@ -3,8 +3,9 @@
 > Status: **Phase 0, in progress.** Branch `dos64-packets` on `../aros-upstream`,
 > off `aarch64-darwin-graft`. Contains no exFAT code or assumptions.
 >
-> `dos64.library` has been taken from master (`7cb141bdfd`) and its 32-bit
-> `DosPacket64` field widths corrected against the ABI (`d17e88f4b3`). The full
+> `dos64.library` has been taken from master (`7cb141bdfd`) unmodified. An attempt to
+> "correct" its field widths against the OS4 SDK was wrong and has been reverted
+> (`61e5fcb07c`); see the layout section. The full
 > upstream merge is deferred: it produces 26 conflicted files, two of which are
 > design divergences over the console input handler and the emul-handler
 > notification scheme, and needs its own session with a boot verification.
@@ -220,27 +221,48 @@ that yielded 56 is confirmed as the transcription error.
 
 ### Upstream AROS added `rom/dos64/` on 2026-07-19
 
-Two days after this branch's merge-base (2026-07-17), which is why it was not visible
-here. It is much larger than this Phase 0's scope: `read64`, `write64`, `seek64`,
-`examine64`, `exnext64`, `examinefh64`, `info64`, `lockrecord64`, `setfilesize64`,
+Two days after this branch's merge-base, which is why it was not visible here. It is
+much larger than this Phase 0's scope: `read64`, `write64`, `seek64`, `examine64`,
+`exnext64`, `examinefh64`, `info64`, `lockrecord64`, `setfilesize64`,
 `allocdosobject64`, plus `posixc` and `stdc` integration.
 
-**Phase 0 is therefore no longer a design task. It is: merge upstream, then correct
-two width errors in `compiler/include/dos/dos64.h`.**
+### The SDK layout is NOT the layout AROS uses, and that is correct
 
-| field | official OS4 | upstream AROS | consequence |
-|---|---|---|---|
-| `dp_Arg1` | `int32`, 4 bytes | `QUAD`, 8 bytes | On **big-endian 32-bit** (m68k) the meaningful value lands at bytes 36-39; a conforming reader takes `int32` at 32-35 and gets the high half, i.e. zero |
-| `dp_Arg5` | `int64`, 8 bytes | `ULONG`, 4 bytes | `dp_Arg5` is the **CHANGE-pair sentinel**. Writing 4 bytes leaves 60-63 uninitialised, so a handler testing a 64-bit zero can see garbage and refuse to validate the `FileHandle` in `dp_Arg4`, silently falling back to the legacy path |
+`struct DosPacket64` is inside `#if (__WORDSIZE != 64)`, so it **only ever compiles for
+i386 and m68k**. On those targets `QUAD` aligns to 4 and 2 respectively, not 8. The
+SDK's natural-alignment layout never occurs:
 
-Field *offsets* coincide by luck of alignment, so the errors are invisible to a
-`sizeof` check and to any offset-only assertion. Only the widths differ. Note the
-`dp_Arg1` error is the same one pfs3's disqualified struct made.
+| | `dp_Res1` | `dp_Arg1` | `dp_Arg2` | `dp_Arg3` | `dp_Arg5` | size |
+|---|---|---|---|---|---|---|
+| OS4 SDK, 8-byte aligned | 24 | 32 | 40 | 48 | 56 | 64 |
+| **AROS i386 / m68k, as built** | **20** | **28** | **36** | **44** | **52** | **56** |
 
-Upstream also requires the originator to additionally store `fh_Arg1` in the *standard*
-packet's `dp_Arg1` at offset 20, which in `DosPacket64` is padding. That is additive
-rather than corrupting, but it is an AROS-private side channel an OS4 handler will
-never read.
+AROS declares `QUAD dp_Arg1` and `ULONG dp_Arg5` where the SDK has `int32` and `int64`.
+That is **deliberate**, and confirmed by the maintainer: the widths were copied from
+pfs3's local struct, which is the definition AROS actually exchanges these packets with.
+pfs3 is the only such handler.
+
+The differences are inert in the AROS protocol: nothing touches the overlay's
+`dp_Arg1` (the object travels in the standard packet's slot, see below), and the packet
+is allocated `MEMF_CLEAR`, so the `dp_Arg5` sentinel bytes are zero however the field is
+declared.
+
+**Do not narrow `dp_Arg1` to `LONG`.** It was tried and reverted. Because `QUAD` aligns
+to 4 on these targets, narrowing produces no padding: it moves `dp_Arg2` from 36 to 32
+and shifts every field after it. `dp_Arg2` is the field that actually carries the 64-bit
+value, so this changes the live wire layout and desynchronises from pfs3 while both
+sides still compile.
+
+### Consequence for the compatibility decision
+
+"SDK-exact" and "pfs3-exact" are **genuinely different layouts on 32-bit targets**, so
+byte-level compatibility with both is not achievable. The earlier plan assumed they were
+the same thing. They are not, and the tree already chose pfs3, correctly, because that
+is the only peer. On emulated m68k the authoritative layout is whatever the host's trap
+filesystem hardcodes, which is this unpadded one.
+
+Any assertions added here must pin the **as-built** row of the table above, not the SDK
+row.
 
 ## Earlier corroboration: the Free Pascal transcription
 
