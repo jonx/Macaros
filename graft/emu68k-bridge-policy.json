@@ -122,6 +122,12 @@
       "c_type": "APTR",
       "kind": "opaque",
       "destructor": "gadtools.library.FreeVisualInfo"
+    },
+    "Menu": {
+      "id": 17,
+      "c_type": "struct Menu *",
+      "kind": "opaque",
+      "destructor": "gadtools.library.FreeMenus"
     }
   },
   "tag_domains": {
@@ -264,6 +270,16 @@
     "gadtools.visual_info": {
       "max_items": 8,
       "tags": []
+    },
+    "gadtools.create_menus": {
+      "headers": ["libraries/gadtools.h"],
+      "max_items": 16,
+      "tags": [
+        {"name": "GTMN_FullMenu", "kind": "u32"},
+        {"name": "GTMN_NewLookMenus", "kind": "u32"},
+        {"name": "GTMN_FrontPen", "kind": "u32"},
+        {"name": "GTMN_SecondaryError", "kind": "refuse"}
+      ]
     },
     "intuition.new_object": {
       "headers": [
@@ -548,6 +564,30 @@
       "objects": {"screen": {"type": "Screen", "nullable": false}},
       "taglists": {"tagList": "gadtools.visual_info"},
       "result": {"kind": "object", "type": "VisualInfo"}
+    },
+    "gadtools.library.CreateMenusA": {
+      "record_arrays": {
+        "newmenu": {
+          "type": "NewMenu",
+          "header": "libraries/gadtools.h",
+          "direction": "in",
+          "sentinel": {"field": "nm_Type", "value": "NM_END", "width": 1},
+          "max_count": 1024,
+          "reject": {"field": "nm_Type", "mask": 128, "width": 1},
+          "fields": {
+            "nm_Label": {"kind": "cstr_sentinel", "sentinel": "NM_BARLABEL"},
+            "nm_CommKey": {"kind": "cstr"},
+            "nm_UserData": {"kind": "guest_value"}
+          }
+        }
+      },
+      "taglists": {"tagList": "gadtools.create_menus"},
+      "result": {"kind": "object", "type": "Menu"}
+    },
+    "gadtools.library.FreeMenus": {
+      "objects": {
+        "menu": {"type": "Menu", "nullable": true, "consume": true}
+      }
     },
     "gadtools.library.FreeVisualInfo": {
       "objects": {

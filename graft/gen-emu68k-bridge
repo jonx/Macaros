@@ -1103,6 +1103,43 @@ def source_files_for_target(rel):
     return root, sorted(files)
 
 
+def terminated_record_arrays(f, raw, base_line):
+    """Recognize a struct-pointer walk terminated by a named *_END case."""
+    code = mask_c_comments(raw)
+    found = []
+    for ctype, argument in f.args:
+        record = signature_record_name(ctype)
+        if not record or ctype.count("*") != 1:
+            continue
+        aliases = {argument}
+        aliases.update(re.findall(r"\b([A-Za-z_]\w*)\s*=\s*%s\b" %
+                                  re.escape(argument), code))
+        for alias in sorted(aliases):
+            for switch in re.finditer(
+                    r"\bswitch\s*\(\s*%s\s*->\s*([A-Za-z_]\w*)\s*\)" %
+                    re.escape(alias), code):
+                tail = code[switch.end():min(len(code), switch.end() + 8192)]
+                sentinels = re.findall(r"\bcase\s+([A-Z][A-Za-z0-9_]*_END)\s*:", tail)
+                advances = (re.search(r"\b%s\s*\+\+" % re.escape(alias), code) or
+                            re.search(r"\b%s\s*\+=\s*1\b" % re.escape(alias), code))
+                if not sentinels or not advances:
+                    continue
+                found.append({
+                    "argument": argument, "record": record,
+                    "sentinel_field": switch.group(1),
+                    "sentinel_value": sentinels[0], "max_count": 1024,
+                    "confidence": "high",
+                    "line": base_line + code.count("\n", 0, switch.start()),
+                    "via_alias": alias
+                })
+    unique = {}
+    for item in found:
+        key = (item["argument"], item["record"], item["sentinel_field"],
+               item["sentinel_value"])
+        unique[key] = item
+    return sorted(unique.values(), key=lambda x: x["argument"])
+
+
 def analyze_function_source(lib, rel, f, sources):
     found = None
     for path, src in sources:
@@ -1114,13 +1151,15 @@ def analyze_function_source(lib, rel, f, sources):
         return {
             "name": f.name, "lvo": f.lvo, "offset": f.offset,
             "source": None, "policy": policy_key(lib, f) in POLICY.get("functions", {}),
-            "tags": [], "arguments": {}, "memory": {}, "callbacks": []
+            "tags": [], "arguments": {}, "memory": {}, "callbacks": [],
+            "record_arrays": []
         }
 
     path, whole, start, raw = found
     code = mask_c_comments(raw)
     base_line = whole.count("\n", 0, start) + 1
     tags = extract_tag_evidence(raw, base_line)
+    record_arrays = terminated_record_arrays(f, raw, base_line)
 
     arguments = {}
     for atype, aname in f.args:
@@ -1162,6 +1201,7 @@ def analyze_function_source(lib, rel, f, sources):
         "arguments": arguments,
         "memory": {"allocators": allocs, "releasers": frees},
         "callbacks": callbacks,
+        "record_arrays": record_arrays,
         "_raw": raw
     }
 
@@ -1970,6 +2010,32 @@ def function_record_contracts(evidence, layouts):
     return contracts
 
 
+def function_record_arrays(evidence, layouts):
+    arrays = []
+    for candidate in evidence.get("record_arrays", []):
+        layout = layouts.get(candidate["record"], {})
+        guest_fields = {field["name"]: field for field in
+                        (layout.get("m68k") or {}).get("fields", [])}
+        native_fields = {field["name"]: field for field in
+                         (layout.get("native") or {}).get("fields", [])}
+        field = guest_fields.get(candidate["sentinel_field"])
+        native = native_fields.get(candidate["sentinel_field"])
+        item = dict(candidate)
+        item["m68k_stride"] = (layout.get("m68k") or {}).get("size")
+        item["native_stride"] = (layout.get("native") or {}).get("size")
+        item["m68k_sentinel_offset"] = field.get("offset") if field else None
+        item["native_sentinel_offset"] = native.get("offset") if native else None
+        item["sentinel_width"] = (SIZE_WIDTHS.get(norm(field.get("type", "")))
+                                  if field else None)
+        item["layout_status"] = "complete" if all(
+            x is not None for x in (item["m68k_stride"], item["native_stride"],
+                                    item["m68k_sentinel_offset"],
+                                    item["native_sentinel_offset"],
+                                    item["sentinel_width"])) else "missing"
+        arrays.append(item)
+    return arrays
+
+
 def api_noun(name):
     name = re.sub(r"A$", "", name)
     return re.sub(r"^(?:GT_)?(?:Get|Create|Alloc|Open|New|Free|Close|Dispose|"
@@ -2155,6 +2221,8 @@ def build_import_manifest(report):
             "reachable_helpers": len(evidence.get("reachable_helpers", [])),
             "record_contracts": function_record_contracts(
                 evidence, report.get("record_layouts", {}).get("types", {})),
+            "record_arrays": function_record_arrays(
+                evidence, report.get("record_layouts", {}).get("types", {})),
             "object_contracts": function_object_contracts(evidence, object_candidates),
             "tag_domains": synthesize_function_tags(evidence, add_review),
             "argument_evidence": evidence.get("arguments", {}),
@@ -2294,11 +2362,27 @@ def policy_subset_for_library(manifest):
             candidates[name] = {"max_items": max(8, min(128, len(tags) + 4)),
                                 "tags": sorted(tags, key=lambda x: x["name"])}
             taglists[domain["argument"]] = name
+        proposal = {}
         if taglists:
-            proposed_functions[lib + "." + function["name"]] = {
-                "taglists": taglists,
-                "activation": "blocked-until-complete-function-contract"
+            proposal["taglists"] = taglists
+        if function.get("record_arrays"):
+            proposal["record_arrays"] = {
+                item["argument"]: {
+                    "type": item["record"], "sentinel_field": item["sentinel_field"],
+                    "sentinel_value": item["sentinel_value"],
+                    "sentinel_width": item["sentinel_width"],
+                    "max_count": item["max_count"],
+                    "layout_status": item["layout_status"]
+                } for item in function["record_arrays"]
             }
+        objects_for_function = function.get("object_contracts", {})
+        if objects_for_function.get("arguments"):
+            proposal["objects"] = objects_for_function["arguments"]
+        if objects_for_function.get("result"):
+            proposal["result"] = objects_for_function["result"]
+        if proposal:
+            proposal["activation"] = "blocked-until-complete-function-contract"
+            proposed_functions[lib + "." + function["name"]] = proposal
     return {
         "schema": 1,
         "library": lib,
@@ -2635,6 +2719,7 @@ def validate_policy(targets):
         callbacks = p.get("callbacks", {})
         pointers = p.get("pointers", {})
         arrays = p.get("arrays", {})
+        record_arrays = p.get("record_arrays", {})
         guest_values = p.get("guest_values", [])
         strings = p.get("strings", [])
         null_args = p.get("null_args", [])
@@ -2779,6 +2864,65 @@ def validate_policy(targets):
             if (arg in taglists or arg in structs or arg in tagged_structs or
                     arg in objects or arg in callbacks or arg in pointers):
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, ap in record_arrays.items():
+            stype, direction = ap.get("type"), ap.get("direction")
+            if arg not in args:
+                errors.append("function policy %s names missing record array %s" % (key, arg))
+            elif (not isinstance(stype, str) or
+                  "struct %s" % stype not in norm(args[arg]) or
+                  args[arg].count("*") != 1):
+                errors.append("function policy %s record array %s is not struct %s *"
+                              % (key, arg, stype))
+            if direction != "in":
+                errors.append("function policy %s record array %s currently requires direction in"
+                              % (key, arg))
+            header = ap.get("header")
+            if not isinstance(header, str) or not re.fullmatch(
+                    r"[A-Za-z0-9_./-]+\.h", header):
+                errors.append("function policy %s record array %s needs a valid header"
+                              % (key, arg))
+            count = ap.get("max_count")
+            if not isinstance(count, int) or count < 1 or count > 4096:
+                errors.append("function policy %s record array %s needs max_count 1..4096"
+                              % (key, arg))
+            sentinel = ap.get("sentinel", {})
+            if (not re.fullmatch(r"[A-Za-z_]\w*", sentinel.get("field", "")) or
+                    not re.fullmatch(r"[A-Za-z_]\w*", sentinel.get("value", ""))):
+                errors.append("function policy %s record array %s needs a field/value sentinel"
+                              % (key, arg))
+            if sentinel.get("width") not in (1, 2, 4):
+                errors.append("function policy %s record array %s sentinel width must be 1, 2, or 4"
+                              % (key, arg))
+            reject = ap.get("reject")
+            if reject is not None and (
+                    not re.fullmatch(r"[A-Za-z_]\w*", reject.get("field", "")) or
+                    not isinstance(reject.get("mask"), int) or reject["mask"] < 1 or
+                    reject.get("width") not in (1, 2, 4)):
+                errors.append("function policy %s record array %s has invalid reject mask"
+                              % (key, arg))
+            fields = ap.get("fields", {})
+            if not isinstance(fields, dict):
+                errors.append("function policy %s record array %s fields must be an object"
+                              % (key, arg))
+                fields = {}
+            for field, fp in fields.items():
+                if not re.fullmatch(r"[A-Za-z_]\w*", field):
+                    errors.append("function policy %s record array %s has invalid field %r"
+                                  % (key, arg, field))
+                kind = fp.get("kind") if isinstance(fp, dict) else None
+                if kind not in ("cstr", "cstr_sentinel", "guest_value"):
+                    errors.append("function policy %s record array %s field %s has invalid kind %r"
+                                  % (key, arg, field, kind))
+                if kind == "cstr_sentinel" and not re.fullmatch(
+                        r"[A-Za-z_]\w*", fp.get("sentinel", "")):
+                    errors.append("function policy %s record array %s field %s needs sentinel"
+                                  % (key, arg, field))
+            if (arg in taglists or arg in structs or arg in tagged_structs or
+                    arg in arrays or arg in objects or arg in callbacks or arg in pointers):
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
+        if record_arrays and callbacks:
+            errors.append("function policy %s cannot yet combine record arrays and callbacks"
+                          % key)
         for arg, op in objects.items():
             otype = op.get("type")
             ospec = object_types.get(otype)
@@ -2837,7 +2981,8 @@ def validate_policy(targets):
                                   % (key, arg))
                 if (arg in taglists or arg in structs or arg in tagged_structs or
                         arg in objects or arg in callbacks or arg in pointers or
-                        arg in arrays or arg in guest_values or arg in strings):
+                        arg in arrays or arg in record_arrays or
+                        arg in guest_values or arg in strings):
                     errors.append("function policy %s argument %s has two policies"
                                   % (key, arg))
         if boopsi:
@@ -2885,7 +3030,8 @@ def validate_policy(targets):
         blockers = []
         for t, n in f.args:
             if (n in taglists or n in structs or n in tagged_structs or
-                    n in pointers or n in arrays or n in objects or n in callbacks or
+                    n in pointers or n in arrays or n in record_arrays or
+                    n in objects or n in callbacks or
                     n in guest_values or n in strings or n in null_args):
                 continue
             if classify(t) not in ("scalar", "widen", "string", "bptr"):
@@ -3022,6 +3168,9 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         for sp in p.get("tagged_structs", {}).values():
             if sp.get("header") not in used_headers:
                 used_headers.append(sp.get("header"))
+        for sp in p.get("record_arrays", {}).values():
+            if sp.get("header") not in used_headers:
+                used_headers.append(sp.get("header"))
         for op in p.get("objects", {}).values():
             if op.get("type") not in used_objects:
                 used_objects.append(op.get("type"))
@@ -3030,7 +3179,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             used_objects.append(result.get("type"))
     uses_structs = (any(function_policy(lib, f) and
                         (function_policy(lib, f).get("structs") or
-                         function_policy(lib, f).get("tagged_structs")) for f in funcs) or
+                         function_policy(lib, f).get("tagged_structs") or
+                         function_policy(lib, f).get("record_arrays")) for f in funcs) or
                     any(object_types[o].get("kind") == "facade" for o in used_objects) or
                     any(t.get("kind") == "struct"
                         for d in used_domains for t in domains[d]["tags"]))
@@ -3072,7 +3222,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("#include <%s>" % h)
     for d in used_domains:
         for h in domains[d].get("headers", []):
-            w("#include <%s>" % h)
+            if h not in used_headers:
+                w("#include <%s>" % h)
     w("")
     w('#include "emu68k_gen.h"')
     if uses_structs:
@@ -3150,6 +3301,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         tagged_structs = policy.get("tagged_structs", {}) if policy else {}
         pointers = policy.get("pointers", {}) if policy else {}
         arrays = policy.get("arrays", {}) if policy else {}
+        record_arrays = policy.get("record_arrays", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
         callbacks = policy.get("callbacks", {}) if policy else {}
         guest_values = policy.get("guest_values", []) if policy else []
@@ -3161,9 +3313,11 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         call_args = []
         post = []
         array_pre = []
+        record_pre = []
         precall = []
         heap_tag_scratch = []
         heap_array_scratch = []
+        heap_record_scratch = []
         # A "how much of this structure do you want" argument is clamped before
         # anything else: it bounds the guest range check as well as the copy, so
         # it cannot be computed inside the block that already needs it. The
@@ -3354,6 +3508,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   % (src, width, ai)], pp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_scalar_%d" % (norm(atype), ai))
                 continue
+            if aname in record_arrays:
+                ap = record_arrays[aname]
+                stype = ap["type"]
+                w("        ULONG emu_record_count_%d = 0;" % ai)
+                w("        ULONG emu_record_size_%d = 0;" % ai)
+                w("        struct %s *emu_record_array_%d = NULL;" % (stype, ai))
+                record_pre.append((ai, atype, aname, src, ap))
+                heap_record_scratch.append(ai)
+                call_args.append("(%s)emu_record_array_%d" % (norm(atype), ai))
+                continue
             if aname in arrays:
                 ap = arrays[aname]
                 cap = ap["max_count"]
@@ -3466,14 +3630,154 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("            return 1;")
             call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
                              % (norm(atype), src, ai))
+        def emit_pre_failure_cleanup(indent):
+            for scratch_ai in heap_tag_scratch:
+                w("%semu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
+                  % (indent, scratch_ai, scratch_ai))
+            for scratch_ai in heap_array_scratch:
+                w("%sif (emu_array_scratch_%d)" % (indent, scratch_ai))
+                w("%s    emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                  % (indent, scratch_ai, scratch_ai))
+            for scratch_ai in heap_record_scratch:
+                w("%sif (emu_record_array_%d)" % (indent, scratch_ai))
+                w("%s    emu68k_scratch_free(emu_record_array_%d, emu_record_size_%d);"
+                  % (indent, scratch_ai, scratch_ai))
+
         for line in array_pre:
             w(line)
         for line in precall:
             w(line)
+        for ai, atype, aname, src, ap in record_pre:
+            stype = ap["type"]
+            cap = ap["max_count"]
+            sentinel = ap["sentinel"]
+            reject = ap.get("reject")
+            w("        if (!%s)" % src)
+            w("        {")
+            w("            if (err && errlen)")
+            w('                snprintf(err, errlen, "%s.%s requires a non-NULL record array");'
+              % (f.name, aname))
+            emit_pre_failure_cleanup("            ")
+            w("            return 1;")
+            w("        }")
+            w("        BOOL emu_record_found_%d = FALSE;" % ai)
+            w("        for (emu_record_count_%d = 0; emu_record_count_%d < %d;"
+              % (ai, ai, cap))
+            w("             emu_record_count_%d++)" % ai)
+            w("        {")
+            w("            ULONG emu_record_guest_%d = %s +"
+              % (ai, src))
+            w("                emu_record_count_%d * M68K_%s_SIZEOF;" % (ai, stype))
+            w("            if (emu68k_require_guest_range(emu_record_guest_%d,"
+              % ai)
+            w("                    M68K_%s_SIZEOF, \"%s.%s\", err, errlen) < 0)"
+              % (stype, f.name, aname))
+            w("            {")
+            emit_pre_failure_cleanup("                ")
+            w("                return 1;")
+            w("            }")
+            if reject:
+                w("            ULONG emu_record_reject_%d = (ULONG)" % ai)
+                w("                emu68k_scalar_from_guest(guest0, emu_record_guest_%d +"
+                  % ai)
+                w("                    M68K_%s_%s, %d);"
+                  % (stype, reject["field"], reject["width"]))
+                w("            if (emu_record_reject_%d & 0x%xUL)" %
+                  (ai, reject["mask"]))
+                w("            {")
+                w("                if (err && errlen)")
+                w('                    snprintf(err, errlen, "%s.%s[%%lu].%s uses an unsupported variant",'
+                  % (f.name, aname, reject["field"]))
+                w("                             (unsigned long)emu_record_count_%d);" % ai)
+                emit_pre_failure_cleanup("                ")
+                w("                return 1;")
+                w("            }")
+            w("            ULONG emu_record_sentinel_%d = (ULONG)" % ai)
+            w("                emu68k_scalar_from_guest(guest0, emu_record_guest_%d +"
+              % ai)
+            w("                    M68K_%s_%s, %d);"
+              % (stype, sentinel["field"], sentinel["width"]))
+            w("            if (emu_record_sentinel_%d == (ULONG)%s)" %
+              (ai, sentinel["value"]))
+            w("            {")
+            w("                emu_record_count_%d++;" % ai)
+            w("                emu_record_found_%d = TRUE;" % ai)
+            w("                break;")
+            w("            }")
+            w("        }")
+            w("        if (!emu_record_found_%d)" % ai)
+            w("        {")
+            w("            if (err && errlen)")
+            w('                snprintf(err, errlen, "%s.%s has no %s within %d records");'
+              % (f.name, aname, sentinel["value"], cap))
+            emit_pre_failure_cleanup("            ")
+            w("            return 1;")
+            w("        }")
+            w("        emu_record_size_%d = emu_record_count_%d * sizeof(struct %s);"
+              % (ai, ai, stype))
+            w("        emu_record_array_%d = emu68k_scratch_alloc("
+              % ai)
+            w("            emu_record_size_%d, err, errlen);" % ai)
+            w("        if (!emu_record_array_%d)" % ai)
+            w("        {")
+            emit_pre_failure_cleanup("            ")
+            w("            return 1;")
+            w("        }")
+            w("        memset(emu_record_array_%d, 0, emu_record_size_%d);" % (ai, ai))
+            w("        for (ULONG emu_record_i_%d = 0;" % ai)
+            w("             emu_record_i_%d < emu_record_count_%d; emu_record_i_%d++)"
+              % (ai, ai, ai))
+            w("        {")
+            w("            ULONG emu_record_guest_%d = %s +"
+              % (ai, src))
+            w("                emu_record_i_%d * M68K_%s_SIZEOF;" % (ai, stype))
+            w("            emu68k_from_guest_sized(guest0, emu_record_guest_%d,"
+              % ai)
+            w("                &emu_record_array_%d[emu_record_i_%d],"
+              % (ai, ai))
+            w("                emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
+              % (stype, stype))
+            w("                M68K_%s_SIZEOF);" % stype)
+            for fi, (field, fp) in enumerate(ap.get("fields", {}).items()):
+                kind = fp["kind"]
+                w("            ULONG emu_record_value_%d_%d = (ULONG)" % (ai, fi))
+                w("                emu68k_scalar_from_guest(guest0, emu_record_guest_%d +"
+                  % ai)
+                w("                    M68K_%s_%s, 4);" % (stype, field))
+                if kind in ("cstr", "cstr_sentinel"):
+                    condition = "emu_record_value_%d_%d" % (ai, fi)
+                    if kind == "cstr_sentinel":
+                        condition += " && emu_record_value_%d_%d != (ULONG)(IPTR)%s" % (
+                            ai, fi, fp["sentinel"])
+                    w("            if (%s &&" % condition)
+                    w("                emu68k_require_guest_range(emu_record_value_%d_%d, 1,"
+                      % (ai, fi))
+                    w('                    "%s.%s.%s", err, errlen) < 0)'
+                      % (f.name, aname, field))
+                    w("            {")
+                    emit_pre_failure_cleanup("                ")
+                    w("                return 1;")
+                    w("            }")
+                target = "emu_record_array_%d[emu_record_i_%d].%s" % (ai, ai, field)
+                if kind == "cstr_sentinel":
+                    w("            if (emu_record_value_%d_%d == (ULONG)(IPTR)%s)"
+                      % (ai, fi, fp["sentinel"]))
+                    w("                %s = (__typeof__(%s))%s;"
+                      % (target, target, fp["sentinel"]))
+                    w("            else")
+                    w("                %s = (__typeof__(%s))EMU_GPTR(guest0, emu_record_value_%d_%d);"
+                      % (target, target, ai, fi))
+                elif kind == "cstr":
+                    w("            %s = (__typeof__(%s))EMU_GPTR(guest0, emu_record_value_%d_%d);"
+                      % (target, target, ai, fi))
+                else:
+                    w("            %s = (__typeof__(%s))(IPTR)emu_record_value_%d_%d;"
+                      % (target, target, ai, fi))
+            w("        }")
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         result_policy = policy.get("result") if policy else None
-        def emit_heap_tag_cleanup():
+        def emit_heap_cleanup():
             for scratch_ai in heap_tag_scratch:
                 w("        emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
                   % (scratch_ai, scratch_ai))
@@ -3481,12 +3785,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("        if (emu_array_scratch_%d)" % scratch_ai)
                 w("            emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
                   % (scratch_ai, scratch_ai))
+            for scratch_ai in heap_record_scratch:
+                w("        if (emu_record_array_%d)" % scratch_ai)
+                w("            emu68k_scratch_free(emu_record_array_%d, emu_record_size_%d);"
+                  % (scratch_ai, scratch_ai))
         if result_policy and result_policy.get("kind") == "guest_arg":
             result_arg = result_policy["arg"]
             result_index = [n for _t, n in f.args].index(result_arg)
             result_src = reg_expr(f.regs[result_index])
             w("        APTR emu_result = (APTR)%s;" % call)
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post, "emu_result")
             w("        r->d[0] = emu_result ? %s : 0;" % result_src)
         elif result_policy and result_policy.get("kind") == "object":
@@ -3569,7 +3877,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("            if (emu_fallback_changed)")
                 w("                emu_result = (APTR)%s;" % call)
                 w("        }")
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]
@@ -3674,17 +3982,17 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("        }")
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post)
         elif classify(f.ret) == "bptr":
             w("        %sr->d[0] = EMU_TOKEN(guest0, %s);   /* a BPTR crosses as a token */"
               % ("    " if policy else "", call))
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post, "r->d[0]")
         elif classify(f.ret) == "double":
             pad = "    " if policy else ""
             w("        %semu68k_double_out(%s, &r->d[0], &r->d[1]);" % (pad, call))
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post)
         else:
             note = ""
@@ -3692,7 +4000,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 note = "   /* narrowed: an integer, never an address */"
             w("        %sr->d[0] = (ULONG)%s;%s" %
               ("    " if policy else "", call, note))
-            emit_heap_tag_cleanup()
+            emit_heap_cleanup()
             emit_post(post, "r->d[0]")
         w("        %sreturn 0;" % ("    " if policy else ""))
         if policy:

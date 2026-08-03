@@ -43,6 +43,7 @@ HEADERS = [
     "graphics/regions.h", "graphics/rastport.h", "graphics/gfx.h",
     "graphics/text.h", "graphics/displayinfo.h",
     "intuition/preferences.h", "intuition/screens.h",
+    "libraries/gadtools.h",
 ]
 
 TYPES = [
@@ -53,6 +54,7 @@ TYPES = [
     "Window", "Screen", "RastPort", "Preferences", "BitMap",
     "TextAttr", "TextFont",
     "DimensionInfo", "DrawInfo",
+    "NewMenu",
 ]
 
 # `struct Screen` is intentionally only marshalled through byte 83. Its head is

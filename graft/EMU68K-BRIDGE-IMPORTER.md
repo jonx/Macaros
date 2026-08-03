@@ -38,7 +38,7 @@ Verify that checked artifacts still describe the current source and build:
 graft/gen-emu68k-bridge --check-import gadtools
 ```
 
-The check regenerates all three artifacts in memory and fails if any file is
+The check regenerates all six artifacts in memory and fails if any file is
 missing or stale. The lower-level source-analysis stream can be inspected with:
 
 ```sh
@@ -130,6 +130,45 @@ and every other exact `struct Gadget *` crossing. A destructor that walks
 `NextGadget`, `NextMenu`, or a similar linked field cannot be treated as releasing
 one token; promotion remains blocked until family-token invalidation is generated.
 
+### Terminated record arrays
+
+The importer also recognizes a public structure pointer that a reachable helper
+advances until a named field equals a macro sentinel. This is represented as a
+`record_arrays` contract rather than as a library-specific function shim. The
+manifest records the evidence path, sentinel, bounded maximum, compiler-probed
+guest/native strides, sentinel offsets, and scalar width.
+
+An active contract states the parts that source analysis cannot safely collapse
+into “copy this pointer”:
+
+```json
+{
+  "type": "NewMenu",
+  "header": "libraries/gadtools.h",
+  "direction": "in",
+  "sentinel": {"field": "nm_Type", "value": "NM_END", "width": 1},
+  "max_count": 1024,
+  "reject": {"field": "nm_Type", "mask": 128, "width": 1},
+  "fields": {
+    "nm_Label": {"kind": "cstr_sentinel", "sentinel": "NM_BARLABEL"},
+    "nm_CommKey": {"kind": "cstr"},
+    "nm_UserData": {"kind": "guest_value"}
+  }
+}
+```
+
+Generated code scans only within the declared bound, validates every guest
+record, includes the sentinel record, allocates native scratch, converts scalar
+fields through the generated layout table, and applies the explicit pointer-field
+rules. Scratch is released on both success and failure. `reject` is a deliberate
+closed branch: GadTools image menu entries make `nm_Label` an Image pointer, so
+they are rejected until an Image object contract exists instead of being
+misread as text.
+
+This mechanism is reusable by another library whose source proves the same
+terminated-array shape; neither the emitter nor the layout generator contains a
+`CreateMenusA` special case.
+
 ## Confidence and fail-closed rules
 
 The analyzer produces evidence; it does not silently make uncertain evidence a
@@ -181,6 +220,85 @@ certified only when generated sources rebuild, its generated tests pass, existin
 bridge regressions remain green, and every public vector has an explicit safe
 outcome. Existing handwritten crossings are retired only after the generated
 equivalent passes identical tests.
+
+## Development and certification runbook
+
+Use the public import/check commands as the front door for every library:
+
+```sh
+graft/gen-emu68k-bridge --import-library gadtools
+sed -n '1,240p' build/emu68k-import/gadtools/review.md
+graft/gen-emu68k-bridge --check-import gadtools
+```
+
+The repeatable promotion loop is:
+
+1. Import the library and inspect the finite review queue and policy candidates.
+2. Promote only contracts whose ABI, direction, ownership, and lifetime are
+   proved; unresolved variants remain `refuse` or leave the vector unavailable.
+3. Regenerate layouts and bridge sources from the policy.
+4. Rebuild the native AROS bridge library.
+5. Run positive lifecycle and negative fail-closed tests in booted AROS.
+6. Run the existing generated-bridge and real-program regressions.
+7. Re-import and use `--check-import` so the committed analysis remains tied to
+   the exact generator, headers, sources, compiler configuration, and policy.
+
+For this workspace the concrete commands after policy promotion are:
+
+```sh
+make struct-layouts
+python3 graft/gen-emu68k-bridge --emit \
+  ../aros-upstream/arch/all-darwin/libs/emu68k/
+TARGETS="hostlibs-emu68k" ./graft/rebuild-aros.sh
+make hosted-emu68k-t3gen
+make hosted-emu68k-t3lha
+```
+
+`hosted-emu68k-t3gen` now includes two record-array programs. `genrecord.s`
+passes a real classic `NewMenu[]` through native `CreateMenusA`, receives a typed
+Menu token, and frees it. `genrecordbad.s` passes an image-valued record and must
+terminate with the named `CreateMenusA.newmenu[0].nm_Type` capability gap before
+native GadTools sees it.
+
+A legacy-program run remains the final behavioral probe. With the local demo
+corpus used during this work, PhotoDemo is run with:
+
+```sh
+EMU68K_TRACE_CALLS=1 \
+CORPUS_BEFORE='Assign Photodemo: MacRW:corpus/gui__PhotoDemo.d' \
+EMU68K_MAX_SECONDS=240 CORPUS_TIMEOUT=420 \
+./graft/68k-corpus /tmp/aros-68k-candidates/corpus \
+  build/photodemo-import.txt
+```
+
+The corpus path is machine-local; the important rule is to retain the trace and
+compare the next named capability gap, not to treat “the process ran longer” as
+certification.
+
+### Agent-assisted review
+
+The versioned skill at
+`graft/skills/review-emu68k-bridge-import/SKILL.md` lets another Codex agent carry
+out the finite review on the user's behalf. It binds decisions to the manifest
+hash, requires exact source/layout citations, separates approved, refused, and
+deferred outcomes, applies policy only when authorized, runs the certification
+gates, and never converts a lower review count into a certification claim.
+
+Invoke it as `$review-emu68k-bridge-import` after installing or exposing the
+repo-owned skill directory to Codex. Its optional `agent-review.json` artifact
+sits beside the import packet and records auditable per-review-ID decisions.
+
+### Current GadTools checkpoint
+
+At this checkpoint all 19 public GadTools vectors parse and their reachable C
+helpers analyze successfully. Four crossings are active in generated code:
+`GetVisualInfoA`, `FreeVisualInfo`, `CreateMenusA`, and `FreeMenus`. The text-menu
+create/free lifecycle and the image-menu refusal pass in booted AROS. Unchanged
+PhotoDemo now passes `GetVisualInfoA` and `CreateMenusA`, then stops at the next
+named boundary, `LayoutMenusA` (GadTools LVO 11, offset -66). The import still
+reports 34 review items, so GadTools as a whole is not yet certified; gadget
+creation, retained data, object-family invalidation, and remaining tag payloads
+must be resolved through the same pipeline.
 
 ## What cannot be completely automatic
 
