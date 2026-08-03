@@ -193,4 +193,48 @@
 #define M68K_CommandLineInterface_cli_Module 60
 #define M68K_CommandLineInterface_cli_StandardError 64
 
+/* struct MsgPort: 42 bytes on m68k (MsgPort) */
+#define M68K_MsgPort_SIZEOF 42
+#define M68K_MsgPort_mp_Node_ln_Succ 0
+#define M68K_MsgPort_mp_Node_ln_Pred 4
+#define M68K_MsgPort_mp_Node_ln_Type 8
+#define M68K_MsgPort_mp_Node_ln_Pri 9
+#define M68K_MsgPort_mp_Node_ln_Name 10
+#define M68K_MsgPort_mp_Flags 14
+#define M68K_MsgPort_mp_SigBit 15
+#define M68K_MsgPort_mp_SigTask 16
+#define M68K_MsgPort_mp_MsgList_lh_Head 20
+#define M68K_MsgPort_mp_MsgList_lh_Tail 24
+#define M68K_MsgPort_mp_MsgList_lh_TailPred 28
+#define M68K_MsgPort_mp_MsgList_lh_Type 32
+#define M68K_MsgPort_mp_MsgList_l_pad 33
+#define M68K_MsgPort_mp_Pad_slock 34
+#define M68K_MsgPort_mp_Pad_s_Owner 38
+
+/* struct Message: 20 bytes on m68k (Message) */
+#define M68K_Message_SIZEOF 20
+#define M68K_Message_mn_Node_ln_Succ 0
+#define M68K_Message_mn_Node_ln_Pred 4
+#define M68K_Message_mn_Node_ln_Type 8
+#define M68K_Message_mn_Node_ln_Pri 9
+#define M68K_Message_mn_Node_ln_Name 10
+#define M68K_Message_mn_ReplyPort 14
+#define M68K_Message_mn_Length 18
+
+/* struct List: 14 bytes on m68k (List) */
+#define M68K_List_SIZEOF 14
+#define M68K_List_lh_Head 0
+#define M68K_List_lh_Tail 4
+#define M68K_List_lh_TailPred 8
+#define M68K_List_lh_Type 12
+#define M68K_List_l_pad 13
+
+/* struct Node: 14 bytes on m68k (Node) */
+#define M68K_Node_SIZEOF 14
+#define M68K_Node_ln_Succ 0
+#define M68K_Node_ln_Pred 4
+#define M68K_Node_ln_Type 8
+#define M68K_Node_ln_Pri 9
+#define M68K_Node_ln_Name 10
+
 #endif /* EMU68K_GUEST_OFFSETS_H */

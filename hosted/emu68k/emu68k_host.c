@@ -170,6 +170,20 @@
 #define LVO_ALLOCSIGNAL   55    /* -330 */
 #define LVO_FREESIGNAL    56    /* -336 */
 #define LVO_OPENDEVICE    74    /* -444 */
+#define LVO_WAIT          53    /* -318 */
+#define LVO_SIGNAL        54    /* -324 */
+#define LVO_ADDPORT       59    /* -354 */
+#define LVO_REMPORT       60    /* -360 */
+#define LVO_PUTMSG        61    /* -366 */
+#define LVO_GETMSG        62    /* -372 */
+#define LVO_REPLYMSG      63    /* -378 */
+#define LVO_WAITPORT      64    /* -384 */
+#define LVO_FINDPORT      65    /* -390 */
+#define MP_SIGTASK   M68K_MsgPort_mp_SigTask
+#define MP_SIGBIT    M68K_MsgPort_mp_SigBit
+#define MP_MSGLIST   M68K_MsgPort_mp_MsgList_lh_Head
+#define MN_REPLYPORT M68K_Message_mn_ReplyPort
+#define TASK_SIGRECVD_OFF M68K_Task_tc_SigRecvd
 #define LVO_OLDOPENLIB    68    /* -408: what pre-2.0 programs still call      */
 #define LVO_AVAILMEM      36    /* -216 */
 #define LVO_ALLOCVEC     114    /* -684: the most-wanted call in the corpus    */
@@ -505,6 +519,11 @@ static const char *guest_cstr(j4_sandbox *sb, uint32_t addr)
 
 /* Guest memory accessors: 68k memory is big-endian, so a pointer written for
  * the guest must be written as big-endian regardless of the host. */
+static uint8_t gread8(j4_sandbox *sb, uint32_t a)
+{
+    return *(const uint8_t *)j4_sandbox_host(sb, a);
+}
+
 static uint32_t gread32(j4_sandbox *sb, uint32_t a)
 {
     const uint8_t *p;
@@ -1822,9 +1841,9 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case 96:                 /* AttemptSemaphore: always succeeds               */
         st->d[0] = 1;
         return 0;
-    case 59: case 60:        /* AddPort / RemPort: no public port list here     */
+    case LVO_ADDPORT: case LVO_REMPORT:  /* no public port list here          */
         return 0;
-    case 65:                 /* FindPort(name A1): a guest has no public ports,
+    case LVO_FINDPORT:       /* FindPort(name A1): a guest has no public ports,
                               * and NULL is the answer callers are written for */
         st->d[0] = 0;
         return 0;
@@ -1840,6 +1859,62 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
      * reservation stopped programs during startup, at their ARexx port, over a
      * bit nobody had signalled yet. What a guest still cannot do is WAIT on
      * one, and that stays a named gap rather than a hang. */
+    /* ---- MESSAGE PORTS ------------------------------------------------------
+     *
+     * Every structure involved - the MsgPort, the Message, the list linking
+     * them - is the GUEST's own memory, so these are guest-memory list
+     * operations exactly like the Add/Rem pair above, plus a signal. Handing
+     * them to the native exec would give it guest addresses it cannot
+     * dereference, and would put the program's messages on a list it cannot
+     * see.
+     *
+     * A port's list is initialised by the program with NewList, so these read
+     * the same lh_Head/lh_Tail/lh_TailPred layout exec does, and an empty list
+     * is detected the way exec detects it: by the terminator's NULL link. */
+    case LVO_PUTMSG: {
+        uint32_t port = st->a[0], msg = st->a[1];
+        uint32_t list = port + MP_MSGLIST;
+        uint32_t tailpred = gread32(sb, list + M68K_List_lh_TailPred);
+        gwrite32(sb, msg, list + M68K_List_lh_Tail);
+        gwrite32(sb, msg + 4, tailpred);
+        gwrite32(sb, tailpred, msg);
+        gwrite32(sb, list + M68K_List_lh_TailPred, msg);
+        /* and tell the port's task, which is what makes a WaitPort return */
+        {
+            uint32_t task = gread32(sb, port + MP_SIGTASK);
+            uint32_t bit  = gread8(sb, port + MP_SIGBIT);
+            if (task && bit < 32)
+                gwrite32(sb, task + TASK_SIGRECVD_OFF,
+                         gread32(sb, task + TASK_SIGRECVD_OFF) | (1u << bit));
+        }
+        return 0;
+    }
+    case LVO_GETMSG: {
+        uint32_t port = st->a[0];
+        uint32_t list = port + MP_MSGLIST;
+        uint32_t head = gread32(sb, list + M68K_List_lh_Head);
+        uint32_t succ = head ? gread32(sb, head) : 0;
+        if (!head || !succ) { st->d[0] = 0; return 0; }   /* empty */
+        gwrite32(sb, list + M68K_List_lh_Head, succ);
+        gwrite32(sb, succ + 4, list);
+        st->d[0] = head;
+        return 0;
+    }
+    case LVO_REPLYMSG: {
+        uint32_t msg = st->a[1];
+        uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
+        if (!reply) return 0;               /* a message with nowhere to go back */
+        st->a[0] = reply;
+        st->a[1] = msg;
+        return exec_call(r, sb, LVO_PUTMSG, st, e, el);
+    }
+    case LVO_SIGNAL: {
+        uint32_t task = st->a[1], sigs = st->d[0];
+        if (task)
+            gwrite32(sb, task + TASK_SIGRECVD_OFF,
+                     gread32(sb, task + TASK_SIGRECVD_OFF) | sigs);
+        return 0;
+    }
     case LVO_ALLOCSIGNAL: {
         uint32_t alloc = gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF);
         int want = (int32_t)st->d[0];

@@ -63,7 +63,8 @@ TYPES = [
 # Not marshalled, read by OFFSET: the structures the 68k execution service
 # fills in on the guest's behalf. They are probed and self-checked like the
 # rest, but they get no conversion table - nothing converts a Task.
-OFFSET_TYPES = ["Task", "ExecBase", "Library", "CommandLineInterface"]
+OFFSET_TYPES = ["Task", "ExecBase", "Library", "CommandLineInterface",
+                "MsgPort", "Message", "List", "Node"]
 
 # `struct Screen` is intentionally only marshalled through byte 83. Its head is
 # the AmigaOS ABI exactly (LeftEdge 8, Flags 20, Font 40, ViewPort 44, RastPort
