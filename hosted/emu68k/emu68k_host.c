@@ -285,6 +285,40 @@ struct guestpool_live {
 
 static const char *g_crash_dir = NULL;
 
+/* ---- 68k CONTEXTS ---------------------------------------------------------
+ *
+ * CreateNewProc(NP_Entry) asks for a second thread of 68k execution. Both are
+ * 68k, everything they share is guest memory, and they talk to each other only
+ * through signal bits - so they never need to run at the same instant, only to
+ * make progress. They run COOPERATIVELY on this one thread, each with its own
+ * engine instance and 68k state, and the switch point is Wait: a context that
+ * cannot proceed runs the other one nested until the signal it wants arrives.
+ *
+ * That removes every problem the threaded shape creates. There is no locking,
+ * no race on the object table, and ExecBase->ThisTask - one word in shared
+ * guest memory that has to read differently per context - is always right,
+ * because only one context is ever current. */
+#include <setjmp.h>
+
+#define EMU68K_MAX_CTX 8
+
+struct emu68k_ctx {
+    j5d_engine           *eng;
+    struct j5d_m68k_state st;
+    uint32_t              task;        /* this context's guest Task/Process   */
+    uint32_t              entry;       /* where it starts (children only)     */
+    uint32_t              stack;       /* its guest stack, low end            */
+    uint32_t              stack_size;
+    uint8_t               live;
+    uint8_t               started;
+    uint8_t               on_stack;    /* nested below us: re-entering dead-locks */
+    uint8_t               finished;
+    uint8_t               blocked;     /* parked in Wait, waiting for wait_mask */
+    uint32_t              wait_mask;
+    jmp_buf               unwind;      /* where a block-back lands             */
+    uint8_t               can_unwind;
+};
+
 struct emu68k_run {
     void                 *reserve;       /* the PROT_NONE guest-space reservation */
     uint8_t              *arena;         /* the RW window inside it               */
@@ -324,6 +358,10 @@ struct emu68k_run {
     uint32_t              stack_upper;
     uint32_t              callback_stack_top;
     uint32_t              poll_quantum;
+    /* ctx[0] is the program itself; the rest are what it asked exec for. */
+    struct emu68k_ctx      ctx[EMU68K_MAX_CTX];
+    int                    nctx;
+    int                    cur_ctx;
 };
 
 /* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
@@ -1436,6 +1474,22 @@ static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
  * performs before it can do anything else. OpenLibrary hands back a guest base
  * that the engine then recognises, so calls through it arrive at the bridge
  * with A6 naming the library. */
+/* The guest Task of the context that is CURRENTLY running. FindTask(NULL),
+ * a signal and a wait are all per-context, and answering them from the one
+ * fixed guest Process was right only while there was one. */
+static uint32_t ctx_task(struct emu68k_run *r)
+{
+    if (r && r->nctx && r->ctx[r->cur_ctx].live)
+        return r->ctx[r->cur_ctx].task;
+    return GUEST_PROCESS;
+}
+
+static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
+                              char *e, unsigned el);
+static int bridge(int lvo, struct j5d_m68k_state *st, void *user,
+                  char *e, unsigned el);
+static j5d_poll_action quantum_poll(void *user);
+
 static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      struct j5d_m68k_state *st, char *e, unsigned el)
 {
@@ -1651,7 +1705,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_FINDTASK:
         /* FindTask(NULL) = "me": the guest Process, which exists so that reading
          * pr_CLI says "launched from the Shell". */
-        st->d[0] = (st->a[1] == 0) ? GUEST_PROCESS : 0;
+        st->d[0] = (st->a[1] == 0) ? ctx_task(r) : 0;
         return 0;
     /* Exec list handling operates on GUEST structures, so it is performed in
      * guest memory here rather than handed to the native AROS AddHead, which
@@ -1889,6 +1943,33 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         return 0;
     }
+    case LVO_WAITPORT: {
+        /* WaitPort(port A0) -> the first message, LEFT ON the port.
+         *
+         * Written in terms of the two pieces that already exist: look, and if
+         * there is nothing, wait on the bit the port names - which is the bit
+         * PutMsg sets. Waiting is where a context hands its turn back, so this
+         * is also where a program that is only waiting stops holding the
+         * machine. */
+        uint32_t port = st->a[0];
+        uint32_t list = port + MP_MSGLIST;
+        for (;;) {
+            uint32_t head = gread32(sb, list + M68K_List_lh_Head);
+            if (head && gread32(sb, head)) { st->d[0] = head; return 0; }
+            {
+                uint32_t bit = gread8(sb, port + MP_SIGBIT);
+                int rc;
+                if (bit > 31) {
+                    snprintf(e, el, "capability gap: WaitPort on a port with no "
+                                    "signal bit");
+                    return 1;
+                }
+                st->d[0] = 1u << bit;
+                rc = exec_call(r, sb, LVO_WAIT, st, e, el);
+                if (rc != 0) return rc;
+            }
+        }
+    }
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
         uint32_t list = port + MP_MSGLIST;
@@ -1919,16 +2000,67 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * is the honest answer: a hang tells the reader nothing, and the run
          * would have to be killed from outside to find out why. */
         uint32_t want = st->d[0];
-        uint32_t got = gread32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF) & want;
+        uint32_t got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
         if (got) {
-            gwrite32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF,
-                     gread32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF) & ~got);
+            gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
+                     gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & ~got);
             st->d[0] = got;
             return 0;
         }
+        /* Nothing for us yet.
+         *
+         * If we are running NESTED - a context someone else gave a turn to -
+         * the answer is not to look for work but to hand the turn back. Park
+         * on the mask and unwind to whoever ran us; they resume us when the
+         * signal arrives, and Wait returns then. Without this a child would
+         * spin inside its own WaitPort forever and the parent would never get
+         * to send it anything. */
+        if (r->ctx[r->cur_ctx].can_unwind) {
+            struct emu68k_ctx *me = &r->ctx[r->cur_ctx];
+            me->blocked = 1;
+            me->wait_mask = want;
+            /* Resume AFTER the call: the return address the jsr pushed is what
+             * makes Wait look like it returned. */
+            me->st = *st;
+            me->st.pc = gread32(sb, st->a[7]);
+            me->st.a[7] = st->a[7] + 4;
+            longjmp(me->unwind, 1);
+        }
+        /* Nothing for us yet. Give the other contexts a turn; one of them is
+         * why we are waiting. Each runs until it blocks back or finishes, and
+         * we recheck after every one. A context already NESTED BELOW US cannot
+         * be run again - that is a genuine deadlock, and recursing into it
+         * would turn a diagnosable cycle into a stack overflow. */
+        {
+            int spun = 0, i;
+            for (;;) {
+                int progress = 0;
+                for (i = 0; i < r->nctx; i++) {
+                    struct emu68k_ctx *o = &r->ctx[i];
+                    if (i == r->cur_ctx || !o->live || o->finished ||
+                        o->on_stack)
+                        continue;
+                    if (o->blocked &&
+                        !(gread32(sb, o->task + TASK_SIGRECVD_OFF) & o->wait_mask))
+                        continue;                 /* nothing for it either     */
+                    if (run_context_nested(r, sb, i, e, el) != 0)
+                        return 1;
+                    progress = 1;
+                    got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
+                    if (got) {
+                        gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
+                                 gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF)
+                                 & ~got);
+                        st->d[0] = got;
+                        return 0;
+                    }
+                }
+                if (!progress || ++spun > 64) break;
+            }
+        }
         ledger_record(lvo, r->name[0] ? r->name : NULL);
         snprintf(e, el, "capability gap: Wait($%08lx) cannot be satisfied - "
-                 "nothing else runs in this program yet to send it",
+                 "nothing that could send it is able to run",
                  (unsigned long)want);
         return 1;
     }
@@ -1940,7 +2072,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     }
     case LVO_ALLOCSIGNAL: {
-        uint32_t alloc = gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF);
+        uint32_t alloc = gread32(sb, ctx_task(r) + TASK_SIGALLOC_OFF);
         int want = (int32_t)st->d[0];
         int bit = -1;
         if (want >= 0 && want < 32) {
@@ -1951,7 +2083,7 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (bit < 16) bit = -1;
         }
         if (bit >= 0)
-            gwrite32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF,
+            gwrite32(sb, ctx_task(r) + TASK_SIGALLOC_OFF,
                      alloc | (1u << bit));
         st->d[0] = (uint32_t)(int32_t)bit;
         return 0;
@@ -1959,8 +2091,8 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_FREESIGNAL: {
         int bit = (int32_t)st->d[0];
         if (bit >= 0 && bit < 32) {
-            uint32_t alloc = gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF);
-            gwrite32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF,
+            uint32_t alloc = gread32(sb, ctx_task(r) + TASK_SIGALLOC_OFF);
+            gwrite32(sb, ctx_task(r) + TASK_SIGALLOC_OFF,
                      alloc & ~(1u << bit));
         }
         return 0;
@@ -2137,6 +2269,181 @@ static int utility_guest_call(j4_sandbox *sb, int lvo,
     }
 }
 
+/* Run one context until it blocks back, finishes, or faults.
+ *
+ * Nested, on this thread, with its own engine instance - the shape the engine
+ * already proves in T0P3. `on_stack` marks it for the duration so a wait inside
+ * it cannot ask to re-enter a context that is below it on this very stack. */
+static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
+                              char *e, unsigned el)
+{
+    struct emu68k_ctx *ctx = &r->ctx[idx];
+    struct bctx c;
+    j5d_sandbox nsb;
+    j5d_engine *outer_eng = r->ctx[r->cur_ctx].eng;
+    int outer = r->cur_ctx, rc;
+    uint32_t d0 = 0, pc;
+
+    /* Save the caller's live state before we leave it: the engine writes the
+     * 68k state through the pointer j5d_run was given, and we are about to
+     * hand it a different one. */
+    if (!ctx->started) {
+        memset(&ctx->st, 0, sizeof ctx->st);
+        ctx->st.a[7] = (ctx->stack + ctx->stack_size) & ~15u;
+        ctx->started = 1;
+    } else if (ctx->blocked) {
+        /* It parked in Wait. Deliver what arrived and let Wait return it. */
+        uint32_t got = gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ctx->wait_mask;
+        if (!got) return 0;                       /* still nothing for it      */
+        gwrite32(sb, ctx->task + TASK_SIGRECVD_OFF,
+                 gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ~got);
+        ctx->st.d[0] = got;
+        ctx->blocked = 0;
+    }
+    pc = ctx->st.pc;
+    if (!ctx->st.pc) pc = ctx->entry;
+
+    nsb.host_mem = r->sb.host_mem;
+    nsb.origin   = r->sb.sandbox_origin;
+    nsb.size     = r->sb.size;
+    c.lib = &r->lib; c.sb = &r->sb; c.run = r;
+
+    ctx->on_stack = 1;
+    r->cur_ctx = idx;
+    j5d_engine_activate(ctx->eng);
+    j5d_set_poll(NULL, NULL, 0);
+    if (setjmp(ctx->unwind) == 0) {
+        ctx->can_unwind = 1;
+        rc = j5d_run(&nsb, pc, RUN_LIBBASE, &ctx->st, &d0, bridge, &c, e, el);
+        ctx->can_unwind = 0;
+        if (rc == 0) ctx->finished = 1;   /* it returned: the process exited  */
+    } else {
+        ctx->can_unwind = 0;              /* it blocked back; state is parked */
+        rc = 0;
+    }
+    j5d_engine_activate(outer_eng);
+    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    r->cur_ctx = outer;
+    ctx->on_stack = 0;
+
+    return rc != 0;
+}
+
+/* CreateNewProc(tags D1) -> struct Process *
+ *
+ * The tags that matter are NP_Entry (68k code), NP_StackSize and NP_Name. The
+ * result is the child's guest Process, which is what the parent will PutMsg to
+ * - and because the child's port lives in guest memory, the parent can address
+ * it. Tags this cannot honour are REFUSED by number rather than ignored: a
+ * process silently started without the input stream or the current directory it
+ * asked for is worse than one that did not start. */
+/* The signal a Process's own port uses. AmigaOS reserves the low bits for the
+ * system's own use and a port needs one that nothing else claims. */
+#define EMU68K_PROC_SIGBIT 8
+#define PROC_MSGPORT M68K_Process_pr_MsgPort_mp_Node_ln_Succ
+
+#define NP_Entry     0x800003EBu
+#define NP_StackSize 0x800003F3u
+#define NP_Name      0x800003F4u
+#define NP_Priority  0x800003F5u
+#define NP_Input     0x800003ECu
+#define NP_Output    0x800003EDu
+#define NP_CloseIn   0x800003EEu
+#define NP_CloseOut  0x800003EFu
+
+static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
+                               struct j5d_m68k_state *st, char *e, unsigned el)
+{
+    uint32_t tags = st->d[1], entry = 0, stacksize = 4096;
+    uint32_t t, v, at;
+    struct emu68k_ctx *ctx;
+    int idx;
+
+    for (at = tags; at; at += 8) {
+        t = gread32(sb, at);
+        v = gread32(sb, at + 4);
+        if (!t) break;                                   /* TAG_DONE          */
+        switch (t) {
+        case NP_Entry:     entry = v; break;
+        case NP_StackSize: stacksize = v; break;
+        case NP_Name: case NP_Priority:
+        case NP_Input: case NP_Output:
+        case NP_CloseIn: case NP_CloseOut:
+            break;                    /* recorded by the caller, not needed here */
+        default:
+            snprintf(e, el, "capability gap: CreateNewProc tag $%08lx is not "
+                     "served, and starting the process without it would be a "
+                     "guess", (unsigned long)t);
+            return 1;
+        }
+    }
+    if (!entry) {
+        snprintf(e, el, "capability gap: CreateNewProc without NP_Entry needs a "
+                        "segment to load, which is a different mechanism");
+        return 1;
+    }
+    if (r->nctx == 0) {                       /* first call: adopt the program */
+        r->ctx[0].eng = r->eng;
+        r->ctx[0].task = GUEST_PROCESS;
+        r->ctx[0].live = 1;
+        r->ctx[0].started = 1;
+        r->nctx = 1;
+        r->cur_ctx = 0;
+    }
+    if (r->nctx >= EMU68K_MAX_CTX) {
+        snprintf(e, el, "capability gap: more 68k processes than this run keeps");
+        return 1;
+    }
+    idx = r->nctx;
+    ctx = &r->ctx[idx];
+    memset(ctx, 0, sizeof *ctx);
+    if (stacksize < 16384) stacksize = 16384;
+    ctx->stack_size = stacksize;
+    ctx->stack = guest_alloc(r, stacksize);
+    ctx->task  = guest_alloc(r, M68K_Process_SIZEOF);
+    if (!ctx->stack || !ctx->task) {
+        snprintf(e, el, "guest memory exhausted starting a 68k process");
+        return 1;
+    }
+    ctx->eng = j5d_engine_new();
+    if (!ctx->eng) {
+        snprintf(e, el, "no engine instance for a 68k process");
+        return 1;
+    }
+    /* Its Task has to look like one: a program finds itself with FindTask and
+     * then reads its own port and stack bounds out of it. */
+    memset(j4_sandbox_host(sb, ctx->task), 0, M68K_Process_SIZEOF);
+    {
+        uint8_t *tk = j4_sandbox_host(sb, ctx->task);
+        tk[M68K_Process_pr_Task_tc_Node_ln_Type] = NT_PROCESS;
+    }
+    gwrite32(sb, ctx->task + TASK_SPLOWER_OFF, ctx->stack);
+    gwrite32(sb, ctx->task + TASK_SPUPPER_OFF, ctx->stack + stacksize);
+    /* Its pr_MsgPort, ready to be waited on. A process finds itself and waits
+     * on this port without ever creating it - it is part of being a Process -
+     * so an uninitialised one is a wait on a list that never ends and a signal
+     * bit nobody sets. */
+    {
+        uint32_t port = ctx->task + PROC_MSGPORT;
+        uint32_t list = port + MP_MSGLIST;
+        gwrite32(sb, list + M68K_List_lh_Head, list + M68K_List_lh_Tail);
+        gwrite32(sb, list + M68K_List_lh_Tail, 0);
+        gwrite32(sb, list + M68K_List_lh_TailPred, list + M68K_List_lh_Head);
+        gwrite32(sb, port + MP_SIGTASK, ctx->task);
+        *(uint8_t *)j4_sandbox_host(sb, port + MP_SIGBIT) = EMU68K_PROC_SIGBIT;
+        gwrite32(sb, ctx->task + TASK_SIGALLOC_OFF, 1u << EMU68K_PROC_SIGBIT);
+    }
+    ctx->entry = entry;
+    ctx->live = 1;
+    r->nctx++;
+    /* Give it its first slice now, so it reaches the port it is about to wait
+     * on before the parent sends to it. */
+    if (run_context_nested(r, sb, idx, e, el) != 0)
+        return 1;
+    st->d[0] = ctx->task;
+    return 0;
+}
+
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
     struct bctx *c = user;
@@ -2209,6 +2516,8 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
                     return 0;
                 }
                 if (lvo == 39) { st->d[0] = 0; return 0; }   /* FreeDosObject   */
+                if (lvo == 83)                              /* CreateNewProc   */
+                    return dos_create_new_proc(r, c->sb, st, e, el);
             }
             if (!strcmp(r->openlib[i].name, "utility.library") &&
                 utility_guest_call(c->sb, lvo, st) == 0)
