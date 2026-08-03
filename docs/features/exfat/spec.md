@@ -144,6 +144,39 @@ already known good: sector shift, then cluster shift, then `VolumeLength`, then
 is validated rather than ignored: a non-zero value there is not a conforming exFAT
 volume, and mounting it risks acting on a FAT BPB that is not one.
 
+### 3.1a Device blocks versus exFAT logical sectors
+
+`[DERIVED]` Two sector sizes are in play and they are learned at different times.
+The **device block size** is known before anything is read, from the Mountlist's
+`de_SizeBlock`. The **exFAT logical sector size** is only known after
+`BytesPerSectorShift` has been read out of the boot sector, which requires reading it
+first. Conflating them means `first_device_sector * sector_size` computes a byte offset
+in one unit from a count in the other, and addresses the wrong place on any volume where
+they differ.
+
+The mount therefore proceeds in two stages:
+
+- **U1** Read the **first 512 bytes** using the **device's** block geometry. 512 is
+  safe as a fixed quantity here because `BytesPerSectorShift` is at offset 108 and the
+  boot signature at 510, so everything §3.1 needs is inside the first 512 bytes
+  whatever the logical sector size turns out to be.
+- **U2** Validate `BytesPerSectorShift` per §3.1, which establishes the logical sector
+  size.
+- **U3** **Phase 1 requires the logical sector size to equal the device block size**,
+  and refuses the mount otherwise with `ERROR_BAD_NUMBER`. `[DERIVED]` The alternative
+  is to convert the partition's byte offset into the logical-sector domain and carry a
+  ratio through every access. That is not hard, but it is a second addressing mode
+  reachable only on hardware we cannot currently test against, and an untested second
+  addressing mode in the layer that computes every byte offset is a poor trade. Deferred
+  explicitly rather than left implicit.
+- **U4** Only once U3 holds may sectors 1 to 11 be read as **logical** sectors, and
+  only then are `first_device_sector` and `total_sectors` meaningful as a single domain.
+
+**U5** `FSSuper.first_device_sector` and `FSSuper.total_sectors` are in that one unit,
+device blocks and logical sectors being equal by U3. Any future relaxation of U3 must
+introduce a separate field rather than redefine these, because `exfat_byte_range()`
+multiplies them by the block size and would silently change meaning.
+
 ### 3.2 Boot region checksum
 
 `[PUB]` Sectors 0 to 10 are checksummed into sector 11, which is filled with **repeated
@@ -392,6 +425,7 @@ handler returned the address of its own size field for `ACTION_GET_FILE_SIZE64`;
 | `ActiveFat` set with `NumberOfFats == 1` | `ERROR_OBJECT_WRONG_TYPE` |
 | Geometry out of range (§3.1) | `ERROR_BAD_NUMBER` |
 | Device cannot address the volume | `ERROR_SEEK_ERROR` |
+| Logical sector size differs from the device block size (U3) | `ERROR_BAD_NUMBER` |
 
 ## 11. Acceptance tests
 
@@ -419,6 +453,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T12 | Every mutating action from R1, plus `ACTION_CHANGE_FILE_SIZE64` | `ERROR_DISK_WRITE_PROTECTED` |
 | T13a | **Unit test**: bounds and `SECTOR_FROM_CLUSTER` around `2^32` sectors against a fake backend | No wrap; S2 and S4 hold |
 | T13b | **Integration**: device shim recording 64-bit offsets, exposing synthetic sectors | Offsets issued match those computed |
+| T15 | Volume whose `BytesPerSectorShift` gives 4096 on a 512-byte device | Refused with `ERROR_BAD_NUMBER` (U3), not mounted at a wrong offset |
 | T14 | Cache key distribution below and above `2^32` | Chain lengths comparable; equality on `UQUAD` keys is exact |
 
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert

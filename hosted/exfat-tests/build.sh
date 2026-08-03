@@ -58,26 +58,57 @@ else
 fi
 echo
 
-echo "== gate 1: m68k, 32-bit big-endian =="
+echo "== gate 1: m68k headers and code generation =="
+echo "   (headers only: cache.c/disk.c/exfat_fs.h need an AROS m68k toolchain)"
 if command -v m68k-elf-gcc >/dev/null 2>&1; then
     for cpu in 68000 68020 68040; do
         printf "  -m%-8s " "$cpu"
         m68k-elf-gcc -m$cpu -c -O2 -std=c99 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-            -I"$SRC" "$HERE/m68k_check.c" -o "$HERE/m68k_$cpu.o" \
+            -I"$SRC" "$HERE/m68k_headers_check.c" -o "$HERE/m68k_$cpu.o" \
             && echo "ok" || fail=1
     done
 
-    # A2 is a claim about generated code, so check the generated code: the
-    # byte-wise accessors must emit byte loads at an odd offset, never a
-    # word read that a 68000 would fault on.
+    # A2 is a claim about generated code, so inspect generated code.
+    #
+    # Every memory read through the caller's byte pointer must be a byte
+    # load. A word or long access through an address register would be an
+    # address error on a 68000 for an odd offset, and depends on the buffer's
+    # base alignment even for an even one. %sp is exempt: that is argument
+    # loading, not buffer access.
+    #
+    # The probes are noinline so their disassembly can be isolated by name.
+    VIOLATION='[a-z]+[wl][[:space:]]+[^,]*%a[0-6]@'
+    probe_disasm() {
+        m68k-elf-objdump -d "$1" \
+            | awk '/<exfat_probe_rd(16|32|64)>:/{p=1} /^$/{p=0} p'
+    }
+
+    # Self-test: the gate must catch a cast. If this stops failing, the
+    # assertion below has stopped meaning anything.
+    printf "  %-11s " "gate self-test"
+    cat > "$HERE/.badprobe.c" <<'BAD'
+typedef unsigned short UWORD;
+typedef unsigned char  UBYTE;
+__attribute__((noinline)) UWORD exfat_probe_rd16(const UBYTE *p, unsigned o)
+{ return *(const UWORD *)(p + o); }
+BAD
+    m68k-elf-gcc -m68000 -c -O2 -o "$HERE/.badprobe.o" "$HERE/.badprobe.c"
+    if probe_disasm "$HERE/.badprobe.o" | grep -qE "$VIOLATION"; then
+        echo "ok, a cast is caught"
+    else
+        echo "FAIL: the gate no longer detects a cast"
+        fail=1
+    fi
+    rm -f "$HERE/.badprobe.c" "$HERE/.badprobe.o"
+
     printf "  %-11s " "byte loads"
-    if m68k-elf-objdump -d "$HERE/m68k_68000.o" 2>/dev/null \
-        | grep -qE '\bmove[wl]\b[^,]*@\((1|3|5|7|9)\)'; then
-        echo "FAIL: odd-address word access emitted"
+    if probe_disasm "$HERE/m68k_68000.o" | grep -qE "$VIOLATION"; then
+        echo "FAIL: word/long access through the buffer pointer"
+        probe_disasm "$HERE/m68k_68000.o" | grep -E "$VIOLATION"
         fail=1
     else
-        echo "ok, no odd-address word access"
+        echo "ok, byte loads only"
     fi
 else
     echo "  SKIPPED: no m68k-elf-gcc"
