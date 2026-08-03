@@ -69,15 +69,24 @@ the guard and then issue a well-formed 64-bit offset into the wrong place.
   operands are not already bounded.
 - **S3** Cluster numbers remain `ULONG`. `[PUB]` exFAT FAT entries are 32-bit, so the
   cluster domain is 32-bit by definition. Only the sector domain widens.
-- **S4** `SECTOR_FROM_CLUSTER` **promotes before subtracting**, and is only called after
-  the cluster has been validated as `>= 2`:
+- **S4** `SECTOR_FROM_CLUSTER` **must promote before the shift**, and **must only be
+  called after the cluster has been validated** as `2 ..= ClusterCount + 1`.
 
   ```
-  /* wrong: the subtraction happens in ULONG and wraps for cluster < 2 */
-  ((UQUAD)(cluster - 2) << shift) + heap
-  /* required */
   (((UQUAD)cluster - 2) << shift) + heap
   ```
+
+  `[OURS]` T13a disproves a weaker claim made in revision 2 of this document, that
+  moving the promotion ahead of the subtraction makes an invalid cluster safe. It does
+  not. `(UQUAD)1 - 2` underflows exactly as `(ULONG)1 - 2` does, and the subsequent
+  shift and add wrap the result back into a plausible-looking sector: with an 8-sector
+  cluster and a heap at 4096, cluster 1 yields sector **4088** under either form.
+  Promotion order changes which wrong answer is produced, not whether one is.
+
+  The promotion is required because `cluster << shift` evaluated in `ULONG` overflows
+  for a large cluster. The **only** protection against underflow is the range check, so
+  it is a precondition of the macro and not an optimisation the caller may skip. The
+  macro is not defensive and must not be treated as though it were.
 - **S5** No `UQUAD` may reach `bug()` / `ErrorMessage()` through an unchecked `%lu`.
   Either one audited formatting helper, or every widened diagnostic call is
   compile-tested on m68k and AArch64. `[OURS]` This project has already shipped a
