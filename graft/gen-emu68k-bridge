@@ -540,6 +540,12 @@ FREE_CALL_RE = re.compile(r"\b(Free(?:Mem|Vec|Pooled|DosObject|AslRequest)|"
                           r"Close[A-Za-z0-9_]*)\s*\(")
 CALLBACK_SOURCE_RE = re.compile(
     r"\b(CallHookPkt|CALLHOOKPKT|AROS_UFC\d*|HookEntry|h_Entry|cl_Dispatcher)\b")
+TAG_DATA_CAST_RE = re.compile(
+    r"\(\s*((?:const\s+)?(?:struct\s+)?[A-Za-z_]\w*"
+    r"(?:\s+[A-Za-z_]\w*)?\s*\*?)\s*\)\s*\(?\s*"
+    r"(?:[A-Za-z_]\w*\s*->\s*ti_Data|tidata)\b")
+C_TYPE_TOKEN_RE = (r"(?:const\s+)?(?:struct\s+)?[A-Za-z_]\w*"
+                   r"(?:\s+[A-Za-z_]\w*)?\s*\**")
 
 
 def mask_c_comments(src):
@@ -717,6 +723,154 @@ def extract_tag_evidence(raw, base_line):
         if not old or strength[tag["confidence"]] > strength[old["confidence"]]:
             tag_by_key[key] = tag
     return sorted(tag_by_key.values(), key=lambda x: (x["name"], x["line"]))
+
+
+def explicit_cast_kind(cast):
+    canonical = object_canon(cast)
+    if canonical in ("STRPTR", "CONST_STRPTR", "char *", "const char *", "TEXT *"):
+        return "cstr"
+    if "*" in canonical or canonical in ("APTR", "CONST_APTR"):
+        return "pointer:" + canonical
+    if classify(canonical) == "scalar":
+        return "u32"
+    return None
+
+
+def declaration_type_index(code):
+    found = {}
+    pattern = re.compile(r"\b(%s)\s*([A-Za-z_]\w*)\s*(?=[=;,\[])" %
+                         C_TYPE_TOKEN_RE)
+    for match in pattern.finditer(code):
+        found.setdefault(match.group(2), set()).add(norm(match.group(1)))
+    return found
+
+
+def declared_type_before(code, name, offset):
+    pattern = re.compile(r"\b(%s)\s*%s\s*(?=[=;,\[])" %
+                         (C_TYPE_TOKEN_RE, re.escape(name)))
+    matches = list(pattern.finditer(code, 0, offset))
+    return norm(matches[-1].group(1)) if matches else None
+
+
+def extract_library_tag_evidence(sources):
+    """Find type-bearing uses of tags anywhere in a library implementation.
+
+    A public wrapper often forwards an IPTR unchanged to a BOOPSI class, so the
+    wrapper alone cannot reveal its representation.  The class switch that
+    consumes the same named tag can: `(struct Hook *)tidata`, for example, is
+    explicit high-confidence evidence even though the call is not a normal C
+    edge reachable from the public vector.
+    """
+    found = []
+    field_types = {}
+    for _path, raw in sources:
+        for name, types in declaration_type_index(mask_c_comments(raw)).items():
+            field_types.setdefault(name, set()).update(types)
+
+    def add_case(tag, kind, cast, path, code, offset, access):
+        found.append({
+            "name": tag, "access": access, "kind": kind,
+            "confidence": "high", "line": 1 + code.count("\n", 0, offset),
+            "cast": cast, "default": "", "list_expression": "",
+            "list_parameters": [], "source": os.path.relpath(path, AROS),
+            "evidence_scope": "library"
+        })
+
+    for path, raw in sources:
+        code = mask_c_comments(raw)
+        # Include explicit casts on direct GetTagData uses throughout the
+        # library, including class implementations reached through dispatch.
+        for item in extract_tag_evidence(raw, 1):
+            if item.get("confidence") == "high":
+                found.append(dict(item, source=os.path.relpath(path, AROS),
+                                  evidence_scope="library"))
+        for call in TAG_CALL_RE.finditer(code):
+            # FindTagItem returns the TagItem itself, so the receiving variable's
+            # type says nothing about ti_Data.  Only GetTagData returns payload.
+            if call.group(1) != "GetTagData":
+                continue
+            opening = code.find("(", call.start())
+            args, _after = call_arguments(code, opening)
+            if not args or not TAG_MACRO_RE.fullmatch(args[0].strip()):
+                continue
+            tag = args[0].strip()
+            prefix = code[max(0, call.start() - 192):call.start()]
+            member = re.search(
+                r"\b[A-Za-z_]\w*\s*->\s*([A-Za-z_]\w*)\s*=\s*"
+                r"(?:\([^;=]+\)\s*)?$", prefix)
+            if member:
+                types = field_types.get(member.group(1), set())
+                kinds = {explicit_cast_kind(t) for t in types}
+                kinds.discard(None)
+                if len(kinds) == 1 and types and all(explicit_cast_kind(t) for t in types):
+                    add_case(tag, next(iter(kinds)), " | ".join(sorted(types)),
+                             path, code, call.start(), "gettag-field-type")
+            local = re.search(r"\b([A-Za-z_]\w*)\s*=\s*(?:\([^;=]+\)\s*)?$", prefix)
+            if local and not member:
+                target_type = declared_type_before(code, local.group(1), call.start())
+                kind = explicit_cast_kind(target_type) if target_type else None
+                if kind:
+                    add_case(tag, kind, target_type, path, code, call.start(),
+                             "gettag-local-target-type")
+        cases = list(re.finditer(r"\bcase\s+([A-Z][A-Za-z0-9_]*)\s*:", code))
+        for i, match in enumerate(cases):
+            tag = match.group(1)
+            if not TAG_MACRO_RE.fullmatch(tag):
+                continue
+            stop = cases[i + 1].start() if i + 1 < len(cases) else min(
+                len(code), match.end() + 4096)
+            block = code[match.end():stop]
+            for cast_match in TAG_DATA_CAST_RE.finditer(block):
+                cast = norm(cast_match.group(1))
+                kind = explicit_cast_kind(cast)
+                if not kind:
+                    continue
+                add_case(tag, kind, cast, path, code,
+                         match.end() + cast_match.start(), "case-payload-cast")
+
+            # A narrow/scalar local receiving ti_Data before the switch proves
+            # scalar use for all of that switch's cases.  IPTR is intentionally
+            # excluded because it is also the native carrier for pointers.
+            if re.search(r"\btidata\b", block):
+                target_type = declared_type_before(code, "tidata", match.start())
+                kind = explicit_cast_kind(target_type) if target_type else None
+                if kind:
+                    add_case(tag, kind, target_type, path, code, match.start(),
+                             "case-local-type")
+
+            # Resolve `data->field = tidata` through declarations of that field.
+            # Accept only when every declaration with that name yields the same
+            # representation; ambiguous names remain unresolved.
+            member_assign = re.compile(
+                r"\b[A-Za-z_]\w*\s*->\s*([A-Za-z_]\w*)\s*=\s*"
+                r"(?:\([^;=]+\)\s*)?(?:[A-Za-z_]\w*\s*->\s*ti_Data|tidata)\b")
+            for assignment in member_assign.finditer(block):
+                types = field_types.get(assignment.group(1), set())
+                kinds = {explicit_cast_kind(t) for t in types}
+                kinds.discard(None)
+                if len(kinds) == 1 and types and all(explicit_cast_kind(t) for t in types):
+                    add_case(tag, next(iter(kinds)), " | ".join(sorted(types)),
+                             path, code, match.end() + assignment.start(),
+                             "case-field-type")
+
+            # Likewise for a named local target whose closest preceding
+            # declaration gives it a concrete scalar or pointer type.
+            local_assign = re.compile(
+                r"\b([A-Za-z_]\w*)\s*=\s*(?:\([^;=]+\)\s*)?"
+                r"(?:[A-Za-z_]\w*\s*->\s*ti_Data|tidata)\b")
+            for assignment in local_assign.finditer(block):
+                name = assignment.group(1)
+                target_type = declared_type_before(code, name, match.start())
+                kind = explicit_cast_kind(target_type) if target_type else None
+                if kind:
+                    add_case(tag, kind, target_type, path, code,
+                             match.end() + assignment.start(), "case-local-target-type")
+    unique = {}
+    for item in found:
+        key = (item["name"], item["kind"], item["source"], item["line"],
+               item["access"])
+        unique[key] = item
+    return sorted(unique.values(), key=lambda x: (x["name"], x["source"], x["line"]))
 
 
 def source_function_chunk(src, name):
@@ -1340,6 +1494,13 @@ def collect_source_reports(which):
                 ast_errors += 1
             analyze_reachable_helpers(e, ast_config, sources,
                                       helper_cache, helper_definition_cache)
+        library_tags = extract_library_tag_evidence(sources)
+        for e in evidence:
+            used_names = {tag["name"] for tag in e.get("tags", [])}
+            used_names.update(tag["name"] for tag in e.get("propagated_tags", []))
+            e["corroborating_tag_evidence"] = [
+                tag for tag in library_tags if tag["name"] in used_names
+            ]
         pairs = ownership_candidates(funcs, evidence)
         for e in evidence:
             e.pop("_raw", None)
@@ -1356,7 +1517,8 @@ def collect_source_reports(which):
                 "failed_functions": ast_errors
             },
             "functions": evidence,
-            "ownership_candidates": pairs
+            "ownership_candidates": pairs,
+            "library_tag_evidence": library_tags
         })
     if wanted and not reports:
         raise ValueError("no generated library matches: %s" %
@@ -1458,6 +1620,10 @@ def tag_observations(evidence):
         item = dict(tag)
         if not item.get("root_arguments") and len(tag_args) == 1:
             item["root_arguments"] = tag_args
+        observations.append(item)
+    for tag in evidence.get("corroborating_tag_evidence", []):
+        item = dict(tag, via=[evidence["name"], "<library-tag-consumer>"],
+                    root_arguments=tag_args if len(tag_args) == 1 else [])
         observations.append(item)
     return observations
 

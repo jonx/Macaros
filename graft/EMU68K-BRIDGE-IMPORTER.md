@@ -74,6 +74,9 @@ For each non-private public vector, the analyzer:
   positions; and
 - propagates helper tag accesses, structure fields, casts, retained pointers,
   ownership calls, and callback evidence back to the public-vector report.
+- builds a library-wide tag-consumer index so payload casts and typed assignments
+  inside BOOPSI class dispatchers can corroborate tags forwarded by public
+  wrappers even though dispatch is not an ordinary C call edge.
 
 For example, `CreateGadgetA` does not itself spell out every gadget tag. It calls
 helpers such as `makebutton`, `makecycle`, and `makelistview`. The interprocedural
@@ -104,6 +107,12 @@ On the native target it is IPTR-sized, and a zero default can also represent a
 pointer. Guessing `u32` there could pass a guest address to native code. The
 importer must leave such a tag closed until another use site or an explicit
 review proves its representation.
+
+`FindTagItem` is treated differently from `GetTagData`: it returns a pointer to
+the `TagItem`, not `ti_Data`. The type of the receiving variable is therefore
+never used as payload evidence. This distinction is covered by the GadTools
+import regression because confusing the two would falsely classify tags as
+`pointer:struct TagItem *`.
 
 ## Import artifacts and remaining certification pipeline
 
