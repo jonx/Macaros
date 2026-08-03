@@ -42,7 +42,7 @@ HEADERS = [
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
     "graphics/regions.h", "graphics/rastport.h", "graphics/gfx.h",
     "graphics/text.h", "graphics/displayinfo.h",
-    "intuition/preferences.h",
+    "intuition/preferences.h", "intuition/screens.h",
 ]
 
 TYPES = [
@@ -50,21 +50,18 @@ TYPES = [
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
-    "Window", "RastPort", "Preferences", "BitMap",
+    "Window", "Screen", "RastPort", "Preferences", "BitMap",
     "TextAttr", "TextFont",
-    "DimensionInfo",
+    "DimensionInfo", "DrawInfo",
 ]
 
-# NOT here, and the reason matters for every structure added after this one:
-# `struct Screen`. Its head is the AmigaOS ABI exactly (LeftEdge 8, Flags 20,
-# Font 40, ViewPort 44, RastPort 84, both nested structures the ABI sizes), but
-# AROS's `struct Layer_Info` is larger than the classic one, so every field
-# after it - FirstGadget, DetailPen, BarLayer, UserData - sits 10 bytes further
-# on than a 1990s binary looks for it. Deriving the guest layout from AROS's own
-# headers is right only where AROS reproduces the ABI, which is most places and
-# is checked below, but it is not a guarantee. Screen crosses as an opaque
-# handle until the classic tail offsets can be confirmed from something better
-# than memory.
+# `struct Screen` is intentionally only marshalled through byte 83. Its head is
+# the AmigaOS ABI exactly (LeftEdge 8, Flags 20, Font 40, ViewPort 44, RastPort
+# 84), but AROS's `struct Layer_Info` is larger than the classic one, so every
+# field after it sits at an incompatible offset. The generated macros may name
+# the full AROS layout, while FIELD_LIMITS prevents the generic copier from
+# claiming that incompatible tail is a legacy facade.
+FIELD_LIMITS = {"Screen": 84}
 
 # Truths from the AmigaOS ABI. If the m68k side stops reproducing these, the
 # probe is being compiled with the wrong alignment and nothing it emits can be
@@ -80,6 +77,9 @@ KNOWN_M68K = {
     "Hook":          (20, {"h_Entry": 8, "h_SubEntry": 12, "h_Data": 16}),
     "Window":        (156, {"LeftEdge": 4, "TopEdge": 6, "Width": 8,
                               "Height": 10, "RPort": 50, "UserPort": 86}),
+    "Screen":        (354, {"LeftEdge": 8, "Flags": 20, "Font": 40,
+                              "ViewPort_ColorMap": 48,
+                              "RastPort_Layer": 84}),
     # GetPrefs is a raw CopyMem on the native side, so the guest's idea of this
     # layout has to be right to the byte. The nested timeval and the pointer
     # sprite are named here because they are what the flattening and the array
@@ -100,6 +100,12 @@ KNOWN_M68K = {
                             "MaxOScan_MinX": 34, "VideoOScan_MinX": 42,
                             "TxtOScan_MinX": 50, "StdOScan_MinX": 58,
                             "pad": 66, "reserved": 80}),
+    "DrawInfo":      (50, {"dri_Version": 0, "dri_NumPens": 2,
+                            "dri_Pens": 4, "dri_Font": 8, "dri_Depth": 12,
+                            "dri_Resolution_X": 14, "dri_Resolution_Y": 16,
+                            "dri_Flags": 18, "dri_CheckMark": 22,
+                            "dri_AmigaKey": 26, "dri_Screen": 30,
+                            "dri_Prefs": 34, "dri_Reserved": 38}),
 }
 
 # clang indents by two spaces per nesting level, after a single space that even
@@ -434,6 +440,10 @@ def emit(m68k, native, out):
             k = field_kind(t, f, ty, nty)
             if k is None or k[0] == "PTR":
                 skipped.append("%s (%s)" % (f, ty))
+                continue
+            if t in FIELD_LIMITS and o + k[1] * k[3] > FIELD_LIMITS[t]:
+                skipped.append("%s (beyond %d-byte partial facade)"
+                               % (f, FIELD_LIMITS[t]))
                 continue
             kind = {"BYTES": "EMU_F_BYTES", "ARRAY": "EMU_F_ARRAY",
                     "GPTR": "EMU_F_GUESTPTR"}.get(k[0], "EMU_F_SCALAR")

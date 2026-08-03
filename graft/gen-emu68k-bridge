@@ -553,6 +553,47 @@ def validate_policy(targets):
         if o.get("kind") == "facade" and not re.fullmatch(
                 r"[A-Za-z_]\w*", o.get("facade_struct", "")):
             errors.append("object type %s facade_struct is invalid" % name)
+        if o.get("facade_size") is not None and (
+                o.get("kind") != "facade" or
+                not isinstance(o.get("facade_size"), int) or o["facade_size"] < 1):
+            errors.append("object type %s facade_size needs a positive facade" % name)
+        nested_fields = o.get("nested_fields", [])
+        if not isinstance(nested_fields, list):
+            errors.append("object type %s nested_fields must be a list" % name)
+            nested_fields = []
+        if nested_fields and o.get("kind") != "facade":
+            errors.append("object type %s nested fields need a facade" % name)
+        seen_nested = set()
+        for nested in nested_fields:
+            field = nested.get("field") if isinstance(nested, dict) else None
+            kind = nested.get("kind") if isinstance(nested, dict) else None
+            if not isinstance(field, str) or not re.fullmatch(r"[A-Za-z_]\w*", field):
+                errors.append("object type %s has invalid nested field" % name)
+                continue
+            native_field = nested.get("native_field", field)
+            if not isinstance(native_field, str) or not re.fullmatch(
+                    r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*", native_field):
+                errors.append("object type %s nested field %s has invalid native_field"
+                              % (name, field))
+            if field in seen_nested:
+                errors.append("object type %s repeats nested field %s" % (name, field))
+            seen_nested.add(field)
+            if kind == "u16_array":
+                if not re.fullmatch(r"[A-Za-z_]\w*", nested.get("count_field", "")):
+                    errors.append("object type %s nested field %s needs count_field"
+                                  % (name, field))
+                count = nested.get("max_count")
+                if not isinstance(count, int) or count < 1 or count > 1024:
+                    errors.append("object type %s nested field %s needs max_count 1..1024"
+                                  % (name, field))
+            elif kind in ("object", "embedded_object"):
+                nested_type = nested.get("type")
+                if nested_type not in object_types:
+                    errors.append("object type %s nested field %s uses missing object %s"
+                                  % (name, field, nested_type))
+            else:
+                errors.append("object type %s nested field %s has invalid kind %r"
+                              % (name, field, kind))
         if destructor is not None:
             df = bykey.get(destructor)
             if not isinstance(destructor, str) or not df:
@@ -623,6 +664,7 @@ def validate_policy(targets):
         objects = p.get("objects", {})
         callbacks = p.get("callbacks", {})
         pointers = p.get("pointers", {})
+        arrays = p.get("arrays", {})
         guest_values = p.get("guest_values", [])
         strings = p.get("strings", [])
         null_args = p.get("null_args", [])
@@ -741,6 +783,32 @@ def validate_policy(targets):
                               % (key, arg))
             if arg in taglists or arg in structs:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, ap in arrays.items():
+            kind, direction = ap.get("kind"), ap.get("direction")
+            if arg not in args:
+                errors.append("function policy %s names missing array %s" % (key, arg))
+            elif "*" not in args[arg]:
+                errors.append("function policy %s array %s is not a pointer" % (key, arg))
+            elif kind == "rgb32" and object_canon(args[arg]).replace("const ", "") not in (
+                    "ULONG *", "const ULONG *"):
+                errors.append("function policy %s RGB32 array %s is not ULONG *"
+                              % (key, arg))
+            if kind != "rgb32":
+                errors.append("function policy %s array %s has invalid kind %r"
+                              % (key, arg, kind))
+            if direction != "in":
+                errors.append("function policy %s array %s currently requires direction in"
+                              % (key, arg))
+            count = ap.get("max_count")
+            if not isinstance(count, int) or count < 1 or count > 4096:
+                errors.append("function policy %s array %s needs max_count 1..4096"
+                              % (key, arg))
+            if ap.get("nullable", True) not in (True, False):
+                errors.append("function policy %s array %s nullable must be boolean"
+                              % (key, arg))
+            if (arg in taglists or arg in structs or arg in tagged_structs or
+                    arg in objects or arg in callbacks or arg in pointers):
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, op in objects.items():
             otype = op.get("type")
             ospec = object_types.get(otype)
@@ -799,7 +867,7 @@ def validate_policy(targets):
                                   % (key, arg))
                 if (arg in taglists or arg in structs or arg in tagged_structs or
                         arg in objects or arg in callbacks or arg in pointers or
-                        arg in guest_values or arg in strings):
+                        arg in arrays or arg in guest_values or arg in strings):
                     errors.append("function policy %s argument %s has two policies"
                                   % (key, arg))
         if boopsi:
@@ -847,7 +915,7 @@ def validate_policy(targets):
         blockers = []
         for t, n in f.args:
             if (n in taglists or n in structs or n in tagged_structs or
-                    n in pointers or n in objects or n in callbacks or
+                    n in pointers or n in arrays or n in objects or n in callbacks or
                     n in guest_values or n in strings or n in null_args):
                 continue
             if classify(t) not in ("scalar", "widen", "string", "bptr"):
@@ -996,6 +1064,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     any(object_types[o].get("kind") == "facade" for o in used_objects) or
                     any(t.get("kind") == "struct"
                         for d in used_domains for t in domains[d]["tags"]))
+    uses_nested_fields = any(object_types[o].get("nested_fields") for o in used_objects)
     out = []
     w = out.append
 
@@ -1025,7 +1094,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     w("#include <%s>" % hdr)
     if uses_structs:
         w("#include <string.h>")
-    if (used_headers or
+    if (used_headers or uses_nested_fields or
             any(function_policy(lib, f) and function_policy(lib, f).get("null_args")
                 for f in funcs)):
         w("#include <stdio.h>")
@@ -1106,6 +1175,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         structs = policy.get("structs", {}) if policy else {}
         tagged_structs = policy.get("tagged_structs", {}) if policy else {}
         pointers = policy.get("pointers", {}) if policy else {}
+        arrays = policy.get("arrays", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
         callbacks = policy.get("callbacks", {}) if policy else {}
         guest_values = policy.get("guest_values", []) if policy else []
@@ -1116,8 +1186,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("    {")
         call_args = []
         post = []
+        array_pre = []
         precall = []
         heap_tag_scratch = []
+        heap_array_scratch = []
         # A "how much of this structure do you want" argument is clamped before
         # anything else: it bounds the guest range check as well as the copy, so
         # it cannot be computed inside the block that already needs it. The
@@ -1215,6 +1287,23 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     ])
                     post.append((["if (emu68k_boopsi_finish(&emu_boopsi_%d, err, errlen) < 0)" % ai,
                                   "    return 1;"], "always"))
+                if op.get("release", False) or op.get("consume", False):
+                    ospec = object_types[oname]
+                    stype = ospec.get("facade_struct")
+                    for nested in ospec.get("nested_fields", []):
+                        if nested["kind"] == "object":
+                            post.append(([
+                                "emu68k_object_release(guest0,",
+                                "    (ULONG)emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s, 4),"
+                                % (src, stype, nested["field"]),
+                                "    EMU_OBJ_%s);" % c_ident(nested["type"]),
+                            ], "always"))
+                        elif nested["kind"] == "embedded_object":
+                            post.append(([
+                                "emu68k_object_release(guest0,",
+                                "    %s + M68K_%s_%s," % (src, stype, nested["field"]),
+                                "    EMU_OBJ_%s);" % c_ident(nested["type"]),
+                            ], "always"))
                 if op.get("release", False):
                     post.append((["emu68k_object_release(guest0, %s, EMU_OBJ_%s);"
                                   % (src, c_ident(oname))], "always"))
@@ -1291,6 +1380,52 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   % (src, width, ai)], pp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_scalar_%d" % (norm(atype), ai))
                 continue
+            if aname in arrays:
+                ap = arrays[aname]
+                cap = ap["max_count"]
+                w("        ULONG emu_array_size_%d = sizeof(ULONG) * %d;" % (ai, cap))
+                w("        APTR emu_array_scratch_%d = NULL;" % ai)
+                prior_arrays = list(heap_array_scratch)
+                array_pre.extend([
+                    "        if (%s)" % src,
+                    "        {",
+                    "            emu_array_scratch_%d = emu68k_scratch_alloc(" % ai,
+                    "                emu_array_size_%d, err, errlen);" % ai,
+                    "            if (!emu_array_scratch_%d)" % ai,
+                    "            {",
+                ] + [
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (old, old) for old in prior_arrays
+                ] + [
+                    "                return 1;",
+                    "            }",
+                    "            if (emu68k_rgb32_to_native(guest0, %s," % src,
+                    "                    (ULONG *)emu_array_scratch_%d, %d," % (ai, cap),
+                    "                    \"%s.%s\", err, errlen) < 0)" % (f.name, aname),
+                    "            {",
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (ai, ai),
+                ] + [
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (old, old) for old in prior_arrays
+                ] + [
+                    "                return 1;",
+                    "            }",
+                    "        }",
+                ])
+                heap_array_scratch.append(ai)
+                if not ap.get("nullable", True):
+                    array_pre[0:0] = [
+                        "        if (!%s)" % src,
+                        "        {",
+                        "            if (err && errlen)",
+                        "                snprintf(err, errlen, \"%s.%s requires a non-NULL array\");"
+                        % (f.name, aname),
+                        "            return 1;",
+                        "        }",
+                    ]
+                call_args.append("(%s)emu_array_scratch_%d" % (norm(atype), ai))
+                continue
             if aname in guest_values:
                 call_args.append("(%s)(IPTR)%s" % (norm(atype), src))
                 continue
@@ -1357,6 +1492,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("            return 1;")
             call_args.append("(%s)(%s ? emu_tags_%d : NULL)"
                              % (norm(atype), src, ai))
+        for line in array_pre:
+            w(line)
         for line in precall:
             w(line)
         args = ",\n              ".join(call_args)
@@ -1365,6 +1502,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         def emit_heap_tag_cleanup():
             for scratch_ai in heap_tag_scratch:
                 w("        emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
+                  % (scratch_ai, scratch_ai))
+            for scratch_ai in heap_array_scratch:
+                w("        if (emu_array_scratch_%d)" % scratch_ai)
+                w("            emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
                   % (scratch_ai, scratch_ai))
         if result_policy and result_policy.get("kind") == "guest_arg":
             result_arg = result_policy["arg"]
@@ -1458,11 +1599,18 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]
+                nested_arrays = [n for n in ospec.get("nested_fields", [])
+                                 if n["kind"] == "u16_array"]
+                extra_parts = ["sizeof(UWORD) * %d" % n["max_count"]
+                               for n in nested_arrays]
+                facade_size = str(ospec.get("facade_size", "M68K_%s_SIZEOF" % stype))
+                if extra_parts:
+                    facade_size += " + " + " + ".join(extra_parts)
                 w("        if (emu68k_object_to_guest_facade(guest0, emu_result, EMU_OBJ_%s,"
                   % c_ident(oname))
                 w("                                             base, %s," % cleanup)
-                w('                                             "%s", M68K_%s_SIZEOF,'
-                  % (oname, stype))
+                w('                                             "%s", %s,'
+                  % (oname, facade_size))
                 w("                                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
                   % (stype, stype))
                 w("                                             &r->d[0], err, errlen) < 0)")
@@ -1473,6 +1621,83 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w('                                      "%s", &r->d[0], err, errlen) < 0)'
                   % oname)
             w("            return 1;")
+            if ospec.get("kind") == "facade" and ospec.get("nested_fields"):
+                w("        if (emu_result && r->d[0])")
+                w("        {")
+                w("            struct %s *emu_facade_native = (struct %s *)emu_result;"
+                  % (stype, stype))
+                array_offset = facade_size
+                for ni, nested in enumerate(ospec.get("nested_fields", [])):
+                    field = nested["field"]
+                    native_field = nested.get("native_field", field)
+                    if nested["kind"] == "u16_array":
+                        count_field = nested["count_field"]
+                        max_count = nested["max_count"]
+                        native_count_field = nested.get("native_count_field", count_field)
+                        w("            ULONG emu_nested_count_%d = emu_facade_native->%s;"
+                          % (ni, native_count_field))
+                        w("            if (emu_nested_count_%d > %d ||"
+                          % (ni, max_count))
+                        w("                (emu_nested_count_%d && !emu_facade_native->%s))"
+                          % (ni, native_field))
+                        w("            {")
+                        w("                if (err && errlen)")
+                        w('                    snprintf(err, errlen, "%s.%s has invalid count/pointer");'
+                          % (oname, field))
+                        w("                return 1;")
+                        w("            }")
+                        w("            ULONG emu_nested_guest_%d = r->d[0] + %s;"
+                          % (ni, array_offset))
+                        w("            for (ULONG emu_nested_i_%d = 0;"
+                          % ni)
+                        w("                 emu_nested_i_%d < emu_nested_count_%d;"
+                          % (ni, ni))
+                        w("                 emu_nested_i_%d++)" % ni)
+                        w("                emu68k_scalar_to_guest(guest0,")
+                        w("                    emu_nested_guest_%d + emu_nested_i_%d * 2, 2,"
+                          % (ni, ni))
+                        w("                    emu_facade_native->%s[emu_nested_i_%d]);"
+                          % (native_field, ni))
+                        w("            emu68k_scalar_to_guest(guest0,")
+                        w("                r->d[0] + M68K_%s_%s, 4," % (stype, field))
+                        w("                emu_nested_count_%d ? emu_nested_guest_%d : 0);"
+                          % (ni, ni))
+                        array_offset += " + sizeof(UWORD) * %d" % max_count
+                    elif nested["kind"] == "object":
+                        nested_type = nested["type"]
+                        nested_spec = object_types[nested_type]
+                        w("            ULONG emu_nested_token_%d = 0;" % ni)
+                        if nested_spec.get("kind") == "facade":
+                            nested_struct = nested_spec["facade_struct"]
+                            w("            if (emu68k_object_to_guest_facade(guest0,")
+                            w("                    emu_facade_native->%s, EMU_OBJ_%s," %
+                              (native_field, c_ident(nested_type)))
+                            w("                    NULL, NULL, \"%s\", M68K_%s_SIZEOF," %
+                              (nested_type, nested_struct))
+                            w("                    emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
+                              % (nested_struct, nested_struct))
+                            w("                    &emu_nested_token_%d, err, errlen) < 0)" % ni)
+                        else:
+                            w("            if (emu68k_object_to_guest(guest0,")
+                            w("                    emu_facade_native->%s, EMU_OBJ_%s," %
+                              (native_field, c_ident(nested_type)))
+                            w("                    NULL, NULL, \"%s\"," % nested_type)
+                            w("                    &emu_nested_token_%d, err, errlen) < 0)" % ni)
+                        w("                return 1;")
+                        w("            emu68k_scalar_to_guest(guest0,")
+                        w("                r->d[0] + M68K_%s_%s, 4, emu_nested_token_%d);"
+                          % (stype, field, ni))
+                    elif nested["kind"] == "embedded_object":
+                        nested_type = nested["type"]
+                        w("            ULONG emu_nested_token_%d =" % ni)
+                        w("                r->d[0] + M68K_%s_%s;" % (stype, field))
+                        w("            if (emu68k_object_alias_to_guest(guest0,")
+                        w("                    emu_nested_token_%d, &emu_facade_native->%s," %
+                          (ni, native_field))
+                        w("                    EMU_OBJ_%s, \"%s\", err, errlen) < 0)" %
+                          (c_ident(nested_type), nested_type))
+                        w("                return 1;")
+                w("        }")
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
             emit_heap_tag_cleanup()
@@ -1605,6 +1830,9 @@ LONG emu68k_object_to_guest_facade(APTR guest0, APTR native, UWORD type,
                                    const char *type_name, ULONG facade_size,
                                    const struct EmuField *fields, int field_count,
                                    ULONG *token, char *err, ULONG errlen);
+LONG emu68k_object_alias_to_guest(APTR guest0, ULONG token, APTR native,
+                                  UWORD type, const char *type_name,
+                                  char *err, ULONG errlen);
 void emu68k_object_release(APTR guest0, ULONG token, UWORD type);
 void emu68k_object_consume(APTR guest0, ULONG token, UWORD type);
 LONG emu68k_hook_prepare(APTR guest0, ULONG guest_hook,
@@ -1653,6 +1881,9 @@ LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
                            struct TagItem *native_tags, ULONG capacity,
                            APTR scratch, ULONG scratch_size,
                            char *err, ULONG errlen);
+LONG emu68k_rgb32_to_native(APTR guest0, ULONG guest_table,
+                            ULONG *native_table, ULONG capacity,
+                            const char *what, char *err, ULONG errlen);
 
 LONG emu68k_require_guest_range(ULONG guest_addr, ULONG length,
                                 const char *what, char *err, ULONG errlen);

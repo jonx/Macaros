@@ -54,7 +54,23 @@
     "Screen": {
       "id": 9,
       "c_type": "struct Screen *",
-      "kind": "opaque",
+      "kind": "facade",
+      "facade_struct": "Screen",
+      "facade_size": 84,
+      "nested_fields": [
+        {
+          "field": "ViewPort_Next",
+          "native_field": "ViewPort",
+          "kind": "embedded_object",
+          "type": "ViewPort"
+        },
+        {
+          "field": "ViewPort_ColorMap",
+          "native_field": "ViewPort.ColorMap",
+          "kind": "object",
+          "type": "ColorMap"
+        }
+      ],
       "destructor": "intuition.library.CloseScreen"
     },
     "AslRequest": {
@@ -74,6 +90,31 @@
       "id": 12,
       "c_type": "DisplayInfoHandle",
       "pointer_typedef": true,
+      "kind": "opaque"
+    },
+    "DrawInfo": {
+      "id": 13,
+      "c_type": "struct DrawInfo *",
+      "kind": "facade",
+      "facade_struct": "DrawInfo",
+      "nested_fields": [
+        {
+          "field": "dri_Pens",
+          "kind": "u16_array",
+          "count_field": "dri_NumPens",
+          "max_count": 256
+        },
+        {"field": "dri_Font", "kind": "object", "type": "TextFont"}
+      ]
+    },
+    "ColorMap": {
+      "id": 14,
+      "c_type": "struct ColorMap *",
+      "kind": "opaque"
+    },
+    "ViewPort": {
+      "id": 15,
+      "c_type": "struct ViewPort *",
       "kind": "opaque"
     }
   },
@@ -343,6 +384,16 @@
     "intuition.library.PubScreenStatus": {
       "objects": {"Scr": {"type": "Screen", "nullable": false}}
     },
+    "intuition.library.GetScreenDrawInfo": {
+      "objects": {"screen": {"type": "Screen", "nullable": false}},
+      "result": {"kind": "object", "type": "DrawInfo", "owned": false}
+    },
+    "intuition.library.FreeScreenDrawInfo": {
+      "objects": {
+        "screen": {"type": "Screen", "nullable": false},
+        "drawInfo": {"type": "DrawInfo", "nullable": false, "release": true}
+      }
+    },
     "intuition.library.MakeClass": {
       "strings": ["classID", "superClassID"],
       "objects": {
@@ -390,6 +441,23 @@
           "header": "graphics/displayinfo.h",
           "variants": {"DTAG_DIMS": "DimensionInfo"},
           "copy_on": "nonzero"
+        }
+      }
+    },
+    "graphics.library.ObtainPen": {
+      "objects": {"cm": {"type": "ColorMap", "nullable": false}}
+    },
+    "graphics.library.ReleasePen": {
+      "objects": {"cm": {"type": "ColorMap", "nullable": false}}
+    },
+    "graphics.library.LoadRGB32": {
+      "objects": {"vp": {"type": "ViewPort", "nullable": false}},
+      "arrays": {
+        "table": {
+          "kind": "rgb32",
+          "direction": "in",
+          "max_count": 1024,
+          "nullable": true
         }
       }
     },
