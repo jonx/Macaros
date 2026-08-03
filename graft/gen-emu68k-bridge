@@ -2927,6 +2927,14 @@ def validate_policy(targets):
                 o.get("kind") != "facade" or
                 not isinstance(o.get("facade_size"), int) or o["facade_size"] < 1):
             errors.append("object type %s facade_size needs a positive facade" % name)
+        linked_field = o.get("linked_field")
+        if linked_field is not None and not re.fullmatch(
+                r"[A-Za-z_]\w*", linked_field):
+            errors.append("object type %s linked_field is invalid" % name)
+        linked_limit = o.get("linked_limit", 4096)
+        if (not isinstance(linked_limit, int) or linked_limit < 1 or
+                linked_limit > 65536):
+            errors.append("object type %s linked_limit must be 1..65536" % name)
         nested_fields = o.get("nested_fields", [])
         if not isinstance(nested_fields, list):
             errors.append("object type %s nested_fields must be a list" % name)
@@ -3151,6 +3159,55 @@ def validate_policy(targets):
                                   % (key, arg))
             if arg in taglists:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+            fields = sp.get("fields", {})
+            if not isinstance(fields, dict):
+                errors.append("function policy %s struct %s fields must be an object"
+                              % (key, arg))
+                fields = {}
+            for field, fp in fields.items():
+                kind = fp.get("kind") if isinstance(fp, dict) else None
+                if not re.fullmatch(r"[A-Za-z_]\w*", field):
+                    errors.append("function policy %s struct %s has invalid field %r"
+                                  % (key, arg, field))
+                if kind not in ("cstr", "struct", "object", "guest_value"):
+                    errors.append("function policy %s struct %s field %s has invalid kind %r"
+                                  % (key, arg, field, kind))
+                if kind == "struct" and not re.fullmatch(
+                        r"[A-Za-z_]\w*", fp.get("type", "")):
+                    errors.append("function policy %s struct %s field %s needs a type"
+                                  % (key, arg, field))
+                nested_fields = fp.get("fields", {}) if kind == "struct" else {}
+                if not isinstance(nested_fields, dict):
+                    errors.append("function policy %s struct %s field %s nested fields "
+                                  "must be an object" % (key, arg, field))
+                    nested_fields = {}
+                for nested_field, nested_fp in nested_fields.items():
+                    nested_kind = (nested_fp.get("kind")
+                                   if isinstance(nested_fp, dict) else None)
+                    if not re.fullmatch(r"[A-Za-z_]\w*", nested_field):
+                        errors.append("function policy %s struct %s field %s has invalid "
+                                      "nested field %r" %
+                                      (key, arg, field, nested_field))
+                    if nested_kind not in ("cstr", "object", "guest_value"):
+                        errors.append("function policy %s struct %s field %s nested field %s "
+                                      "has invalid kind %r" %
+                                      (key, arg, field, nested_field, nested_kind))
+                    if (nested_kind == "object" and
+                            nested_fp.get("type") not in object_types):
+                        errors.append("function policy %s struct %s field %s nested field %s "
+                                      "uses missing object %r" %
+                                      (key, arg, field, nested_field,
+                                       nested_fp.get("type")))
+                    if nested_fp.get("nullable", True) not in (True, False):
+                        errors.append("function policy %s struct %s field %s nested field %s "
+                                      "nullable must be boolean" %
+                                      (key, arg, field, nested_field))
+                if kind == "object" and fp.get("type") not in object_types:
+                    errors.append("function policy %s struct %s field %s uses missing object %r"
+                                  % (key, arg, field, fp.get("type")))
+                if fp.get("nullable", True) not in (True, False):
+                    errors.append("function policy %s struct %s field %s nullable must be boolean"
+                                  % (key, arg, field))
         for arg, sp in tagged_structs.items():
             tag_arg, size_arg = sp.get("tag_arg"), sp.get("size_arg")
             variants = sp.get("variants")
@@ -3335,6 +3392,14 @@ def validate_policy(targets):
             if op.get("release", False) and op.get("consume", False):
                 errors.append("function policy %s object %s cannot release and consume"
                               % (key, arg))
+            if op.get("consume_family", False) not in (True, False):
+                errors.append("function policy %s object %s consume_family must be boolean"
+                              % (key, arg))
+            elif op.get("consume_family", False) and (
+                    not op.get("consume", False) or not ospec or
+                    not ospec.get("linked_field")):
+                errors.append("function policy %s object %s consume_family needs a linked "
+                              "object type and consume" % (key, arg))
             if arg in taglists or arg in structs or arg in pointers:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, cb in callbacks.items():
@@ -3402,6 +3467,19 @@ def validate_policy(targets):
                 elif owned and not ospec["destructor"].startswith(key.rsplit(".", 1)[0] + "."):
                     errors.append("function policy %s object destructor must be in the same library"
                                   % key)
+                store_arg = result.get("store_arg")
+                if store_arg is not None:
+                    if store_arg not in args or args[store_arg].count("*") < 2:
+                        errors.append("function policy %s object store_arg must be a "
+                                      "pointer-to-pointer argument" % key)
+                    elif store_arg in (set(taglists) | set(structs) |
+                                       set(tagged_structs) | set(objects) |
+                                       set(callbacks) | set(pointers) |
+                                       set(arrays) | set(record_arrays) |
+                                       set(guest_values) | set(strings) |
+                                       set(null_args)):
+                        errors.append("function policy %s object store_arg %s has two policies"
+                                      % (key, store_arg))
                 fallback = result.get("fallback_textattr")
                 if fallback is not None:
                     farg = fallback.get("arg") if isinstance(fallback, dict) else None
@@ -3418,6 +3496,8 @@ def validate_policy(targets):
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
         for t, n in f.args:
+            if result and n == result.get("store_arg"):
+                continue
             if (n in taglists or n in structs or n in tagged_structs or
                     n in pointers or n in arrays or n in record_arrays or
                     n in objects or n in callbacks or
@@ -3715,6 +3795,8 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         strings = policy.get("strings", []) if policy else []
         null_args = policy.get("null_args", []) if policy else []
         boopsi = policy.get("boopsi") if policy else None
+        result_policy = policy.get("result") if policy else None
+        result_store_arg = (result_policy or {}).get("store_arg")
         if policy:
             w("    {")
         call_args = []
@@ -3722,6 +3804,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         array_pre = []
         record_pre = []
         precall = []
+        destructive_pre = []
         heap_tag_scratch = []
         heap_array_scratch = []
         heap_record_scratch = []
@@ -3799,6 +3882,22 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             tagged_size_args[sp["size_arg"]] = "emu_tagged_native_size_%d" % bi
         for ai, ((atype, aname), reg) in enumerate(zip(f.args, f.regs)):
             src = reg_expr(reg)
+            if aname == result_store_arg:
+                native_type = norm(re.sub(r"\s*\*\s*$", "", atype))
+                w("        if (emu68k_require_guest_range(%s, 4," % src)
+                w('                                         "%s.%s", err, errlen) < 0)'
+                  % (f.name, aname))
+                w("            return 1;")
+                w("        if (emu68k_scalar_from_guest(guest0, %s, 4) != 0)" % src)
+                w("        {")
+                w("            if (err && errlen)")
+                w('                snprintf(err, errlen, "%s.%s must initially contain NULL");'
+                  % (f.name, aname))
+                w("            return 1;")
+                w("        }")
+                w("        %s emu_result_store_native = NULL;" % native_type)
+                call_args.append("(%s)&emu_result_store_native" % norm(atype))
+                continue
             if classify(atype) == "double":
                 hi, lo = reg_pair(reg)
                 call_args.append("emu68k_double_in(%s, %s)" % (hi, lo))
@@ -3845,6 +3944,43 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 if op.get("consume", False):
                     post.append((["emu68k_object_consume(guest0, %s, EMU_OBJ_%s);"
                                   % (src, c_ident(oname))], "always"))
+                if op.get("consume_family", False):
+                    ospec = object_types[oname]
+                    linked_field = ospec["linked_field"]
+                    linked_limit = ospec.get("linked_limit", 4096)
+                    native_type = ospec["c_type"]
+                    destructive_pre.extend([
+                        "        ULONG emu_family_count_%d = 0;" % ai,
+                        "        %s emu_family_scan_%d = (%s)emu_object_%d;" %
+                        (native_type, ai, native_type, ai),
+                        "        while (emu_family_scan_%d && emu_family_count_%d < %d)" %
+                        (ai, ai, linked_limit),
+                        "        {",
+                        "            emu_family_scan_%d = (%s)emu_family_scan_%d->%s;" %
+                        (ai, native_type, ai, linked_field),
+                        "            emu_family_count_%d++;" % ai,
+                        "        }",
+                        "        if (emu_family_scan_%d)" % ai,
+                        "        {",
+                        "            if (err && errlen)",
+                        ('                snprintf(err, errlen, "%s.%s linked %s family exceeds '
+                         '%d members or contains a cycle");' %
+                         (f.name, aname, oname, linked_limit)),
+                        "            return 1;",
+                        "        }",
+                        "        %s emu_family_member_%d = (%s)emu_object_%d;" %
+                        (native_type, ai, native_type, ai),
+                        "        for (ULONG emu_family_i_%d = 0;" % ai,
+                        "             emu_family_i_%d < emu_family_count_%d; emu_family_i_%d++)" %
+                        (ai, ai, ai),
+                        "        {",
+                        "            %s emu_family_next_%d = (%s)emu_family_member_%d->%s;" %
+                        (native_type, ai, native_type, ai, linked_field),
+                        "            emu68k_object_consume_native(guest0, emu_family_member_%d," % ai,
+                        "                EMU_OBJ_%s);" % c_ident(oname),
+                        "            emu_family_member_%d = emu_family_next_%d;" % (ai, ai),
+                        "        }",
+                    ])
                 if op.get("sync", False):
                     ospec = object_types[oname]
                     stype = ospec["facade_struct"]
@@ -3878,6 +4014,134 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                       % (src, ai))
                     w("                             emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
                       % (stype, stype, span))
+                    for fi, (field, fp) in enumerate(sp.get("fields", {}).items()):
+                        kind = fp["kind"]
+                        w("        ULONG emu_struct_field_%d_%d = (ULONG)" % (ai, fi))
+                        w("            emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s, 4);"
+                          % (src, stype, field))
+                        if kind == "cstr":
+                            w("        if (emu_struct_field_%d_%d &&" % (ai, fi))
+                            w("            emu68k_require_guest_range(emu_struct_field_%d_%d, 1,"
+                              % (ai, fi))
+                            w('                "%s.%s.%s", err, errlen) < 0)'
+                              % (f.name, aname, field))
+                            w("            return 1;")
+                            if not fp.get("nullable", True):
+                                w("        if (!emu_struct_field_%d_%d)" % (ai, fi))
+                                w("        {")
+                                w("            if (err && errlen)")
+                                w('                snprintf(err, errlen, "%s.%s.%s requires non-NULL");'
+                                  % (f.name, aname, field))
+                                w("            return 1;")
+                                w("        }")
+                            w("        emu_struct_%d.%s = (__typeof__(emu_struct_%d.%s))"
+                              "EMU_GPTR(guest0, emu_struct_field_%d_%d);"
+                              % (ai, field, ai, field, ai, fi))
+                        elif kind == "guest_value":
+                            w("        emu_struct_%d.%s = (__typeof__(emu_struct_%d.%s))"
+                              "(IPTR)emu_struct_field_%d_%d;"
+                              % (ai, field, ai, field, ai, fi))
+                        elif kind == "object":
+                            nested_type = fp["type"]
+                            w("        APTR emu_struct_object_%d_%d;" % (ai, fi))
+                            w("        if (emu68k_object_from_guest(guest0, emu_struct_field_%d_%d,"
+                              % (ai, fi))
+                            w("                EMU_OBJ_%s, %d, \"%s\", &emu_struct_object_%d_%d,"
+                              % (c_ident(nested_type),
+                                 1 if fp.get("nullable", True) else 0,
+                                 nested_type, ai, fi))
+                            w("                err, errlen) < 0)")
+                            w("            return 1;")
+                            w("        emu_struct_%d.%s = (__typeof__(emu_struct_%d.%s))"
+                              "emu_struct_object_%d_%d;"
+                              % (ai, field, ai, field, ai, fi))
+                        elif kind == "struct":
+                            nested_struct = fp["type"]
+                            w("        struct %s emu_struct_nested_%d_%d;"
+                              % (nested_struct, ai, fi))
+                            w("        memset(&emu_struct_nested_%d_%d, 0,"
+                              " sizeof(emu_struct_nested_%d_%d));" % (ai, fi, ai, fi))
+                            w("        if (emu_struct_field_%d_%d)" % (ai, fi))
+                            w("        {")
+                            w("            if (emu68k_require_guest_range(emu_struct_field_%d_%d,"
+                              % (ai, fi))
+                            w("                    M68K_%s_SIZEOF, \"%s.%s.%s\", err, errlen) < 0)"
+                              % (nested_struct, f.name, aname, field))
+                            w("                return 1;")
+                            w("            emu68k_from_guest_sized(guest0, emu_struct_field_%d_%d,"
+                              % (ai, fi))
+                            w("                &emu_struct_nested_%d_%d, emu_fields_%s,"
+                              % (ai, fi, nested_struct))
+                            w("                EMU_NFIELDS(emu_fields_%s), M68K_%s_SIZEOF);"
+                              % (nested_struct, nested_struct))
+                            for nfi, (nested_field, nested_fp) in enumerate(
+                                    fp.get("fields", {}).items()):
+                                nested_kind = nested_fp["kind"]
+                                w("            ULONG emu_struct_nested_field_%d_%d_%d = (ULONG)"
+                                  % (ai, fi, nfi))
+                                w("                emu68k_scalar_from_guest(guest0, "
+                                  "emu_struct_field_%d_%d + M68K_%s_%s, 4);"
+                                  % (ai, fi, nested_struct, nested_field))
+                                if nested_kind == "cstr":
+                                    w("            if (emu_struct_nested_field_%d_%d_%d &&"
+                                      % (ai, fi, nfi))
+                                    w("                emu68k_require_guest_range("
+                                      "emu_struct_nested_field_%d_%d_%d, 1,"
+                                      % (ai, fi, nfi))
+                                    w('                    "%s.%s.%s.%s", err, errlen) < 0)'
+                                      % (f.name, aname, field, nested_field))
+                                    w("                return 1;")
+                                    if not nested_fp.get("nullable", True):
+                                        w("            if (!emu_struct_nested_field_%d_%d_%d)"
+                                          % (ai, fi, nfi))
+                                        w("            {")
+                                        w("                if (err && errlen)")
+                                        w('                    snprintf(err, errlen, '
+                                          '"%s.%s.%s.%s requires non-NULL");'
+                                          % (f.name, aname, field, nested_field))
+                                        w("                return 1;")
+                                        w("            }")
+                                    w("            emu_struct_nested_%d_%d.%s = "
+                                      "(__typeof__(emu_struct_nested_%d_%d.%s))"
+                                      "EMU_GPTR(guest0, emu_struct_nested_field_%d_%d_%d);"
+                                      % (ai, fi, nested_field, ai, fi, nested_field,
+                                         ai, fi, nfi))
+                                elif nested_kind == "guest_value":
+                                    w("            emu_struct_nested_%d_%d.%s = "
+                                      "(__typeof__(emu_struct_nested_%d_%d.%s))"
+                                      "(IPTR)emu_struct_nested_field_%d_%d_%d;"
+                                      % (ai, fi, nested_field, ai, fi, nested_field,
+                                         ai, fi, nfi))
+                                elif nested_kind == "object":
+                                    nested_object_type = nested_fp["type"]
+                                    w("            APTR emu_struct_nested_object_%d_%d_%d;"
+                                      % (ai, fi, nfi))
+                                    w("            if (emu68k_object_from_guest(guest0, "
+                                      "emu_struct_nested_field_%d_%d_%d,"
+                                      % (ai, fi, nfi))
+                                    w("                    EMU_OBJ_%s, %d, \"%s\","
+                                      % (c_ident(nested_object_type),
+                                         1 if nested_fp.get("nullable", True) else 0,
+                                         nested_object_type))
+                                    w("                    &emu_struct_nested_object_%d_%d_%d, "
+                                      "err, errlen) < 0)" % (ai, fi, nfi))
+                                    w("                return 1;")
+                                    w("            emu_struct_nested_%d_%d.%s = "
+                                      "(__typeof__(emu_struct_nested_%d_%d.%s))"
+                                      "emu_struct_nested_object_%d_%d_%d;"
+                                      % (ai, fi, nested_field, ai, fi, nested_field,
+                                         ai, fi, nfi))
+                            w("            emu_struct_%d.%s = &emu_struct_nested_%d_%d;"
+                              % (ai, field, ai, fi))
+                            w("        }")
+                            if not fp.get("nullable", True):
+                                w("        else")
+                                w("        {")
+                                w("            if (err && errlen)")
+                                w('                snprintf(err, errlen, "%s.%s.%s requires non-NULL");'
+                                  % (f.name, aname, field))
+                                w("            return 1;")
+                                w("        }")
                 if direction in ("out", "inout"):
                     # Blanking first is right when the call fills the whole
                     # structure: a field it chose not to set must not read as
@@ -4189,9 +4453,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     w("            %s = (__typeof__(%s))(IPTR)emu_record_value_%d_%d;"
                       % (target, target, ai, fi))
             w("        }")
+        for line in destructive_pre:
+            w(line)
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
-        result_policy = policy.get("result") if policy else None
         def emit_heap_cleanup():
             for scratch_ai in heap_tag_scratch:
                 w("        emu68k_scratch_free(emu_tagscratch_%d, emu_tagscratch_size_%d);"
@@ -4218,6 +4483,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             cleanup = ("emu_object_cleanup_%s" % c_ident(oname)
                        if result_policy.get("owned", True) else "NULL")
             w("        APTR emu_result = (APTR)%s;" % call)
+            if result_store_arg:
+                w("        if ((APTR)emu_result_store_native != emu_result)")
+                w("        {")
+                if cleanup != "NULL":
+                    w("            if (emu_result) %s(base, emu_result);" % cleanup)
+                w("            if (err && errlen)")
+                w('                snprintf(err, errlen, "%s.%s did not match its returned object");'
+                  % (f.name, result_store_arg))
+                w("            return 1;")
+                w("        }")
             fallback = result_policy.get("fallback_textattr")
             if fallback:
                 farg = fallback["arg"]
@@ -4403,6 +4678,11 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                           (c_ident(nested_type), nested_type))
                         w("                return 1;")
                 w("        }")
+            if result_store_arg:
+                store_index = [n for _t, n in f.args].index(result_store_arg)
+                store_src = reg_expr(f.regs[store_index])
+                w("        emu68k_scalar_to_guest(guest0, %s, 4, r->d[0]);"
+                  % store_src)
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
             emit_heap_cleanup()
@@ -4540,6 +4820,7 @@ LONG emu68k_object_alias_to_guest(APTR guest0, ULONG token, APTR native,
                                   char *err, ULONG errlen);
 void emu68k_object_release(APTR guest0, ULONG token, UWORD type);
 void emu68k_object_consume(APTR guest0, ULONG token, UWORD type);
+void emu68k_object_consume_native(APTR guest0, APTR native, UWORD type);
 LONG emu68k_hook_prepare(APTR guest0, ULONG guest_hook,
                          struct Emu68kHookBridge *bridge,
                          char *err, ULONG errlen);

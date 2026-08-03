@@ -369,6 +369,16 @@ checks the guest-readable Width/Height, nested Screen identity, and RastPort
 facade, then executes `GT_BeginRefresh`/`GT_EndRefresh` and closes both objects.
 `genwindowbad.s` supplies a forged Window token and must stop with the exact
 typed-object diagnostic before native GadTools is entered.
+`gengadget.s` covers the first generated linked-object family. It proves that
+`CreateContext` can return a Gadget token and store that same token through a
+classic pointer-to-pointer argument, then rebuilds a 30-byte `NewGadget` with
+its nested `TextAttr`, strings, VisualInfo object, and guest-only user cookie.
+It creates a native button and destroys the family through its context head.
+`gengadgetbad.s` keeps the returned child token, frees the head, and then proves
+that family destruction invalidated the child before another native call can
+observe it. The implementation is driven by reusable `linked_field`,
+`linked_limit`, `store_arg`, nested-structure field, and `consume_family`
+metadata rather than GadTools-specific generator branches.
 
 A legacy-program run remains the final behavioral probe. With the local demo
 corpus used during this work, PhotoDemo is run with:
@@ -401,17 +411,20 @@ sits beside the import packet and records auditable per-review-ID decisions.
 ### Current GadTools checkpoint
 
 At this checkpoint all 19 public GadTools vectors parse and their reachable C
-helpers analyze successfully. Five crossings are active in generated code:
-`GetVisualInfoA`, `FreeVisualInfo`, `CreateMenusA`, `FreeMenus`, and
-`LayoutMenusA`. The text-menu create/layout/free lifecycle and both image-pointer
-refusals pass in booted AROS. The last unchanged PhotoDemo trace passed
-`GetVisualInfoA` and `CreateMenusA` and stopped at `LayoutMenusA`; that exact
-boundary is now covered, but the next legacy run is deliberately held until the
-remaining manifest is reviewed as a library-wide batch rather than using the app
-as a vector-discovery loop. The import still reports 33 review items, so GadTools
-as a whole is not yet certified; gadget creation, retained data, object-family
-invalidation, and remaining tag payloads must be resolved through the same
-pipeline.
+helpers analyze successfully. Sixteen crossings are active in generated code.
+The menu lifecycle and the `CreateContext`/`CreateGadgetA`/`FreeGadgets` linked
+Gadget lifecycle pass in booted AROS, including nested record fields and
+family-wide stale-token rejection. The deterministic review queue is down to
+five items: `GT_GetGadgetAttrsA`, `GT_SetGadgetAttrsA`, `LayoutMenuItemsA`, the
+conservative ownership-pair finding for `CreateContext`/`FreeGadgets`, and the
+unproved `GTMN_FrontPen` payload for `LayoutMenuItemsA`.
+
+The current PhotoDemo image passes `GetVisualInfoA`, `CreateMenusA`, and
+`LayoutMenusA`. Its next named gap is in Intuition rather than GadTools:
+`OpenWindowTagList` receives `WA_NewLookMenus`. The source consumes that value
+through the `MODIFY_FLAG` macro, so the next importer iteration is to infer the
+Boolean flag-macro pattern for the whole tag domain rather than adding a
+PhotoDemo-specific tag exception.
 
 ## What cannot be completely automatic
 

@@ -157,6 +157,14 @@
         {"field": "IFont", "kind": "object", "type": "TextFont"}
       ],
       "destructor": "intuition.library.CloseWindow"
+    },
+    "Gadget": {
+      "id": 20,
+      "c_type": "struct Gadget *",
+      "kind": "opaque",
+      "linked_field": "NextGadget",
+      "linked_limit": 4096,
+      "destructor": "gadtools.library.FreeGadgets"
     }
   },
   "tag_domains": {
@@ -414,6 +422,71 @@
         {"name": "WA_BackFill", "kind": "refuse"},
         {"name": "WA_ShapeHook", "kind": "refuse"},
         {"name": "WA_ShapeRegion", "kind": "refuse"}
+      ]
+    },
+    "gadtools.create_gadget": {
+      "headers": ["libraries/gadtools.h", "intuition/gadgetclass.h"],
+      "max_items": 128,
+      "tags": [
+        {"name": "GA_Disabled", "kind": "u32"},
+        {"name": "GA_Height", "kind": "u32"},
+        {"name": "GA_ID", "kind": "u32"},
+        {"name": "GA_Immediate", "kind": "u32"},
+        {"name": "GA_Left", "kind": "u32"},
+        {"name": "GA_Previous", "kind": "object", "type": "Gadget", "nullable": true},
+        {"name": "GA_RelVerify", "kind": "u32"},
+        {"name": "GA_TabCycle", "kind": "u32"},
+        {"name": "GA_Top", "kind": "u32"},
+        {"name": "GA_Width", "kind": "u32"},
+        {"name": "GTCB_Checked", "kind": "u32"},
+        {"name": "GTCB_Scaled", "kind": "u32"},
+        {"name": "GTCY_Active", "kind": "u32"},
+        {"name": "GTCY_Labels", "kind": "refuse"},
+        {"name": "GTIN_MaxChars", "kind": "u32"},
+        {"name": "GTIN_Number", "kind": "u32"},
+        {"name": "GTLV_CallBack", "kind": "refuse"},
+        {"name": "GTLV_ItemHeight", "kind": "u32"},
+        {"name": "GTLV_Labels", "kind": "refuse"},
+        {"name": "GTLV_MakeVisible", "kind": "u32"},
+        {"name": "GTLV_MaxPen", "kind": "u32"},
+        {"name": "GTLV_ReadOnly", "kind": "u32"},
+        {"name": "GTLV_ScrollWidth", "kind": "u32"},
+        {"name": "GTLV_Selected", "kind": "u32"},
+        {"name": "GTLV_ShowSelected", "kind": "object", "type": "Gadget", "nullable": true},
+        {"name": "GTLV_Top", "kind": "u32"},
+        {"name": "GTMX_Active", "kind": "u32"},
+        {"name": "GTMX_Labels", "kind": "refuse"},
+        {"name": "GTMX_Scaled", "kind": "u32"},
+        {"name": "GTMX_Spacing", "kind": "u32"},
+        {"name": "GTMX_TitlePlace", "kind": "u32"},
+        {"name": "GTNM_Border", "kind": "u32"},
+        {"name": "GTNM_Number", "kind": "u32"},
+        {"name": "GTPA_IndicatorHeight", "kind": "u32"},
+        {"name": "GTPA_NumColors", "kind": "u32"},
+        {"name": "GTSC_Arrows", "kind": "u32"},
+        {"name": "GTSC_Top", "kind": "u32"},
+        {"name": "GTSC_Total", "kind": "u32"},
+        {"name": "GTSC_Visible", "kind": "u32"},
+        {"name": "GTSL_DispFunc", "kind": "refuse"},
+        {"name": "GTSL_Justification", "kind": "u32"},
+        {"name": "GTSL_Level", "kind": "u32"},
+        {"name": "GTSL_LevelFormat", "kind": "cstr"},
+        {"name": "GTSL_LevelPlace", "kind": "u32"},
+        {"name": "GTSL_Max", "kind": "u32"},
+        {"name": "GTSL_MaxLevelLen", "kind": "u32"},
+        {"name": "GTSL_MaxPixelLen", "kind": "u32"},
+        {"name": "GTSL_Min", "kind": "u32"},
+        {"name": "GTST_EditHook", "kind": "refuse"},
+        {"name": "GTST_MaxChars", "kind": "u32"},
+        {"name": "GTST_String", "kind": "cstr"},
+        {"name": "GTTX_Border", "kind": "u32"},
+        {"name": "GTTX_CopyText", "kind": "u32"},
+        {"name": "GTTX_Text", "kind": "cstr"},
+        {"name": "GT_Underscore", "kind": "u32"},
+        {"name": "PGA_Freedom", "kind": "u32"},
+        {"name": "STRINGA_ExitHelp", "kind": "u32"},
+        {"name": "STRINGA_Justification", "kind": "u32"},
+        {"name": "STRINGA_ReplaceMode", "kind": "u32"}
       ]
     }
   },
@@ -715,6 +788,45 @@
         "vi": {"type": "VisualInfo", "nullable": false}
       },
       "taglists": {"tagList": "gadtools.layout_menus"}
+    },
+    "gadtools.library.CreateContext": {
+      "result": {"kind": "object", "type": "Gadget", "store_arg": "glistpointer"}
+    },
+    "gadtools.library.CreateGadgetA": {
+      "objects": {
+        "previous": {"type": "Gadget", "nullable": false}
+      },
+      "structs": {
+        "ng": {
+          "type": "NewGadget",
+          "direction": "in",
+          "fields": {
+            "ng_GadgetText": {"kind": "cstr", "nullable": true},
+            "ng_TextAttr": {
+              "kind": "struct",
+              "type": "TextAttr",
+              "nullable": true,
+              "fields": {
+                "ta_Name": {"kind": "cstr", "nullable": false}
+              }
+            },
+            "ng_VisualInfo": {"kind": "object", "type": "VisualInfo", "nullable": false},
+            "ng_UserData": {"kind": "guest_value"}
+          }
+        }
+      },
+      "taglists": {"taglist": "gadtools.create_gadget"},
+      "result": {"kind": "object", "type": "Gadget", "owned": false}
+    },
+    "gadtools.library.FreeGadgets": {
+      "objects": {
+        "glist": {
+          "type": "Gadget",
+          "nullable": true,
+          "consume": true,
+          "consume_family": true
+        }
+      }
     },
     "gadtools.library.GT_RefreshWindow": {
       "noop": true,
