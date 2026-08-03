@@ -2,4 +2,5 @@ t13a
 t13a-san
 t_boot
 t_boot-san
+*.o
 *.dSYM/
