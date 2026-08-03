@@ -672,6 +672,59 @@ def call_arguments(src, opening):
     return ([], opening)
 
 
+# A default that says "a number". A non-zero integer cannot be a pointer, and a
+# macro constant is the library naming a value rather than an address - C spells
+# the absent pointer `NULL`, and a library that means one writes it. `FALSE` is
+# therefore a boolean default, not a null one; a bare `0` is the case that stays
+# ambiguous, because that is the spelling the two share.
+SCALAR_CONST_RE = re.compile(
+    r"(?!0[uUlL]*$)(?!NULL$)"
+    r"(?:[1-9]\d*[uUlL]*|0[xX][0-9a-fA-F]+[uUlL]*|[A-Z][A-Z0-9_]*)")
+
+
+def resolve_local_tagitem_default(code, expression):
+    """`defaults[1].ti_Data` -> what the function initialised that entry to.
+
+    A library that keeps its defaults in a local TagItem array and overrides
+    them through GetTagData names the payload twice: once in the initialiser and
+    once as the default. Reading only the second one sees an array subscript and
+    learns nothing, so the tag stayed unproved over a value written in plain
+    sight two lines up."""
+    m = re.fullmatch(r"(\w+)\s*\[\s*(\d+)\s*\]\s*\.\s*ti_Data", expression.strip())
+    if not m:
+        return expression
+    name, index = m.group(1), int(m.group(2))
+    decl = re.search(r"\bstruct\s+TagItem\s+%s\s*\[[^\]]*\]\s*=\s*\{" %
+                     re.escape(name), code)
+    if not decl:
+        return expression
+    entries, depth, start = [], 1, decl.end()
+    i = start
+    while i < len(code) and depth:
+        if code[i] == "{":
+            if depth == 1:
+                start = i + 1
+            depth += 1
+        elif code[i] == "}":
+            depth -= 1
+            if depth == 1:
+                entries.append(code[start:i])
+        i += 1
+    if index >= len(entries):
+        return expression
+    fields, fdepth, fstart = [], 0, 0
+    for j, ch in enumerate(entries[index]):
+        if ch in "([{":
+            fdepth += 1
+        elif ch in ")]}":
+            fdepth -= 1
+        elif ch == "," and not fdepth:
+            fields.append(entries[index][fstart:j])
+            fstart = j + 1
+    fields.append(entries[index][fstart:])
+    return fields[1].strip() if len(fields) > 1 else expression
+
+
 def source_cast_before(src, offset):
     """The result cast immediately preceding a GetTagData call, if any."""
     prefix = src[max(0, offset - 96):offset]
@@ -694,10 +747,16 @@ def infer_source_tag_kind(access, cast, default):
         return ("cstr", "high")
     if re.search(r"\bNULL\b", default or ""):
         return ("pointer:unknown", "medium")
-    # An uncast GetTagData result is IPTR-sized and a literal default does not
-    # distinguish an integer from a pointer encoded as zero.  Calling it u32
-    # here would make pointer-valued tags unsafe.  A later AST use-site pass may
-    # promote this evidence after proving arithmetic/boolean-only use.
+    # A compile-time constant default settles it: no library defaults a pointer
+    # to a number, and one that means a null pointer writes NULL, which is
+    # already handled above. A cast on the result would have decided this
+    # earlier still.
+    d = (default or "").strip()
+    if not cast and SCALAR_CONST_RE.fullmatch(d):
+        return ("u32", "high")
+    # An uncast GetTagData result is IPTR-sized and a zero or computed default
+    # does not distinguish an integer from a pointer encoded as zero. Calling it
+    # u32 here would make pointer-valued tags unsafe.
     return ("unknown", "medium")
 
 
@@ -720,7 +779,8 @@ def extract_tag_evidence(raw, base_line):
         elif m.group(1) == "FindTagItem" and len(args) > 1:
             list_expression = args[1].strip()
         cast = source_cast_before(code, m.start())
-        kind, confidence = infer_source_tag_kind(m.group(1), cast, default)
+        kind, confidence = infer_source_tag_kind(
+            m.group(1), cast, resolve_local_tagitem_default(code, default))
         tags.append({
             "name": tag,
             "access": m.group(1),
