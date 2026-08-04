@@ -85,6 +85,16 @@ Run its dedicated 255-code-unit target probe with:
 EXFAT_NAME_ONLY=1 ./graft/exfat-fixture-smoke
 ```
 
+Run the isolated T3 gate with:
+
+```sh
+./graft/exfat-fragmentation-smoke
+```
+
+It deliberately cannot share T7's image: T3 creates and frees cluster holes,
+whereas T7's 10,000-entry directory consumes those same clusters for directory
+data and can turn a supposedly fragmented test stream contiguous.
+
 The normal gate currently discharges T4 (a verified `NoFatChain` stream),
 T5b (an unmappable UTF-16 unit is displayed as `_` and that display spelling
 does not open the file), and T6b (two distinct names with the same on-disk

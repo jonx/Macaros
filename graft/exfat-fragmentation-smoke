@@ -1,0 +1,62 @@
+#!/bin/bash
+# T3: a dedicated exFAT fragmentation fixture.  It cannot share T7's image:
+# a 10,000-entry directory consumes the free clusters deliberately left here.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit6"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT6"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT6.mountlist"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-t3.XXXXXX")"
+SOURCE="$WORK/source"
+HOST_MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/t3.out"
+DEVICE=""
+
+cleanup() {
+    if [ -n "$DEVICE" ]; then hdiutil detach "$DEVICE" -quiet || true; fi
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] || { echo "FAIL: Unit6 is already in use" >&2; exit 1; }
+mkdir "$SOURCE" "$HOST_MOUNT" "$RESULTS"
+dd if=/dev/zero of="$SOURCE/Fragmented.bin" bs=16m count=1 status=none
+
+truncate -s 64m "$IMAGE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 {print $1}')"
+/sbin/newfs_exfat -v AROST3 "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet; DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 {print $1}')"
+
+# 56 MiB leaves no contiguous 16 MiB tail. Deleting alternating 1 MiB files
+# leaves 28 separated holes; the resulting 16 MiB stream must span >=8 runs.
+for n in {0..55}; do
+    dd if=/dev/zero of="$HOST_MOUNT/F$n.bin" bs=1m count=1 status=none
+done
+for n in $(seq 0 2 54); do unlink "$HOST_MOUNT/F$n.bin"; done
+COPYFILE_DISABLE=1 cp -X "$SOURCE/Fragmented.bin" "$HOST_MOUNT/"
+hdiutil detach "$DEVICE" -quiet; DEVICE=""
+
+shape="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Fragmented.bin)"
+extents="$(printf '%s\n' "$shape" | sed -n 's/.*extents=\([0-9][0-9]*\).*/\1/p')"
+case "$shape" in *"nofat=0"*) ;; *) echo "FAIL: T3 is contiguous: $shape" >&2; exit 1;; esac
+[ -n "$extents" ] && [ "$extents" -ge 8 ] || { echo "FAIL: T3 needs >=8 extents: $shape" >&2; exit 1; }
+
+expected="$(shasum -a 256 "$SOURCE/Fragmented.bin" | awk '{print $1}')"
+cp "$TEMPLATE" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT6\nC:Copy EXFAT6:Fragmented.bin MacRW:Fragmented.bin >MacRW:t3.out' \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 8 >/dev/null
+[ -f "$RESULTS/Fragmented.bin" ] || { echo "FAIL: T3 target read did not produce a file" >&2; cat "$OUT" >&2 || true; exit 1; }
+actual="$(shasum -a 256 "$RESULTS/Fragmented.bin" | awk '{print $1}')"
+[ "$actual" = "$expected" ] || { echo "FAIL: T3 byte comparison failed" >&2; exit 1; }
+echo "PASS: T3 fragmented FAT chain ($extents extents), target byte comparison"

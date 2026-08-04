@@ -492,6 +492,12 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert
 refusal; every other test asserts a successful mount first.
 
+`[OURS]` T3 has a dedicated 64 MiB image. Before the target copy runs, the
+fixture oracle reads the raw FAT chain and requires `NoFatChain` clear and at
+least eight physical extents. T7 cannot share that image: its 10,000-entry
+directory consumes the free clusters T3 deliberately creates, defeating the
+fragmentation mechanism and creating a false pass.
+
 `[OURS]` The target T5 probe passes two distinct 255-code-unit names to
 `Open()` and reads their distinct payloads successfully. They share their
 first 106 units, so the legacy `FileInfoBlock` used by `List` displays two
