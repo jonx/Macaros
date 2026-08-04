@@ -398,14 +398,27 @@ Mechanism state after the first spike (AROS m68k `gadtools.library` from the
 
 How far it gets: gadtools loads, constructs its base, inits, opens its five
 (all-bridged) dependencies, survives DrawInfo/pen queries, pooled exec
-allocs, text measurement, and builds its frame image via bridged
-`NewObjectA`. **Current frontier: `GA_IntuiText` — the gadget label as a
-linked IntuiText value-struct (IText string, nested TextAttr, NextText
-chain), which has no marshalling yet.** The EmuV0 reference's
-`makeIntuiText()` (AoA `abiv0/intuition/intuition_gadgets.c`) is the exact
-shape to build, generated rather than hand-written. After that:
+allocs, text measurement, builds its frame image via bridged `NewObjectA`,
+crosses its label as **GA_IntuiText** (deep-marshalled: policy
+`follow_fields` → generated `EmuFollow`/`EmuStructDesc` tables → whole
+reference graph rebuilt run-lifetime via `emu68k_persist_alloc`, because the
+class RETAINS the label), and passes its own guest context gadget as
+**GA_Previous** (object tags with `"adopt": true` carry their mirror and
+adopt guest-owned structures).
+
+**Current frontier: `MakeClass` with guest dispatchers.** gadtools creates
+its 11 BOOPSI kind classes at init (the 11 `MakeClass` calls, `d0` =
+instance sizes) with 68k dispatcher code, then `NewObjectA` on that guest
+classPtr returns NULL. The T3BOOPSI hook machinery already proves
+native→guest class dispatch; `MakeClass` needs to build a native `IClass`
+whose dispatcher trampolines into the guest hook. After that:
 `gengadgetbad` control guest-side, then iffparse → locale in dependency
 order. Bridged baseline (`t3gen` and friends) green throughout.
+
+Verification rule reinforced twice today: BSD `grep` silently lacks `\|`
+alternation (false negatives), the shell wrapper skips non-UTF-8 files —
+check file content with python, and check bytes, not greps, before
+diagnosing "the file changed".
 
 ## STATUS 2026-08-02: T3e complete; a real disk-library chain runs unchanged
 
