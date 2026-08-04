@@ -19,6 +19,30 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <execinfo.h>
+#include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
+
+/* The sandbox range is NOT uniformly readable: the emu68k arena punches its
+ * hardware windows back out as PROT_NONE holes inside [origin, origin+size).
+ * Every guest read on the crash path goes through this copy, which asks the
+ * kernel instead of faulting — a fault INSIDE the fault handler is how a
+ * diagnosable crash turned into an unkillable livelock. Returns 0 on success. */
+static int safe_copy(void *dst, const void *src, size_t len)
+{
+#ifdef __APPLE__
+    mach_vm_size_t got = 0;
+    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(),
+        (mach_vm_address_t)(uintptr_t)src, (mach_vm_size_t)len,
+        (mach_vm_address_t)(uintptr_t)dst, &got);
+    return (kr == KERN_SUCCESS && got == (mach_vm_size_t)len) ? 0 : 1;
+#else
+    memcpy(dst, src, len);
+    return 0;
+#endif
+}
 
 /* The engine git commit + build config are baked in by the Makefile via -D; provide
  * fallbacks so this file also compiles standalone. */
@@ -32,6 +56,9 @@
 /* ======================== config registration (the side-channel) ======================= */
 static j5n_diag *g_engine_diag = NULL;   /* the engine's view (j5d_engine.c reads it)   */
 static j5n_diag *g_interp_diag = NULL;   /* the oracle's view (j5d_interp.c calls step)  */
+
+static j5n_symbolize_fn g_symbolize = NULL;   /* the embedder's module resolver */
+void j5n_set_symbolizer(j5n_symbolize_fn fn) { g_symbolize = fn; }
 
 /* the interp's weak step-hook setter (j5d_interp.c). */
 typedef int (*j5n_step_hook_fn)(void *diag, const struct j5d_m68k_state *st,
@@ -195,15 +222,37 @@ static void opwords(const j5d_sandbox *sb, uint32_t pc, char *out, size_t outlen
         snprintf(out, outlen, "<out of sandbox>");
         return;
     }
-    const uint8_t *ip = sb->host_mem + (pc - sb->origin);
+    uint8_t ip[6];
     size_t avail = sb->size - (pc - sb->origin);
-    char *p = out; size_t left = outlen;
     int nw = (avail >= 6) ? 3 : (avail >= 4 ? 2 : 1);
+    if (safe_copy(ip, sb->host_mem + (pc - sb->origin), (size_t)nw * 2)) {
+        snprintf(out, outlen, "<pc unreadable>");
+        return;
+    }
+    char *p = out; size_t left = outlen;
     for (int i = 0; i < nw; i++) {
         int k = snprintf(p, left, "%s%04X", i ? " " : "", dbe16(ip + i*2));
         if (k < 0 || (size_t)k >= left) break;
         p += k; left -= (size_t)k;
     }
+}
+
+/* j5n_disasm against a SAFE local copy of the instruction window, for the crash
+ * path: the pc can sit next to (or in) an unreadable hole. */
+static void disasm_safe(const j5d_sandbox *sb, uint32_t pc, char *out, size_t outlen)
+{
+    uint8_t win[16];
+    if (pc < sb->origin || (uint64_t)(pc - sb->origin) + 2 > sb->size) {
+        snprintf(out, outlen, "<pc out of sandbox>");
+        return;
+    }
+    uint64_t avail = sb->size - (pc - sb->origin);
+    size_t n = avail < sizeof win ? (size_t)avail : sizeof win;
+    if (safe_copy(win, sb->host_mem + (pc - sb->origin), n)) {
+        snprintf(out, outlen, "<pc unreadable>");
+        return;
+    }
+    j5n_disasm(win, pc, pc, (uint32_t)n, out, outlen);
 }
 
 /* =============================== the SHA-256 (for program.sha256) ======================
@@ -288,7 +337,9 @@ static void write_68k_stack(FILE *f, const struct j5d_m68k_state *st, j5d_sandbo
     }
     int frame = 1;
     for (uint32_t a = sp; a + 4 <= top && frame < 32; a += 2) {
-        const uint8_t *p = sb->host_mem + (a - sb->origin);
+        uint8_t p[4];
+        if (safe_copy(p, sb->host_mem + (a - sb->origin), 4))
+            continue;               /* a punched hardware window: skip, no fault */
         uint32_t cand = ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
         /* a plausible return address: even, inside the sandbox code region. */
         if ((cand & 1u) || cand < sb->origin || cand >= top) continue;
@@ -307,7 +358,7 @@ static void write_report(FILE *f, j5n_fault_kind kind, const char *detail,
                          const j5n_hostregs *host, j5n_diag *d)
 {
     char dis[128], ow[64];
-    j5n_disasm(sb->host_mem, st->pc, sb->origin, sb->size, dis, sizeof dis);
+    disasm_safe(sb, st->pc, dis, sizeof dis);
     opwords(sb, st->pc, ow, sizeof ow);
     uint16_t sr = j5d_pack_sr(st);
 
@@ -349,6 +400,27 @@ static void write_report(FILE *f, j5n_fault_kind kind, const char *detail,
     /* ----- host AArch64 registers ----- */
     fprintf(f, "HOST AArch64 REGISTERS\n");
     if (host && host->have) {
+        static const struct { const char *label; int reg; } named[] = {
+            { "faulting pc", -1 }, { "lr (caller)", 30 },
+        };
+        for (unsigned k = 0; k < sizeof named / sizeof named[0]; k++) {
+            unsigned long long a = named[k].reg < 0 ? host->pc
+                                                    : host->x[named[k].reg];
+            char sym[256] = "";
+            if (g_symbolize) g_symbolize(a, sym, sizeof sym);
+            if (!sym[0]) {
+                Dl_info di;
+                if (dladdr((void *)(uintptr_t)a, &di) && di.dli_fname)
+                    snprintf(sym, sizeof sym, "%s`%s + %ld",
+                             strrchr(di.dli_fname, '/')
+                                 ? strrchr(di.dli_fname, '/') + 1 : di.dli_fname,
+                             di.dli_sname ? di.dli_sname : "?",
+                             di.dli_saddr ? (long)((uintptr_t)a -
+                                                   (uintptr_t)di.dli_saddr) : 0);
+            }
+            if (sym[0])
+                fprintf(f, "  %s : 0x%016llX  %s\n", named[k].label, a, sym);
+        }
         for (int i = 0; i < 31; i++)
             fprintf(f, "  x%-2d=0x%016llX%s", i, (unsigned long long)host->x[i],
                     (i % 2 == 1) ? "\n" : "  ");
@@ -385,7 +457,7 @@ static void write_report(FILE *f, j5n_fault_kind kind, const char *detail,
         for (uint64_t k = start; k < total; k++) {
             uint64_t i = k % J5N_FLIGHT_N;
             char dd[96];
-            j5n_disasm(sb->host_mem, d->flight.pc[i], sb->origin, sb->size, dd, sizeof dd);
+            disasm_safe(sb, d->flight.pc[i], dd, sizeof dd);
             fprintf(f, "  [%6llu] pc=0x%08X  %04X  %s\n",
                     (unsigned long long)k, d->flight.pc[i], d->flight.op[i], dd);
         }
@@ -508,7 +580,7 @@ static void write_diverge(FILE *f, j5n_diag *d)
     fprintf(f, "  opcode word    : 0x%04X\n", d->diverge_op);
     {
         char dis[128];
-        j5n_disasm(d->sb->host_mem, d->diverge_pc, d->sb->origin, d->sb->size, dis, sizeof dis);
+        disasm_safe(d->sb, d->diverge_pc, dis, sizeof dis);
         fprintf(f, "  disassembly    : %s\n", dis);
     }
     {
@@ -540,7 +612,17 @@ static int write_snapshot(const char *path, const struct j5d_m68k_state *st, j5d
     uint32_t hdr[4] = { J5N_SNAP_MAGIC, sb->origin, sb->size, (uint32_t)sizeof(*st) };
     fwrite(hdr, sizeof hdr, 1, f);
     fwrite(st, sizeof(*st), 1, f);
-    fwrite(sb->host_mem, 1, sb->size, f);
+    {   /* chunked, hole-tolerant: unreadable pages (the punched hardware
+         * windows) snapshot as zeros instead of faulting the crash path. */
+        uint8_t buf[16384];
+        for (uint32_t off = 0; off < sb->size; ) {
+            size_t n = sb->size - off < sizeof buf ? sb->size - off : sizeof buf;
+            if (safe_copy(buf, sb->host_mem + off, n))
+                memset(buf, 0, n);
+            fwrite(buf, 1, n, f);
+            off += n;
+        }
+    }
     fclose(f);
     return 0;
 }
@@ -751,6 +833,12 @@ sigjmp_buf *j5n_signal_set_recover(sigjmp_buf *env)
     return prev;
 }
 
+
+/* Re-entry latch: a fault while bundling a fault must not try to bundle again.
+ * Requires SA_NODEFER below — with the signal deferred, a same-signal fault in
+ * the handler is undeliverable and the kernel retries the instruction forever. */
+static volatile sig_atomic_t g_in_fault = 0;
+
 static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
 {
     j5n_fault_kind kind;
@@ -791,10 +879,26 @@ static void host_signal_handler(int sig, siginfo_t *info, void *ucv)
         g_classify(info ? info->si_addr : NULL, g_classify_user)) {
         sigjmp_buf *r = g_recover;
         g_recover = NULL;
+        g_in_fault = 0;
         siglongjmp(*r, 2);
     }
 
+    if (g_in_fault) {
+        /* The bundler itself faulted. Skip diagnostics and unwind to the run's
+         * containment if it has one; otherwise die with the original signal. */
+        if (g_recover) {
+            sigjmp_buf *r = g_recover;
+            g_recover = NULL;
+            g_in_fault = 0;
+            siglongjmp(*r, 1);
+        }
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+    g_in_fault = 1;
     j5d_fault(kind, detail, st, sb, &h);
+    g_in_fault = 0;
 
     /* [T0P3] containment: a registered recovery target means an embedder (j5d_run) wants
      * to SURVIVE this fault — unwind there (the bundle is already written; sigsetjmp(.,1)
@@ -827,7 +931,10 @@ void j5n_signal_install(j5n_diag *d)
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = host_signal_handler;
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    /* SA_NODEFER: a fault inside the handler must REACH the handler again (the
+     * g_in_fault latch then unwinds or dies); with the signal deferred it would
+     * livelock at the faulting instruction instead. */
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS,  &sa, NULL);

@@ -170,6 +170,14 @@ typedef int (*j5n_classify_fn)(void *fault_addr, void *user);
 void j5n_signal_set_classifier(j5n_classify_fn fn, void *user);   /* returns the PREVIOUS target so
                                                         * nested runs (a native->68k hook
                                                         * re-entering j5d_run) restore it */
+
+/* Host-address SYMBOLIZER for the crash report. dladdr() only knows host
+ * dylibs; the interesting faulting pc is usually inside an OS module the OS's
+ * own loader placed. The embedder registers a resolver (the OS's debug
+ * facility) and REPORT.txt names the module and symbol behind the host pc/lr.
+ * The resolver must write "" when it does not know the address. */
+typedef void (*j5n_symbolize_fn)(unsigned long long addr, char *out, unsigned outlen);
+void j5n_set_symbolizer(j5n_symbolize_fn fn);
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);
 
 /* The 68k state the signal net is currently holding, or NULL outside a run. A

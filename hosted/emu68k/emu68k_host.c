@@ -547,6 +547,13 @@ static int classify_hardware(void *fault_addr, void *user)
     return 1;
 }
 
+/* The OS side registers its module resolver (debug facility) here so a host
+ * crash report can name the OS module behind the faulting host pc. */
+void emu68k_set_symbolizer(void (*fn)(unsigned long long, char *, unsigned))
+{
+    j5n_set_symbolizer((j5n_symbolize_fn)fn);
+}
+
 void emu68k_run_set_name(struct emu68k_run *r, const char *name)
 {
     if (r) snprintf(r->name, sizeof r->name, "%s", name ? name : "");
@@ -1619,6 +1626,7 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user,
                   char *e, unsigned el);
 static j5d_poll_action quantum_poll(void *user);
+static j5d_poll_action nested_poll(void *user);
 
 static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      struct j5d_m68k_state *st, char *e, unsigned el)
@@ -2565,7 +2573,9 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
             if (r->guestlib[i].state == GL_READY && r->guestlib[i].base)
                 j5d_register_guest_libbase(r->guestlib[i].base);
     }
-    j5d_set_poll(NULL, NULL, 0);
+    /* Child contexts run on the parent's native stack; they park via the
+     * unwind longjmp, not a poll yield. Poll for kill/deadline only. */
+    j5d_set_poll(nested_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     if (setjmp(ctx->unwind) == 0) {
         int dom = domain_enter_guest();   /* this context IS the guest again */
         ctx->can_unwind = 1;
@@ -2868,6 +2878,7 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
 }
 
 static j5d_poll_action quantum_poll(void *user);
+static j5d_poll_action nested_poll(void *user);
 
 int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
                          unsigned long hook, unsigned long object,
@@ -2909,8 +2920,8 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     c.run = r;
     j5d_engine_activate(r->eng);
     /* A nested callback must complete as part of the native call; yielding it
-     * would strand the native stack. Restore the outer quantum immediately. */
-    j5d_set_poll(NULL, NULL, 0);
+     * would strand the native stack. Poll for kill/deadline only, never yield. */
+    j5d_set_poll(nested_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     int dom = domain_enter_guest();   /* the hook body is GUEST code */
     int rc = j5d_run(&sb, (uint32_t)entry, RUN_LIBBASE, &st, &d0,
                      bridge, &c, err, errlen);
@@ -2937,6 +2948,23 @@ static j5d_poll_action quantum_poll(void *user)
         }
     }
     return J5D_POLL_YIELD;                      /* interval expiry = quantum end */
+}
+
+/* poll for nested (callback) runs: honour kill requests and the wall-clock
+ * deadline, but never yield, since the native stack below cannot be parked. */
+static j5d_poll_action nested_poll(void *user)
+{
+    struct emu68k_run *r = user;
+    if (r->kill_req) return J5D_POLL_KILL;
+    if (r->deadline > 0.0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        if ((double)ts.tv_sec + ts.tv_nsec / 1e9 > r->deadline) {
+            r->kill_req = 1;
+            return J5D_POLL_KILL;
+        }
+    }
+    return J5D_POLL_CONTINUE;
 }
 
 static void flush_output(struct emu68k_run *r)
