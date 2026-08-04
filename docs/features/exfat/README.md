@@ -1,61 +1,114 @@
-# exfat — an exFAT handler for AROS
+# exFAT handler status and development guide
 
-> Status: **spec written, no code.** Branch `exfat-handler` on `../aros-upstream`,
-> off `dos64-packets`.
+The `exfat-handler` branch in `../aros-upstream` now contains a working
+read-only handler for explicitly mounted `FATX` volumes. It is implemented
+from [the clean-room functional specification](spec.md), not from another
+exFAT implementation.
 
-exFAT is the format on every SD card and USB stick over 32 GB. AROS today can write to
-no medium a modern Mac or PC would hand it except FAT32: [`rom/filesys/fat`](../../../../aros-upstream/rom/filesys/fat)
-is FAT12/16/32 only, `workbench/fs/ntfs` is read-only by a hardcoded `#define`, and
-there is no ext, exFAT or APFS support at all.
+exFAT fills a practical gap in AROS: the existing FAT handler supports only
+FAT12/16/32, while large SD cards and removable media are commonly exFAT.
 
-This is the highest value-per-line change available in the AROS storage stack, which is
-why it comes before the alternatives.
+## Why this is a separate handler
 
-## Read this first
+The FAT handler abstracts FAT-table access through two function pointers, but
+contains 146 direct assumptions about the legacy 32-byte directory entry.
+exFAT instead uses checksummed entry sets (File, Stream Extension and one or
+more File Name entries), an allocation bitmap, an on-disk up-case table and
+per-stream `NoFatChain` semantics. Those differences cross the whole handler,
+not one dispatch point, so a separate module keeps the existing boot-critical
+FAT implementation outside the change's blast radius.
 
-**[spec.md](spec.md)** is the cleanroom functional specification for Phase 1. It is the
-only description of behaviour the implementation is written from. It carries the
-provenance record required by [CLEANROOM.md](../CLEANROOM.md), and states plainly that
-no third-party exFAT implementation has been read.
+The DosType is `FATX` (`0x46415458`), matching the existing OS4 and Aminet
+handlers. Phase 1 deliberately requires an explicit Mountlist entry. exFAT
+shares common MBR/GPT partition identifiers with other formats, so safe
+content probing belongs to the later discovery phase.
 
-## Why a separate handler, not a fourth FAT type
+## Delivered
 
-The obvious plan is to add exFAT as another format inside the existing FAT handler,
-which already has FAT12/16/32 dispatch, and that was the original intent here. Reading
-the code changed it.
+- Overflow-safe `UQUAD` sector addressing and cache keys, including refusal
+  when a device cannot address the requested byte range.
+- Main/extended boot-region validation and full repeated checksum validation.
+- FAT-chained and `NoFatChain` stream reads with allocation-bitmap checks,
+  zero-filled invalid-data tails, and cyclic-chain detection.
+- Allocation bitmap and compressed up-case table loading and validation.
+- Checked directory entry-set parsing, set checksum and name-hash validation,
+  case-insensitive lookup, nested paths, and DOS volume registration.
+- Read-only DOS packets for locks, parent/copy/same-lock, examine/enumerate,
+  open/read/seek/close, info, current volume, and the 64-bit position/size
+  actions. Mutating packets fail with `ERROR_DISK_WRITE_PROTECTED`; unknown
+  packets fail with `ERROR_ACTION_NOT_KNOWN`.
+- A target fix for `fdsk.device`: its custom Open path now holds a temporary
+  open reference so low-memory expunge cannot unload the device while its
+  worker process is being created.
 
-The FAT handler's variance is abstracted through exactly **two** function pointers,
-`func_get_fat_entry` and `func_set_fat_entry`, covering FAT table access only.
-Meanwhile there are **146 direct accesses** to the on-disk FAT directory entry spread
-across `ops.c`, `direntry.c`, `names.c`, `volume.c` and `lock.c`, each hardcoding the
-32-byte short-entry layout. exFAT has no such entry: it has entry *sets* of a File
-entry, a Stream Extension entry and one or more Filename entries, bound by a checksum.
-None of those 146 sites translate.
+## Gates and reproduced target result
 
-exFAT is not FAT with extensions. It reuses cluster chains and an optional FAT table,
-and differs in boot sector, allocation, directory format, naming and size domain. A
-separate handler follows the precedent already in the tree, `workbench/fs/ntfs` being
-visibly a copy of the FAT scaffolding, and keeps a filesystem the whole system depends
-on out of the blast radius.
+Run the host and cross-code-generation gates with:
 
-## Phases
+```sh
+cd hosted/exfat-tests
+./build.sh
+```
+
+This runs the bounds, boot-region, metadata/up-case, ASan and UBSan suites,
+then the AArch64 AROS compile gate and the m68k byte-load code-generation
+check. Build the target module with:
+
+```sh
+TARGETS=kernel-fs-exfat ./graft/rebuild-aros.sh
+```
+
+The August 4, 2026 target smoke test used a 64 MiB image formatted and populated
+by macOS, mounted through `fdsk.device`. `List EXFAT0: ALL` enumerated the root,
+the macOS metadata directory, and a nested directory. Files were copied from
+the volume into `SYS:T` and checked on the host:
+
+```text
+Hello.txt             ea19efb17590b24c4080dbe807df42e52169ec85e85ab6b961de79896ac4d424
+SubDir/Handler.bin    ece5e609bd1a9cd248d8154280be2bb4c72c5fa4f92ffa873e6ef4df2a721b4a
+```
+
+Opening `hello.TXT` proved case-insensitive lookup. Copying a file back onto
+the volume failed with `disk is write-protected`. The run had no trap and the
+handler reported `boot region accepted, superblock constructed`.
+
+## Remaining acceptance work
+
+The functional core is usable, but the entire Phase 1 acceptance matrix in
+`spec.md` is not yet discharged. Do not call the following proven until their
+fixtures run on target:
+
+- 4 GiB - 1, 4 GiB and 4 GiB + 1 files;
+- a deliberately fragmented FAT-chained file and `ValidDataLength` tail;
+- 255-code-unit, non-ASCII and deliberately colliding name-hash cases;
+- 10,000-entry enumeration and the directory corruption vectors;
+- a full AROS m68k source compile (the present m68k gate covers the portable
+  headers and generated byte loads only).
+
+Phase 1 currently presents code units above the local 8-bit character set as
+`_`, as specified by N4. Packed exFAT timestamps are exposed, but applying the
+recorded UTC-offset byte remains a follow-up. These are compatibility limits,
+not silent claims of full Unicode/time-zone support.
+
+## Roadmap
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | 64-bit DOS packet plumbing, see [dos64-packets](../dos64-packets/README.md) | **done** |
-| 0.5 | Copy the FAT scaffolding, widen its sector domain to `UQUAD` | next |
-| 1 | Read-only: explicit `FATX` Mountlist, VBR validation, bitmap, upcase, entry sets, list, read | spec written |
-| 2 | Writable files and metadata, with fault injection and external `fsck_exfat` validation | not started |
-| 3 | Formatter, then shared content probing for MBR, GPT **and** USB mass storage | not started |
+| 0 | 64-bit DOS packet plumbing | delivered on the branch |
+| 0.5 | 64-bit-safe disk/cache and mount geometry | delivered and gated |
+| 1 | Explicit read-only `FATX` mount, list and read | functional core delivered; extended corpus above remains |
+| 2 | Writes, fault injection and external `fsck_exfat` validation | not started |
+| 3 | Formatter and shared MBR/GPT/USB content probing | not started |
 
-Phase 3 covers USB mass storage explicitly because a probe living only in
-`rom/partition` would miss the single most common exFAT medium.
+USB discovery is explicitly part of Phase 3; putting the probe only in
+`rom/partition` would miss USB mass-storage paths.
 
-## DosType
+## Implementation map
 
-`FATX`, `0x46415458`, matching the existing OS4 and Aminet exFAT handlers so media is
-interchangeable. Note that exFAT **cannot be identified by partition type**: it shares
-MBR type `0x07` with NTFS and the Microsoft Basic Data GUID on GPT, so identification
-requires probing the volume boot record for the `"EXFAT   "` signature at offset 3.
-That is Phase 3's problem, not Phase 1's, which mounts only from an explicit Mountlist
-entry.
+- `rom/filesys/exfat/volume.c`: ordered mount, boot region, metadata bootstrap,
+  DOS volume lifecycle.
+- `stream.c`: FAT/contiguous traversal and read semantics.
+- `directory.c`: bitmap, up-case and validated entry sets.
+- `packet.c`: read-only AmigaDOS contract.
+- `exfat_meta.h`: pure metadata helpers shared by hosted corruption tests.
+- `hosted/exfat-tests/`: host sanitiser and target code-generation gates.

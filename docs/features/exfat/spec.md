@@ -5,7 +5,10 @@
 > approved public sources named here.
 >
 > Branch `exfat-handler` on `../aros-upstream`, off `dos64-packets`.
-> Status: **revision 2, after review.** No handler code exists yet.
+> Status: **revision 2, implemented through the Phase 1 read-only core.** The
+> target handler mounts, registers a DOS volume, enumerates directories and
+> reads files; the remaining acceptance-corpus coverage is tracked in
+> [README.md](README.md).
 
 ## Provenance record
 
