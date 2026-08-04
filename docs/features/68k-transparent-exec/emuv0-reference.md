@@ -47,11 +47,45 @@ to the forum; that is their entire triage pipeline.
 The core trick — run the guest ISA natively — does not exist for us: 68k is
 big-endian and there is no compatibility mode. Every byte the guest reads or
 writes needs swapping, which is exactly why our importer/facade machinery has
-to exist. Their "only proxy 5 libraries" economy also depends on running real
-32-bit library binaries; for us that would mean running the whole 68k
-library stack under JIT (AROS m68k builds exist, so it is *possible*) — a
-plausible long-term lever, not the current path: each JITted library multiplies
-translated code and every one still bottoms out in the same 5-library bridge.
+to exist below the waterline.
+
+## The waterline model — measured, not speculative (2026-08-04)
+
+Their real structural idea is the **waterline**: bridge only the bottom
+libraries, run everything above as guest-ISA binaries. For us both halves
+already exist: the bridge covers the bottom set, and the T3e guest-library
+loader runs real third-party 68k disk libraries (xpk chain, proven
+2026-08-02). What was missing was the supply of guest system libraries and
+the evidence. Both gathered:
+
+- **Supply**: AROS amiga-m68k nightly builds are current (checked 20260804)
+  and ship the full `Libs/` set as plain HUNK files — the format our loader
+  already speaks. Reference copy:
+  `/Users/jkn/Source/references/aros-m68k-20260804/libs/`. For shipping we
+  would cross-build them ourselves (APL).
+- **Dependencies** (from the binaries): every tail library bottoms out in
+  exactly the set we already bridge — {exec, dos, graphics, intuition,
+  layers, utility, cybergraphics} — plus three devices (timer, input,
+  clipboard), `kernel.resource` (stubbable), and workbench.library
+  (asl/datatypes/icon, notification paths). gadtools and diskfont need
+  NOTHING beyond the bridged five. asl is the deepest: it additionally
+  pulls gadtools, diskfont, iffparse, locale, coolimages — all of which can
+  themselves be guest-side.
+- **scan68k on m68k gadtools**: route JIT, no hardware use, small
+  enumerable exec LVO surface, every opened library bridged.
+
+Where bridging a tail library is still genuinely better — the three
+native-integration seams: **asl** (native Zune file requester vs 1995-look
+guest one), **datatypes** (only the native side sees ffmpeg.datatype and
+friends), **diskfont** (only the native side sees CoreText-bridged fonts).
+Those argue for per-library routing policy, not for bridging everything.
+
+Cost asymmetry that decides the rest: the next libraries in the import queue
+(datatypes, asl, icon) are BOOPSI/class-heavy — the place where per-function
+bridging cost explodes (object model across the boundary) and where
+guest-side marginal cost is near zero (guest-to-guest calls never cross).
+Third-party app-bundled `.library` files force the guest-side mechanism to
+exist regardless; no bridging effort can ever cover them.
 
 ## What is directly worth stealing
 
@@ -104,6 +138,11 @@ public reply to Krzysztof is John's call.
 
 Architecturally we converged on the same shapes independently (proxy+sync,
 translate-at-boundary, per-command device marshalling, refuse loudly). Their
-technique is not "better", it is the same boundary design on a much easier
-substrate, executed manually. The transferable value is their catalogue of
-GUI quirks and the async-IO/callback patterns, which are ahead of ours.
+technique is not "better" at the boundary, it is the same design on a much
+easier substrate, executed manually. But their waterline economics transfer:
+above the bridged bottom set, running real guest libraries beats bridging
+per-function, except at the three native-integration seams listed above.
+Proposed direction (decision pending): per-library routing — bridge below
+the waterline and at seams that pay, guest-side by default above it; first
+spike is gadtools guest-side A/B'd against the bridged one using the
+existing T3GEN fixtures and Bridge Lab traces.
