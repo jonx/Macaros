@@ -476,6 +476,64 @@ alternation (false negatives), the shell wrapper skips non-UTF-8 files —
 check file content with python, and check bytes, not greps, before
 diagnosing "the file changed".
 
+## STATUS 2026-08-05: gengadget PASSES guest-side; the stall was four stacked bugs
+
+**`[T3GADGET] PASS` on guest-side gadtools** (create context → CreateGadgetA
+through the guest class → super stub → native gadgetclass → GetAttr answers).
+Bridged gates green after everything below: t3gen 433 crossings, engine
+conformance 256/279, J5t byte-exact.
+
+The week's "post-GetAttr stall" was four bugs stacked, newest hiding oldest.
+Fixed in this order (graft `eefe29e`, fork `16f5335354` + `8337ca7177`):
+
+1. **Nested runs were unkillable**: `emu68k_run_call_hook` and the child-
+   context resume set the engine poll to NULL. Both now use `nested_poll`
+   (kill + deadline, never yield — the native stack below cannot park).
+2. **exec's stack probe suspended runs mid-JIT**: guest execution runs with
+   SP translated into the arena; `core_Switch` saw SP out of bounds and
+   parked the task forever (`TS_WAIT`, `sigWait=0`) while it held native
+   locks. `emu68k_run_to_completion` widens `tc_SPLower/Upper` for the run.
+3. **The fault handler livelocked on its own fault**: the crash-report
+   writer walked guest memory across the punched hardware windows, faulted
+   with the signal blocked, and macOS retried the instruction forever
+   (unkillable 100 % CPU; lldb showed `j5d_fault` at `EXC_BAD_ACCESS`).
+   Crash-path guest reads now go through `mach_vm_read_overwrite` (holes
+   skip or snapshot as zeros); `SA_NODEFER` + a re-entry latch turn any
+   remaining handler fault into containment. REPORT.txt also symbolizes the
+   faulting host pc/lr via a new embedder hook (emu68k.library registers
+   debug.library `DecodeLocationA`) — this is what named bug 4.
+4. **The actual bug: a missing `#include <proto/intuition.h>`** in
+   `emu68k_oscall.c`. `NewObjectA` in the super stub was implicitly
+   declared (int return), truncating the created object's pointer to 32
+   bits; the facade registered the truncated pointer and native `GetAttr`
+   faulted on it in page-zero. One include line. The object
+   registration/resolve `bug()` traces that caught it are permanent.
+
+Also landed: **OM_GET crosses as a real `opGet`** (instance facade lookup
+via `object_by_native`, attr ID + guest storage slot, value copied back);
+other non-OM_NEW methods still cross method-only. `boopsi_entry` accepts
+methods on instances, not just the OM_NEW class convention.
+
+**Next slice, diagnosed but not started — guest-visible Gadget family
+linking.** The pair control (`t3gen-gadget` guest-side) shows
+`gengadgetbad` printing FAIL with ZERO `DisposeObject` crossings in the
+whole run: the CreateGadgetA result facade is never linked into the
+guest's gadget chain, so guest `FreeGadgets` frees only the plain context
+gadget, the native BOOPSI gadget LEAKS, and the double-free the control
+probes for never crosses the bridge at all (guest-internal no-op, as on
+real hardware — the control's abort-on-stale expectation was
+bridged-semantics-specific). Wanted: write the facade's guest address into
+the previous guest gadget's NextGadget at creation (and the facade's own
+NextGadget on later links), so the guest chain mirrors the native one and
+frees actually dispose. Related standing rule: a chain may not mix
+adopted mirrors with bridge-issued facades — this slice is where that
+rule needs its answer.
+
+Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
+full this inflated swap until the machine hit ENOSPC twice (wedged
+100 %-CPU instances from bug 3 made it worse). Check free space before
+corpus batches.
+
 ## STATUS 2026-08-02: T3e complete; a real disk-library chain runs unchanged
 
 9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
