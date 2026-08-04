@@ -522,17 +522,28 @@ guest's gadget chain, so guest `FreeGadgets` frees only the plain context
 gadget, the native BOOPSI gadget LEAKS, and the double-free the control
 probes for never crosses the bridge at all (guest-internal no-op, as on
 real hardware — the control's abort-on-stale expectation was
-bridged-semantics-specific). Start by measuring, not fixing: guest
-gadtools links the chain itself (the facade address IS what NewObjectA
-returned to it), so the likelier gap is the facade's CONTENT — it is
-allocated as zeros, never converted from the native Gadget, so the guest's
-walk reads NextGadget=0 / no gadtools signature and stops. Dump the
-context gadget's guest NextGadget and trace what FreeGadgets reads; the
-probable fix is giving Gadget-rooted object facades a converted Gadget
-field view (the existing Gadget mirror field map), refreshed at
-crossings. Related standing rule: a chain may not mix adopted mirrors
-with bridge-issued facades — this slice is where that rule needs its
-answer.
+bridged-semantics-specific). Mechanism CONFIRMED from the gadtools source
+(same tree the m68k nightly is built from) plus the run-21 facade dump:
+`FreeGadgets` disposes only when `GadgetType` has `GTYP_GADTOOLS` AND
+`GTYP_CUSTOMGADGET`; the guest's own `|= GTYP_GADTOOLS` RMW landed on the
+zeroed facade (dump shows exactly `0x0100` at facade+0x10), but the
+native `GTYP_CUSTOMGADGET` bits were never converted in, so the walk
+skips and the native object leaks. `DisposeObject(facade)` itself would
+cross fine — the facade address is its token.
+
+This is NOT a per-function or per-library fix. It is the ONE generic
+boundary question of the waterline model: how a BOOPSI object made below
+the waterline is REPRESENTED in guest memory above it — the same seam
+for every guest library that subclasses a bridged class (gadtools now,
+asl/datatypes later). Shape to decide (design first, then build):
+facades of objects whose class roots in a guest-visible struct (Gadget)
+must carry that struct's converted view, with three general rules —
+convert native-owned fields once at creation and let guest RMWs survive
+later crossings; link fields hold guest addresses of sibling facades,
+never converted native pointers; ownership-crossing pointer fields
+(GadgetText: the guest frees ITS OWN IText) keep the guest's value.
+Related standing rule: a chain may not mix adopted mirrors with
+bridge-issued facades — this slice is where that rule needs its answer.
 
 Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
 full this inflated swap until the machine hit ENOSPC twice (wedged
