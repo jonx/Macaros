@@ -95,6 +95,12 @@ It deliberately cannot share T7's image: T3 creates and frees cluster holes,
 whereas T7's 10,000-entry directory consumes those same clusters for directory
 data and can turn a supposedly fragmented test stream contiguous.
 
+Run the isolated T7 enumeration gate with:
+
+```sh
+./graft/exfat-enumeration-smoke
+```
+
 The normal gate currently discharges T4 (a verified `NoFatChain` stream),
 T5b (an unmappable UTF-16 unit is displayed as `_` and that display spelling
 does not open the file), and T6b (two distinct names with the same on-disk

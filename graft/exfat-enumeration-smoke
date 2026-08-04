@@ -1,0 +1,51 @@
+#!/bin/bash
+# T7: enumerate 10,000 deliberately ordinary files through the target handler.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit7"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT7"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT7.mountlist"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-t7.XXXXXX")"
+HOST_MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/t7.out"
+DEVICE=""
+
+cleanup() {
+    if [ -n "$DEVICE" ]; then hdiutil detach "$DEVICE" -quiet || true; fi
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] || { echo "FAIL: Unit7 is already in use" >&2; exit 1; }
+mkdir "$HOST_MOUNT" "$RESULTS"
+
+truncate -s 128m "$IMAGE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 {print $1}')"
+/sbin/newfs_exfat -v AROST7 "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet; DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 {print $1}')"
+for n in {0..9999}; do
+    printf -v name 'Entry%05d.bin' "$n"
+    : >"$HOST_MOUNT/$name"
+done
+hdiutil detach "$DEVICE" -quiet; DEVICE=""
+
+cp "$TEMPLATE" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT7\nC:List EXFAT7: ALL >MacRW:t7.out' \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 18 >/dev/null
+
+[ -f "$OUT" ] || { echo "FAIL: T7 produced no target output" >&2; exit 1; }
+count="$(grep -c '^Entry[0-9][0-9][0-9][0-9][0-9]\.bin' "$OUT" || true)"
+[ "$count" -eq 10000 ] || { echo "FAIL: T7 expected 10000 entries, got $count" >&2; exit 1; }
+grep -q 'TOTAL:' "$OUT" || { echo "FAIL: T7 enumeration did not complete" >&2; exit 1; }
+echo "PASS: T7 enumerated 10000 entries through the target handler"

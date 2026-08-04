@@ -498,6 +498,10 @@ least eight physical extents. T7 cannot share that image: its 10,000-entry
 directory consumes the free clusters T3 deliberately creates, defeating the
 fragmentation mechanism and creating a false pass.
 
+`[OURS]` T7 likewise has its own 128 MiB image. It requires exactly 10,000
+`EntryNNNNN.bin` lines and the final `TOTAL:` line from target enumeration;
+a partial directory walk cannot satisfy either condition.
+
 `[OURS]` The target T5 probe passes two distinct 255-code-unit names to
 `Open()` and reads their distinct payloads successfully. They share their
 first 106 units, so the legacy `FileInfoBlock` used by `List` displays two
