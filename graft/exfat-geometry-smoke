@@ -1,0 +1,88 @@
+#!/bin/bash
+# Paired target controls for T1 and logical/device sector mismatches T15a/T15b.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+IMAGE512="$AROS/DiskImages/Unit10"
+IMAGE4096="$AROS/DiskImages/Unit11"
+DRIVER="$AROS/Devs/DOSDrivers/EXFATG"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-geometry.XXXXXX")"
+RESULTS="$WORK/results"
+DEVICE=""
+WAIT_SECONDS="${EXFAT_WAIT_SECONDS:-15}"
+
+cleanup() {
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE512" ] || unlink "$IMAGE512"
+    [ ! -e "$IMAGE4096" ] || unlink "$IMAGE4096"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE512" ] && [ ! -e "$IMAGE4096" ] && [ ! -e "$DRIVER" ] || {
+    echo "FAIL: Unit10, Unit11 or EXFATG is already in use" >&2; exit 1;
+}
+
+mkdir "$RESULTS"
+format_image() {
+    local image=$1 sector=$2
+    truncate -s 64m "$image"
+    DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$image" | awk 'NR == 1 { print $1 }')"
+    [ -n "$DEVICE" ] || { echo "FAIL: geometry image did not attach" >&2; exit 1; }
+    /sbin/newfs_exfat -R -S "$sector" -b 1048576 -v AROSGEO "$DEVICE" >/dev/null
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+    "$ROOT/hosted/exfat-tests/exfat_boot_inspect.py" "$image" "$sector"
+}
+format_image "$IMAGE512" 512
+format_image "$IMAGE4096" 4096
+
+"$ROOT/hosted/exfat-tests/build-exfat-geometry-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATGeometryProbe" "$AROS/C/EXFATGeometryProbe"
+
+run_case() {
+    local name=$1 template=$2 expect=$3 out="$RESULTS/$1.out" log="$RESULTS/$1.log"
+    cp "$ROOT/hosted/exfat-tests/$template" "$DRIVER"
+    AROS_CTL_HOST_FOLDER="$RESULTS" \
+    AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFATG\nC:EXFATGeometryProbe >MacRW:'"$name"$'.out' \
+        "$HERE/aros-ctl" run >/dev/null
+    "$HERE/aros-ctl" wait "$WAIT_SECONDS" >/dev/null
+    "$HERE/aros-ctl" log 140 >"$log"
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    unlink "$DRIVER"
+    if [ "$expect" = mount ]; then
+        grep -q '^\[EXFATGEO\] PASS' "$out" || {
+            echo "FAIL: $name clean control did not mount with plausible Info" >&2
+            [ -f "$out" ] && cat "$out" >&2
+            exit 1
+        }
+        if [ "$name" = partition-larger-than-volume ]; then
+            grep -q 'exfat\] 131072 sectors of 512 bytes' "$log" || {
+                echo "FAIL: T16b runtime boundary did not use VolumeLength" >&2
+                exit 1
+            }
+        fi
+    else
+        grep -q 'exfat\] mount REFUSED, error 115$' "$log" || {
+            echo "FAIL: $name did not refuse with ERROR_BAD_NUMBER" >&2
+            exit 1
+        }
+    fi
+}
+
+run_case control-512 EXFAT10.mountlist mount
+run_case logical-512-device-4096 EXFAT10-device4096.mountlist refuse
+run_case control-4096 EXFAT11.mountlist mount
+run_case logical-4096-device-512 EXFAT11-device512.mountlist refuse
+run_case partition-smaller-than-volume EXFAT10-partition-small.mountlist refuse
+run_case partition-larger-than-volume EXFAT10-partition-large.mountlist mount
+
+echo "PASS: T1 mounts; T15 mismatches and T16 partition boundaries hold"

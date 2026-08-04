@@ -2,6 +2,8 @@
 # T3: a dedicated exFAT fragmentation fixture.  It cannot share T7's image:
 # a 10,000-entry directory consumes the free clusters deliberately left here.
 set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

@@ -1,0 +1,141 @@
+#!/bin/bash
+# Exhaust every allocation-bitmap cluster, then prove ENOSPC preflight errors
+# leave the old file state and a clean, externally valid filesystem.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit15"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT15"
+PROBE="$AROS/C/EXFATFullProbe"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-full.XXXXXX")"
+MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/exfat-full.out"
+EXPECTED="$WORK/Existing.bin"
+DEVICE=""
+
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ] \
+        && [ -e "$IMAGE" ]; then
+        cp "$IMAGE" "$WORK/Unit15"
+    fi
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$PROBE" ] || unlink "$PROBE"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed full-volume fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] && [ ! -e "$PROBE" ] || {
+    echo "FAIL: Unit15, EXFAT15 or EXFATFullProbe is already in use" >&2
+    exit 1
+}
+mkdir "$MOUNT" "$RESULTS"
+printf 'existing payload\n' >"$EXPECTED"
+truncate -s 64m "$IMAGE"
+
+DEVICE="$(hdiutil attach -nomount \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/newfs_exfat -v AROSFULL "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+COPYFILE_DISABLE=1 cp -X "$EXPECTED" "$MOUNT/Existing.bin"
+set +e
+dd if=/dev/zero of="$MOUNT/Filler.bin" bs=1m count=128 status=none \
+    2>"$RESULTS/fill-dd.err"
+fill_status=$?
+set -e
+[ "$fill_status" -ne 0 ] || {
+    echo "FAIL: host fill unexpectedly fit in the 64 MiB image" >&2
+    exit 1
+}
+sync
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+"$ROOT/hosted/exfat-tests/exfat_fill_volume.py" "$IMAGE" Filler.bin
+bitmap="$($ROOT/hosted/exfat-tests/exfat_bitmap_inspect.py "$IMAGE")"
+case "$bitmap" in *"free=0"*"percent=100"*) ;; *)
+    echo "FAIL: full-volume precondition missing: $bitmap" >&2
+    exit 1 ;;
+esac
+DEVICE="$(hdiutil attach -nomount -readonly \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-before.out" 2>&1 || {
+    cat "$RESULTS/fsck-before.out" >&2
+    exit 1
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+"$ROOT/hosted/exfat-tests/build-exfat-full-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFATFullProbe" "$PROBE"
+cp "$ROOT/hosted/exfat-tests/EXFAT15.mountlist" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT15\nC:EXFATFullProbe >MacRW:exfat-full.out' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 30; second++)); do
+    if [ -f "$OUT" ] && grep -Eq '^\[EXFATFULL\] (PASS|FAIL)' "$OUT"; then
+        break
+    fi
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+{ [ -f "$OUT" ] && grep -q '^\[EXFATFULL\] PASS' "$OUT"; } || {
+    echo "FAIL: target full-volume rollback probe failed" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+
+[ "$($ROOT/hosted/exfat-tests/exfat_volume_flags.py "$IMAGE")" = 0x0000 ] || {
+    echo "FAIL: expected ENOSPC left VolumeDirty set" >&2
+    exit 1
+}
+bitmap="$($ROOT/hosted/exfat-tests/exfat_bitmap_inspect.py "$IMAGE")"
+case "$bitmap" in *"free=0"*"percent=100"*) ;; *)
+    echo "FAIL: target changed full bitmap occupancy: $bitmap" >&2
+    exit 1 ;;
+esac
+DEVICE="$(hdiutil attach -nomount -readonly \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-after.out" 2>&1 || {
+    cat "$RESULTS/fsck-after.out" >&2
+    exit 1
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -readonly -mountpoint "$MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+cmp "$EXPECTED" "$MOUNT/Existing.bin"
+[ ! -e "$MOUNT/NoRoomDir" ] || {
+    echo "FAIL: failed directory became visible after host remount" >&2
+    exit 1
+}
+[ ! -e "$MOUNT/EmptyAllowed.bin" ] || {
+    echo "FAIL: metadata-only cleanup file remains after host remount" >&2
+    exit 1
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+echo "PASS: full-volume ENOSPC rolls back cleanly and preserves allocation ownership"

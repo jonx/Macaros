@@ -1,0 +1,116 @@
+#!/bin/bash
+# Repeatably round-trip the immutable physical AROSEX partition capture.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+SOURCE="${EXFAT_USB_SOURCE:-$AROS/DiskImages/Unit14.physical-capture}"
+IMAGE="$AROS/DiskImages/Unit17"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT17"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-usb.XXXXXX")"
+RESULTS="$WORK/results"
+HOST_MOUNT="$WORK/mount"
+EXPECTED="$WORK/expected"
+OUT="$RESULTS/usb-roundtrip.out"
+PROBE_OUT="$RESULTS/usb-probe.out"
+DEVICE=""
+
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed USB test results at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -f "$SOURCE" ] || { echo "FAIL: capture is missing: $SOURCE" >&2; exit 1; }
+[ -r "$SOURCE" ] || { echo "FAIL: capture is not readable: $SOURCE" >&2; exit 1; }
+[ "$(stat -f %z "$SOURCE")" = 536870912 ] || {
+    echo "FAIL: capture is not the expected 536870912-byte partition" >&2
+    exit 1
+}
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] || {
+    echo "FAIL: Unit17 or EXFAT17 is already in use" >&2; exit 1;
+}
+mkdir "$RESULTS" "$HOST_MOUNT" "$EXPECTED"
+cp "$SOURCE" "$IMAGE"
+chmod u+w "$IMAGE"
+cp "$ROOT/hosted/exfat-tests/EXFAT17.mountlist" "$DRIVER"
+"$ROOT/hosted/exfat-tests/build-exfat-usb-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFATUSBProbe" "$RESULTS/EXFATUSBProbe"
+"$ROOT/hosted/exfat-tests/exfat_boot_inspect.py" "$IMAGE" 512
+
+# Preserve exactly what macOS authored before asking AROS to mutate the copy.
+DEVICE="$(hdiutil attach -readonly -mountpoint "$HOST_MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+cp "$HOST_MOUNT/AROSUSB/Handover.txt" "$EXPECTED/Handover.txt"
+cp "$HOST_MOUNT/AROSUSB/Handler.bin" "$EXPECTED/Handler.bin"
+cp "$HOST_MOUNT/AROSUSB/Nested/Source.c" "$EXPECTED/Source.c"
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT17\nC:List EXFAT17:AROSUSB ALL >MacRW:usb-roundtrip.out\nC:Copy EXFAT17:AROSUSB/Handover.txt MacRW:Handover-readback.txt >>MacRW:usb-roundtrip.out\nC:Copy EXFAT17:AROSUSB/Handler.bin MacRW:Handler-readback.bin >>MacRW:usb-roundtrip.out\nC:Copy EXFAT17:AROSUSB/Nested/Source.c MacRW:Source-readback.c >>MacRW:usb-roundtrip.out\nMacRW:EXFATUSBProbe EXFAT17: >MacRW:usb-probe.out\nC:List EXFAT17:AROSUSB ALL >>MacRW:usb-roundtrip.out\nC:Echo PASS >MacRW:usb.done' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 60; second++)); do
+    [ -f "$RESULTS/usb.done" ] && break
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+[ -f "$RESULTS/usb.done" ] || {
+    echo "FAIL: target USB image sequence did not finish" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    [ -f "$PROBE_OUT" ] && cat "$PROBE_OUT" >&2
+    exit 1
+}
+[ "$(grep -c '^TOTAL:' "$OUT" || true)" -ge 2 ] || {
+    echo "FAIL: target final directory listing did not finish" >&2
+    cat "$OUT" >&2
+    exit 1
+}
+grep -q '^\[EXFATUSB\] PASS$' "$PROBE_OUT" || {
+    echo "FAIL: target USB mutation probe failed" >&2
+    cat "$PROBE_OUT" >&2
+    exit 1
+}
+cmp "$EXPECTED/Handover.txt" "$RESULTS/Handover-readback.txt"
+cmp "$EXPECTED/Handler.bin" "$RESULTS/Handler-readback.bin"
+cmp "$EXPECTED/Source.c" "$RESULTS/Source-readback.c"
+
+DEVICE="$(hdiutil attach -nomount -readonly \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck.out" 2>&1 || {
+    cat "$RESULTS/fsck.out" >&2
+    exit 1
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -readonly -mountpoint "$HOST_MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+cmp "$EXPECTED/Handover.txt" "$HOST_MOUNT/AROSUSB/Renamed.txt"
+cmp "$EXPECTED/Handler.bin" "$HOST_MOUNT/AROSUSB/Handler.bin"
+printf 'AROS exFAT USB round-trip\n' | \
+    cmp - "$HOST_MOUNT/AROSUSB/AROS-Written.txt"
+[ ! -e "$HOST_MOUNT/AROSUSB/Handover.txt" ] || {
+    echo "FAIL: source name remains after AROS rename" >&2; exit 1;
+}
+[ ! -e "$HOST_MOUNT/AROSUSB/Nested/Source.c" ] || {
+    echo "FAIL: AROS deletion remains visible to macOS" >&2; exit 1;
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+echo "PASS: physical USB capture is readable and writable across macOS and AROS"

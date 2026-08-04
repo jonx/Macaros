@@ -1,0 +1,91 @@
+#!/bin/bash
+# Format a blank fdsk image through ACTION_FORMAT, then cross-check it.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+UNIT="${EXFAT_FORMAT_UNIT:-6}"
+VOLUME="EXFAT${UNIT}:"
+IMAGE="$AROS/DiskImages/Unit${UNIT}"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT${UNIT}"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT${UNIT}.mountlist"
+BLOCK_SIZE="$(awk '$1 == "BlockSize" { print $3; exit }' "$TEMPLATE")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-format.XXXXXX")"
+HOST_MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/exfat-format.out"
+DEVICE=""
+PAYLOAD='AROS handler-formatted exFAT payload'
+
+cleanup() {
+    local status=$?
+    if [ -n "$DEVICE" ]; then
+        hdiutil detach "$DEVICE" -quiet || true
+    fi
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
+[ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace existing $DRIVER" >&2; exit 1; }
+
+mkdir "$HOST_MOUNT" "$RESULTS"
+"$ROOT/hosted/exfat-tests/build-exfat-format-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATFormatProbe" "$AROS/C/EXFATFormatProbe"
+cp "$TEMPLATE" "$DRIVER"
+truncate -s 64m "$IMAGE"
+
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA="$(printf 'Assign \"FDSK:\" \"SYS:DiskImages\"\nC:Mount DEVS:DOSDrivers/EXFAT%s\nC:EXFATFormatProbe EXFAT%s: >MacRW:exfat-format.out\nC:Copy EXFAT%s:Formatted.bin MacRW:Formatted.bin >>MacRW:exfat-format.out' "$UNIT" "$UNIT" "$UNIT")" \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 15 >/dev/null
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+grep -q '^\[EXFATFORMAT\] PASS' "$OUT" || {
+    echo "FAIL: target formatter probe did not pass" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+printf '%s\n' "$PAYLOAD" >"$WORK/expected"
+cmp "$WORK/expected" "$RESULTS/Formatted.bin" || {
+    echo "FAIL: target formatted-file copy differs" >&2; exit 1;
+}
+[ "$("$ROOT/hosted/exfat-tests/exfat_label_inspect.py" "$IMAGE")" = AROSFORMAT ] || {
+    echo "FAIL: formatter label is missing" >&2; exit 1;
+}
+"$ROOT/hosted/exfat-tests/exfat_format_inspect.py" "$IMAGE" \
+    >"$RESULTS/format-structure.out"
+
+if [ "$BLOCK_SIZE" != 512 ]; then
+    echo "PASS: ACTION_FORMAT unit $UNIT passes target I/O and raw ${BLOCK_SIZE}-byte structural validation"
+    exit 0
+fi
+DEVICE="$(hdiutil attach -nomount -readonly -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-exfat.out" 2>&1 || {
+    cat "$RESULTS/fsck-exfat.out" >&2
+    echo "FAIL: fsck_exfat rejected the handler-formatted image" >&2
+    exit 1
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -readonly -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+cmp "$WORK/expected" "$HOST_MOUNT/Formatted.bin" || {
+    echo "FAIL: host-remounted formatted payload differs" >&2; exit 1;
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+echo "PASS: ACTION_FORMAT unit $UNIT passes target I/O, fsck, and host remount"

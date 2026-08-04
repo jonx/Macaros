@@ -1,0 +1,17 @@
+FileSystem      = exfat-handler
+Device          = fdsk.device
+Unit            = 10
+Flags           = 0
+Surfaces        = 1
+BlocksPerTrack  = 1
+LowCyl          = 0
+HighCyl         = 131071
+Reserved        = 0
+BlockSize       = 512
+Buffers         = 64
+BufMemType      = 1
+StackSize       = 32768
+Priority        = 5
+GlobVec         = -1
+DosType         = 0x46415458
+Activate        = 0

@@ -1,0 +1,81 @@
+#!/bin/bash
+# Sparse target gate for T2, T8 and handler-level 64-bit addressing (T13b).
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+IMAGE="$AROS/DiskImages/Unit9"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT9"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT9.mountlist"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-sparse.XXXXXX")"
+RESULTS="$WORK/results"
+MANIFEST="$WORK/manifest.txt"
+OUT="$RESULTS/exfat-sparse.out"
+LOG="$RESULTS/exfat-sparse.log"
+DEVICE=""
+
+cleanup() {
+    status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK and $IMAGE" >&2
+        return
+    fi
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ -f "$TEMPLATE" ] || { echo "FAIL: no EXFAT9 Mountlist template" >&2; exit 1; }
+[ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
+[ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace existing $DRIVER" >&2; exit 1; }
+
+mkdir "$RESULTS"
+truncate -s 17179869184 "$IMAGE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: sparse fixture image did not attach" >&2; exit 1; }
+/sbin/newfs_exfat -R -S 512 -b 1048576 -v AROSSPARSE "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+"$ROOT/hosted/exfat-tests/exfat_sparse_fixture.py" "$IMAGE" >"$MANIFEST"
+logical_bytes="$(stat -f '%z' "$IMAGE")"
+allocated_kib="$(du -k "$IMAGE" | awk '{ print $1 }')"
+[ "$logical_bytes" -eq 17179869184 ] || { echo "FAIL: sparse image logical size changed" >&2; exit 1; }
+[ "$allocated_kib" -lt 524288 ] || {
+    echo "FAIL: formatter densified sparse image ($allocated_kib KiB allocated)" >&2
+    exit 1
+}
+
+"$ROOT/hosted/exfat-tests/build-exfat-sparse-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATSparseProbe" "$AROS/C/EXFATSparseProbe"
+cp "$TEMPLATE" "$DRIVER"
+
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT9\nC:EXFATSparseProbe >MacRW:exfat-sparse.out' \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 12 >/dev/null
+"$HERE/aros-ctl" log 160 >"$LOG"
+
+if [ ! -f "$OUT" ] || ! grep -q '^\[EXFATSPARSE\] PASS' "$OUT"; then
+    echo "FAIL: sparse exFAT target probe did not pass" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    cat "$MANIFEST" >&2
+    "$HERE/aros-ctl" crash >&2 || true
+    exit 1
+fi
+grep -q 'exfat\] boot region accepted' "$LOG" || {
+    echo "FAIL: sparse fixture did not prove a successful exFAT mount" >&2
+    exit 1
+}
+
+cat "$MANIFEST"
+echo "SPARSE logical=$logical_bytes allocated_kib=$allocated_kib"
+cat "$OUT"

@@ -46,6 +46,9 @@ ULONG exfat_m68k_check(const UBYTE *boot, const UBYTE *sum_sector,
 __attribute__((noinline)) UWORD exfat_probe_rd16(const UBYTE *p, unsigned o);
 __attribute__((noinline)) ULONG exfat_probe_rd32(const UBYTE *p, unsigned o);
 __attribute__((noinline)) UQUAD exfat_probe_rd64(const UBYTE *p, unsigned o);
+__attribute__((noinline)) void exfat_probe_wr16(UBYTE *p, unsigned o, UWORD v);
+__attribute__((noinline)) void exfat_probe_wr32(UBYTE *p, unsigned o, ULONG v);
+__attribute__((noinline)) void exfat_probe_wr64(UBYTE *p, unsigned o, UQUAD v);
 
 __attribute__((noinline)) UWORD exfat_probe_rd16(const UBYTE *p, unsigned o)
 {
@@ -60,6 +63,21 @@ __attribute__((noinline)) ULONG exfat_probe_rd32(const UBYTE *p, unsigned o)
 __attribute__((noinline)) UQUAD exfat_probe_rd64(const UBYTE *p, unsigned o)
 {
     return exfat_rd64(p, o);
+}
+
+__attribute__((noinline)) void exfat_probe_wr16(UBYTE *p, unsigned o, UWORD v)
+{
+    exfat_wr16(p, o, v);
+}
+
+__attribute__((noinline)) void exfat_probe_wr32(UBYTE *p, unsigned o, ULONG v)
+{
+    exfat_wr32(p, o, v);
+}
+
+__attribute__((noinline)) void exfat_probe_wr64(UBYTE *p, unsigned o, UQUAD v)
+{
+    exfat_wr64(p, o, v);
 }
 
 ULONG exfat_m68k_check(const UBYTE *boot, const UBYTE *sum_sector,
@@ -91,6 +109,9 @@ ULONG exfat_m68k_check(const UBYTE *boot, const UBYTE *sum_sector,
     acc += exfat_probe_rd32(boot, 3);
     acc += (ULONG)(exfat_probe_rd64(boot, EXFAT_BOOT_VOLUMELENGTH) & 0xFFFFu);
     acc += (ULONG)(exfat_probe_rd64(boot, 1) & 0xFFu);
+    exfat_probe_wr16((UBYTE *)boot, 3, (UWORD)acc);
+    exfat_probe_wr32((UBYTE *)boot, 5, acc);
+    exfat_probe_wr64((UBYTE *)boot, 9, (UQUAD)acc);
 
     if (exfat_validate_boot(boot, 512, &g) == EXFAT_BOOT_OK)
         acc += g.cluster_count + g.sector_size;

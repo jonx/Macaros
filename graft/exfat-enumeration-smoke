@@ -1,6 +1,8 @@
 #!/bin/bash
 # T7: enumerate 10,000 deliberately ordinary files through the target handler.
 set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

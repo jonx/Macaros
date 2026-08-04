@@ -17,6 +17,7 @@ typedef uint16_t UWORD;
 typedef uint8_t  UBYTE;
 
 #include "exfat_boot.h"
+#include <dos/exfat.h>
 
 static int failures;
 
@@ -89,7 +90,8 @@ static void test_accept(void)
     check("geometry read back correctly",
         g.sector_size == 512 && g.cluster_shift == 3
         && g.volume_length == 131072 && g.heap_offset == 1024
-        && g.root_cluster == 2 && g.percent_in_use == 50);
+        && g.root_cluster == 2 && g.percent_in_use == 50
+        && g.volume_flags == 0);
     {
         /* 4096-byte sectors: the FAT covers four times as many entries per
            sector, so the same geometry is still self-consistent. */
@@ -290,6 +292,29 @@ static void test_checksum(void)
     }
 }
 
+static void test_write_flags(void)
+{
+    UWORD flags;
+
+    puts("\n3.1.13  writable transaction flags");
+    flags = exfat_volume_flags_begin_write(
+        EXFAT_VOLUMEFLAG_MEDIAFAIL | EXFAT_VOLUMEFLAG_CLEARZERO | 0x8000U);
+    check("begin sets dirty, clears ClearToZero and preserves other bits",
+        (flags & EXFAT_VOLUMEFLAG_DIRTY) != 0
+            && (flags & EXFAT_VOLUMEFLAG_CLEARZERO) == 0
+            && (flags & EXFAT_VOLUMEFLAG_MEDIAFAIL) != 0
+            && (flags & 0x8000U) != 0);
+    check("successful clean-origin transaction clears dirty",
+        (exfat_volume_flags_finish_write(flags, 0, 1)
+            & EXFAT_VOLUMEFLAG_DIRTY) == 0);
+    check("failed transaction remains dirty",
+        (exfat_volume_flags_finish_write(flags, 0, 0)
+            & EXFAT_VOLUMEFLAG_DIRTY) != 0);
+    check("pre-existing dirty state is never cleared",
+        (exfat_volume_flags_finish_write(flags, 1, 1)
+            & EXFAT_VOLUMEFLAG_DIRTY) != 0);
+}
+
 static void test_b3(void)
 {
     UBYTE sec11[512];
@@ -405,17 +430,54 @@ static void test_mount_boundary(void)
             == EXFAT_BOOT_BAD_GEOMETRY);
 }
 
+static void test_content_probe(void)
+{
+    UBYTE b[512];
+
+    puts("\ndiscovery  shared exFAT content probe");
+    make_good(b);
+    check("valid exFAT signature routes to FATX",
+        IsExfatBootSector(b, sizeof b));
+    check("short buffers are rejected without inspection",
+        !IsExfatBootSector(b, 511));
+    b[0] = 0xe9;
+    check("wrong jump instruction is rejected",
+        !IsExfatBootSector(b, sizeof b));
+    make_good(b);
+    b[3] = 'N';
+    check("an NTFS-style filesystem name is rejected",
+        !IsExfatBootSector(b, sizeof b));
+    make_good(b);
+    b[11] = 1;
+    check("legacy BPB content is rejected",
+        !IsExfatBootSector(b, sizeof b));
+    make_good(b);
+    b[511] = 0;
+    check("missing boot signature is rejected",
+        !IsExfatBootSector(b, sizeof b));
+    check("content-probed FATX survives generic MBR type 0x07 mapping",
+        ExfatSelectPartitionDosType(ID_EXFAT_DISK, 0x4e544653UL)
+            == ID_EXFAT_DISK);
+    check("non-exFAT partitions retain their generic type mapping",
+        ExfatSelectPartitionDosType(0x4e544653UL, 0x46415402UL)
+            == 0x46415402UL);
+}
+
 int main(void)
 {
+    check("shared automounter handler name matches installed module",
+        strcmp(EXFAT_HANDLER_NAME, "exfat-handler") == 0);
     test_accept();
     test_identity();
     test_version_and_texfat();
     test_geometry();
     test_ordering();
     test_checksum();
+    test_write_flags();
     test_b3();
     test_no_partial_geometry();
     test_mount_boundary();
+    test_content_probe();
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASS",
         failures, failures == 1 ? "" : "s");
     return failures != 0;

@@ -1,0 +1,64 @@
+#!/bin/bash
+# Exercise the physical-hotplug probe logic against the byte-exact Unit14
+# capture. This validates its FATX/CRC/absence oracles; actual automounting is
+# deliberately left to the same binary on real AROS USB hardware.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit14"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT14"
+PROBE="$AROS/C/EXFATHotplugProbe"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-hotplug-probe.XXXXXX")"
+OUT="$WORK/exfat-hotplug.out"
+
+cleanup() {
+    local status=$?
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$PROBE" ] || unlink "$PROBE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed hotplug-probe results at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -f "$IMAGE" ] || { echo "FAIL: missing physical capture $IMAGE" >&2; exit 1; }
+[ "$(stat -f %z "$IMAGE")" = 536870912 ] || {
+    echo "FAIL: Unit14 is not the expected 536870912 bytes" >&2
+    exit 1
+}
+[ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace $DRIVER" >&2; exit 1; }
+[ ! -e "$PROBE" ] || { echo "FAIL: refusing to replace $PROBE" >&2; exit 1; }
+
+"$ROOT/hosted/exfat-tests/build-exfat-hotplug-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFAT14.mountlist" "$DRIVER"
+cp "$ROOT/hosted/exfat-tests/EXFATHotplugProbe.aarch64" "$PROBE"
+
+AROS_CTL_HOST_FOLDER="$WORK" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT14\nC:EXFATHotplugProbe EXFAT14: >MacRW:exfat-hotplug.out\nC:Echo DONE >MacRW:exfat-hotplug.done' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 60; second++)); do
+    [ -f "$WORK/exfat-hotplug.done" ] && break
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+[ -f "$WORK/exfat-hotplug.done" ] || {
+    echo "FAIL: target probe did not finish" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+grep -q '^\[EXFATHOTPLUG\] PASS EXFAT14: mounted as FATX with exact payloads$' "$OUT" || {
+    echo "FAIL: physical-hotplug oracle failed on Unit14" >&2
+    cat "$OUT" >&2
+    exit 1
+}
+
+cat "$OUT"
+echo "PASS: hardware hotplug oracle reads exact Unit14 payloads on target"

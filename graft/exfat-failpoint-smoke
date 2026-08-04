@@ -1,0 +1,164 @@
+#!/bin/bash
+# Crash-order matrix for the test-only exFAT handler failpoint build.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+UPSTREAM="${AROS_UPSTREAM:-$ROOT/../aros-upstream}"
+TOP="${AROS_BUILD:-$HOME/aros-build}"
+BUILD="$TOP/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+MODULE="$AROS/L/exfat-handler"
+IMAGE="$AROS/DiskImages/Unit5"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT5"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT5.mountlist"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-failpoint.XXXXXX")"
+BASE="$WORK/base.img"
+HOST_MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+SPECIAL="$WORK/exfat-failpoint-handler"
+GENERATED_BACKUP="$WORK/generated-backup"
+DEVICE=""
+NORMAL_REBUILD=0
+PAYLOAD='-new-state-after-ordered-flushes'
+OLD_EXPECTED="$WORK/old.expected"
+NEW_EXPECTED="$WORK/new.expected"
+WAIT_SECONDS="${EXFAT_WAIT_SECONDS:-20}"
+POINTS="${EXFAT_FAILPOINT_CASE:-1 2 3 4 5 6}"
+
+build_handler() {
+    local flags="$1"
+    make -B -C "$TOP/rom/filesys/exfat" -f mmakefile \
+        TOP="$TOP" SRCDIR="$UPSTREAM" CURDIR=rom/filesys/exfat \
+        TARGET=kernel-fs-exfat AROS_TARGET_ARCH=darwin \
+        AROS_TARGET_CPU=aarch64 AROS_HOST_ARCH=darwin \
+        AROS_HOST_CPU=aarch64 USER_CPPFLAGS="$flags" \
+        kernel-fs-exfat
+}
+
+cleanup() {
+    local status=$?
+    if [ -n "$DEVICE" ]; then
+        hdiutil detach "$DEVICE" -quiet || true
+    fi
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    if [ "$NORMAL_REBUILD" -eq 1 ]; then
+        build_handler '-D__NOLIBBASE__' >/dev/null || true
+    fi
+    if [ -d "$GENERATED_BACKUP" ]; then
+        cp "$GENERATED_BACKUP/emu68k_gen_gadtools.c" \
+            "$UPSTREAM/arch/all-darwin/libs/emu68k/emu68k_gen_gadtools.c"
+        cp "$GENERATED_BACKUP/emu68k_gen_intuition.c" \
+            "$UPSTREAM/arch/all-darwin/libs/emu68k/emu68k_gen_intuition.c"
+    fi
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+[ -f "$MODULE" ] || { echo "FAIL: no normal exFAT module at $MODULE" >&2; exit 1; }
+[ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
+[ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace existing $DRIVER" >&2; exit 1; }
+
+mkdir "$HOST_MOUNT" "$RESULTS"
+mkdir "$GENERATED_BACKUP"
+cp "$UPSTREAM/arch/all-darwin/libs/emu68k/emu68k_gen_gadtools.c" \
+    "$GENERATED_BACKUP/"
+cp "$UPSTREAM/arch/all-darwin/libs/emu68k/emu68k_gen_intuition.c" \
+    "$GENERATED_BACKUP/"
+"$ROOT/hosted/exfat-tests/build-exfat-failpoint-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATFailpointProbe" "$AROS/C/EXFATFailpointProbe"
+
+NORMAL_REBUILD=1
+build_handler '-D__NOLIBBASE__ -DEXFAT_TEST_FAILPOINTS' >/dev/null
+cp "$MODULE" "$SPECIAL"
+cp "$TEMPLATE" "$DRIVER"
+
+truncate -s 64m "$BASE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: base image did not attach" >&2; exit 1; }
+/sbin/newfs_exfat -v FAILBASE "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR == 1 { print $1 }')"
+dd if=/dev/zero of="$OLD_EXPECTED" bs=4096 count=1 status=none
+printf 'old-state' | dd of="$OLD_EXPECTED" bs=1 conv=notrunc status=none
+cp "$OLD_EXPECTED" "$NEW_EXPECTED"
+printf '%s' "$PAYLOAD" >>"$NEW_EXPECTED"
+COPYFILE_DISABLE=1 cp -X "$OLD_EXPECTED" "$HOST_MOUNT/FailGrow.bin"
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+old_sha="$(shasum -a 256 "$OLD_EXPECTED" | awk '{ print $1 }')"
+new_sha="$(shasum -a 256 "$NEW_EXPECTED" | awk '{ print $1 }')"
+
+for point in $POINTS; do
+    case "$point" in 1|2|3|4|5|6) ;; *)
+        echo "FAIL: EXFAT_FAILPOINT_CASE must contain points 1 through 6" >&2
+        exit 1;;
+    esac
+    snapshot="$WORK/snapshot-$point.img"
+    repaired="$WORK/repaired-$point.img"
+    out="$RESULTS/failpoint-$point.out"
+    cp "$BASE" "$IMAGE"
+    cp "$SPECIAL" "$MODULE"
+    AROS_CTL_HOST_FOLDER="$RESULTS" \
+    AROS_CTL_STARTUP_EXTRA="$(printf 'Assign \"FDSK:\" \"SYS:DiskImages\"\nC:Mount DEVS:DOSDrivers/EXFAT5\nC:EXFATFailpointProbe %s >MacRW:failpoint-%s.out' "$point" "$point")" \
+        "$HERE/aros-ctl" run >/dev/null
+    for ((second = 0; second < WAIT_SECONDS; second++)); do
+        [ -f "$out" ] && grep -q '^\[EXFATFAIL\]' "$out" && break
+        "$HERE/aros-ctl" wait 1 >/dev/null
+    done
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    grep -q '^\[EXFATFAIL\] PASS' "$out" || {
+        echo "FAIL: failpoint $point did not fire" >&2
+        [ -f "$out" ] && cat "$out" >&2
+        exit 1
+    }
+    cp "$IMAGE" "$snapshot"
+    unlink "$IMAGE"
+
+    flags="$("$ROOT/hosted/exfat-tests/exfat_volume_flags.py" "$snapshot")"
+    case "$flags" in
+        0x0002|0x0003) ;;
+        *) echo "FAIL: failpoint $point did not leave VolumeDirty: $flags" >&2; exit 1;;
+    esac
+
+    cp "$snapshot" "$repaired"
+    DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$repaired" | awk 'NR == 1 { print $1 }')"
+    /sbin/fsck_exfat -y "$DEVICE" >"$RESULTS/fsck-repair-$point.out" 2>&1 || {
+        cat "$RESULTS/fsck-repair-$point.out" >&2
+        echo "FAIL: failpoint $point was not repairable" >&2
+        exit 1
+    }
+    /sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-clean-$point.out" 2>&1 || {
+        cat "$RESULTS/fsck-clean-$point.out" >&2
+        echo "FAIL: failpoint $point remained inconsistent after repair" >&2
+        exit 1
+    }
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+
+    DEVICE="$(hdiutil attach -readonly -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$repaired" | awk 'NR == 1 { print $1 }')"
+    actual_sha="$(shasum -a 256 "$HOST_MOUNT/FailGrow.bin" | awk '{ print $1 }')"
+    case "$actual_sha" in
+        "$old_sha"|"$new_sha") ;;
+        *) echo "FAIL: failpoint $point exposed partial data: $actual_sha" >&2; exit 1;;
+    esac
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+done
+
+if [ "$POINTS" = "1 2 3 4 5 6" ]; then
+    echo "PASS: six ordered-sync failpoints remain dirty, repairable, and old-or-new"
+else
+    echo "PASS: selected ordered-sync failpoint(s) $POINTS remain dirty, repairable, and old-or-new"
+fi

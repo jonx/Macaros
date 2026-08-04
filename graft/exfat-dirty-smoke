@@ -1,0 +1,97 @@
+#!/bin/bash
+# Prove that a volume already carrying VolumeDirty mounts read-only and that
+# neither reads nor refused mutations alter a byte of the image.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit16"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT16"
+PROBE="$AROS/C/EXFATDirtyProbe"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-dirty.XXXXXX")"
+MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/exfat-dirty.out"
+BEFORE="$WORK/Unit16.before"
+EXPECTED="$WORK/Existing.bin"
+DEVICE=""
+
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$PROBE" ] || unlink "$PROBE"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed dirty-volume fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] && [ ! -e "$PROBE" ] || {
+    echo "FAIL: Unit16, EXFAT16 or EXFATDirtyProbe is already in use" >&2
+    exit 1
+}
+
+mkdir "$MOUNT" "$RESULTS"
+printf 'pre-existing dirty payload\n' >"$EXPECTED"
+truncate -s 64m "$IMAGE"
+DEVICE="$(hdiutil attach -nomount \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/newfs_exfat -v AROSDIRTY "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+COPYFILE_DISABLE=1 cp -X "$EXPECTED" "$MOUNT/Existing.bin"
+sync
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+# Verify the clean source, then introduce only the checksum-exempt flag word.
+DEVICE="$(hdiutil attach -nomount -readonly \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-clean.out" 2>&1
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+"$ROOT/hosted/exfat-tests/exfat_volume_flags.py" --set 0x0002 "$IMAGE"
+[ "$("$ROOT/hosted/exfat-tests/exfat_volume_flags.py" "$IMAGE")" = 0x0002 ]
+cp "$IMAGE" "$BEFORE"
+
+"$ROOT/hosted/exfat-tests/build-exfat-dirty-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFATDirtyProbe" "$PROBE"
+cp "$ROOT/hosted/exfat-tests/EXFAT16.mountlist" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT16\nC:EXFATDirtyProbe >MacRW:exfat-dirty.out' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 30; second++)); do
+    if [ -f "$OUT" ] && grep -Eq '^\[EXFATDIRTY\] (PASS|FAIL)' "$OUT"; then
+        break
+    fi
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+{ [ -f "$OUT" ] && grep -q '^\[EXFATDIRTY\] PASS' "$OUT"; } || {
+    echo "FAIL: target dirty-volume probe failed" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+
+cmp "$BEFORE" "$IMAGE"
+[ "$("$ROOT/hosted/exfat-tests/exfat_volume_flags.py" "$IMAGE")" = 0x0002 ] || {
+    echo "FAIL: handler changed the pre-existing VolumeDirty flag" >&2
+    exit 1
+}
+echo "PASS: pre-existing VolumeDirty remains readable, non-validated and byte-exact"

@@ -346,6 +346,12 @@ write_startup_sequence() {
                 printf '%s\n' 'EndCLI'
             } > "$startup"
             ;;
+        minimal|test)
+            # Deterministic automation boot: filesystem and low-level tests
+            # supply all commands through AROS_CTL_STARTUP_EXTRA and must not
+            # be pre-empted by unrelated desktop, audio, or clipboard setup.
+            printf '%s\n' 'Version' 'FailAt 21' > "$startup"
+            ;;
         console)
             # Startup-sequence: version, then bring up the console<->system
             # clipboard bridge. CLIPS: -> a host-visible dir (so a copied clip
@@ -416,6 +422,8 @@ artifact_line() {
 deploy_boot_artifacts() {
     [ -n "${BOOTD:-}" ] || return 1
     AROS="$(cd "$BOOTD/../.." && pwd)"
+
+    aros_bootstrap_conf_ensure "$BOOTD" "$AROS" || return 1
 
     mkdir -p "$HOME/lib"
     copy_if_changed "$DYLIB_SRC" "$HOME/lib/cocoametal.dylib" "cocoametal.dylib" || true

@@ -2,6 +2,8 @@
 # End-to-end fdsk NSD 64-bit transport gate.  It uses a sparse raw image and
 # never changes the existing Unit0 exFAT fixture.
 set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

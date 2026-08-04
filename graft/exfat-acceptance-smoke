@@ -1,0 +1,45 @@
+#!/bin/bash
+# Run every reproducible exFAT acceptance gate against the current source and
+# linked target. The physical-capture round trip is included when its immutable
+# source is present; direct USB-stack hotplug still requires real hardware.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+CAPTURE="${EXFAT_USB_SOURCE:-${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14.physical-capture}"
+
+run() {
+    printf '[exfat-acceptance] %s\n' "$*"
+    "$@"
+}
+
+cd "$ROOT"
+run hosted/exfat-tests/build.sh
+run hosted/exfat-tests/build-exfat-discovery.sh
+run graft/exfat-fixture-smoke
+run env EXFAT_NAME_ONLY=1 graft/exfat-fixture-smoke
+run graft/exfat-fragmentation-smoke
+run graft/exfat-enumeration-smoke
+run graft/exfat-sparse-smoke
+run graft/exfat-geometry-smoke
+run graft/exfat-corruption-smoke
+run graft/exfat-fdsk64-smoke
+run graft/exfat-media-change-smoke
+run graft/exfat-failpoint-smoke
+run graft/exfat-dirty-smoke
+run graft/exfat-full-smoke
+run graft/exfat-format-smoke
+run env EXFAT_FORMAT_UNIT=12 graft/exfat-format-smoke
+
+if [ -f "$CAPTURE" ]; then
+    run env EXFAT_USB_SOURCE="$CAPTURE" graft/exfat-usb-image-smoke
+    if [ -f "${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14" ]; then
+        run graft/exfat-hotplug-probe-smoke
+    else
+        echo "[exfat-acceptance] SKIP hotplug oracle: verified Unit14 is absent"
+    fi
+else
+    echo "[exfat-acceptance] SKIP physical-capture round trip: $CAPTURE is absent"
+fi
+
+echo "PASS: complete reproducible exFAT acceptance matrix"

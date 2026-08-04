@@ -1,35 +1,180 @@
 #!/bin/bash
-# T9/T9b/T10 paired clean/corrupt target mounts. More directory mutations add
-# cases here; every refusal is paired with the same unmodified control image.
+# Paired boot, metadata and directory-corruption target checks. Every corrupt
+# image is paired with the same unmodified control image.
 set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
 AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
 IMAGE="$AROS/DiskImages/Unit8"; DRIVER="$AROS/Devs/DOSDrivers/EXFAT8"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-corrupt.XXXXXX")"
 BASE="$WORK/base.img"; HOST_MOUNT="$WORK/mount"; RESULTS="$WORK/results"; DEVICE=""
-cleanup() { [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true; "$HERE/aros-ctl" stop >/dev/null 2>&1 || true; [ ! -e "$DRIVER" ] || unlink "$DRIVER"; [ ! -e "$IMAGE" ] || unlink "$IMAGE"; }
+PROBE="$AROS/C/EXFATExtensionProbe"
+CORRUPT_NAME="CorruptMe.txt"
+CORRUPT_DIR="CorruptDir"
+WAIT_SECONDS="${EXFAT_WAIT_SECONDS:-20}"
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+    [ ! -e "$PROBE" ] || unlink "$PROBE"
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
 trap cleanup EXIT HUP INT TERM
 [ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] || { echo "FAIL: Unit8 is already in use" >&2; exit 1; }
 mkdir "$HOST_MOUNT" "$RESULTS"; truncate -s 64m "$BASE"
 DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR==1{print $1}')"; /sbin/newfs_exfat -v AROSCOR "$DEVICE" >/dev/null; hdiutil detach "$DEVICE" -quiet; DEVICE=""
-DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR==1{print $1}')"; printf 'control payload\n' >"$HOST_MOUNT/Control.txt"; hdiutil detach "$DEVICE" -quiet; DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR==1{print $1}')"
+mkdir "$HOST_MOUNT/$CORRUPT_DIR"
+mkdir "$HOST_MOUNT/BenignDir"
+printf 'control payload\n' >"$HOST_MOUNT/$CORRUPT_DIR/Control.txt"
+printf 'checksum-corruption payload\n' >"$HOST_MOUNT/$CORRUPT_DIR/$CORRUPT_NAME"
+printf 'delete-extension payload\n' >"$HOST_MOUNT/$CORRUPT_DIR/DeleteMe.txt"
+hdiutil detach "$DEVICE" -quiet; DEVICE=""
 cp "$ROOT/hosted/exfat-tests/EXFAT8.mountlist" "$DRIVER"
+"$ROOT/hosted/exfat-tests/build-exfat-extension-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFATExtensionProbe" "$PROBE"
 run_case() {
-    local name=$1 expect=$2 out log
+    local name=$1 expect=$2 expected_error=${3:-} out log
     out="$RESULTS/$name.out"; log="$RESULTS/$name.log"
     cp "$BASE" "$IMAGE"
-    [ "$name" = control ] || "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" "$name"
-    AROS_CTL_HOST_FOLDER="$RESULTS" AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT8\nC:List EXFAT8: ALL >MacRW:'"$name"$'.out' "$HERE/aros-ctl" run >/dev/null
-    "$HERE/aros-ctl" wait 7 >/dev/null; "$HERE/aros-ctl" log 120 >"$log"; "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
-    if [ "$expect" = mount ]; then grep -q 'Control.txt' "$out" || { echo "FAIL: clean control did not mount" >&2; exit 1; }
-    else grep -q '\[exfat\] mount REFUSED' "$log" || { echo "FAIL: $name did not refuse" >&2; exit 1; }; fi
+    if [ "$name" = unknown-benign-secondary-write ]; then
+        "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" \
+            unknown-benign-secondary-large "$CORRUPT_NAME" "$CORRUPT_DIR"
+        "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" \
+            unknown-benign-secondary-allocation DeleteMe.txt "$CORRUPT_DIR"
+        "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" \
+            unknown-benign-primary-allocation _ BenignDir
+    elif [ "$name" = set-checksum ] || [ "$name" = name-hash ] \
+        || [ "$name" = secondary-count ] \
+        || [ "$name" = unknown-critical-primary ] \
+        || [ "$name" = unknown-benign-primary ] \
+        || [ "$name" = unknown-critical-secondary ] \
+        || [ "$name" = unknown-benign-secondary ] \
+        || [ "$name" = unknown-benign-secondary-large ] \
+        || [ "$name" = bitmap-free-cluster ]; then
+        "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" "$name" \
+            "$CORRUPT_NAME" "$CORRUPT_DIR"
+    elif [ "$name" != control ]; then
+        "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" "$name"
+    fi
+    if [ "$name" = unknown-benign-secondary-write ]; then
+        AROS_CTL_HOST_FOLDER="$RESULTS" AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT8\nC:EXFATExtensionProbe >MacRW:'"$name"$'.out' "$HERE/aros-ctl" run >/dev/null
+    else
+        AROS_CTL_HOST_FOLDER="$RESULTS" AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT8\nC:List EXFAT8:CorruptDir ALL >MacRW:'"$name"$'.out\nC:Copy EXFAT8:CorruptDir/Control.txt MacRW:'"$name"$'-control.bin >>MacRW:'"$name"$'.out\nC:Copy EXFAT8:CorruptDir/CorruptMe.txt MacRW:'"$name"$'-corrupt.bin >>MacRW:'"$name"$'.out' "$HERE/aros-ctl" run >/dev/null
+    fi
+    for ((second = 0; second < WAIT_SECONDS; second++)); do
+        if { [ -f "$out" ] && grep -Eq '^TOTAL:|^List: bad number$|^\[EXFATEXT\] (PASS|FAIL)' "$out"; } \
+            || "$HERE/aros-ctl" log 40 2>/dev/null \
+                | grep -q 'exfat\] mount REFUSED'; then
+            break
+        fi
+        "$HERE/aros-ctl" wait 1 >/dev/null
+    done
+    # The list completion marker precedes the two Copy commands in the startup
+    # sequence, so allow the latter to publish their result files.
+    "$HERE/aros-ctl" wait 1 >/dev/null
+    "$HERE/aros-ctl" log 120 >"$log"; "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    if [ "$expect" = extension-write ]; then
+        grep -q '^\[EXFATEXT\] PASS$' "$out" || {
+            echo "FAIL: benign-secondary write probe failed" >&2
+            cat "$out" >&2
+            exit 1
+        }
+        "$ROOT/hosted/exfat-tests/exfat_extension_inspect.py" "$IMAGE"
+        DEVICE="$(hdiutil attach -nomount \
+            -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+            | awk 'NR==1{print $1}')"
+        /sbin/fsck_exfat -n "$DEVICE" >/dev/null
+        hdiutil detach "$DEVICE" -quiet
+        DEVICE=""
+    elif [ "$expect" = mount ]; then
+        grep -q '^Control[.]txt ' "$out" || { echo "FAIL: clean control did not mount" >&2; exit 1; }
+        grep -q '^CorruptMe[.]txt ' "$out" || { echo "FAIL: clean checksum-control file is missing" >&2; exit 1; }
+    elif [ "$expect" = skip-one ]; then
+        grep -q '^Control[.]txt ' "$out" || { echo "FAIL: unrelated entry was not enumerable after skipped set" >&2; exit 1; }
+        ! grep -q '^CorruptMe[.]txt ' "$out" || { echo "FAIL: corrupt or unknown entry remained visible" >&2; exit 1; }
+        grep -q '^TOTAL:' "$out" || { echo "FAIL: enumeration did not complete after skipping one set" >&2; exit 1; }
+        ! grep -q 'exfat\] mount REFUSED' "$log" || { echo "FAIL: directory-local corruption refused the whole volume" >&2; exit 1; }
+    elif [ "$expect" = directory-error ]; then
+        grep -q '^Control[.]txt ' "$out" || { echo "FAIL: directory corruption gate did not enumerate its leading control" >&2; exit 1; }
+        grep -q '^List: bad number$' "$out" || { echo "FAIL: malformed directory did not report its enumeration error" >&2; exit 1; }
+        ! grep -q 'exfat\] mount REFUSED' "$log" || { echo "FAIL: directory-local corruption refused the whole volume" >&2; exit 1; }
+    elif [ "$expect" = read-error ]; then
+        grep -q '^Control[.]txt ' "$out" || { echo "FAIL: bitmap case lost the control entry" >&2; exit 1; }
+        grep -q '^CorruptMe[.]txt ' "$out" || { echo "FAIL: bitmap case hid the structurally valid file" >&2; exit 1; }
+        grep -q '^control payload$' "$RESULTS/$name-control.bin" || { echo "FAIL: bitmap case broke unrelated file reads" >&2; exit 1; }
+        if [ -f "$RESULTS/$name-corrupt.bin" ] && grep -q 'checksum-corruption payload' "$RESULTS/$name-corrupt.bin"; then
+            echo "FAIL: unallocated file cluster remained readable" >&2; exit 1
+        fi
+        ! grep -q 'exfat\] mount REFUSED' "$log" || { echo "FAIL: unallocated file cluster refused the whole volume" >&2; exit 1; }
+    else
+        grep -q 'exfat\] mount REFUSED' "$log" || { echo "FAIL: $name did not refuse" >&2; exit 1; }
+        if [ -n "$expected_error" ]; then
+            grep -q "exfat\] mount REFUSED, error $expected_error$" "$log" || {
+                echo "FAIL: $name refused with the wrong DOS error" >&2
+                exit 1
+            }
+        fi
+    fi
 }
 run_case control mount
 if [ -n "${EXFAT_CORRUPT_CASE:-}" ]; then
-    run_case "$EXFAT_CORRUPT_CASE" refuse
+    if [ "$EXFAT_CORRUPT_CASE" = set-checksum ] \
+        || [ "$EXFAT_CORRUPT_CASE" = name-hash ] \
+        || [ "$EXFAT_CORRUPT_CASE" = unknown-critical-secondary ]; then
+        run_case "$EXFAT_CORRUPT_CASE" skip-one
+    elif [ "$EXFAT_CORRUPT_CASE" = unknown-benign-secondary ]; then
+        run_case unknown-benign-secondary mount
+    elif [ "$EXFAT_CORRUPT_CASE" = unknown-benign-secondary-large ]; then
+        run_case unknown-benign-secondary-large mount
+    elif [ "$EXFAT_CORRUPT_CASE" = unknown-benign-secondary-write ]; then
+        run_case unknown-benign-secondary-write extension-write
+    elif [ "$EXFAT_CORRUPT_CASE" = secondary-count ] \
+        || [ "$EXFAT_CORRUPT_CASE" = unknown-critical-primary ]; then
+        run_case "$EXFAT_CORRUPT_CASE" directory-error
+    elif [ "$EXFAT_CORRUPT_CASE" = unknown-benign-primary ]; then
+        run_case unknown-benign-primary skip-one
+    elif [ "$EXFAT_CORRUPT_CASE" = bitmap-free-cluster ]; then
+        run_case bitmap-free-cluster read-error
+    else
+        case "$EXFAT_CORRUPT_CASE" in
+            boot-checksum|upcase-checksum)
+                run_case "$EXFAT_CORRUPT_CASE" refuse 213 ;;
+            texfat|revision|active-fat)
+                run_case "$EXFAT_CORRUPT_CASE" refuse 212 ;;
+            wrong-fsname|must-be-zero|boot-signature|primary-bad-backup-good)
+                run_case "$EXFAT_CORRUPT_CASE" refuse 225 ;;
+            *)
+                echo "FAIL: unknown corruption case $EXFAT_CORRUPT_CASE" >&2
+                exit 1 ;;
+        esac
+    fi
 else
-    run_case boot-checksum refuse
-    run_case primary-bad-backup-good refuse
-    run_case texfat refuse
+    run_case boot-checksum refuse 213
+    run_case wrong-fsname refuse 225
+    run_case must-be-zero refuse 225
+    run_case boot-signature refuse 225
+    run_case revision refuse 212
+    run_case active-fat refuse 212
+    run_case primary-bad-backup-good refuse 225
+    run_case texfat refuse 212
+    run_case set-checksum skip-one
+    run_case name-hash skip-one
+    run_case secondary-count directory-error
+    run_case unknown-critical-primary directory-error
+    run_case unknown-benign-primary skip-one
+    run_case unknown-critical-secondary skip-one
+    run_case unknown-benign-secondary mount
+    run_case unknown-benign-secondary-large mount
+    run_case unknown-benign-secondary-write extension-write
+    run_case upcase-checksum refuse 213
+    run_case bitmap-free-cluster read-error
 fi
-echo "PASS: clean control mounts; T9, T9b and T10 refuse"
+echo "PASS: paired boot, metadata and directory-corruption policy holds"

@@ -46,6 +46,13 @@ def main(image_name, wanted):
         image.seek((heap_offset + (root_cluster - 2) * sectors_per_cluster)
                    * sector_size)
         directory = image.read(cluster_size)
+        bitmap_cluster = None
+        for off in range(0, len(directory), 32):
+            if directory[off] == 0:
+                break
+            if directory[off] == 0x81:
+                bitmap_cluster = u32(directory, off + 20)
+                break
 
         for off in range(0, len(directory), 32):
             if directory[off] == 0:
@@ -67,10 +74,28 @@ def main(image_name, wanted):
             if name != wanted:
                 continue
             first_cluster = u32(stream, 20)
+            create_timestamp = u32(directory, off + 8)
+            modify_timestamp = u32(directory, off + 12)
+            access_timestamp = u32(directory, off + 16)
+            create_10ms = directory[off + 20]
+            modify_10ms = directory[off + 21]
+            create_utc = directory[off + 22]
+            modify_utc = directory[off + 23]
+            access_utc = directory[off + 24]
+            valid_length = u64(stream, 8)
             length = u64(stream, 24)
             clusters = (length + cluster_size - 1) // cluster_size
             nofat = (stream[1] & 2) != 0
             extents = 1 if clusters else 0
+            next_allocated = -1
+            if bitmap_cluster is not None and clusters:
+                next_bit = first_cluster + clusters - 2
+                bitmap_offset = (heap_offset
+                    + (bitmap_cluster - 2) * sectors_per_cluster) * sector_size
+                image.seek(bitmap_offset + next_bit // 8)
+                value = image.read(1)
+                if len(value) == 1:
+                    next_allocated = (value[0] >> (next_bit & 7)) & 1
             if not nofat and clusters:
                 image.seek(fat_offset * sector_size + first_cluster * 4)
                 current = first_cluster
@@ -82,8 +107,18 @@ def main(image_name, wanted):
                     if following != current + 1:
                         extents += 1
                     current = following
-            print("name=%s hash=%04x nofat=%d clusters=%d extents=%d" % (
-                wanted, u16(stream, 4), int(nofat), clusters, extents))
+            print("name=%s hash=%04x nofat=%d first=%d vdl=%d length=%d clusters=%d extents=%d next_allocated=%d create_timestamp=%08x modify_timestamp=%08x access_timestamp=%08x create_10ms=%d modify_10ms=%d create_utc=%02x modify_utc=%02x access_utc=%02x timestamps_nonzero=%d touched_pair=%d modify_utc_valid=%d utc_valid=%d" % (
+                wanted, u16(stream, 4), int(nofat), first_cluster,
+                valid_length, length, clusters, extents, next_allocated,
+                create_timestamp, modify_timestamp, access_timestamp,
+                create_10ms, modify_10ms, create_utc, modify_utc, access_utc,
+                int(create_timestamp != 0 and modify_timestamp != 0
+                    and access_timestamp != 0),
+                int(modify_timestamp == access_timestamp
+                    and modify_utc == access_utc),
+                int((modify_utc & 0x80) != 0),
+                int((create_utc & 0x80) != 0 and (modify_utc & 0x80) != 0
+                    and (access_utc & 0x80) != 0)))
             return
     fail("entry not found: " + wanted)
 

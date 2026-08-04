@@ -15,12 +15,12 @@ if [ ! -f "$SRC/exfat_bounds.h" ]; then
 fi
 
 CC=${CC:-cc}
-CFLAGS="-O2 -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Werror"
+CFLAGS="-O2 -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Werror -I${AROS_UPSTREAM:-$HERE/../../../aros-upstream}/compiler/include"
 
 # Plain build, then again under the sanitisers. The bounds code is all
 # integer arithmetic, so UBSan is the one that matters.
 fail=0
-for t in t13a_bounds t_boot t_meta; do
+for t in t13a_bounds t_boot t_meta t_time; do
     name=${t%_bounds}
     $CC $CFLAGS -I"$SRC" -o "$HERE/$name" "$HERE/$t.c"
     $CC $CFLAGS -I"$SRC" -fsanitize=undefined,address \
@@ -78,10 +78,10 @@ if command -v m68k-elf-gcc >/dev/null 2>&1; then
     # loading, not buffer access.
     #
     # The probes are noinline so their disassembly can be isolated by name.
-    VIOLATION='[a-z]+[wl][[:space:]]+[^,]*%a[0-6]@'
+    VIOLATION='[a-z]+[wl][[:space:]].*%a[0-6]@'
     probe_disasm() {
         m68k-elf-objdump -d "$1" \
-            | awk '/<exfat_probe_rd(16|32|64)>:/{p=1} /^$/{p=0} p'
+            | awk '/<exfat_probe_(rd|wr)(16|32|64)>:/{p=1} /^$/{p=0} p'
     }
 
     # Self-test: the gate must catch a cast. If this stops failing, the
@@ -102,16 +102,47 @@ BAD
     fi
     rm -f "$HERE/.badprobe.c" "$HERE/.badprobe.o"
 
-    printf "  %-11s " "byte loads"
+    printf "  %-11s " "byte I/O"
     if probe_disasm "$HERE/m68k_68000.o" | grep -qE "$VIOLATION"; then
         echo "FAIL: word/long access through the buffer pointer"
         probe_disasm "$HERE/m68k_68000.o" | grep -E "$VIOLATION"
         fail=1
     else
-        echo "ok, byte loads only"
+        echo "ok, byte loads/stores only"
     fi
 else
     echo "  SKIPPED: no m68k-elf-gcc"
+fi
+echo
+
+echo "== gate 1: complete m68k AROS source compile =="
+M68K_AROS_ROOT=${AROS_M68K_BUILD:-$HOME/aros-m68k-build}
+M68K_AROS_CC=${AROS_M68K_CC:-$M68K_AROS_ROOT/bin/darwin-aarch64/tools/crosstools/m68k-aros-gcc}
+M68K_AROS_OBJDUMP=${AROS_M68K_OBJDUMP:-$M68K_AROS_ROOT/bin/darwin-aarch64/tools/crosstools/m68k-aros-objdump}
+M68K_AROS_SYS=$M68K_AROS_ROOT/bin/amiga-m68k
+if [ -x "$M68K_AROS_CC" ] && [ -x "$M68K_AROS_OBJDUMP" ] \
+    && [ -d "$M68K_AROS_SYS/gen/include" ]; then
+    for src in "$SRC"/*.c; do
+        base=${src##*/}
+        obj="$HERE/${base%.c}.m68k-aros.o"
+        printf "  %-14s " "$base"
+        if "$M68K_AROS_CC" -c -O2 -Wall -Wextra -Werror \
+            -Wno-pointer-sign -Wno-volatile-register-var \
+            -I"$SRC" -I"$M68K_AROS_SYS/gen/include" \
+            -I"$M68K_AROS_SYS/gen/include/aros/stdc" \
+            -I"$M68K_AROS_SYS/gen/include/aros/posixc" \
+            -I"$M68K_AROS_SYS/AROS/Developer/include" \
+            "$src" -o "$obj" \
+            && "$M68K_AROS_OBJDUMP" -f "$obj" \
+                | grep -q 'architecture: m68k'; then
+            echo "ok, m68k AROS"
+        else
+            echo "FAIL"
+            fail=1
+        fi
+    done
+else
+    echo "  SKIPPED: set AROS_M68K_BUILD or AROS_M68K_CC for an AROS toolchain"
 fi
 echo
 

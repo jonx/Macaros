@@ -84,6 +84,7 @@ if [ -z "$BOOTD" ] || [ ! -x "$BOOTD/AROSBootstrap" ]; then
 fi
 echo ">> boot dir: $BOOTD"
 AROS="$(cd "$BOOTD/../.." && pwd)"   # .../darwin-aarch64/AROS
+aros_bootstrap_conf_ensure "$BOOTD" "$AROS" || exit 1
 
 artifact_line() {
     label="$1"
@@ -223,6 +224,11 @@ write_startup_sequence() {
                     '    EndCLI' \
                     'EndIf'
             } > "$startup"
+            ;;
+        minimal|test)
+            # Deterministic automation boot.  The caller supplies its command
+            # sequence through AROS_CTL_STARTUP_EXTRA.
+            printf '%s\n' 'Version' 'FailAt 21' > "$startup"
             ;;
         console)
             # Startup-sequence: print the version, then make clipboard.device

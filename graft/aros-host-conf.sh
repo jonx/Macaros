@@ -52,6 +52,82 @@ aros_host_conf_load() {
 
 aros_host_conf_load
 
+# A partial AROS build can replace AROSBootstrap.conf with an empty or incomplete
+# file.  The launchers used to append their optional resident modules to that
+# file, producing a plausible-looking configuration with no kernel, DOS, or
+# filesystem resources.  Hosted AROS then exits before emitting any useful
+# diagnostic.  Reconstruct the standard base module set from the runnable tree
+# when (and only when) the kernel entry is absent.  Existing non-module settings
+# and non-standard module entries are retained, with exact duplicates removed.
+aros_bootstrap_conf_ensure() {
+    _bootd="$1"
+    _aros="$2"
+    _conf="$_bootd/AROSBootstrap.conf"
+
+    [ -f "$_conf" ] || return 1
+    grep -Eq '^module[[:space:]]+(.*/)?kernel$' "$_conf" && return 0
+    [ -f "$_bootd/kernel" ] || {
+        echo "aros-host-conf: $_conf has no kernel entry and $_bootd/kernel is missing" >&2
+        return 1
+    }
+
+    _old="$_conf.pre-repair.$$"
+    _base="$_conf.base.$$"
+    _new="$_conf.new.$$"
+    cp "$_conf" "$_old" || return 1
+    : > "$_base" || { rm -f "$_old"; return 1; }
+
+    for _module in \
+        "$_bootd/kernel" \
+        "$_bootd/Devs/hostlib.resource" \
+        "$_bootd/Devs/Drivers/unixio.hidd" \
+        "$_bootd/L/emul-handler" \
+        "$_bootd/Libs/expansion.library" \
+        "$_bootd/Devs/processor.resource" \
+        "$_bootd/Devs/battclock.resource" \
+        "$_bootd/Devs/timer.device" \
+        "$_bootd/Libs/debug.library" \
+        "$_aros/Devs/bootloader.resource" \
+        "$_aros/Devs/entropy.resource" \
+        "$_aros/Devs/FileSystem.resource" \
+        "$_aros/Devs/console.device" \
+        "$_aros/Devs/dosboot.resource" \
+        "$_aros/Devs/gameport.device" \
+        "$_aros/Devs/lddemon.resource" \
+        "$_aros/Devs/input.device" \
+        "$_aros/Devs/keyboard.device" \
+        "$_aros/Devs/Drivers/gfx.hidd" \
+        "$_aros/Devs/Drivers/hiddclass.hidd" \
+        "$_aros/Devs/Drivers/inputclass.hidd" \
+        "$_aros/Devs/Drivers/keyboard.hidd" \
+        "$_aros/Devs/Drivers/mouse.hidd" \
+        "$_aros/Libs/aros.library" \
+        "$_aros/Libs/dos.library" \
+        "$_aros/Libs/gadtools.library" \
+        "$_aros/Libs/graphics.library" \
+        "$_aros/Libs/intuition.library" \
+        "$_aros/Libs/keymap.library" \
+        "$_aros/Libs/layers.library" \
+        "$_aros/Libs/oop.library" \
+        "$_aros/Libs/utility.library" \
+        "$_aros/L/con-handler" \
+        "$_aros/L/ram-handler"
+    do
+        [ -e "$_module" ] && printf 'module %s\n' "$_module" >> "$_base"
+    done
+
+    if awk '/^module[[:space:]]+/ { if (seen[$0]++) next } { print }' \
+        "$_base" "$_old" > "$_new" && mv "$_new" "$_conf"; then
+        rm -f "$_old" "$_base"
+        echo "aros-host-conf: restored mandatory modules in $_conf" >&2
+        return 0
+    fi
+
+    rm -f "$_base" "$_new"
+    mv "$_old" "$_conf" 2>/dev/null || true
+    return 1
+}
+
 # When EXECUTED (not sourced), print what it would export — handy for --check / debug.
 case "${0##*/}" in
     aros-host-conf.sh)

@@ -1,10 +1,12 @@
 #!/bin/bash
-# Reproducible target smoke for the Phase 1 exFAT read-only handler.
+# Reproducible target smoke for exFAT reads and bounded in-place writes.
 #
 # The image is made by macOS's documented formatter, not by another exFAT
 # implementation.  It is a disposable raw image on fdsk unit 4; Unit0 and
 # any developer-created mount entries are never touched.
 set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -25,6 +27,11 @@ LIST_PREFIX="$(printf 'L%.0s' {1..106})"
 EURO_NAME="Euro€Name.bin"
 COLLISION_A="C00001.DAT"
 COLLISION_B="C00040.DAT"
+WRITE_MARKER="AROS-exFAT-in-place-write-crosses-sector"
+GROW_CONTIG_MARKER="AROS-contiguous-growth"
+GROW_FALLBACK_MARKER="AROS-FAT-fallback-growth"
+CREATED_PAYLOAD="AROS-created-file-payload"
+DIRECTORY_PAYLOAD="AROS-created-directory-payload"
 
 cleanup() {
     status=$?
@@ -42,6 +49,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 [ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
 [ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
 [ -f "$TEMPLATE" ] || { echo "FAIL: no EXFAT4 Mountlist template" >&2; exit 1; }
 [ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
@@ -51,6 +59,10 @@ if [ "${EXFAT_NAME_ONLY:-0}" = 1 ]; then
     "$ROOT/hosted/exfat-tests/build-exfat-name-probe.sh"
     cp "$ROOT/hosted/exfat-tests/EXFATNameProbe" "$AROS/C/EXFATNameProbe"
 fi
+"$ROOT/hosted/exfat-tests/build-exfat-readonly-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATReadonlyProbe" "$AROS/C/EXFATReadonlyProbe"
+"$ROOT/hosted/exfat-tests/build-exfat-write-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATWriteProbe" "$AROS/C/EXFATWriteProbe"
 
 mkdir "$SOURCE" "$HOST_MOUNT" "$RESULTS"
 printf 'AROS exFAT fixture: exact text payload\n' >"$SOURCE/Hello.txt"
@@ -60,6 +72,13 @@ printf 'm-long-name fixture B\n' >"$SOURCE/$LONG_NAME_B"
 printf 'unmappable-name fixture\n' >"$SOURCE/$EURO_NAME"
 printf 'first collision payload\n' >"$SOURCE/$COLLISION_A"
 printf 'second collision payload\n' >"$SOURCE/$COLLISION_B"
+dd if=/dev/zero of="$SOURCE/Writable.bin" bs=2048 count=1 status=none
+dd if=/dev/zero of="$SOURCE/GrowContig.bin" bs=1048576 count=1 status=none
+dd if=/dev/zero of="$SOURCE/GrowFallback.bin" bs=1048576 count=1 status=none
+dd if=/dev/zero of="$SOURCE/Blocker.bin" bs=1048576 count=1 status=none
+dd if=/dev/zero of="$SOURCE/Truncate.bin" bs=1048576 count=1 status=none
+printf 'truncate me through FINDOUTPUT\n' >"$SOURCE/OutputTruncate.bin"
+dd if=/dev/zero of="$SOURCE/DeleteMe.bin" bs=8192 count=1 status=none
 mkdir "$SOURCE/SubDir"
 dd if=/dev/zero of="$SOURCE/SubDir/Handler.bin" bs=40952 count=1 status=none
 
@@ -73,12 +92,51 @@ DEVICE=""
 DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
 [ -n "$DEVICE" ] || { echo "FAIL: formatted fixture image did not mount" >&2; exit 1; }
 COPYFILE_DISABLE=1 cp -X "$SOURCE/Hello.txt" "$SOURCE/MixedCase.DAT" "$HOST_MOUNT/"
+COPYFILE_DISABLE=1 cp -X "$SOURCE/OutputTruncate.bin" "$HOST_MOUNT/"
+COPYFILE_DISABLE=1 cp -X "$SOURCE/DeleteMe.bin" "$HOST_MOUNT/"
 COPYFILE_DISABLE=1 cp -X "$SOURCE/$LONG_NAME_A" "$SOURCE/$LONG_NAME_B" "$SOURCE/$EURO_NAME" \
-    "$SOURCE/$COLLISION_A" "$SOURCE/$COLLISION_B" "$HOST_MOUNT/"
+    "$SOURCE/$COLLISION_A" "$SOURCE/$COLLISION_B" "$SOURCE/Writable.bin" "$HOST_MOUNT/"
 mkdir "$HOST_MOUNT/SubDir"
 COPYFILE_DISABLE=1 cp -X "$SOURCE/SubDir/Handler.bin" "$HOST_MOUNT/SubDir/"
+# Force the root directory to grow before placing the allocation-layout
+# fixtures. exFAT directories do not shrink when these entries are deleted,
+# so later file data is not followed by a surprise root-directory cluster.
+for dummy in {000..127}; do
+    : >"$HOST_MOUNT/PreGrow$dummy.tmp"
+done
+for dummy in {000..015}; do
+    unlink "$HOST_MOUNT/PreGrow$dummy.tmp"
+done
+dd if="$SOURCE/GrowFallback.bin" of="$HOST_MOUNT/GrowFallback.bin" \
+    bs=1048576 count=1 status=none
+dd if="$SOURCE/Blocker.bin" of="$HOST_MOUNT/Blocker.bin" \
+    bs=1048576 count=1 status=none
+dd if="$SOURCE/GrowContig.bin" of="$HOST_MOUNT/GrowContig.bin" \
+    bs=1048576 count=1 status=none
+dd if="$SOURCE/Truncate.bin" of="$HOST_MOUNT/Truncate.bin" \
+    bs=1048576 count=1 status=none
+for dummy in {016..127}; do
+    unlink "$HOST_MOUNT/PreGrow$dummy.tmp"
+done
 hdiutil detach "$DEVICE" -quiet
 DEVICE=""
+
+"$ROOT/hosted/exfat-tests/exfat_delete_fixture.py" \
+    "$IMAGE" ._GrowContig.bin >/dev/null
+
+"$ROOT/hosted/exfat-tests/exfat_set_vdl.py" "$IMAGE" Writable.bin 480 >/dev/null
+writable_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Writable.bin)"
+case "$writable_info" in *"vdl=480"*"length=2048"*) ;; *)
+    echo "FAIL: writable VDL precondition missing: $writable_info" >&2; exit 1;;
+esac
+grow_fallback_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" GrowFallback.bin)"
+grow_contig_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Blocker.bin)"
+case "$grow_fallback_info" in *"nofat=1"*"next_allocated=1"*) ;; *)
+    echo "FAIL: FAT-fallback precondition missing: $grow_fallback_info" >&2; exit 1;;
+esac
+case "$grow_contig_info" in *"nofat=1"*"next_allocated=0"*) ;; *)
+    echo "FAIL: contiguous-growth precondition missing: $grow_contig_info" >&2; exit 1;;
+esac
 
 contiguous_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" MixedCase.DAT)"
 collision_a_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" "$COLLISION_A")"
@@ -97,6 +155,25 @@ case_sha="$(shasum -a 256 "$SOURCE/MixedCase.DAT" | awk '{ print $1 }')"
 bin_sha="$(shasum -a 256 "$SOURCE/SubDir/Handler.bin" | awk '{ print $1 }')"
 collision_a_sha="$(shasum -a 256 "$SOURCE/$COLLISION_A" | awk '{ print $1 }')"
 collision_b_sha="$(shasum -a 256 "$SOURCE/$COLLISION_B" | awk '{ print $1 }')"
+cp "$SOURCE/Writable.bin" "$SOURCE/Writable.expected"
+printf '%s' "$WRITE_MARKER" | dd of="$SOURCE/Writable.expected" bs=1 seek=500 conv=notrunc status=none
+printf '\132' >>"$SOURCE/Writable.expected"
+write_sha="$(shasum -a 256 "$SOURCE/Writable.expected" | awk '{ print $1 }')"
+cp "$SOURCE/Blocker.bin" "$SOURCE/Blocker.expected"
+printf '%s' "$GROW_CONTIG_MARKER" >>"$SOURCE/Blocker.expected"
+grow_contig_sha="$(shasum -a 256 "$SOURCE/Blocker.expected" | awk '{ print $1 }')"
+cp "$SOURCE/GrowFallback.bin" "$SOURCE/GrowFallback.expected"
+printf '%s' "$GROW_FALLBACK_MARKER" >>"$SOURCE/GrowFallback.expected"
+grow_fallback_sha="$(shasum -a 256 "$SOURCE/GrowFallback.expected" | awk '{ print $1 }')"
+dd if="$SOURCE/Truncate.bin" of="$SOURCE/Truncate.expected" \
+    bs=524288 count=1 status=none
+truncate_sha="$(shasum -a 256 "$SOURCE/Truncate.expected" | awk '{ print $1 }')"
+printf '%s\n' "$CREATED_PAYLOAD" >"$SOURCE/Created.expected"
+created_sha="$(shasum -a 256 "$SOURCE/Created.expected" | awk '{ print $1 }')"
+printf '%s\n' "$DIRECTORY_PAYLOAD" >"$SOURCE/Inside.expected"
+inside_sha="$(shasum -a 256 "$SOURCE/Inside.expected" | awk '{ print $1 }')"
+: >"$SOURCE/OutputTruncate.expected"
+output_truncate_sha="$(shasum -a 256 "$SOURCE/OutputTruncate.expected" | awk '{ print $1 }')"
 
 cp "$TEMPLATE" "$DRIVER"
 if [ "${EXFAT_NAME_ONLY:-0}" = 1 ]; then
@@ -111,9 +188,10 @@ if [ "${EXFAT_NAME_ONLY:-0}" = 1 ]; then
     exit 0
 fi
 AROS_CTL_HOST_FOLDER="$RESULTS" \
-AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:List EXFAT4: ALL >MacRW:exfat-fixture.out\nC:Copy EXFAT4:hello.txt MacRW:Hello.txt >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:MixedCase.DAT MacRW:MixedCase.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:SubDir/Handler.bin MacRW:Handler.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00001.DAT MacRW:C00001.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00040.DAT MacRW:C00040.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Euro_Name.bin MacRW:Euro_Name.bin >>MacRW:exfat-fixture.out' \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:List EXFAT4: ALL >MacRW:exfat-fixture.out\nC:Copy EXFAT4:hello.txt MacRW:Hello.txt >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:MixedCase.DAT MacRW:MixedCase.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:SubDir/Handler.bin MacRW:Handler.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00001.DAT MacRW:C00001.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00040.DAT MacRW:C00040.DAT >>MacRW:exfat-fixture.out\nC:EXFATReadonlyProbe >>MacRW:exfat-fixture.out\nC:EXFATWriteProbe >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Writable.bin MacRW:Writable.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Blocker.bin MacRW:Blocker.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:GrowFallback.bin MacRW:GrowFallback.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Truncate.bin MacRW:Truncate.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Created.bin MacRW:Created.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:CreatedDir/Inside.bin MacRW:Inside.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:CreatedDir/Grow49.bin MacRW:Grow49.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:CreatedDir/Moved.bin MacRW:Moved.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:CreatedDir/MovedDir/Child.bin MacRW:MovedChild.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:OutputTruncate.bin MacRW:OutputTruncate.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Euro_Name.bin MacRW:Euro_Name.bin >>MacRW:exfat-fixture.out' \
     "$HERE/aros-ctl" run >/dev/null
 "$HERE/aros-ctl" wait 8 >/dev/null
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
 
 if [ ! -f "$OUT" ] || ! grep -q 'Hello.txt' "$OUT" || \
     ! grep -q 'MixedCase.DAT' "$OUT" || ! grep -q 'Handler.bin' "$OUT"; then
@@ -135,6 +213,16 @@ check_sha "$RESULTS/MixedCase.DAT" "$case_sha" MixedCase.DAT
 check_sha "$RESULTS/Handler.bin" "$bin_sha" SubDir/Handler.bin
 check_sha "$RESULTS/$COLLISION_A" "$collision_a_sha" "$COLLISION_A"
 check_sha "$RESULTS/$COLLISION_B" "$collision_b_sha" "$COLLISION_B"
+check_sha "$RESULTS/Writable.bin" "$write_sha" Writable.bin
+check_sha "$RESULTS/Blocker.bin" "$grow_contig_sha" Blocker.bin
+check_sha "$RESULTS/GrowFallback.bin" "$grow_fallback_sha" GrowFallback.bin
+check_sha "$RESULTS/Truncate.bin" "$truncate_sha" Truncate.bin
+check_sha "$RESULTS/Created.bin" "$created_sha" Created.bin
+check_sha "$RESULTS/Inside.bin" "$inside_sha" CreatedDir/Inside.bin
+check_sha "$RESULTS/Grow49.bin" "$inside_sha" CreatedDir/Grow49.bin
+check_sha "$RESULTS/Moved.bin" "$created_sha" CreatedDir/Moved.bin
+check_sha "$RESULTS/MovedChild.bin" "$created_sha" CreatedDir/MovedDir/Child.bin
+check_sha "$RESULTS/OutputTruncate.bin" "$output_truncate_sha" OutputTruncate.bin
 [ ! -e "$RESULTS/Euro_Name.bin" ] || {
     echo "FAIL: T5b display spelling unexpectedly opened the Unicode name" >&2; exit 1;
 }
@@ -142,5 +230,105 @@ same_prefix_count="$(grep -c "^$LIST_PREFIX" "$OUT" || true)"
 [ "$same_prefix_count" -eq 2 ] || {
     echo "FAIL: T5 expected two identically truncated List names, got $same_prefix_count" >&2; exit 1;
 }
+grep -q '^\[EXFATRO\] PASS' "$OUT" || {
+    echo "FAIL: T12 read-only packet contract probe did not pass" >&2
+    exit 1
+}
+grep -q '^\[EXFATWRITE\] PASS' "$OUT" || {
+    echo "FAIL: bounded write packet probe did not pass" >&2
+    exit 1
+}
 
-echo "PASS: T4/T5b/T6b exFAT recipe corpus"
+DEVICE="$(hdiutil attach -nomount -readonly -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: mutated image did not attach for fsck" >&2; exit 1; }
+if ! /sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-exfat.out" 2>&1; then
+    cat "$RESULTS/fsck-exfat.out" >&2
+    echo "FAIL: fsck_exfat rejected the bounded-write image" >&2
+    exit 1
+fi
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+label="$("$ROOT/hosted/exfat-tests/exfat_label_inspect.py" "$IMAGE")"
+[ "$label" = AROSRENAMED ] || {
+    echo "FAIL: relabeled volume has raw label '$label'" >&2; exit 1;
+}
+writable_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Writable.bin)"
+case "$writable_info" in *"vdl=2049"*"length=2049"*) ;; *)
+    echo "FAIL: committed VDL was not published: $writable_info" >&2; exit 1;;
+esac
+case "$writable_info" in *"timestamps_nonzero=1"*"touched_pair=1"*) ;; *)
+    echo "FAIL: content write did not update modification/access timestamps together: $writable_info" >&2; exit 1;;
+esac
+grow_fallback_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" GrowFallback.bin)"
+grow_contig_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Blocker.bin)"
+case "$grow_fallback_info" in *"nofat=0"*"clusters=257"*"extents=2"*) ;; *)
+    echo "FAIL: contiguous stream did not convert to FAT: $grow_fallback_info" >&2; exit 1;;
+esac
+truncate_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Truncate.bin)"
+case "$truncate_info" in *"nofat=1"*"length=524288"*"clusters=128"*) ;; *)
+    echo "FAIL: contiguous truncation was not published: $truncate_info" >&2; exit 1;;
+esac
+created_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" Created.bin)"
+case "$created_info" in *"nofat=1"*"vdl=26"*"length=26"*"clusters=1"*) ;; *)
+    echo "FAIL: created stream was not published: $created_info" >&2; exit 1;;
+esac
+case "$created_info" in *"timestamps_nonzero=1"*"modify_utc_valid=1"*) ;; *)
+    echo "FAIL: creation timestamps or explicit-date UTC offset were not published: $created_info" >&2; exit 1;;
+esac
+created_dir_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" CreatedDir)"
+case "$created_dir_info" in *"nofat=0"*"length=8192"*"clusters=2"*"extents=2"*) ;; *)
+    echo "FAIL: created directory did not grow: $created_dir_info" >&2; exit 1;;
+esac
+output_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" OutputTruncate.bin)"
+case "$output_info" in *"vdl=0"*"length=0"*"clusters=0"*) ;; *)
+    echo "FAIL: FINDOUTPUT truncation was not published: $output_info" >&2; exit 1;;
+esac
+if "$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" \
+        "$IMAGE" DeleteMe.bin >/dev/null 2>&1; then
+    echo "FAIL: deleted file remains reachable in the raw directory" >&2
+    exit 1
+fi
+case "$grow_contig_info" in *"nofat=1"*) ;; *)
+    echo "FAIL: in-place contiguous growth lost NoFatChain: $grow_contig_info" >&2; exit 1;;
+esac
+
+DEVICE="$(hdiutil attach -readonly -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: mutated image did not mount read-only" >&2; exit 1; }
+[ "$(stat -f %z "$HOST_MOUNT/Writable.bin")" -eq 2049 ] || {
+    echo "FAIL: host-remounted Writable.bin length changed" >&2; exit 1;
+}
+check_sha "$HOST_MOUNT/Writable.bin" "$write_sha" \
+    "host-remounted Writable.bin"
+check_sha "$HOST_MOUNT/Blocker.bin" "$grow_contig_sha" \
+    "host-remounted Blocker.bin"
+check_sha "$HOST_MOUNT/GrowFallback.bin" "$grow_fallback_sha" \
+    "host-remounted GrowFallback.bin"
+check_sha "$HOST_MOUNT/Truncate.bin" "$truncate_sha" \
+    "host-remounted Truncate.bin"
+check_sha "$HOST_MOUNT/Created.bin" "$created_sha" \
+    "host-remounted Created.bin"
+check_sha "$HOST_MOUNT/CreatedDir/Inside.bin" "$inside_sha" \
+    "host-remounted CreatedDir/Inside.bin"
+check_sha "$HOST_MOUNT/CreatedDir/Grow49.bin" "$inside_sha" \
+    "host-remounted CreatedDir/Grow49.bin"
+check_sha "$HOST_MOUNT/CreatedDir/Moved.bin" "$created_sha" \
+    "host-remounted CreatedDir/Moved.bin"
+check_sha "$HOST_MOUNT/CreatedDir/MovedDir/Child.bin" "$created_sha" \
+    "host-remounted CreatedDir/MovedDir/Child.bin"
+check_sha "$HOST_MOUNT/OutputTruncate.bin" "$output_truncate_sha" \
+    "host-remounted OutputTruncate.bin"
+[ ! -e "$HOST_MOUNT/DeleteMe.bin" ] || {
+    echo "FAIL: host remount still exposes DeleteMe.bin" >&2; exit 1;
+}
+[ ! -e "$HOST_MOUNT/DeleteDir" ] || {
+    echo "FAIL: host remount still exposes DeleteDir" >&2; exit 1;
+}
+[ ! -e "$HOST_MOUNT/RenameMe.bin" ] \
+    && [ ! -e "$HOST_MOUNT/Renamed.bin" ] \
+    && [ ! -e "$HOST_MOUNT/RenameDir" ] || {
+    echo "FAIL: host remount exposes a rename source" >&2; exit 1;
+}
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+echo "PASS: T4/T5b/T6b/T12 plus bounded write/fsck exFAT corpus"

@@ -5,10 +5,10 @@
 > approved public sources named here.
 >
 > Branch `exfat-handler` on `../aros-upstream`, off `dos64-packets`.
-> Status: **revision 2, implemented through the Phase 1 read-only core.** The
-> target handler mounts, registers a DOS volume, enumerates directories and
-> reads files; the remaining acceptance-corpus coverage is tracked in
-> [README.md](README.md).
+> Status: **revision 2, implemented and accepted for the Phase 1 read-only
+> core.** The completed writable extension is specified separately in
+> [write-spec.md](write-spec.md); its mutation, recovery and formatting gates
+> are tracked in [README.md](README.md).
 
 ## Provenance record
 
@@ -337,12 +337,15 @@ Also recognised: `0x83` Volume Label, `0x81` Allocation Bitmap, `0x82` Up-case T
 **D1** `SecondaryCount` is **untrusted input**. Before an entry set is skipped or
 accepted, all of the following must hold:
 
-- `SecondaryCount` is `2 ..= 18`, the minimum being one Stream Extension plus one File
-  Name, the maximum being what 255 name code units require;
+- `SecondaryCount` is `2 ..= 255`; one Stream Extension and at least one File
+  Name entry are required, while benign extensions may occupy the remaining
+  secondary slots;
 - the whole claimed set lies within the directory stream;
 - entry 2 of the set is a Stream Extension (`0xC0`);
-- entries 3 onward are File Name entries (`0xC1`);
-- `NameLength` is `1 ..= 255` and consistent with the File Name entry count.
+- enough consecutive entries after the Stream Extension are File Name entries
+  (`0xC1`) for `NameLength`;
+- `NameLength` is `1 ..= 255` and consistent with that consecutive File Name
+  entry count; remaining entries are handled by the unknown-entry policy.
 
 **D2** If any of D1 fails, the structure is malformed and the handler **terminates
 enumeration of that directory with an I/O error**. `[DERIVED]` It does not skip
@@ -371,6 +374,15 @@ not. `[DERIVED]`:
   directory with an I/O error.**
 - **Unknown critical secondary** (bit 5 clear, bit 6 set): the enclosing set cannot be
   trusted. **Skip the whole set**, continue the directory.
+
+`[PUB]` Writers preserve unknown benign entries they do not modify. File-entry
+sets may contain extensions up to the format's 255-secondary limit; metadata
+updates and rename retain their opaque bytes and recompute the enclosing
+checksum. Deletion processes the generic `AllocationPossible`, `NoFatChain`,
+`FirstCluster` and `DataLength` fields before releasing an unknown entry's
+allocation. Consequently, deleting an otherwise empty directory also purges
+unknown benign primary sets within it, including allocations declared by their
+generic primary and secondary templates.
 
 ### 7.3 Valid data length
 
@@ -427,6 +439,11 @@ attempt astral-plane composition.
 | `ACTION_CHANGE_FILE_POSITION64` (8001) | **supported**, seeking does not mutate the volume |
 | `ACTION_CHANGE_FILE_SIZE64` (8003) | `DOSFALSE` + `ERROR_DISK_WRITE_PROTECTED` |
 
+On 32-bit targets these four actions use the `DosPacket64` overlay. The
+handler requires and preserves `DP64_INIT`, takes wide arguments from the
+overlay and writes `dp_Res1` there; using native `DosPacket` fields is a
+truncation bug, not an acceptable reduced mode.
+
 **R4** `[AROS]` An action the handler does not implement replies `DOSFALSE` with
 `ERROR_ACTION_NOT_KNOWN`. `[OURS]` This is not cosmetic: `dos64.library` distinguishes
 "unsupported" from "answered zero" solely by the secondary result. Three upstream
@@ -463,7 +480,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 |---|---|---|
 | T1 | Empty volume, 512 and 4096-byte sectors | Mounts; `Info` free space plausible |
 | T1a | Reproducible macOS-authored 64 MiB, 512-byte-sector volume: root file, nested file and mixed-case name | Mounts through `fdsk.device`; lists all three, opens the root file with different case, and byte-compares every copied file |
-| T2 | File of 4 GiB − 1, 4 GiB, 4 GiB + 1 | Exact size; full byte-compare |
+| T2 | File of 4 GiB − 1, 4 GiB, 4 GiB + 1 | Exact size; raw-vs-target first/final and 4 GiB-boundary sentinels; each high physical marker differs from its low-32-bit alias |
 | T3 | Fragmented file, ≥ 8 extents | Byte-compare |
 | T4 | Contiguous file, `NoFatChain` set | Byte-compare, and the FAT is never read for it |
 | T5 | 255-code-unit name, mixed case, non-ASCII | Listed and openable |
@@ -480,7 +497,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T11c | Unknown critical primary entry | Directory errors. Unknown benign entry: skipped |
 | T12 | Every mutating action from R1, plus `ACTION_CHANGE_FILE_SIZE64` | `ERROR_DISK_WRITE_PROTECTED` |
 | T13a | **Unit test**: bounds and `SECTOR_FROM_CLUSTER` around `2^32` sectors against a fake backend | No wrap; S2 and S4 hold |
-| T13b | **Integration**: device shim recording 64-bit offsets, exposing synthetic sectors | Offsets issued match those computed |
+| T13b | **Integration**: sparse exFAT image with distinct raw sentinels above 4/8/12 GiB | Target reads every sentinel at its true offset; each high marker differs from its low-32-bit alias |
 | T13c | **Transport**: sparse `fdsk.device` image with distinct bytes at zero and 4 GiB - 1/4 GiB/4 GiB + 1 | `NSCMD_TD_READ64` and `NSCMD_TD_WRITE64` issue the true offset; neither truncates to zero |
 | T13d | **CRT**: native AArch64 C runtime opens that sparse backing file | `fopen`/`fseek`/`ftell`/`lseek`/`fstat`, `GetFileSize64`, and `ExamineFH64` retain exact positions and size beyond 4 GiB |
 | T15a | Logical sector 4096 on a 512-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
@@ -488,6 +505,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T16a | `VolumeLength` larger than the Mountlist partition | Refused, `ERROR_BAD_NUMBER` (U7). No read may be issued past the partition |
 | T16b | `VolumeLength` smaller than the partition | Mounts; the trailing blocks are not readable through the filesystem (U8) |
 | T14 | Cache key distribution below and above `2^32` | Chain lengths comparable; equality on `UQUAD` keys is exact |
+| T17 | Complete production source compiled by genuine AROS toolchains | Both modules link; m68k output is a big-endian `m68k:68000` AROS ELF and every source is present in the build |
 
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert
 refusal; every other test asserts a successful mount first.
@@ -511,6 +529,14 @@ both character mapping and name length, while path resolution is exact in both
 cases. This does not change the T5 path-resolution requirement or make the
 ambiguous presentation acceptable.
 
+`[OURS]` T2 deliberately uses a sparse boundary oracle instead of streaming
+roughly 12 GiB through the emulator. General whole-stream comparison is
+already covered by T3 and T4; T2's unique risk is 32-bit size/offset
+truncation. It therefore checks exact sizes plus the first byte, final byte and
+4 GiB boundary, and proves from the raw image that no high-offset sentinel is
+equal to the byte at its truncated low-32-bit alias. A wrap cannot produce a
+plausible pass.
+
 ## 12. Test harness
 
 `[OURS]` `fdsk.device` advertises `NSCMD_TD_READ64` and
@@ -524,9 +550,8 @@ the same image to prove the CRT chooses those packets instead of silently
 falling back to the legacy 32-bit DOS calls.
 
 **H1** exFAT does **not** depend on this transport work for the pure arithmetic
-proof T13a. It does unblock the real-image portion of T2 and T13b, which still
-need the fixture generator to create an exFAT volume with the requested
-large-file layout.
+proof T13a. The sparse fixture generator uses it for the real-image T2/T13b
+gate and raw-verifies the requested large-file layout before booting AROS.
 
 **H2** `struct DriveGeometry` remains a legacy `ULONG` sector-count API. That
 does not limit the NSD request path or 4 GiB fixture, but a device larger than

@@ -1,0 +1,90 @@
+#!/bin/bash
+# Removable-media lifecycle gate using fdsk.device's TD_EJECT support.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit13"
+NEW_IMAGE="$AROS/DiskImages/Unit13.new"
+OLD_IMAGE="$AROS/DiskImages/Unit13.old"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT13"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-media.XXXXXX")"
+MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/media-change.out"
+DEVICE=""
+
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    for path in "$DRIVER" "$IMAGE" "$NEW_IMAGE" "$OLD_IMAGE"; do
+        [ ! -e "$path" ] || unlink "$path"
+    done
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+for path in "$IMAGE" "$NEW_IMAGE" "$OLD_IMAGE" "$DRIVER"; do
+    [ ! -e "$path" ] || { echo "FAIL: refusing to replace $path" >&2; exit 1; }
+done
+mkdir "$MOUNT" "$RESULTS"
+
+make_image() {
+    local image=$1 marker=$2
+    truncate -s 64m "$image"
+    DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$image" | awk 'NR == 1 { print $1 }')"
+    /sbin/newfs_exfat -v AROSMEDIA "$DEVICE" >/dev/null
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+    DEVICE="$(hdiutil attach -mountpoint "$MOUNT" -imagekey diskimage-class=CRawDiskImage "$image" | awk 'NR == 1 { print $1 }')"
+    printf '%s\n' "$marker" > "$MOUNT/Marker.txt"
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+}
+
+make_image "$IMAGE" OLD
+make_image "$NEW_IMAGE" NEW
+"$ROOT/hosted/exfat-tests/build-exfat-media-change-probe.sh"
+cp "$ROOT/hosted/exfat-tests/EXFATMediaChangeProbe" "$AROS/C/EXFATMediaChangeProbe"
+cp "$ROOT/hosted/exfat-tests/EXFAT13.mountlist" "$DRIVER"
+
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT13\nC:EXFATMediaChangeProbe >MacRW:media-change.out' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 30; second++)); do
+    [ -f "$OUT" ] && grep -q '^\[EXFATMEDIA\]' "$OUT" && break
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+grep -q '^\[EXFATMEDIA\] PASS' "$OUT" || {
+    echo "FAIL: target media-change probe did not pass" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+
+check_image() {
+    local image=$1 log=$2
+    DEVICE="$(hdiutil attach -nomount -readonly -imagekey diskimage-class=CRawDiskImage "$image" | awk 'NR == 1 { print $1 }')"
+    /sbin/fsck_exfat -n "$DEVICE" > "$RESULTS/$log" 2>&1 || {
+        cat "$RESULTS/$log" >&2
+        echo "FAIL: fsck_exfat rejected $image" >&2
+        exit 1
+    }
+    hdiutil detach "$DEVICE" -quiet
+    DEVICE=""
+}
+check_image "$IMAGE" replacement-fsck.out
+check_image "$OLD_IMAGE" removed-fsck.out
+
+echo "PASS: eject/reload closes stale handles, remounts same-label media, and preserves both filesystems"
