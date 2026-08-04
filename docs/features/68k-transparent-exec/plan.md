@@ -369,6 +369,44 @@ should always abort the run, or whether some (`CreateNewProc` among them) should
 return the failure the API already defines, which is what a real Amiga does when
 it is out of memory and what programs are written to handle.
 
+## STATUS 2026-08-04: the waterline pivot — guest-side SYSTEM libraries
+
+**Decision (John): stop bridging tail libraries; run real m68k libraries
+guest-side above the waterline.** Rationale and evidence in
+[emuv0-reference.md](emuv0-reference.md); standing rules in the
+`waterline-pivot` memory. The former import queue (icon, diskfont, asl,
+workbench, datatypes) is cancelled as bridging targets.
+
+Mechanism state after the first spike (AROS m68k `gadtools.library` from the
+20260804 nightly, driven by the `gengadget` fixture, all committed):
+
+- `EMU68K_GUESTSIDE_LIBS` (comma-separated leaf names) routes a name past the
+  bridged-servable list into the T3e guest loader; a missing 68k file fails
+  the open rather than silently falling back, so bridged vs guest-side runs
+  stay comparable. `EMU68K_LIBS_PATH` supplies host-side library dirs.
+- Reserved (zero) LVO slots in a resident's vector table load fine and fail
+  at CALL time: the slot is filled with ILLEGAL, so the fault pc names base
+  and LVO. Real system libraries have such slots; xpk never did.
+- The engine's `move to/from CCR` dispatcher existed but was unreachable
+  (over-tight guard also required `40xx`); m68k gadtools hit it immediately.
+  Unknown terminators now report opcode and pc.
+- `intuition.new_object`'s tag domain grew the imageclass (IA_) and
+  gadgetclass (GA_) families: scalars as u32, `GA_Image`/`GA_LabelImage` as
+  Object, `GA_Previous` as Gadget, `GA_DrawInfo` as DrawInfo, `GA_TextAttr`
+  as struct, `GA_Text` as cstr; pointer-ambiguous tags stay absent and fail
+  closed.
+
+How far it gets: gadtools loads, constructs its base, inits, opens its five
+(all-bridged) dependencies, survives DrawInfo/pen queries, pooled exec
+allocs, text measurement, and builds its frame image via bridged
+`NewObjectA`. **Current frontier: `GA_IntuiText` — the gadget label as a
+linked IntuiText value-struct (IText string, nested TextAttr, NextText
+chain), which has no marshalling yet.** The EmuV0 reference's
+`makeIntuiText()` (AoA `abiv0/intuition/intuition_gadgets.c`) is the exact
+shape to build, generated rather than hand-written. After that:
+`gengadgetbad` control guest-side, then iffparse → locale in dependency
+order. Bridged baseline (`t3gen` and friends) green throughout.
+
 ## STATUS 2026-08-02: T3e complete; a real disk-library chain runs unchanged
 
 9 run; ADocReader fails with its own message (no MUI installed); AMIGAPeek and
