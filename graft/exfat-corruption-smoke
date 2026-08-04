@@ -1,0 +1,35 @@
+#!/bin/bash
+# T9/T9b/T10 paired clean/corrupt target mounts. More directory mutations add
+# cases here; every refusal is paired with the same unmodified control image.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit8"; DRIVER="$AROS/Devs/DOSDrivers/EXFAT8"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-corrupt.XXXXXX")"
+BASE="$WORK/base.img"; HOST_MOUNT="$WORK/mount"; RESULTS="$WORK/results"; DEVICE=""
+cleanup() { [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true; "$HERE/aros-ctl" stop >/dev/null 2>&1 || true; [ ! -e "$DRIVER" ] || unlink "$DRIVER"; [ ! -e "$IMAGE" ] || unlink "$IMAGE"; }
+trap cleanup EXIT HUP INT TERM
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] || { echo "FAIL: Unit8 is already in use" >&2; exit 1; }
+mkdir "$HOST_MOUNT" "$RESULTS"; truncate -s 64m "$BASE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR==1{print $1}')"; /sbin/newfs_exfat -v AROSCOR "$DEVICE" >/dev/null; hdiutil detach "$DEVICE" -quiet; DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$BASE" | awk 'NR==1{print $1}')"; printf 'control payload\n' >"$HOST_MOUNT/Control.txt"; hdiutil detach "$DEVICE" -quiet; DEVICE=""
+cp "$ROOT/hosted/exfat-tests/EXFAT8.mountlist" "$DRIVER"
+run_case() {
+    local name=$1 expect=$2 out log
+    out="$RESULTS/$name.out"; log="$RESULTS/$name.log"
+    cp "$BASE" "$IMAGE"
+    [ "$name" = control ] || "$ROOT/hosted/exfat-tests/exfat_corrupt.py" "$IMAGE" "$name"
+    AROS_CTL_HOST_FOLDER="$RESULTS" AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT8\nC:List EXFAT8: ALL >MacRW:'"$name"$'.out' "$HERE/aros-ctl" run >/dev/null
+    "$HERE/aros-ctl" wait 7 >/dev/null; "$HERE/aros-ctl" log 120 >"$log"; "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    if [ "$expect" = mount ]; then grep -q 'Control.txt' "$out" || { echo "FAIL: clean control did not mount" >&2; exit 1; }
+    else grep -q '\[exfat\] mount REFUSED' "$log" || { echo "FAIL: $name did not refuse" >&2; exit 1; }; fi
+}
+run_case control mount
+if [ -n "${EXFAT_CORRUPT_CASE:-}" ]; then
+    run_case "$EXFAT_CORRUPT_CASE" refuse
+else
+    run_case boot-checksum refuse
+    run_case primary-bad-backup-good refuse
+    run_case texfat refuse
+fi
+echo "PASS: clean control mounts; T9, T9b and T10 refuse"
