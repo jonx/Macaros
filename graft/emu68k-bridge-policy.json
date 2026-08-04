@@ -1039,7 +1039,8 @@
      "kind": "struct",
      "type": "IntuiText"
     }
-   ]
+   ],
+   "export": true
   },
   "intuition.open_screen": {
    "headers": [

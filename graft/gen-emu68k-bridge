@@ -4452,6 +4452,11 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("{")
         w('    emu_tagdesc_%s, %d, "%s"' % (ident, len(tags), d))
         w("};")
+        if domains[d].get("export"):
+            # Hand-served machinery (the BOOPSI super chain) converts with the
+            # SAME reviewed domain instead of keeping a second list in step.
+            w("const struct EmuTagDomain *const emu68k_domain_%s ="
+              " &emu_tagdomain_%s;" % (ident, ident))
         w("")
     for oname in used_objects:
         ospec = object_types[oname]
@@ -5824,6 +5829,13 @@ def emit(outdir, check=False):
     # host's list of names it hands the guest a native base for. Both were
     # written by hand and both drifted the first time a library was added, so
     # both are emitted from the set that was actually generated.
+    exported = sorted(d for d, spec in
+                      POLICY.get("tag_domains", {}).items() if spec.get("export"))
+    if exported:
+        protos.append("\n".join(
+            ["/* Domains hand-served machinery shares with the crossings. */"] +
+            ["extern const struct EmuTagDomain *const emu68k_domain_%s;"
+             % c_ident(d) for d in exported]))
     protos.append("\n".join(
         ["/* name, generated entry point, and where its base comes from. */",
          "#define EMU68K_GEN_LIBS(X) \\"] +

@@ -415,18 +415,35 @@ taglist (the guest dispatcher parses guest tags itself — no conversion),
 fail visibly. Verified live: gadtools' buttonkind dispatcher runs and
 parses its attributes.
 
-**Current frontier: the super chain.** The dispatcher's `DoSuperMethodA`
-jumps through the facade's `cl_Super`, which the facade cannot carry (a
-native pointer has no guest form) — the run dies cleanly at "frame push
-out of sandbox". Slice 2 is a guest-callable SUPER STUB: `MakeClass`
-plants in the Class facade a `cl_Super` pointing at a guest IClass stub
-whose `cl_Dispatcher.h_Entry` traps into the bridge (an address inside a
-registered base's negative window is what the engine traps on); the trap
-serves OM_NEW by calling native `NewObjectA` on the native superclass with
-the SAME tag domain conversion, and returns an object facade sized with a
-guest instance annex (`cl_InstOffset`/`cl_InstSize` from the facade), so
-guest `INST_DATA` arithmetic lands in guest-writable memory that native
-code never reads. Other super methods refuse by name until driven.
+**Slice 2, the super chain — BUILT AND WORKING.** `MakeClass` plants a
+guest-side SUPER STUB in the Class facade's `cl_Super`: a guest IClass
+whose dispatcher `h_Entry` is a reserved vector (`EMU68K_SUPER_LVO` 250)
+below the caller's own intuition base, and whose `h_Data` names the native
+superclass as a Class token. The trap serves OM_NEW with the SAME tag
+domain the outer call used (the domain is now exported from the generated
+TU via a policy `export` flag rather than duplicated), makes the object on
+the native superclass, and answers with a facade sized to cover the guest
+class's `cl_InstOffset + cl_InstSize` — the guest instance annex. The
+dispatch entry translates a guest OM_NEW answer back to the native object,
+and the outer crossing's dedupe-by-native returns the same facade token.
+Other super methods refuse by name.
+
+Getting there surfaced a REAL GENERAL ENGINE GAP: amiga.lib's CallHook
+tail-calls a computed vector with the classic `move.l vector,-(sp) ; rts`
+trampoline, and the dispatcher never classified an RTS-popped target as a
+library vector — the jump translated library-base bytes as code until the
+runaway guard fired. The rts path now classifies the popped address
+exactly like `jsr (An)` does; a served vector then returns to the caller's
+real return address, which the pop exposed. Engine gates (J5t, apps68k,
+conformance) and T3LHA stay byte-exact.
+
+**Current frontier: intuition `GetAttr` (LVO 109) has no crossing** — the
+first thing gadtools asks after its object exists. Shape:
+`GetAttr(attrID D0, object A0, storage A1)`, an OUT scalar through a
+guest pointer, with attrID validated against the same reviewed domain
+(scalar kinds served, object kinds refused until typed). This wants a
+small generator vocabulary ("single-attribute get"), not a hand crossing —
+GT_GetGadgetAttrsA's out_u32 tags are the precedent.
 
 **Build-hygiene lesson that cost a day of confusion:** regenerating a
 source in the same second as the previous compile leaves the mtime equal

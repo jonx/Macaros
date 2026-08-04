@@ -2435,7 +2435,36 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
             g_stats.returns_popped++;
             if (depth) depth--;
-            pc = ret;
+            /* The pea/rts trampoline: `move.l vector,-(sp) ; rts` is the classic
+             * way to tail-call a computed vector (amiga.lib's CallHook does it).
+             * A popped address landing on a registered library vector is that
+             * idiom, never a return: serve the vector, then return to the
+             * caller's real return address, which the pop exposed. */
+            if (libbase_of_target(ret, a6_libbase)) {
+                int brc = call_vector_by_target(ret,
+                                                libbase_of_target(ret, a6_libbase),
+                                                st, lvo, user, "rts-vector",
+                                                errbuf, errlen);
+                if (brc && brc != J5D_LVO_REDIRECT) return 1;
+                g_stats.lib_calls++;
+                if (brc == J5D_LVO_REDIRECT) {
+                    /* The redirect body's own rts must come back to the
+                     * caller's return address, which is now the stack top -
+                     * exactly where a tail call wants it. */
+                    pc = st->pc;
+                } else {
+                    if (st->a[7] >= initial_sp) {
+                        *exit_d0 = st->d[0];
+                        finalize_stats();
+                        return 0;
+                    }
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    pc = ret;
+                }
+            }
+            else
+                pc = ret;
         }
         else if (top == 0x4E73u) {                   /* [J5i] rte -> pop SR+PC, resume */
             /* The frame is at a7: SR (16-bit BE) @ a7, PC (32-bit BE) @ a7+2. Pop both,
