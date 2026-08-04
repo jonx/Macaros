@@ -19,7 +19,9 @@ HOST_MOUNT="$WORK/mount"
 RESULTS="$WORK/results"
 OUT="$RESULTS/exfat-fixture.out"
 DEVICE=""
-LONG_NAME="$(printf 'L%.0s' {1..251}).bin"
+LONG_NAME_A="$(printf 'L%.0s' {1..251}).bin"
+LONG_NAME_B="$(printf 'L%.0s' {1..250})A.bin"
+LIST_PREFIX="$(printf 'L%.0s' {1..106})"
 EURO_NAME="Euro€Name.bin"
 COLLISION_A="C00001.DAT"
 COLLISION_B="C00040.DAT"
@@ -53,7 +55,8 @@ fi
 mkdir "$SOURCE" "$HOST_MOUNT" "$RESULTS"
 printf 'AROS exFAT fixture: exact text payload\n' >"$SOURCE/Hello.txt"
 printf 'case-folding fixture\n' >"$SOURCE/MixedCase.DAT"
-printf 'long-name fixture\n' >"$SOURCE/$LONG_NAME"
+printf 'long-name fixture A\n' >"$SOURCE/$LONG_NAME_A"
+printf 'm-long-name fixture B\n' >"$SOURCE/$LONG_NAME_B"
 printf 'unmappable-name fixture\n' >"$SOURCE/$EURO_NAME"
 printf 'first collision payload\n' >"$SOURCE/$COLLISION_A"
 printf 'second collision payload\n' >"$SOURCE/$COLLISION_B"
@@ -70,7 +73,7 @@ DEVICE=""
 DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
 [ -n "$DEVICE" ] || { echo "FAIL: formatted fixture image did not mount" >&2; exit 1; }
 COPYFILE_DISABLE=1 cp -X "$SOURCE/Hello.txt" "$SOURCE/MixedCase.DAT" "$HOST_MOUNT/"
-COPYFILE_DISABLE=1 cp -X "$SOURCE/$LONG_NAME" "$SOURCE/$EURO_NAME" \
+COPYFILE_DISABLE=1 cp -X "$SOURCE/$LONG_NAME_A" "$SOURCE/$LONG_NAME_B" "$SOURCE/$EURO_NAME" \
     "$SOURCE/$COLLISION_A" "$SOURCE/$COLLISION_B" "$HOST_MOUNT/"
 mkdir "$HOST_MOUNT/SubDir"
 COPYFILE_DISABLE=1 cp -X "$SOURCE/SubDir/Handler.bin" "$HOST_MOUNT/SubDir/"
@@ -134,6 +137,10 @@ check_sha "$RESULTS/$COLLISION_A" "$collision_a_sha" "$COLLISION_A"
 check_sha "$RESULTS/$COLLISION_B" "$collision_b_sha" "$COLLISION_B"
 [ ! -e "$RESULTS/Euro_Name.bin" ] || {
     echo "FAIL: T5b display spelling unexpectedly opened the Unicode name" >&2; exit 1;
+}
+same_prefix_count="$(grep -c "^$LIST_PREFIX" "$OUT" || true)"
+[ "$same_prefix_count" -eq 2 ] || {
+    echo "FAIL: T5 expected two identically truncated List names, got $same_prefix_count" >&2; exit 1;
 }
 
 echo "PASS: T4/T5b/T6b exFAT recipe corpus"

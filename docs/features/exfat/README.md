@@ -89,9 +89,11 @@ The normal gate currently discharges T4 (a verified `NoFatChain` stream),
 T5b (an unmappable UTF-16 unit is displayed as `_` and that display spelling
 does not open the file), and T6b (two distinct names with the same on-disk
 16-bit name hash both resolve to their distinct contents). The dedicated T5
-probe opens a 255-code-unit name directly through DOS. `List` displays the
-legacy `FileInfoBlock`-sized prefix of that name; this is a presentation limit
-of the DOS structure, not a path-resolution truncation.
+probe opens two distinct 255-code-unit names directly through DOS. They share
+their first 106 units and therefore display as two identical `List` entries.
+This is a second independent lossy presentation case alongside N4's `_`
+mapping: AmigaDOS presentation is lossy in both character mapping and name
+length, while path resolution remains exact in both cases.
 
 It formats a disposable raw 64 MiB image with macOS `newfs_exfat`, mounts it
 through `fdsk.device` as `EXFAT4:`, and asserts enumeration, case-folded open,

@@ -492,11 +492,14 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert
 refusal; every other test asserts a successful mount first.
 
-`[OURS]` The target T5 probe passes the full 255-code-unit name to `Open()` and
-reads its payload successfully. The legacy `FileInfoBlock` used by `List`
-cannot render all 255 units; it displays its fixed-size prefix. This does not
-change the T5 path-resolution requirement, but it records the presentation
-limit rather than conflating it with a failed lookup.
+`[OURS]` The target T5 probe passes two distinct 255-code-unit names to
+`Open()` and reads their distinct payloads successfully. They share their
+first 106 units, so the legacy `FileInfoBlock` used by `List` displays two
+identical fixed-size prefixes. Together with N4's `_` substitution, this
+establishes one property with two causes: AmigaDOS presentation is lossy in
+both character mapping and name length, while path resolution is exact in both
+cases. This does not change the T5 path-resolution requirement or make the
+ambiguous presentation acceptable.
 
 ## 12. Test harness
 

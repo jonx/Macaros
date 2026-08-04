@@ -26,6 +26,18 @@ int main(void)
         return 20;
     }
     Close(file);
-    Printf("[EXFATNAME] PASS 255-unit name opens through DOS\n");
+    memset(path + sizeof("EXFAT4:") - 1, 'L', 250);
+    path[sizeof("EXFAT4:") - 1 + 250] = 'A';
+    memcpy(path + sizeof("EXFAT4:") - 1 + 251, ".bin", 5);
+    file = Open(path, MODE_OLDFILE);
+    if (file == BNULL || Read(file, &byte, 1) != 1 || byte != 'l' + 1)
+    {
+        if (file != BNULL)
+            Close(file);
+        Printf("[EXFATNAME] FAIL second 255-unit name (%ld)\n", IoErr());
+        return 20;
+    }
+    Close(file);
+    Printf("[EXFATNAME] PASS two colliding List prefixes open through DOS\n");
     return 0;
 }
