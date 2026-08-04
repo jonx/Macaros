@@ -4660,9 +4660,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 call_args.append("(%s)emu_object_%d" % (norm(atype), ai))
                 if boopsi and boopsi.get("class_arg") == aname:
                     w("        struct Emu68kBoopsiBridge emu_boopsi_%d;" % ai)
+                    tagsrc = "0"
+                    for (_t2, n2), r2 in zip(f.args, f.regs):
+                        if n2 in (policy.get("taglists") or {}):
+                            tagsrc = reg_expr(r2)
+                            break
                     precall.extend([
                         "        if (emu68k_boopsi_prepare(guest0, %s, emu_object_%d," % (src, ai),
-                        "                                   &emu_boopsi_%d, err, errlen) < 0)" % ai,
+                        "                                   %s, &emu_boopsi_%d, err, errlen) < 0)" % (tagsrc, ai),
                         "            return 1;",
                     ])
                     post.append((["if (emu68k_boopsi_finish(&emu_boopsi_%d, err, errlen) < 0)" % ai,
@@ -5568,6 +5573,11 @@ struct Emu68kBoopsiBridge
     APTR state;
     ULONG guest_class;
     ULONG entry;
+    /* The caller's ORIGINAL guest taglist. OM_NEW's message carries it as
+     * ops_AttrList, because the guest dispatcher parses guest tags itself -
+     * handing it the method ID alone made every dispatcher see no
+     * attributes and fail its OM_NEW cleanly, which read as NULL results. */
+    ULONG guest_tags;
     LONG failed;
     char error[160];
 };
@@ -5676,7 +5686,7 @@ LONG emu68k_hook_prepare(APTR guest0, ULONG guest_hook,
 LONG emu68k_hook_finish(const struct Emu68kHookBridge *bridge,
                         char *err, ULONG errlen);
 LONG emu68k_boopsi_prepare(APTR guest0, ULONG guest_class, APTR native_class,
-                           struct Emu68kBoopsiBridge *bridge,
+                           ULONG guest_tags, struct Emu68kBoopsiBridge *bridge,
                            char *err, ULONG errlen);
 LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
                           char *err, ULONG errlen);
