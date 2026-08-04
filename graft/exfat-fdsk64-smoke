@@ -1,0 +1,50 @@
+#!/bin/bash
+# End-to-end fdsk NSD 64-bit transport gate.  It uses a sparse raw image and
+# never changes the existing Unit0 exFAT fixture.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+IMAGE="$AROS/DiskImages/Unit3"
+RESULTS="$(mktemp -d "${TMPDIR:-/tmp}/aros-fdsk64.XXXXXX")"
+OUT="$RESULTS/fdsk64.out"
+
+cleanup() {
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    rm -f "$IMAGE"
+    rm -rf "$RESULTS"
+}
+trap cleanup EXIT
+
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
+
+"$ROOT/hosted/exfat-tests/build-fdsk64-probe.sh"
+if [ "${FDSK64_SKIP_BUILD:-0}" != 1 ]; then
+    TARGETS="workbench-devs-fdsk" "$HERE/rebuild-aros.sh"
+fi
+cp "$ROOT/hosted/exfat-tests/FDSK64Probe" "$AROS/C/FDSK64Probe"
+
+# Logical size is 4 GiB + 3.  The byte at zero is deliberately not the byte at
+# 4 GiB; this makes an accidental low-32-bit read fail deterministically.
+truncate -s 4294967299 "$IMAGE"
+printf L | dd of="$IMAGE" bs=1 seek=0 conv=notrunc status=none
+printf B | dd of="$IMAGE" bs=1 seek=4294967295 conv=notrunc status=none
+printf E | dd of="$IMAGE" bs=1 seek=4294967296 conv=notrunc status=none
+printf P | dd of="$IMAGE" bs=1 seek=4294967297 conv=notrunc status=none
+
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:FDSK64Probe >MacRW:fdsk64.out' \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 5 >/dev/null
+
+if [ ! -f "$OUT" ] || ! grep -q '^\[FDSK64\] PASS' "$OUT"; then
+    echo "FAIL: fdsk 64-bit probe did not pass" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    "$HERE/aros-ctl" crash >&2 || true
+    exit 1
+fi
+
+echo "PASS: $(cat "$OUT")"

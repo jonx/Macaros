@@ -40,6 +40,9 @@ content probing belongs to the later discovery phase.
 - A target fix for `fdsk.device`: its custom Open path now holds a temporary
   open reference so low-memory expunge cannot unload the device while its
   worker process is being created.
+- `fdsk.device` now advertises and implements `NSCMD_TD_READ64` and
+  `NSCMD_TD_WRITE64`. The hosted `emul-handler` accepts the corresponding
+  dos64 packets, so a sparse backing image can be addressed past 4 GiB.
 
 ## Gates and reproduced target result
 
@@ -56,6 +59,15 @@ check. Build the target module with:
 
 ```sh
 TARGETS=kernel-fs-exfat ./graft/rebuild-aros.sh
+```
+
+The transport gate below builds a native probe, uses a disposable sparse
+`FDSK:Unit3` image, and proves that bytes at offset zero cannot be confused
+with bytes at 4 GiB - 1, 4 GiB, or 4 GiB + 1. It also writes and reads back a
+byte at 4 GiB + 2:
+
+```sh
+./graft/exfat-fdsk64-smoke
 ```
 
 The August 4, 2026 target smoke test used a 64 MiB image formatted and populated
@@ -78,7 +90,8 @@ The functional core is usable, but the entire Phase 1 acceptance matrix in
 `spec.md` is not yet discharged. Do not call the following proven until their
 fixtures run on target:
 
-- 4 GiB - 1, 4 GiB and 4 GiB + 1 files;
+- 4 GiB - 1, 4 GiB and 4 GiB + 1 **exFAT files** (the fdsk transport beneath
+  them is now proven separately);
 - a deliberately fragmented FAT-chained file and `ValidDataLength` tail;
 - 255-code-unit, non-ASCII and deliberately colliding name-hash cases;
 - 10,000-entry enumeration and the directory corruption vectors;

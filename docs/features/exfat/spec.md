@@ -480,6 +480,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T12 | Every mutating action from R1, plus `ACTION_CHANGE_FILE_SIZE64` | `ERROR_DISK_WRITE_PROTECTED` |
 | T13a | **Unit test**: bounds and `SECTOR_FROM_CLUSTER` around `2^32` sectors against a fake backend | No wrap; S2 and S4 hold |
 | T13b | **Integration**: device shim recording 64-bit offsets, exposing synthetic sectors | Offsets issued match those computed |
+| T13c | **Transport**: sparse `fdsk.device` image with distinct bytes at zero and 4 GiB - 1/4 GiB/4 GiB + 1 | `NSCMD_TD_READ64` and `NSCMD_TD_WRITE64` issue the true offset; neither truncates to zero |
 | T15a | Logical sector 4096 on a 512-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
 | T15b | Logical sector 512 on a 4096-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
 | T16a | `VolumeLength` larger than the Mountlist partition | Refused, `ERROR_BAD_NUMBER` (U7). No read may be issued past the partition |
@@ -491,18 +492,23 @@ refusal; every other test asserts a successful mount first.
 
 ## 12. Test harness
 
-`[AROS]` **`fdsk.device` cannot exercise T13.** Its supported-command table lacks
-`TD_READ64` and `NSCMD_TD_READ64`, its read path takes `iotd_Req.io_Offset` straight to
-a 32-bit `Seek()`, and its geometry uses a 32-bit `fib_Size`.
+`[OURS]` `fdsk.device` advertises `NSCMD_TD_READ64` and
+`NSCMD_TD_WRITE64`, reconstructs the input offset from `io_Actual:io_Offset`,
+and seeks the backing image through `dos64.library`. The hosted
+`emul-handler` implements the native 64-bit seek, size and examine packet
+family beneath that call. T13c is an end-to-end raw-device gate: a sparse
+image contains a deliberately different byte at offset zero, so any
+low-32-bit truncation fails rather than returning plausible data.
 
-**H1** exFAT does **not** depend on fixing that. T13 splits into T13a, a pure arithmetic
-unit test against a fake backend, and T13b, an integration test against a purpose-built
-device shim that records the 64-bit offsets it is asked for and serves synthetic
-sectors. Neither requires a real multi-terabyte image.
+**H1** exFAT does **not** depend on this transport work for the pure arithmetic
+proof T13a. It does unblock the real-image portion of T2 and T13b, which still
+need the fixture generator to create an exFAT volume with the requested
+large-file layout.
 
-**H2** Extending `fdsk.device` with a 64-bit path, now cheap because `dos64.library`
-provides `Seek64()`, is worthwhile on its own merits and is tracked separately. It is
-not a Phase 1 dependency.
+**H2** `struct DriveGeometry` remains a legacy `ULONG` sector-count API. That
+does not limit the NSD request path or 4 GiB fixture, but a device larger than
+what that structure represents must not be described as fully reportable via
+`TD_GETGEOMETRY` alone.
 
 **H3** `[AROS]` The cache hash needs no change for a `UQUAD` key.
 `(blockNum >> 5) & (hash_size - 1)` distributes sequential ranges identically above and
