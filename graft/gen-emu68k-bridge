@@ -3551,10 +3551,15 @@ def c_ident(s):
 def object_canon(t):
     """Compare an object's pointer type without const qualification. Policy
     names identity classes, so `struct Locale *` and `const struct Locale *`
-    are the same class while unrelated pointer types must still be rejected."""
+    are the same class while unrelated pointer types must still be rejected.
+    BOOPSI's `Object *` is opaque BY DEFINITION (classusr.h), so it and APTR
+    are one class - the conf spells the same thing both ways."""
     t = re.sub(r"\b(const|CONST)\b", "", norm(t))
     t = re.sub(r"\s*\*\s*", " *", t)
-    return norm(t)
+    t = norm(t)
+    if t == "Object *":
+        return "APTR"
+    return t
 
 
 def validate_policy(targets):
@@ -4165,9 +4170,12 @@ def validate_policy(targets):
             else:
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
+        attr_get = p.get("attr_get") or {}
         for t, n in f.args:
             if result and n == result.get("store_arg"):
                 continue
+            if n in (attr_get.get("attr_arg"), attr_get.get("storage_arg")):
+                continue           # the attr_get crossing owns these two
             if (n in taglists or n in structs or n in tagged_structs or
                     n in pointers or n in arrays or n in record_arrays or
                     n in objects or n in callbacks or
@@ -5295,6 +5303,56 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("        if (emu_record_array_%d)" % scratch_ai)
                 w("            emu68k_scratch_free(emu_record_array_%d, emu_record_size_%d);"
                   % (scratch_ai, scratch_ai))
+        attr_get = policy.get("attr_get") if policy else None
+        if attr_get:
+            # Single-attribute get (the GetAttr shape): the attribute is
+            # validated against the SAME reviewed domain the class tags use;
+            # scalar kinds are written through the guest storage pointer, and
+            # anything else refuses by name rather than leaking the native
+            # pointer a non-scalar attribute answers with.
+            names = [n for _t, n in f.args]
+            attr_src = reg_expr(f.regs[names.index(attr_get["attr_arg"])])
+            store_src = reg_expr(f.regs[names.index(attr_get["storage_arg"])])
+            dom_ident = c_ident(attr_get["domain"])
+            cargs = []
+            for i2, (t2, n2) in enumerate(f.args):
+                if n2 == attr_get["attr_arg"]:
+                    cargs.append("(%s)%s" % (norm(t2), attr_src))
+                elif n2 == attr_get["storage_arg"]:
+                    cargs.append("&emu_attr_value")
+                elif n2 in objects:
+                    cargs.append("(%s)emu_object_%d" % (norm(t2), i2))
+                else:
+                    raise SystemExit("attr_get %s: unhandled argument %s"
+                                     % (f.name, n2))
+            w("        const struct EmuTagDesc *emu_attr =")
+            w("            emu68k_tag_lookup(&emu_tagdomain_%s, %s);"
+              % (dom_ident, attr_src))
+            w("        if (!emu_attr || (emu_attr->kind != EMU_TAG_U32 &&")
+            w("                          emu_attr->kind != EMU_TAG_OUT_U32))")
+            w("        {")
+            w("            if (err && errlen)")
+            w('                snprintf(err, errlen, "capability gap: attribute "')
+            w('                         "%%08lx is not a served scalar in %s",'
+              % attr_get["domain"])
+            w("                         (unsigned long)%s);" % attr_src)
+            w("            return 1;")
+            w("        }")
+            w('        if (emu68k_require_guest_range(%s, 4, "%s storage",'
+              % (store_src, f.name))
+            w("                                       err, errlen) < 0)")
+            w("            return 1;")
+            w("        {")
+            w("            IPTR emu_attr_value = 0;")
+            w("            r->d[0] = (ULONG)%s(%s);" % (f.name, ", ".join(cargs)))
+            w("            emu68k_scalar_to_guest(guest0, %s, 4,"
+              % store_src)
+            w("                                   (ULONG)emu_attr_value);")
+            w("        }")
+            w("        return 0;")
+            w("    }")
+            n += 1
+            continue
         if result_policy and result_policy.get("kind") == "guest_arg":
             result_arg = result_policy["arg"]
             result_index = [n for _t, n in f.args].index(result_arg)
@@ -5759,6 +5817,8 @@ LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
 LONG emu68k_tags_to_guest(APTR guest0, struct TagItem *native_tags,
                           ULONG count, const struct EmuTagDomain *domain,
                           char *err, ULONG errlen);
+const struct EmuTagDesc *emu68k_tag_lookup(const struct EmuTagDomain *domain,
+                                           ULONG tag);
 LONG emu68k_rgb32_to_native(APTR guest0, ULONG guest_table,
                             ULONG *native_table, ULONG capacity,
                             const char *what, char *err, ULONG errlen);

@@ -4233,6 +4233,18 @@
     "tags": "import.icon.PutIconTagList.tags"
    },
    "origin": "import"
+  },
+  "intuition.library.GetAttr": {
+   "objects": {
+    "object": {
+     "type": "Object"
+    }
+   },
+   "attr_get": {
+    "attr_arg": "attrID",
+    "storage_arg": "storagePtr",
+    "domain": "intuition.new_object"
+   }
   }
  },
  "struct_metadata": {
