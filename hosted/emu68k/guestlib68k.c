@@ -254,11 +254,13 @@ int gl68_prepare_init(j4_sandbox *sb, const j4_seglist *seg,
         uint32_t fn;
         if (relative) {
             int16_t disp = (int16_t)rd16(j4_sandbox_host(sb, functions + 2u + i * 2u));
-            if (!disp) { if (err) snprintf(err, errlen, "zero relative library vector unsupported"); return 1; }
+            /* A zero entry is a reserved LVO slot, ordinary in a system
+             * library's table; it is refused at CALL time, not here. */
+            if (!disp) continue;
             fn = functions + (uint32_t)(int32_t)disp;
         } else {
             fn = rd32(j4_sandbox_host(sb, functions + i * 4u));
-            if (!fn) { if (err) snprintf(err, errlen, "zero absolute library vector unsupported"); return 1; }
+            if (!fn) continue;
         }
         if (!segment_span(seg, fn, 2, 1)) {
             if (err) snprintf(err, errlen, "library vector %u points outside CODE hunks", i + 1u);
@@ -274,15 +276,21 @@ int gl68_prepare_init(j4_sandbox *sb, const j4_seglist *seg,
         out->base = alloc + out->neg_size;
     }
     for (uint32_t i = 0; i < nvec; i++) {
-        uint32_t fn;
+        uint32_t fn = 0;
         if (relative) {
             int16_t disp = (int16_t)rd16(j4_sandbox_host(sb, functions + 2u + i * 2u));
-            fn = functions + (uint32_t)(int32_t)disp;
+            if (disp) fn = functions + (uint32_t)(int32_t)disp;
         } else {
             fn = rd32(j4_sandbox_host(sb, functions + i * 4u));
         }
         uint8_t *v = j4_sandbox_host(sb, out->base - (i + 1u) * 6u);
-        wr16(v, 0x4ef9u); wr32(v + 2, fn);
+        if (fn) {
+            wr16(v, 0x4ef9u); wr32(v + 2, fn);
+        } else {
+            /* Reserved slot: a call lands ON the slot and executes ILLEGAL,
+             * so the fault pc names base and LVO exactly. */
+            wr16(v, 0x4afcu); wr16(v + 2, 0x4afcu); wr16(v + 4, 0x4afcu);
+        }
     }
     if (structure && apply_initstruct(sb, seg, structure, out->base, dsize, err, errlen)) {
         memset(j4_sandbox_host(sb, (old_next + 1u) & ~1u), 0,
