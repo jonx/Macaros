@@ -1596,6 +1596,24 @@ static uint32_t ctx_task(struct emu68k_run *r)
     return GUEST_PROCESS;
 }
 
+/* Waterline routing override: a leaf name listed in EMU68K_GUESTSIDE_LIBS
+ * (comma-separated) is served by a guest-side 68k library even though the
+ * bridge could serve it natively. When the 68k file cannot be found the open
+ * FAILS rather than falling back to the bridged one: a run must be entirely
+ * one route or the other for the two to be comparable. */
+static int route_guestside(const char *leaf)
+{
+    const char *p = getenv("EMU68K_GUESTSIDE_LIBS");
+    size_t n = strlen(leaf);
+    while (p && *p) {
+        const char *end = strchr(p, ',');
+        size_t seg = end ? (size_t)(end - p) : strlen(p);
+        if (seg == n && !strncmp(p, leaf, n)) return 1;
+        p = end ? end + 1 : NULL;
+    }
+    return 0;
+}
+
 static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
                               char *e, unsigned el);
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user,
@@ -1678,6 +1696,12 @@ static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             unsigned k; int known = 0;
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
                 if (!strcmp(leaf, servable[k])) { known = 1; break; }
+            if (known && route_guestside(leaf)) {
+                if (getenv("EMU68K_TRACE_CALLS"))
+                    fprintf(stderr, "[68k] OpenLibrary %s routed guest-side\n",
+                            leaf);
+                known = 0;
+            }
             if (known && g_oscall) {
                 uint32_t base;
                 if (r->nlib >= LIBBASE_MAX) {
