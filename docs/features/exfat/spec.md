@@ -481,6 +481,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | T13a | **Unit test**: bounds and `SECTOR_FROM_CLUSTER` around `2^32` sectors against a fake backend | No wrap; S2 and S4 hold |
 | T13b | **Integration**: device shim recording 64-bit offsets, exposing synthetic sectors | Offsets issued match those computed |
 | T13c | **Transport**: sparse `fdsk.device` image with distinct bytes at zero and 4 GiB - 1/4 GiB/4 GiB + 1 | `NSCMD_TD_READ64` and `NSCMD_TD_WRITE64` issue the true offset; neither truncates to zero |
+| T13d | **CRT**: native AArch64 C runtime opens that sparse backing file | `fopen`/`fseek`/`ftell`/`lseek`/`fstat`, `GetFileSize64`, and `ExamineFH64` retain exact positions and size beyond 4 GiB |
 | T15a | Logical sector 4096 on a 512-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
 | T15b | Logical sector 512 on a 4096-byte device | Refused, `ERROR_BAD_NUMBER` (U3) |
 | T16a | `VolumeLength` larger than the Mountlist partition | Refused, `ERROR_BAD_NUMBER` (U7). No read may be issued past the partition |
@@ -495,10 +496,12 @@ refusal; every other test asserts a successful mount first.
 `[OURS]` `fdsk.device` advertises `NSCMD_TD_READ64` and
 `NSCMD_TD_WRITE64`, reconstructs the input offset from `io_Actual:io_Offset`,
 and seeks the backing image through `dos64.library`. The hosted
-`emul-handler` implements the native 64-bit seek, size and examine packet
-family beneath that call. T13c is an end-to-end raw-device gate: a sparse
+`emul-handler` implements the native 64-bit seek and size packets beneath
+that call. T13c is an end-to-end raw-device gate: a sparse
 image contains a deliberately different byte at offset zero, so any
-low-32-bit truncation fails rather than returning plausible data.
+low-32-bit truncation fails rather than returning plausible data. T13d uses
+the same image to prove the CRT chooses those packets instead of silently
+falling back to the legacy 32-bit DOS calls.
 
 **H1** exFAT does **not** depend on this transport work for the pure arithmetic
 proof T13a. It does unblock the real-image portion of T2 and T13b, which still

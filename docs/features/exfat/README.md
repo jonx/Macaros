@@ -42,7 +42,8 @@ content probing belongs to the later discovery phase.
   worker process is being created.
 - `fdsk.device` now advertises and implements `NSCMD_TD_READ64` and
   `NSCMD_TD_WRITE64`. The hosted `emul-handler` accepts the corresponding
-  dos64 packets, so a sparse backing image can be addressed past 4 GiB.
+  dos64 seek and size packets, so a sparse backing image can be addressed
+  past 4 GiB.
 
 ## Gates and reproduced target result
 
@@ -61,10 +62,11 @@ check. Build the target module with:
 TARGETS=kernel-fs-exfat ./graft/rebuild-aros.sh
 ```
 
-The transport gate below builds a native probe, uses a disposable sparse
-`FDSK:Unit3` image, and proves that bytes at offset zero cannot be confused
-with bytes at 4 GiB - 1, 4 GiB, or 4 GiB + 1. It also writes and reads back a
-byte at 4 GiB + 2:
+The transport gate below builds native raw-device and CRT probes, uses a
+disposable sparse `FDSK:Unit3` image, and proves that bytes at offset zero
+cannot be confused with bytes at 4 GiB - 1, 4 GiB, or 4 GiB + 1. It also
+writes and reads back a byte at 4 GiB + 2, then proves `fopen`/`fseek`/
+`ftell`/`lseek`/`fstat` report the same file correctly past 4 GiB:
 
 ```sh
 ./graft/exfat-fdsk64-smoke

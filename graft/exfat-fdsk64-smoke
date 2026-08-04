@@ -22,10 +22,12 @@ trap cleanup EXIT
 [ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
 
 "$ROOT/hosted/exfat-tests/build-fdsk64-probe.sh"
+"$ROOT/hosted/exfat-tests/build-crt64-probe.sh"
 if [ "${FDSK64_SKIP_BUILD:-0}" != 1 ]; then
     TARGETS="workbench-devs-fdsk" "$HERE/rebuild-aros.sh"
 fi
 cp "$ROOT/hosted/exfat-tests/FDSK64Probe" "$AROS/C/FDSK64Probe"
+cp "$ROOT/hosted/exfat-tests/CRT64Probe" "$AROS/C/CRT64Probe"
 
 # Logical size is 4 GiB + 3.  The byte at zero is deliberately not the byte at
 # 4 GiB; this makes an accidental low-32-bit read fail deterministically.
@@ -36,12 +38,13 @@ printf E | dd of="$IMAGE" bs=1 seek=4294967296 conv=notrunc status=none
 printf P | dd of="$IMAGE" bs=1 seek=4294967297 conv=notrunc status=none
 
 AROS_CTL_HOST_FOLDER="$RESULTS" \
-AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:FDSK64Probe >MacRW:fdsk64.out' \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:FDSK64Probe >MacRW:fdsk64.out\nC:CRT64Probe >>MacRW:fdsk64.out' \
     "$HERE/aros-ctl" run >/dev/null
 "$HERE/aros-ctl" wait 5 >/dev/null
 
-if [ ! -f "$OUT" ] || ! grep -q '^\[FDSK64\] PASS' "$OUT"; then
-    echo "FAIL: fdsk 64-bit probe did not pass" >&2
+if [ ! -f "$OUT" ] || ! grep -q '^\[FDSK64\] PASS' "$OUT" || \
+    ! grep -q '^\[CRT64\] PASS' "$OUT"; then
+    echo "FAIL: fdsk or CRT 64-bit probe did not pass" >&2
     [ -f "$OUT" ] && cat "$OUT" >&2
     "$HERE/aros-ctl" crash >&2 || true
     exit 1
