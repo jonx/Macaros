@@ -406,14 +406,39 @@ class RETAINS the label), and passes its own guest context gadget as
 **GA_Previous** (object tags with `"adopt": true` carry their mirror and
 adopt guest-owned structures).
 
-**Current frontier: `MakeClass` with guest dispatchers.** gadtools creates
-its 11 BOOPSI kind classes at init (the 11 `MakeClass` calls, `d0` =
-instance sizes) with 68k dispatcher code, then `NewObjectA` on that guest
-classPtr returns NULL. The T3BOOPSI hook machinery already proves
-native→guest class dispatch; `MakeClass` needs to build a native `IClass`
-whose dispatcher trampolines into the guest hook. After that:
-`gengadgetbad` control guest-side, then iffparse → locale in dependency
-order. Bridged baseline (`t3gen` and friends) green throughout.
+**Guest-class dispatch, slice 1 DONE:** `MakeClass` already returns a Class
+facade and `NewObjectA` on it already re-enters the guest dispatcher (the
+T3BOOPSI machinery); what was missing was the message. OM_NEW now crosses
+as a real `opSet` whose `ops_AttrList` is the caller's ORIGINAL guest
+taglist (the guest dispatcher parses guest tags itself — no conversion),
+`ops_GInfo` NULL; other methods still cross as the method ID alone and
+fail visibly. Verified live: gadtools' buttonkind dispatcher runs and
+parses its attributes.
+
+**Current frontier: the super chain.** The dispatcher's `DoSuperMethodA`
+jumps through the facade's `cl_Super`, which the facade cannot carry (a
+native pointer has no guest form) — the run dies cleanly at "frame push
+out of sandbox". Slice 2 is a guest-callable SUPER STUB: `MakeClass`
+plants in the Class facade a `cl_Super` pointing at a guest IClass stub
+whose `cl_Dispatcher.h_Entry` traps into the bridge (an address inside a
+registered base's negative window is what the engine traps on); the trap
+serves OM_NEW by calling native `NewObjectA` on the native superclass with
+the SAME tag domain conversion, and returns an object facade sized with a
+guest instance annex (`cl_InstOffset`/`cl_InstSize` from the facade), so
+guest `INST_DATA` arithmetic lands in guest-writable memory that native
+code never reads. Other super methods refuse by name until driven.
+
+**Build-hygiene lesson that cost a day of confusion:** regenerating a
+source in the same second as the previous compile leaves the mtime equal
+and mmake SKIPS the recompile — the run then exercises a stale object
+while the source is new (the "guest_tags silently 0" symptom, and the
+earlier phantom "file reverted" scare). When a regenerated change appears
+not to take, check the OBJECT is newer than the source before theorizing;
+changing a function signature is the loud way to force the truth.
+
+After slice 2: `gengadgetbad` control guest-side, then iffparse → locale
+in dependency order. Bridged baseline (`t3gen` and friends) green
+throughout.
 
 Verification rule reinforced twice today: BSD `grep` silently lacks `\|`
 alternation (false negatives), the shell wrapper skips non-UTF-8 files —
