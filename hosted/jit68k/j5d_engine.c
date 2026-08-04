@@ -2395,9 +2395,8 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         const uint8_t *thost = sb->host_mem + (tpc - sb->origin);
         uint16_t top = be16(thost);
 
-        if ((top & 0xFF00u) == 0x4000u && (top & 0xC0u) == 0xC0u &&
-            ((top & 0xFFC0u) == 0x40C0u || (top & 0xFFC0u) == 0x42C0u ||
-             (top & 0xFFC0u) == 0x44C0u)) {
+        if ((top & 0xFFC0u) == 0x40C0u || (top & 0xFFC0u) == 0x42C0u ||
+            (top & 0xFFC0u) == 0x44C0u) {
             /* move from SR / from CCR / to CCR, in C. Only the register and
              * immediate forms are served; anything else is refused by name
              * rather than translated into a fault. */
@@ -3022,7 +3021,10 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             pc = after;
         }
         else {
-            RFAIL("unknown terminator opcode");
+            char e2[96];
+            snprintf(e2, sizeof e2, "unknown terminator opcode %04x at pc %08x",
+                     top, tpc);
+            RFAIL(e2);
         }
 
         /* [J5n] the terminator just dispatched (rts/branch/jsr/nop/etc.) is one more 68k

@@ -772,9 +772,10 @@
    "headers": [
     "intuition/classes.h",
     "intuition/imageclass.h",
-    "intuition/pointerclass.h"
+    "intuition/pointerclass.h",
+    "intuition/gadgetclass.h"
    ],
-   "max_items": 32,
+   "max_items": 69,
    "tags": [
     {
      "name": "SYSIA_DrawInfo",
@@ -882,6 +883,155 @@
     {
      "name": "SYSIA_Depth",
      "kind": "u32"
+    },
+    {
+     "name": "GA_Left",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelRight",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Top",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelBottom",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Width",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelWidth",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Height",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelHeight",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Highlight",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Disabled",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_GZZGadget",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_ID",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_UserData",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Selected",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_EndGadget",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Immediate",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelVerify",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_FollowMouse",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RightBorder",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_LeftBorder",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_TopBorder",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_BottomBorder",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_ToggleSelect",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_SysGadget",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_SysGType",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_TabCycle",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_RelSpecial",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_ReadOnly",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_LabelPlace",
+     "kind": "u32"
+    },
+    {
+     "name": "GA_Image",
+     "kind": "object",
+     "type": "Object",
+     "nullable": true
+    },
+    {
+     "name": "GA_LabelImage",
+     "kind": "object",
+     "type": "Object",
+     "nullable": true
+    },
+    {
+     "name": "GA_Previous",
+     "kind": "object",
+     "type": "Gadget",
+     "nullable": true
+    },
+    {
+     "name": "GA_DrawInfo",
+     "kind": "object",
+     "type": "DrawInfo",
+     "nullable": true
+    },
+    {
+     "name": "GA_TextAttr",
+     "kind": "struct",
+     "type": "TextAttr"
+    },
+    {
+     "name": "GA_Text",
+     "kind": "cstr"
     }
    ]
   },
