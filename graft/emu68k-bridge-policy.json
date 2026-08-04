@@ -775,7 +775,7 @@
     "intuition/pointerclass.h",
     "intuition/gadgetclass.h"
    ],
-   "max_items": 69,
+   "max_items": 70,
    "tags": [
     {
      "name": "SYSIA_DrawInfo",
@@ -1016,7 +1016,8 @@
      "name": "GA_Previous",
      "kind": "object",
      "type": "Gadget",
-     "nullable": true
+     "nullable": true,
+     "adopt": true
     },
     {
      "name": "GA_DrawInfo",
@@ -1032,6 +1033,11 @@
     {
      "name": "GA_Text",
      "kind": "cstr"
+    },
+    {
+     "name": "GA_IntuiText",
+     "kind": "struct",
+     "type": "IntuiText"
     }
    ]
   },
@@ -4233,6 +4239,18 @@
    "ExtGadget": [
     "UserData",
     "MutualExclude"
+   ]
+  },
+  "follow_fields": {
+   "IntuiText": [
+    {
+     "field": "ITextFont",
+     "ref": "TextAttr"
+    },
+    {
+     "field": "NextText",
+     "ref": "IntuiText"
+    }
    ]
   }
  }

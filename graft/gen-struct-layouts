@@ -54,7 +54,7 @@ TYPES = [
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
     "Window", "Screen", "RastPort", "Preferences", "BitMap",
-    "TextAttr", "TextFont",
+    "TextAttr", "TextFont", "IntuiText",
     "DimensionInfo", "DrawInfo",
     "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage",
     "Gadget", "ExtGadget",
@@ -335,6 +335,7 @@ OPAQUE_SCALAR_FIELDS = {
 GUEST_BYTE_POINTER_FIELDS = {
     ("BitMap", "Planes"),
     ("TextAttr", "ta_Name"),
+    ("IntuiText", "IText"),
 }
 
 ARRAY_RE = re.compile(r"^(.*?)\[(\d+)\]$")
@@ -368,6 +369,25 @@ def _opaque_value_fields():
 
 
 OPAQUE_VALUE_FIELDS = _opaque_value_fields()
+
+
+# Pointer fields the marshaller FOLLOWS: what they reference is converted too.
+# Per-field statements about the structure, so written down in the policy,
+# not inferred; the emitted tables carry indexes so a chain (IntuiText ->
+# NextText -> IntuiText) needs no forward reference.
+def _follow_fields():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "emu68k-bridge-policy.json")
+    try:
+        with open(path) as fh:
+            meta = json.load(fh).get("struct_metadata", {})
+    except (OSError, ValueError):
+        return {}
+    return {struct: [(e["field"], e["ref"]) for e in entries]
+            for struct, entries in meta.get("follow_fields", {}).items()}
+
+
+FOLLOW_FIELDS = _follow_fields()
 
 
 def field_kind(struct_name, field_name, guest_type, native_type):
@@ -434,6 +454,28 @@ struct EmuField
     unsigned char  g_w, n_w;       /* width of ONE element on each side (a
                                     * guest LONG is 4, a native IPTR is 8)    */
     unsigned char  kind;
+};
+
+/* A pointer field the marshaller FOLLOWS: what it references is converted
+ * too, and the converted copy's native address is written at n_off. `ref`
+ * indexes emu_sdescs (an index, not a pointer, so a chain may reference its
+ * own descriptor). */
+struct EmuFollow
+{
+    unsigned short g_off, n_off;
+    unsigned short ref;
+};
+
+/* A whole structure the marshaller can convert, flat fields plus followed
+ * pointers. Sizes are numeric so this header needs no other includes. */
+struct EmuStructDesc
+{
+    const struct EmuField *fields;
+    unsigned short nfields;
+    unsigned short guest_size, native_size;
+    const struct EmuFollow *follow;
+    unsigned short nfollow;
+    const char *name;
 };
 
 """
@@ -538,6 +580,64 @@ def emit(m68k, native, out):
             for x in skipped:
                 L.append(" *   %s" % x)
             L.append(" */")
+        L.append("")
+
+    # ---- the FOLLOW tables: pointer fields converted by reference -----------
+    # The descriptor table is the transitive closure of everything the policy's
+    # follow_fields reach, in dependency-then-name order; entries reference each
+    # other by index so a self-referencing chain needs no forward declaration.
+    if FOLLOW_FIELDS:
+        order = []
+
+        def visit(name):
+            if name in order:
+                return
+            order.append(name)
+            for _fld, ref in FOLLOW_FIELDS.get(name, []):
+                visit(ref)
+
+        for name in sorted(FOLLOW_FIELDS):
+            visit(name)
+        order.sort(key=lambda n: (n in FOLLOW_FIELDS, n))
+        index = {n: i for i, n in enumerate(order)}
+        L.append("/* Followed pointer fields (policy struct_metadata.follow_fields):")
+        L.append(" * what these reference is rebuilt too, recursively; a chain is")
+        L.append(" * bounded by the marshaller's depth guard, never by this table. */")
+        for name in order:
+            entries = FOLLOW_FIELDS.get(name)
+            if not entries:
+                continue
+            _an, a = resolve(m68k, name)
+            _bn, b = resolve(native, name)
+            if not a or not b:
+                raise SystemExit("follow_fields names %s, which the probe "
+                                 "did not resolve" % name)
+            g_offs = {f: o for f, o, _ty in a["fields"]}
+            n_offs = {f: o for f, o, _ty in b["fields"]}
+            L.append("static const struct EmuFollow emu_follow_%s[] = {" % name)
+            for fld, ref in entries:
+                if fld not in g_offs or fld not in n_offs:
+                    raise SystemExit("follow field %s.%s is not in the probe"
+                                     % (name, fld))
+                L.append("    { %4d, %4d, %d },   /* %s -> struct %s */"
+                         % (g_offs[fld], n_offs[fld], index[ref], fld, ref))
+            L.append("};")
+        L.append("static const struct EmuStructDesc emu_sdescs[] = {")
+        for name in order:
+            _an, a = resolve(m68k, name)
+            _bn, b = resolve(native, name)
+            entries = FOLLOW_FIELDS.get(name)
+            follow = ("emu_follow_%s" % name) if entries \
+                else "(const struct EmuFollow *)0"
+            L.append('    { emu_fields_%s,' % name)
+            L.append('      (int)(sizeof(emu_fields_%s) / sizeof(emu_fields_%s[0])),'
+                     % (name, name))
+            L.append('      %d, %d, %s, %d, "%s" },'
+                     % (a["size"], b["size"], follow,
+                        len(entries) if entries else 0, name))
+        L.append("};")
+        for name in order:
+            L.append("#define EMU_SDESC_%s %d" % (name, index[name]))
         L.append("")
     L.append("#endif /* EMU68K_LAYOUTS_H */")
     text = "\n".join(L) + "\n"

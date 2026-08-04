@@ -4373,53 +4373,6 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     if uses_structs:
         w('#include "emu68k_layouts.h"')
     w("")
-    for d in used_domains:
-        ident = c_ident(d)
-        w("static const struct EmuTagDesc emu_tagdesc_%s[] =" % ident)
-        w("{")
-        tags = domains[d]["tags"]
-        for tag in tags:
-            if tag["kind"] == "struct":
-                st = tag["type"]
-                w('    { %s, %s, "%s", emu_fields_%s, EMU_NFIELDS(emu_fields_%s),'
-                  % (tag["name"], TAG_KINDS[tag["kind"]], tag["name"], st, st))
-                w("      M68K_%s_SIZEOF, sizeof(struct %s), 0, 0 }," % (st, st))
-            elif tag["kind"] == "u16_ffff":
-                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
-                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
-                   tag["max_count"]))
-            elif tag["kind"] == "rgb32":
-                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
-                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
-                   tag["max_longs"]))
-            elif tag["kind"] == "object":
-                w('    { %s, %s, "%s", NULL, 0, 0, 0, EMU_OBJ_%s, %d },' %
-                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
-                   c_ident(tag["type"]), 1 if tag.get("nullable", True) else 0))
-            else:
-                w('    { %s, %s, "%s", NULL, 0, 0, 0, 0, 0 },' %
-                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
-        if not tags:
-            w("    { 0, EMU_TAG_REFUSE, NULL, NULL, 0, 0, 0, 0, 0 },")
-        w("};")
-        w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
-        w("{")
-        w('    emu_tagdesc_%s, %d, "%s"' % (ident, len(tags), d))
-        w("};")
-        w("")
-    for oname in used_objects:
-        ospec = object_types[oname]
-        destructor_spec = ospec.get("destructor")
-        if not destructor_spec or not destructor_spec.startswith(lib + "."):
-            continue
-        destructor = destructor_spec.rsplit(".", 1)[1]
-        w("static void emu_object_cleanup_%s(APTR emu_base, APTR emu_object)" %
-          c_ident(oname))
-        w("{")
-        w("    %s *%s = emu_base;" % (btype, base))
-        w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
-        w("}")
-        w("")
     for oname in used_objects:
         owned = object_types[oname].get("guest_owned")
         if not owned:
@@ -4443,6 +4396,75 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             "M68K_%s_%s" % (mirror, link) if link else "-1",
             owned.get("linked_limit", 1)))
         w("};")
+        w("")
+    for d in used_domains:
+        ident = c_ident(d)
+        w("static const struct EmuTagDesc emu_tagdesc_%s[] =" % ident)
+        w("{")
+        tags = domains[d]["tags"]
+        for tag in tags:
+            if tag["kind"] == "struct":
+                st = tag["type"]
+                follow = POLICY.get("struct_metadata", {}).get(
+                    "follow_fields", {})
+                w('    { %s, %s, "%s", emu_fields_%s, EMU_NFIELDS(emu_fields_%s),'
+                  % (tag["name"], TAG_KINDS[tag["kind"]], tag["name"], st, st))
+                if st in follow:
+                    # Followed pointer fields: the row names its descriptor so
+                    # the marshaller rebuilds the whole reference graph,
+                    # run-lifetime (the callee retains it).
+                    w("      M68K_%s_SIZEOF, sizeof(struct %s), 0, 0,"
+                      % (st, st))
+                    w("      emu_sdescs, EMU_SDESC_%s + 1 }," % st)
+                else:
+                    w("      M68K_%s_SIZEOF, sizeof(struct %s), 0, 0 },"
+                      % (st, st))
+            elif tag["kind"] == "u16_ffff":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_count"]))
+            elif tag["kind"] == "rgb32":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_longs"]))
+            elif tag["kind"] == "object":
+                if tag.get("adopt"):
+                    # The mirror is emitted with the library's adopting
+                    # functions; a tag naming a type with no mirror in this
+                    # module fails the COMPILE, never the run.
+                    w('    { %s, %s, "%s", NULL, 0, 0, 0, EMU_OBJ_%s, %d,' %
+                      (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                       c_ident(tag["type"]),
+                       1 if tag.get("nullable", True) else 0))
+                    w('      NULL, 0, &emu_mirror_%s },' % c_ident(tag["type"]))
+                else:
+                    w('    { %s, %s, "%s", NULL, 0, 0, 0, EMU_OBJ_%s, %d },' %
+                      (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                       c_ident(tag["type"]),
+                       1 if tag.get("nullable", True) else 0))
+            else:
+                w('    { %s, %s, "%s", NULL, 0, 0, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"]))
+        if not tags:
+            w("    { 0, EMU_TAG_REFUSE, NULL, NULL, 0, 0, 0, 0, 0 },")
+        w("};")
+        w("static const struct EmuTagDomain emu_tagdomain_%s =" % ident)
+        w("{")
+        w('    emu_tagdesc_%s, %d, "%s"' % (ident, len(tags), d))
+        w("};")
+        w("")
+    for oname in used_objects:
+        ospec = object_types[oname]
+        destructor_spec = ospec.get("destructor")
+        if not destructor_spec or not destructor_spec.startswith(lib + "."):
+            continue
+        destructor = destructor_spec.rsplit(".", 1)[1]
+        w("static void emu_object_cleanup_%s(APTR emu_base, APTR emu_object)" %
+          c_ident(oname))
+        w("{")
+        w("    %s *%s = emu_base;" % (btype, base))
+        w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
+        w("}")
         w("")
     w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base," % short)
     w("                  char *err, ULONG errlen)")
@@ -5691,7 +5713,23 @@ struct EmuTagDesc
     UWORD native_size;
     UWORD object_type;
     UBYTE object_nullable;
+    /* EMU_TAG_STRUCT with followed pointer fields: the descriptor table base
+     * and 1+index of this structure's descriptor (0 = flat, no follow pass).
+     * A followed conversion is RETAINED by the callee (a class keeps the
+     * label it was given), so it is allocated run-lifetime through
+     * emu68k_persist_alloc, never from call scratch. */
+    const struct EmuStructDesc *sdescs;
+    UWORD sdesc1;
+    /* EMU_TAG_OBJECT only, optional: a mirror descriptor makes the tag accept
+     * a GUEST-OWNED structure by adoption as well as an issued token - the
+     * adopt path resolves an issued token at the head anyway, so it strictly
+     * widens what the tag accepts. */
+    const struct EmuMirror *mirror;
 };
+struct EmuStructDesc;
+/* Run-lifetime allocator for retained deep conversions, installed by the
+ * run owner; deep marshalling refuses by name while it is unset. */
+extern APTR (*emu68k_persist_alloc)(ULONG size);
 struct EmuTagDomain
 {
     const struct EmuTagDesc *tags;
