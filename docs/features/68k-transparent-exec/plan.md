@@ -522,12 +522,17 @@ guest's gadget chain, so guest `FreeGadgets` frees only the plain context
 gadget, the native BOOPSI gadget LEAKS, and the double-free the control
 probes for never crosses the bridge at all (guest-internal no-op, as on
 real hardware — the control's abort-on-stale expectation was
-bridged-semantics-specific). Wanted: write the facade's guest address into
-the previous guest gadget's NextGadget at creation (and the facade's own
-NextGadget on later links), so the guest chain mirrors the native one and
-frees actually dispose. Related standing rule: a chain may not mix
-adopted mirrors with bridge-issued facades — this slice is where that
-rule needs its answer.
+bridged-semantics-specific). Start by measuring, not fixing: guest
+gadtools links the chain itself (the facade address IS what NewObjectA
+returned to it), so the likelier gap is the facade's CONTENT — it is
+allocated as zeros, never converted from the native Gadget, so the guest's
+walk reads NextGadget=0 / no gadtools signature and stops. Dump the
+context gadget's guest NextGadget and trace what FreeGadgets reads; the
+probable fix is giving Gadget-rooted object facades a converted Gadget
+field view (the existing Gadget mirror field map), refreshed at
+crossings. Related standing rule: a chain may not mix adopted mirrors
+with bridge-issued facades — this slice is where that rule needs its
+answer.
 
 Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
 full this inflated swap until the machine hit ENOSPC twice (wedged
