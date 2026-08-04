@@ -72,6 +72,18 @@ writes and reads back a byte at 4 GiB + 2, then proves `fopen`/`fseek`/
 ./graft/exfat-fdsk64-smoke
 ```
 
+For a reproducible small-volume target fixture, rather than the retained
+manual Unit0 image, run:
+
+```sh
+./graft/exfat-fixture-smoke
+```
+
+It formats a disposable raw 64 MiB image with macOS `newfs_exfat`, mounts it
+through `fdsk.device` as `EXFAT4:`, and asserts enumeration, case-folded open,
+and host byte comparisons. It deliberately does not claim the extended corpus
+vectors below (fragmentation, `NoFatChain`, corruption, or files beyond 4 GiB).
+
 The August 4, 2026 target smoke test used a 64 MiB image formatted and populated
 by macOS, mounted through `fdsk.device`. `List EXFAT0: ALL` enumerated the root,
 the macOS metadata directory, and a nested directory. Files were copied from

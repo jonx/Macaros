@@ -462,6 +462,7 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 | # | Vector | Pass condition |
 |---|---|---|
 | T1 | Empty volume, 512 and 4096-byte sectors | Mounts; `Info` free space plausible |
+| T1a | Reproducible macOS-authored 64 MiB, 512-byte-sector volume: root file, nested file and mixed-case name | Mounts through `fdsk.device`; lists all three, opens the root file with different case, and byte-compares every copied file |
 | T2 | File of 4 GiB − 1, 4 GiB, 4 GiB + 1 | Exact size; full byte-compare |
 | T3 | Fragmented file, ≥ 8 extents | Byte-compare |
 | T4 | Contiguous file, `NoFatChain` set | Byte-compare, and the FAT is never read for it |

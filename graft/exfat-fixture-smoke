@@ -1,0 +1,89 @@
+#!/bin/bash
+# Reproducible target smoke for the Phase 1 exFAT read-only handler.
+#
+# The image is made by macOS's documented formatter, not by another exFAT
+# implementation.  It is a disposable raw image on fdsk unit 4; Unit0 and
+# any developer-created mount entries are never touched.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+AROS="$BUILD/AROS"
+IMAGE="$AROS/DiskImages/Unit4"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT4"
+TEMPLATE="$ROOT/hosted/exfat-tests/EXFAT4.mountlist"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-fixture.XXXXXX")"
+SOURCE="$WORK/source"
+HOST_MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/exfat-fixture.out"
+DEVICE=""
+
+cleanup() {
+    if [ -n "$DEVICE" ]; then
+        hdiutil detach "$DEVICE" -quiet || true
+    fi
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$IMAGE" ] || unlink "$IMAGE"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ -f "$TEMPLATE" ] || { echo "FAIL: no EXFAT4 Mountlist template" >&2; exit 1; }
+[ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
+[ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace existing $DRIVER" >&2; exit 1; }
+
+mkdir "$SOURCE" "$HOST_MOUNT" "$RESULTS"
+printf 'AROS exFAT fixture: exact text payload\n' >"$SOURCE/Hello.txt"
+printf 'case-folding fixture\n' >"$SOURCE/MixedCase.DAT"
+mkdir "$SOURCE/SubDir"
+dd if=/dev/zero of="$SOURCE/SubDir/Handler.bin" bs=40952 count=1 status=none
+
+truncate -s 64m "$IMAGE"
+DEVICE="$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: raw fixture image did not attach" >&2; exit 1; }
+/sbin/newfs_exfat -v AROSFIX "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
+[ -n "$DEVICE" ] || { echo "FAIL: formatted fixture image did not mount" >&2; exit 1; }
+COPYFILE_DISABLE=1 cp -X "$SOURCE/Hello.txt" "$SOURCE/MixedCase.DAT" "$HOST_MOUNT/"
+mkdir "$HOST_MOUNT/SubDir"
+COPYFILE_DISABLE=1 cp -X "$SOURCE/SubDir/Handler.bin" "$HOST_MOUNT/SubDir/"
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+hello_sha="$(shasum -a 256 "$SOURCE/Hello.txt" | awk '{ print $1 }')"
+case_sha="$(shasum -a 256 "$SOURCE/MixedCase.DAT" | awk '{ print $1 }')"
+bin_sha="$(shasum -a 256 "$SOURCE/SubDir/Handler.bin" | awk '{ print $1 }')"
+
+cp "$TEMPLATE" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:List EXFAT4: ALL >MacRW:exfat-fixture.out\nC:Copy EXFAT4:hello.txt MacRW:Hello.txt >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:MixedCase.DAT MacRW:MixedCase.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:SubDir/Handler.bin MacRW:Handler.bin >>MacRW:exfat-fixture.out' \
+    "$HERE/aros-ctl" run >/dev/null
+"$HERE/aros-ctl" wait 8 >/dev/null
+
+if [ ! -f "$OUT" ] || ! grep -q 'Hello.txt' "$OUT" || \
+    ! grep -q 'MixedCase.DAT' "$OUT" || ! grep -q 'Handler.bin' "$OUT"; then
+    echo "FAIL: handler did not enumerate the generated fixture" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    "$HERE/aros-ctl" crash >&2 || true
+    exit 1
+fi
+
+check_sha() {
+    actual="$(shasum -a 256 "$1" | awk '{ print $1 }')"
+    [ "$actual" = "$2" ] || {
+        echo "FAIL: byte comparison failed for $3" >&2
+        exit 1
+    }
+}
+check_sha "$RESULTS/Hello.txt" "$hello_sha" Hello.txt
+check_sha "$RESULTS/MixedCase.DAT" "$case_sha" MixedCase.DAT
+check_sha "$RESULTS/Handler.bin" "$bin_sha" SubDir/Handler.bin
+
+echo "PASS: reproducible exFAT mount, enumeration, case-folded open and byte comparison"
