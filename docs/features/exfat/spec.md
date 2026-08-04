@@ -492,6 +492,12 @@ mounts a disk image through `fdsk.device` and is driven headlessly by `aros-ctl`
 **T-neg** No test may pass by the handler declining to mount. T9, T9b and T10 assert
 refusal; every other test asserts a successful mount first.
 
+`[OURS]` The target T5 probe passes the full 255-code-unit name to `Open()` and
+reads its payload successfully. The legacy `FileInfoBlock` used by `List`
+cannot render all 255 units; it displays its fixed-size prefix. This does not
+change the T5 path-resolution requirement, but it records the presentation
+limit rather than conflating it with a failed lookup.
+
 ## 12. Test harness
 
 `[OURS]` `fdsk.device` advertises `NSCMD_TD_READ64` and

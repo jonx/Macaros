@@ -79,6 +79,20 @@ manual Unit0 image, run:
 ./graft/exfat-fixture-smoke
 ```
 
+Run its dedicated 255-code-unit target probe with:
+
+```sh
+EXFAT_NAME_ONLY=1 ./graft/exfat-fixture-smoke
+```
+
+The normal gate currently discharges T4 (a verified `NoFatChain` stream),
+T5b (an unmappable UTF-16 unit is displayed as `_` and that display spelling
+does not open the file), and T6b (two distinct names with the same on-disk
+16-bit name hash both resolve to their distinct contents). The dedicated T5
+probe opens a 255-code-unit name directly through DOS. `List` displays the
+legacy `FileInfoBlock`-sized prefix of that name; this is a presentation limit
+of the DOS structure, not a path-resolution truncation.
+
 It formats a disposable raw 64 MiB image with macOS `newfs_exfat`, mounts it
 through `fdsk.device` as `EXFAT4:`, and asserts enumeration, case-folded open,
 and host byte comparisons. It deliberately does not claim the extended corpus

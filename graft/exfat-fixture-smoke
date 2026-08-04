@@ -19,12 +19,21 @@ HOST_MOUNT="$WORK/mount"
 RESULTS="$WORK/results"
 OUT="$RESULTS/exfat-fixture.out"
 DEVICE=""
+LONG_NAME="$(printf 'L%.0s' {1..251}).bin"
+EURO_NAME="Euro€Name.bin"
+COLLISION_A="C00001.DAT"
+COLLISION_B="C00040.DAT"
 
 cleanup() {
+    status=$?
     if [ -n "$DEVICE" ]; then
         hdiutil detach "$DEVICE" -quiet || true
     fi
     "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed fixture at $WORK" >&2
+        return
+    fi
     [ ! -e "$DRIVER" ] || unlink "$DRIVER"
     [ ! -e "$IMAGE" ] || unlink "$IMAGE"
 }
@@ -36,9 +45,18 @@ trap cleanup EXIT HUP INT TERM
 [ ! -e "$IMAGE" ] || { echo "FAIL: refusing to replace existing $IMAGE" >&2; exit 1; }
 [ ! -e "$DRIVER" ] || { echo "FAIL: refusing to replace existing $DRIVER" >&2; exit 1; }
 
+if [ "${EXFAT_NAME_ONLY:-0}" = 1 ]; then
+    "$ROOT/hosted/exfat-tests/build-exfat-name-probe.sh"
+    cp "$ROOT/hosted/exfat-tests/EXFATNameProbe" "$AROS/C/EXFATNameProbe"
+fi
+
 mkdir "$SOURCE" "$HOST_MOUNT" "$RESULTS"
 printf 'AROS exFAT fixture: exact text payload\n' >"$SOURCE/Hello.txt"
 printf 'case-folding fixture\n' >"$SOURCE/MixedCase.DAT"
+printf 'long-name fixture\n' >"$SOURCE/$LONG_NAME"
+printf 'unmappable-name fixture\n' >"$SOURCE/$EURO_NAME"
+printf 'first collision payload\n' >"$SOURCE/$COLLISION_A"
+printf 'second collision payload\n' >"$SOURCE/$COLLISION_B"
 mkdir "$SOURCE/SubDir"
 dd if=/dev/zero of="$SOURCE/SubDir/Handler.bin" bs=40952 count=1 status=none
 
@@ -52,18 +70,45 @@ DEVICE=""
 DEVICE="$(hdiutil attach -mountpoint "$HOST_MOUNT" -imagekey diskimage-class=CRawDiskImage "$IMAGE" | awk 'NR == 1 { print $1 }')"
 [ -n "$DEVICE" ] || { echo "FAIL: formatted fixture image did not mount" >&2; exit 1; }
 COPYFILE_DISABLE=1 cp -X "$SOURCE/Hello.txt" "$SOURCE/MixedCase.DAT" "$HOST_MOUNT/"
+COPYFILE_DISABLE=1 cp -X "$SOURCE/$LONG_NAME" "$SOURCE/$EURO_NAME" \
+    "$SOURCE/$COLLISION_A" "$SOURCE/$COLLISION_B" "$HOST_MOUNT/"
 mkdir "$HOST_MOUNT/SubDir"
 COPYFILE_DISABLE=1 cp -X "$SOURCE/SubDir/Handler.bin" "$HOST_MOUNT/SubDir/"
 hdiutil detach "$DEVICE" -quiet
 DEVICE=""
 
+contiguous_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" MixedCase.DAT)"
+collision_a_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" "$COLLISION_A")"
+collision_b_info="$("$ROOT/hosted/exfat-tests/exfat_stream_inspect.py" "$IMAGE" "$COLLISION_B")"
+case "$contiguous_info" in *"nofat=1"*"extents=1"*) ;; *)
+    echo "FAIL: T4 fixture is not a NoFatChain stream: $contiguous_info" >&2; exit 1;;
+esac
+hash_a="$(printf '%s\n' "$collision_a_info" | sed -n 's/.*hash=\([0-9a-f]*\).*/\1/p')"
+hash_b="$(printf '%s\n' "$collision_b_info" | sed -n 's/.*hash=\([0-9a-f]*\).*/\1/p')"
+[ -n "$hash_a" ] && [ "$hash_a" = "$hash_b" ] || {
+    echo "FAIL: T6b names did not collide: $collision_a_info / $collision_b_info" >&2; exit 1;
+}
+
 hello_sha="$(shasum -a 256 "$SOURCE/Hello.txt" | awk '{ print $1 }')"
 case_sha="$(shasum -a 256 "$SOURCE/MixedCase.DAT" | awk '{ print $1 }')"
 bin_sha="$(shasum -a 256 "$SOURCE/SubDir/Handler.bin" | awk '{ print $1 }')"
+collision_a_sha="$(shasum -a 256 "$SOURCE/$COLLISION_A" | awk '{ print $1 }')"
+collision_b_sha="$(shasum -a 256 "$SOURCE/$COLLISION_B" | awk '{ print $1 }')"
 
 cp "$TEMPLATE" "$DRIVER"
+if [ "${EXFAT_NAME_ONLY:-0}" = 1 ]; then
+    AROS_CTL_HOST_FOLDER="$RESULTS" \
+    AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:EXFATNameProbe >MacRW:exfat-fixture.out' \
+        "$HERE/aros-ctl" run >/dev/null
+    "$HERE/aros-ctl" wait 8 >/dev/null
+    grep -q '^\[EXFATNAME\] PASS' "$OUT" || {
+        echo "FAIL: T5 255-unit name did not open through DOS" >&2; exit 1;
+    }
+    echo "PASS: T5 255-unit name opens through DOS"
+    exit 0
+fi
 AROS_CTL_HOST_FOLDER="$RESULTS" \
-AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:List EXFAT4: ALL >MacRW:exfat-fixture.out\nC:Copy EXFAT4:hello.txt MacRW:Hello.txt >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:MixedCase.DAT MacRW:MixedCase.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:SubDir/Handler.bin MacRW:Handler.bin >>MacRW:exfat-fixture.out' \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT4\nC:List EXFAT4: ALL >MacRW:exfat-fixture.out\nC:Copy EXFAT4:hello.txt MacRW:Hello.txt >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:MixedCase.DAT MacRW:MixedCase.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:SubDir/Handler.bin MacRW:Handler.bin >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00001.DAT MacRW:C00001.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:C00040.DAT MacRW:C00040.DAT >>MacRW:exfat-fixture.out\nC:Copy EXFAT4:Euro_Name.bin MacRW:Euro_Name.bin >>MacRW:exfat-fixture.out' \
     "$HERE/aros-ctl" run >/dev/null
 "$HERE/aros-ctl" wait 8 >/dev/null
 
@@ -85,5 +130,10 @@ check_sha() {
 check_sha "$RESULTS/Hello.txt" "$hello_sha" Hello.txt
 check_sha "$RESULTS/MixedCase.DAT" "$case_sha" MixedCase.DAT
 check_sha "$RESULTS/Handler.bin" "$bin_sha" SubDir/Handler.bin
+check_sha "$RESULTS/$COLLISION_A" "$collision_a_sha" "$COLLISION_A"
+check_sha "$RESULTS/$COLLISION_B" "$collision_b_sha" "$COLLISION_B"
+[ ! -e "$RESULTS/Euro_Name.bin" ] || {
+    echo "FAIL: T5b display spelling unexpectedly opened the Unicode name" >&2; exit 1;
+}
 
-echo "PASS: reproducible exFAT mount, enumeration, case-folded open and byte comparison"
+echo "PASS: T4/T5b/T6b exFAT recipe corpus"
