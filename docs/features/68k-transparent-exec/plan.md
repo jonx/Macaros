@@ -437,13 +437,27 @@ exactly like `jsr (An)` does; a served vector then returns to the caller's
 real return address, which the pop exposed. Engine gates (J5t, apps68k,
 conformance) and T3LHA stay byte-exact.
 
-**Current frontier: intuition `GetAttr` (LVO 109) has no crossing** — the
-first thing gadtools asks after its object exists. Shape:
-`GetAttr(attrID D0, object A0, storage A1)`, an OUT scalar through a
-guest pointer, with attrID validated against the same reviewed domain
-(scalar kinds served, object kinds refused until typed). This wants a
-small generator vocabulary ("single-attribute get"), not a hand crossing —
-GT_GetGadgetAttrsA's out_u32 tags are the precedent.
+**`GetAttr` crossing BUILT (the "attr_get" generator vocabulary), NOT yet
+live-verified.** attrID is validated with `emu68k_tag_lookup` against the
+exported domain; scalar kinds are written through the guest storage
+pointer; anything else refuses by name. `Object *` and `APTR` are one
+identity class in `object_canon` (BOOPSI Object is opaque by definition).
+
+**Verification is blocked by harness contention** (two sessions sharing
+one Macaros instance: the corpus `pkill -f Macaros` on start kills the
+other side's instance, and shutdown via the shared `/tmp/aros-cm.ctl`
+kills ours — "power request: shutdown" seconds after boot is that
+collision, not a code bug). Before the collisions took over, two runs got
+PAST the GetAttr gap and then stalled with no output. Prime suspect,
+worth fixing regardless: `emu68k_run_call_hook` disables the watchdog
+poll for nested runs, so a guest loop inside a class dispatcher hangs
+unkillably — give callbacks a deadline-only poll. When the harness is
+free: rerun the gengadget spike with tracing, settle the stall, then the
+full `t3gen` gate (it needs the harness too).
+
+Worth an hour sometime: an instance-isolation mode for the corpus
+(per-run control socket, no blanket pkill), so parallel sessions stop
+killing each other.
 
 **Build-hygiene lesson that cost a day of confusion:** regenerating a
 source in the same second as the previous compile leaves the mtime equal
