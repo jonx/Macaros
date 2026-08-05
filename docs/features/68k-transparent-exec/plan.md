@@ -535,15 +535,36 @@ This is NOT a per-function or per-library fix. It is the ONE generic
 boundary question of the waterline model: how a BOOPSI object made below
 the waterline is REPRESENTED in guest memory above it — the same seam
 for every guest library that subclasses a bridged class (gadtools now,
-asl/datatypes later). Shape to decide (design first, then build):
-facades of objects whose class roots in a guest-visible struct (Gadget)
-must carry that struct's converted view, with three general rules —
-convert native-owned fields once at creation and let guest RMWs survive
-later crossings; link fields hold guest addresses of sibling facades,
-never converted native pointers; ownership-crossing pointer fields
-(GadgetText: the guest frees ITS OWN IText) keep the guest's value.
-Related standing rule: a chain may not mix adopted mirrors with
-bridge-issued facades — this slice is where that rule needs its answer.
+asl/datatypes later).
+
+**BUILT 2026-08-05 (graft `c373a6c`, fork-graft `c79d17c72a`), verified
+live**: facades of objects whose class roots in `gadgetclass` (native
+super-chain `cl_ID` walk) carry the Gadget scalar view, converted once at
+creation via the policy-exported Gadget mirror field map (`"export": true`
+on the `guest_owned` block emits a single `emu68k_mirror_Gadget` alias);
+guest RMWs (gadtools' `|= GTYP_GADTOOLS`) survive because nothing
+re-converts; sibling links are written as guest addresses (any known
+gadget whose native `NextGadget` is the new object gets the facade
+address in its guest `NextGadget`, flag `EMU68K_OBJ_GADGET_VIEW` marks
+viewed facades). Consequence chain, all live: guest `FreeGadgets` now
+identifies and DISPOSES the gadget through the bridge (no more native
+leak), and guest `GT_SetGadgetAttrsA` stopped early-outing — which
+surfaced `SetAttrsA` as a missing crossing, added via policy (434
+crossings, t3gen green). `gengadget` passes its full lifecycle:
+create → SetAttrs → GetAttr → dispose → screen closed.
+
+**`gengadgetbad` still prints FAIL, but for a NEWLY NAMED reason**: it
+passes `ng_TextAttr = 0`, so guest `makeitext` falls back to
+`dri->dri_Font` — and the DrawInfo facade does not carry `dri_Font`, so
+label-making returns NULL and `CreateGadgetA` fails before any gadget
+exists. The double-free probe is unreachable until the DrawInfo facade
+carries a font. NEXT: the same facade-content seam applied to DrawInfo
+(`dri_Font` as a TextFont object field, pens array while there) — then
+the pair control becomes meaningful guest-side (expected: first free
+disposes, second free aborts on the stale token, FAIL never prints).
+Also still open: GA_Previous adopt with a FACADE previous (multi-gadget
+programs; the adopt head must resolve issued Object facades, not mirror
+their bytes).
 
 Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
 full this inflated swap until the machine hit ENOSPC twice (wedged
