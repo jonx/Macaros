@@ -54,7 +54,7 @@ TYPES = [
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
     "Window", "Screen", "RastPort", "Preferences", "BitMap",
-    "TextAttr", "TextFont", "IntuiText",
+    "TextAttr", "TextFont", "TextExtent", "IntuiText",
     "DimensionInfo", "DrawInfo",
     "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage",
     "Gadget", "ExtGadget",

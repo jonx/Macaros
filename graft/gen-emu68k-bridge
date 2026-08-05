@@ -3541,6 +3541,60 @@ def function_policy(lib, f):
     return POLICY.get("functions", {}).get(policy_key(lib, f))
 
 
+def inferred_object_policy(lib, f, object_types):
+    """A crossing derived from the OBJECT TYPES alone, for a vector nobody has
+    written policy for.
+
+    The reviewed decision is the TYPE: "a Layer is opaque, it crosses as a
+    token". Once that is recorded, every vector that only passes and returns
+    such pointers follows from it - which is the difference between describing
+    a library and writing out its vectors one at a time. Deliberately narrow:
+
+      - only when the C type maps to EXACTLY ONE declared object type, so the
+        mapping is never a guess;
+      - only when every pointer argument is covered that way (one uncovered
+        pointer and the whole vector stays unserved, because a guessed pointer
+        is how a guest gets handed something it cannot read);
+      - hand-written policy always wins, and this never overrides it.
+    """
+    if f.private:
+        return None
+    by_pointer = {}
+    for oname, spec in object_types.items():
+        canonical = object_canon(spec.get("c_type", ""))
+        if canonical:
+            by_pointer.setdefault(canonical, []).append(oname)
+
+    def sole_object(ctype):
+        matches = by_pointer.get(object_canon(ctype), [])
+        return matches[0] if len(matches) == 1 else None
+
+    objects = {}
+    for atype, aname in f.args:
+        kind = classify(atype)
+        if kind in ("scalar", "widen"):
+            continue
+        oname = sole_object(atype) if kind in ("struct", "aptr", "other") else None
+        if not oname:
+            return None                     # an argument nobody has described
+        objects[aname] = {"type": oname, "nullable": True}
+    if not objects:
+        return None                         # tier 1 already covers these
+    rc = classify(f.ret)
+    if rc in ("scalar", "widen", "void"):
+        return {"objects": objects, "origin": "inferred"}
+    result_object = sole_object(f.ret) if rc in ("struct", "aptr") else None
+    if not result_object:
+        return None
+    # A returned object is NOT owned by the caller unless a reviewed policy
+    # says so: this vector is being derived precisely because nobody has
+    # decided its lifetime, and inventing a destructor call is how a bridge
+    # frees something the library still uses.
+    return {"objects": objects,
+            "result": {"kind": "object", "type": result_object, "owned": False},
+            "origin": "inferred"}
+
+
 def refusal_policy(lib, f):
     return POLICY.get("refused_functions", {}).get(policy_key(lib, f))
 
@@ -4507,7 +4561,24 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         policy = function_policy(lib, f)
         refusal = refusal_policy(lib, f)
         if not refusal and t not in (1, 2) and not policy:
-            continue
+            policy = inferred_object_policy(lib, f, object_types)
+            if not policy:
+                # EVERY public vector is accounted for. Without this the
+                # library's table had silent holes and a guest that called one
+                # got "LVO 127" - a number, from which the next question ("what
+                # would it take to serve it?") cannot be answered. The blocker
+                # is known right here, so the vector says it itself.
+                why = f.tier(lib)[1] or "no derivation"
+                w("    case %d:  /* %s: no crossing [%d] */" %
+                  (f.lvo, f.name, f.offset))
+                w("        if (err && errlen)")
+                w("            snprintf(err, errlen, %s);" % json.dumps(
+                    "capability gap: %s.%s needs %s described" %
+                    (lib, f.name, why)))
+                w("        r->d[0] = 0;")
+                w("        return 1;")
+                n += 1
+                continue
         if refusal:
             w("    case %d:  /* %s: explicit reviewed refusal [%d] */" %
               (f.lvo, f.name, f.offset))
@@ -6069,6 +6140,53 @@ def report_all():
     return 0
 
 
+def report_gaps(names):
+    """The WORK QUEUE for one library, whole: every public vector that has no
+    crossing, with what blocks it and whether a policy entry already exists.
+
+    A guest library above the waterline calls DOWN into these, so its gaps are
+    this list, not whatever the last fixture happened to hit. Working a library
+    means clearing its list in one pass and testing once - discovering the same
+    facts one failing run at a time is the loop this exists to end."""
+    import collections
+    for name in names:
+        short = name[:-8] if name.endswith(".library") else name
+        target = [t for t in all_targets() if t[0] == short + ".library"]
+        if not target:
+            print("%s: not a known library" % name, file=sys.stderr)
+            continue
+        rel = target[0][1]
+        lib = name if name.endswith(".library") else short + ".library"
+        funcs = parse_conf(os.path.join(AROS, rel))
+        served, blocked, types = [], [], collections.Counter()
+        for f in funcs:
+            if f.private:
+                continue
+            tier, why = f.tier(lib)
+            has_policy = (function_policy(lib, f) is not None or
+                          refusal_policy(lib, f) is not None or
+                          inferred_object_policy(lib, f,
+                                                 POLICY.get("object_types", {}))
+                          is not None)
+            if tier or has_policy:
+                served.append(f.name)
+            else:
+                blocked.append((f.name, why or "?"))
+                for part in (why or "?").split(", "):
+                    types[part] += 1
+        print("%s: %d public vectors, %d served, %d without a crossing"
+              % (name, len(served) + len(blocked), len(served), len(blocked)))
+        if types:
+            print("  blocking types, most vectors first:")
+            for t, c in types.most_common():
+                print("    %-40s %3d" % (t[:40], c))
+        if blocked:
+            print("  vectors:")
+            for fname, why in blocked:
+                print("    %-32s %s" % (fname, why))
+    return 0
+
+
 POLICY_ORIGIN_KEY = "origin"
 
 
@@ -6199,6 +6317,13 @@ def main():
     if "--emit" in sys.argv:
         i = sys.argv.index("--emit")
         return emit(sys.argv[i + 1])
+    if "--gaps" in sys.argv:
+        i = sys.argv.index("--gaps")
+        names = [a for a in sys.argv[i + 1:] if not a.startswith("-")]
+        if not names:
+            print("usage: gen-emu68k-bridge --gaps <library> [...]", file=sys.stderr)
+            return 2
+        return report_gaps(names)
     if "--report-all" in sys.argv:
         return report_all()
     if "--check" in sys.argv:

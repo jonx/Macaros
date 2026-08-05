@@ -130,6 +130,31 @@
    "c_type": "struct ColorMap *",
    "kind": "opaque"
   },
+  "Layer": {
+   "id": 22,
+   "c_type": "struct Layer *",
+   "kind": "opaque"
+  },
+  "Layer_Info": {
+   "id": 23,
+   "c_type": "struct Layer_Info *",
+   "kind": "opaque"
+  },
+  "View": {
+   "id": 24,
+   "c_type": "struct View *",
+   "kind": "opaque"
+  },
+  "ClipRect": {
+   "id": 25,
+   "c_type": "struct ClipRect *",
+   "kind": "opaque"
+  },
+  "NamedObject": {
+   "id": 26,
+   "c_type": "struct NamedObject *",
+   "kind": "opaque"
+  },
   "ViewPort": {
    "id": 15,
    "c_type": "struct ViewPort *",
@@ -2121,6 +2146,20 @@
       "DTAG_DIMS": "DimensionInfo"
      },
      "copy_on": "nonzero"
+    }
+   }
+  },
+  "graphics.library.FontExtent": {
+   "objects": {
+    "font": {
+     "type": "TextFont",
+     "nullable": false
+    }
+   },
+   "structs": {
+    "fontExtent": {
+     "type": "TextExtent",
+     "direction": "out"
     }
    }
   },
