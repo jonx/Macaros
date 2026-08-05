@@ -583,18 +583,62 @@ surfaced `SetAttrsA` as a missing crossing, added via policy (434
 crossings, t3gen green). `gengadget` passes its full lifecycle:
 create → SetAttrs → GetAttr → dispose → screen closed.
 
-**`gengadgetbad` still prints FAIL, but for a NEWLY NAMED reason**: it
-passes `ng_TextAttr = 0`, so guest `makeitext` falls back to
-`dri->dri_Font` — and the DrawInfo facade does not carry `dri_Font`, so
-label-making returns NULL and `CreateGadgetA` fails before any gadget
-exists. The double-free probe is unreachable until the DrawInfo facade
-carries a font. NEXT: the same facade-content seam applied to DrawInfo
-(`dri_Font` as a TextFont object field, pens array while there) — then
-the pair control becomes meaningful guest-side (expected: first free
-disposes, second free aborts on the stale token, FAIL never prints).
-Also still open: GA_Previous adopt with a FACADE previous (multi-gadget
-programs; the adopt head must resolve issued Object facades, not mirror
-their bytes).
+**FACADE CONTENT COMPLETED (graft `711fdb2`, fork-graft `3d3b7bc062`) —
+the gadget pair is now fully correct guest-side.** `gengadgetbad` had been
+failing earlier than its probe: with `ng_TextAttr = 0`, guest `makeitext`
+falls back to `dri->dri_Font->tf_Message.mn_Node.ln_Name`, and the
+TextFont facade had no name string, so every label failed and
+`CreateGadgetA` returned NULL. Three generic additions, none
+gadtools-specific:
+
+- **`cstr` facade-content kind**: the string is copied into the facade's
+  trailing area and the guest pointer field names that copy
+  (`emu68k_cstr_to_guest`, always terminated in the reserved room, empty
+  for NULL). TextFont's node name is the first user; any structure a
+  guest library reads a name out of takes the same route.
+- **Nested facades carry their own content**, sized accordingly. A facade
+  reached through another facade was previously half-built.
+- **Trailing-offset FIX (pre-existing, latent)**: content was written
+  starting at the END of the facade instead of after its base structure,
+  so the first item landed past the allocation. The pens array had the
+  same defect and survived only because pen counts are small; a 64-byte
+  font name landed on the guest's taglist and turned `GA_Previous` into
+  the ASCII of "topaz.font", which is how it was caught.
+
+Result: `gengadget` PASS, and `gengadgetbad` behaves exactly as designed —
+the first `FreeGadgets` disposes the gadget through the bridge, the second
+stops at the bridge with a stale-token diagnostic and never reaches its
+FAIL print. t3gen green (434 crossings).
+
+**Guest-side fixture sweep after this slice** (all with
+`EMU68K_GUESTSIDE_LIBS=gadtools.library`):
+
+| fixture | verdict |
+|---|---|
+| `gengadget` | PASS (create → SetAttrs → GetAttr → dispose) |
+| `gengadgetbad` | correct: 2nd free stops at the bridge, stale token named |
+| `genowngadget` | PASS (guest-OWNED gadget adoption works under guest gadtools) |
+| `genowngadgetbad` | correct: refuses the field the mirror cannot carry |
+| `genowngadgetcycle` | correct: names the family cycle |
+| `genmenuitem` | GAP: guest gadtools calls `graphics.library` LVO 127 |
+
+So gadtools' gadget half is done guest-side, including guest-owned
+adoption, with all three negative controls failing closed by name.
+
+**The named gap, and the next generic vocabulary item**: the nightly's
+gadtools calls `GetDisplayInfoData(handle, buf, size, tagID, ID)` while
+laying out menus. Its out-buffer is a DIFFERENT structure per `tagID`
+(`DTAG_DIMS` → DimensionInfo, `DTAG_DISP` → DisplayInfo, …), which the
+policy cannot yet express: `structs` has `direction: in|out` but one
+fixed type. Wanted: a **variant out-struct** kind — the struct is
+selected by another argument's value, converted native→guest after the
+call, with an unlisted selector refused by name (never guessed). That is
+a policy+generator addition of the same shape as `attr_get`, and it will
+serve every "give me the record for this tag" call, not just this one.
+
+Also still open for gadtools: GA_Previous adopt with a FACADE previous
+(multi-gadget programs; the adopt head must resolve issued Object facades
+rather than mirror their bytes).
 
 Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
 full this inflated swap until the machine hit ENOSPC twice (wedged
