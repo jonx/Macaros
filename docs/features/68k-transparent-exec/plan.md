@@ -625,20 +625,50 @@ FAIL print. t3gen green (434 crossings).
 So gadtools' gadget half is done guest-side, including guest-owned
 adoption, with all three negative controls failing closed by name.
 
-**The named gap, and the next generic vocabulary item**: the nightly's
-gadtools calls `GetDisplayInfoData(handle, buf, size, tagID, ID)` while
-laying out menus. Its out-buffer is a DIFFERENT structure per `tagID`
-(`DTAG_DIMS` → DimensionInfo, `DTAG_DISP` → DisplayInfo, …), which the
-policy cannot yet express: `structs` has `direction: in|out` but one
-fixed type. Wanted: a **variant out-struct** kind — the struct is
-selected by another argument's value, converted native→guest after the
-call, with an unlisted selector refused by name (never guessed). That is
-a policy+generator addition of the same shape as `attr_get`, and it will
-serve every "give me the record for this tag" call, not just this one.
+## WHOLE-LIBRARY DERIVATION (John's correction, 2026-08-05)
 
-Also still open for gadtools: GA_Previous adopt with a FACADE previous
+Working `genmenuitem` gap-by-gap earned the right correction: **take the
+library at once — describe, derive, emit, then test once.** Discovering
+the same facts one failing fixture at a time is the loop this project
+exists to end. Three changes make a library one unit of work (graft
+`e772e3a`, fork-graft `bd524a0924`):
+
+- **Object inference**: a vector whose pointers all map to exactly ONE
+  declared object type is generated from the type declarations alone, no
+  per-function policy. The reviewed decision is the TYPE ("a Layer is
+  opaque, it crosses as a token"); every vector that only passes such
+  pointers follows. Narrow on purpose: one undescribed pointer and the
+  vector stays unserved (a guessed pointer is how a guest gets handed
+  something it cannot read), hand policy always wins, and a derived
+  result is never owned (inventing a destructor frees what the library
+  still uses).
+- **Every public vector is emitted**, as a crossing or as a refusal that
+  NAMES what it needs ("needs struct Hook * described"). The tables had
+  silent holes, so a guest calling one got a bare LVO number — a number
+  from which the next question cannot be answered.
+- **`--gaps <library>`**: the work queue for a whole library with its
+  blocking types ranked, so what gets described next is chosen by what it
+  unlocks, not by what a fixture happened to hit.
+
+Result: 435 → **1074** emitted vectors; layers went from 0 crossings to
+26 purely by declaring `Layer`/`Layer_Info`. Described this pass: Layer,
+Layer_Info, View, ClipRect, NamedObject (opaque), TextExtent (layout),
+FontExtent (crossing).
+
+**GADTOOLS IS NOW COMPLETE GUEST-SIDE — gadgets AND menus.** Full sweep:
+`gengadget` PASS, `genmenuitem` PASS, `genowngadget` PASS, and the three
+negative controls fail closed by name (stale token, unsupported field,
+family cycle). Gates green after: t3gen (1074), conformance 256/279, J5t
+byte-exact, T3LHA.
+
+Still open for gadtools: GA_Previous adopt with a FACADE previous
 (multi-gadget programs; the adopt head must resolve issued Object facades
 rather than mirror their bytes).
+
+**How to work the next library** (iffparse, then locale): run
+`gen-emu68k-bridge --gaps <lib>`, describe the types at the top of its
+blocking list, regenerate, build ONCE, run its fixtures ONCE. Do not
+chase gaps one run at a time.
 
 Operational note: each Macaros boot commits ~1.3 GB; with the disk nearly
 full this inflated swap until the machine hit ENOSPC twice (wedged
