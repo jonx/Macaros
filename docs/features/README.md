@@ -87,6 +87,7 @@ one-look summary. Verified against the code, not just the docs.)
 | bridge-lab | Turns a 68k run into runtime-contract evidence, as structured output an agent acts on | [README](bridge-lab/README.md) |
 | debug-tools | bring-up diagnostics (`TestLib`, `lddemon` trace) + how to debug a crash/memory bug (trap backtrace, MUNGWALL, host lldb) | [README](debug-tools/README.md) |
 | crash-handling | A bounded guru with a symbolized backtrace | [README](crash-handling/README.md) |
+| compatibility-reporting | Macaros review, redaction, packaging, and explicit submission of compatibility diagnostics | [README](compatibility-reporting/README.md) |
 
 **Features & ports:**
 
