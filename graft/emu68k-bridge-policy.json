@@ -206,6 +206,7 @@
    "linked_limit": 4096,
    "destructor": "gadtools.library.FreeGadgets",
    "guest_owned": {
+    "export": true,
     "struct": "ExtGadget",
     "linked_field": "NextGadget",
     "linked_limit": 4096,
@@ -2044,6 +2045,16 @@
      "nullable": false,
      "consume": true
     }
+   }
+  },
+  "intuition.library.SetAttrsA": {
+   "objects": {
+    "object": {
+     "type": "Object"
+    }
+   },
+   "taglists": {
+    "tagList": "intuition.new_object"
    }
   },
   "intuition.library.NewObjectA": {

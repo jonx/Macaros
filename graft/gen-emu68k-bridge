@@ -117,6 +117,7 @@ def load_policy():
 
 
 POLICY = load_policy()
+EMITTED_MIRROR_ALIASES = set()   # one exported alias per mirror across all TUs
 
 
 def find_confs():
@@ -4404,6 +4405,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             "M68K_%s_%s" % (mirror, link) if link else "-1",
             owned.get("linked_limit", 1)))
         w("};")
+        if owned.get("export") and oname not in EMITTED_MIRROR_ALIASES:
+            # Hand-served machinery (the BOOPSI facade view) converts with the
+            # SAME reviewed field map instead of keeping a second list in step.
+            # The mirror appears in every library that adopts the type; the
+            # alias must exist exactly once.
+            EMITTED_MIRROR_ALIASES.add(oname)
+            w("const struct EmuMirror *const emu68k_mirror_%s ="
+              " &emu_mirror_%s;" % (c_ident(oname), c_ident(oname)))
         w("")
     for d in used_domains:
         ident = c_ident(d)
@@ -5896,6 +5905,14 @@ def emit(outdir, check=False):
             ["/* Domains hand-served machinery shares with the crossings. */"] +
             ["extern const struct EmuTagDomain *const emu68k_domain_%s;"
              % c_ident(d) for d in exported]))
+    exported_mirrors = sorted(
+        o for o, spec in POLICY.get("object_types", {}).items()
+        if (spec.get("guest_owned") or {}).get("export"))
+    if exported_mirrors:
+        protos.append("\n".join(
+            ["/* Mirrors hand-served machinery shares with the crossings. */"] +
+            ["extern const struct EmuMirror *const emu68k_mirror_%s;"
+             % c_ident(o) for o in exported_mirrors]))
     protos.append("\n".join(
         ["/* name, generated entry point, and where its base comes from. */",
          "#define EMU68K_GEN_LIBS(X) \\"] +
