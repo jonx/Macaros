@@ -4,6 +4,68 @@ Read this before touching the bridge. It says what we are building, where it
 stands, and — most importantly — **the method**, which is the part that keeps
 getting violated and costs the most time.
 
+## What this is, for someone arriving cold
+
+AROS is an open-source reimplementation of AmigaOS. This project runs it
+**hosted on an Apple Silicon Mac**: AROS is compiled for aarch64 and runs as a
+macOS process, drawing into a Cocoa window.
+
+Classic Amiga software is **68000 machine code** and cannot run on that CPU
+directly. So the project carries a **68k JIT** that translates 68k code to
+aarch64 at run time, and around it a **bridge**: when the translated program
+calls an Amiga library function, the bridge answers it with the real, native
+AROS implementation. The program thinks it is talking to AmigaOS 3.x; it is
+actually talking to 64-bit AROS through a translation layer.
+
+The hard part is not the CPU, it is the **boundary**. A 68k program's world is
+32-bit, big-endian, and lives inside one flat memory arena we give it. AROS's
+world is 64-bit, little-endian, with real pointers. So every value crossing the
+boundary has to be converted: a native pointer cannot be handed to the program
+(it does not fit in a 32-bit register), a structure the program allocated
+cannot be handed to AROS (wrong layout and byte order). The bridge therefore
+deals in **tokens** (an opaque 32-bit handle standing for a native object),
+**facades** (a guest-readable copy of a native structure, at a guest address),
+and **mirrors** (a native copy of a structure the program owns). None of this
+is guessed: anything the bridge does not know how to convert fails loudly as a
+named "capability gap" rather than passing something through and corrupting
+memory.
+
+Most of that boundary code is **generated**, not written by hand — from the
+same `.conf` interface files AROS itself uses to build its libraries, plus a
+reviewed policy file that records the decisions a machine cannot infer (is this
+pointer an opaque handle or a structure the program reads?). That is why the
+method below matters so much: the work is describing types and regenerating,
+not writing crossings one at a time.
+
+**The waterline idea** (the current strategy): stop bridging every library.
+Bridge only the bottom seven, and run every *other* Amiga library as its real
+m68k binary inside the guest — the same code a real Amiga ran. Those upper
+libraries then get their behaviour for free, bug for bug, and the only thing we
+maintain is the bottom boundary.
+
+### Where things are
+
+| path | what it is |
+|---|---|
+| `~/Source/aros-aarch64` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
+| `~/Source/aros-upstream` | the AROS OS source (branch `aarch64-darwin-graft`); OS-side code lives here, incl. `emu68k.library` |
+| `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
+| `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
+| `~/Source/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
+| `hosted/jit68k/` | the 68k JIT engine (`j5d_engine.c`), hunk loader (`j4_loader.c`), diagnostics (`j5n_diag.c`) |
+| `hosted/emu68k/emu68k_host.c` | the host side of the bridge: exec dispatch, guest memory, guest-library loading |
+| `hosted/emu68k/nativelib/*.s` | 68k test fixtures (hand-written assembly), one per behaviour |
+| `graft/gen-emu68k-bridge` | **the generator** — reads the `.conf` files + policy, writes the crossings |
+| `graft/gen-struct-layouts` | generates 68k-vs-native structure layouts from the AROS headers |
+| `graft/emu68k-bridge-policy.json` | **the policy** — the reviewed decisions the generator cannot infer |
+| `graft/68k-corpus` | the test harness: boots AROS, runs a directory of 68k programs, collects verdicts |
+| `arch/all-darwin/libs/emu68k/` (in `aros-upstream`) | the OS-side module + the generated crossing files |
+| `docs/features/68k-transparent-exec/` | design, plan, and this handover |
+
+Two ground rules that predate this document: **never run a bare `make`** in the
+build tree (it tries to rebuild the toolchain), and OS-side edits go in
+`aros-upstream`, not here.
+
 ## The goal
 
 **The waterline is complete.** Seven libraries are bridged to native AROS:
