@@ -7,6 +7,36 @@
 > loop: build → boot → drive with [aros-ctl](../control-harness/README.md) →
 > one PASS/FAIL.
 
+## THE GOAL (set by John, 2026-08-05): the waterline is complete
+
+Every library above the bottom seven (exec, dos, graphics, intuition,
+layers, utility, cybergraphics + timer/input/clipboard devices +
+kernel.resource) runs as real m68k guest code, or is a recorded policy
+exception, so that ANY classic program is served by the same generic
+machinery: loader, facades, object table, tag domains. Nothing
+per-program, nothing per-function.
+
+Measurable finish criteria, none of them about one program:
+
+1. **The tail set ships guest-side**: gadtools, iffparse, locale, icon,
+   datatypes, asl, diskfont, commodities, plus muimaster/Zune from the
+   m68k nightly (which makes the MUI app universe reachable). Each
+   library lands the same way: route guest-side, fix whatever facade
+   content its structs need, fixtures green, A/B trace recorded.
+2. **Breadth is proven by the corpus, not claimed**: an Aminet GUI corpus
+   (a few dozen real programs across plain intuition, gadtools, and MUI)
+   swept with verdicts, gaps fixed in ledger-frequency order. The finish
+   line is a sweep where remaining failures are named routing verdicts
+   (needs real hardware, needs a library we chose not to ship), never
+   capability gaps.
+3. **Re-runnable by construction**: one command re-verifies the whole
+   stack against a fresh m68k nightly.
+
+Photogenics 1.2 interactive is the DEPTH milestone inside this plan (it
+forces BOOPSI classes, IDCMP, datatypes and device IO in one program, and
+it is the demo), but the deliverable is the platform and the corpus
+number is the proof.
+
 Ordering logic: prove the in-OS execution spine first (`T1`), make failure
 handling excellent early (`T2`, because every later phase produces failures we
 want captured), then scale coverage (`T3`), then polish UX (`T4`), then the
