@@ -90,7 +90,15 @@
    "c_type": "struct TextFont *",
    "kind": "facade",
    "facade_struct": "TextFont",
-   "destructor": "graphics.library.CloseFont"
+   "destructor": "graphics.library.CloseFont",
+   "nested_fields": [
+    {
+     "field": "tf_Message_mn_Node_ln_Name",
+     "native_field": "tf_Message.mn_Node.ln_Name",
+     "kind": "cstr",
+     "max_count": 64
+    }
+   ]
   },
   "DisplayInfoHandle": {
    "id": 12,

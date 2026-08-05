@@ -3640,6 +3640,11 @@ def validate_policy(targets):
                 if not isinstance(count, int) or count < 1 or count > 1024:
                     errors.append("object type %s nested field %s needs max_count 1..1024"
                                   % (name, field))
+            elif kind == "cstr":
+                count = nested.get("max_count")
+                if not isinstance(count, int) or count < 2 or count > 1024:
+                    errors.append("object type %s nested field %s needs max_count 2..1024"
+                                  % (name, field))
             elif kind in ("object", "embedded_object", "embedded_facade"):
                 nested_type = nested.get("type")
                 if nested_type not in object_types:
@@ -5464,11 +5469,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             emit_post(post, "emu_result")
             if ospec.get("kind") == "facade":
                 stype = ospec["facade_struct"]
-                nested_arrays = [n for n in ospec.get("nested_fields", [])
-                                 if n["kind"] == "u16_array"]
                 extra_parts = ["sizeof(UWORD) * %d" % n["max_count"]
-                               for n in nested_arrays]
-                facade_size = str(ospec.get("facade_size", "M68K_%s_SIZEOF" % stype))
+                               if n["kind"] == "u16_array" else str(n["max_count"])
+                               for n in ospec.get("nested_fields", [])
+                               if n["kind"] in ("u16_array", "cstr")]
+                # The trailing area starts after the BASE structure and each
+                # item advances it. Starting it at the total size wrote the
+                # first item just past the allocation, onto whatever the guest
+                # had there (a font name landed on a gadget's taglist).
+                facade_base = str(ospec.get("facade_size", "M68K_%s_SIZEOF" % stype))
+                facade_size = facade_base
                 if extra_parts:
                     facade_size += " + " + " + ".join(extra_parts)
                 w("        if (emu68k_object_to_guest_facade(guest0, emu_result, EMU_OBJ_%s,"
@@ -5491,7 +5501,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("        {")
                 w("            struct %s *emu_facade_native = (struct %s *)emu_result;"
                   % (stype, stype))
-                array_offset = facade_size
+                array_offset = facade_base
                 for ni, nested in enumerate(ospec.get("nested_fields", [])):
                     field = nested["field"]
                     native_field = nested.get("native_field", field)
@@ -5534,11 +5544,21 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         w("            ULONG emu_nested_token_%d = 0;" % ni)
                         if nested_spec.get("kind") == "facade":
                             nested_struct = nested_spec["facade_struct"]
+                            # A nested facade carries ITS OWN content too: a
+                            # structure reached through another one is read by
+                            # the same guest code, so stopping one level down
+                            # would hand it a half-built object.
+                            sub_size = "M68K_%s_SIZEOF" % nested_struct
+                            for snf in nested_spec.get("nested_fields", []):
+                                if snf["kind"] == "u16_array":
+                                    sub_size += " + sizeof(UWORD) * %d" % snf["max_count"]
+                                elif snf["kind"] == "cstr":
+                                    sub_size += " + %d" % snf["max_count"]
                             w("            if (emu68k_object_to_guest_facade(guest0,")
                             w("                    emu_facade_native->%s, EMU_OBJ_%s," %
                               (native_field, c_ident(nested_type)))
-                            w("                    NULL, NULL, \"%s\", M68K_%s_SIZEOF," %
-                              (nested_type, nested_struct))
+                            w("                    NULL, NULL, \"%s\", %s," %
+                              (nested_type, sub_size))
                             w("                    emu_fields_%s, EMU_NFIELDS(emu_fields_%s),"
                               % (nested_struct, nested_struct))
                             w("                    &emu_nested_token_%d, err, errlen) < 0)" % ni)
@@ -5552,6 +5572,31 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         w("            emu68k_scalar_to_guest(guest0,")
                         w("                r->d[0] + M68K_%s_%s, 4, emu_nested_token_%d);"
                           % (stype, field, ni))
+                        if nested_spec.get("kind") == "facade":
+                            sub_off = "M68K_%s_SIZEOF" % nested_spec["facade_struct"]
+                            for si, sn in enumerate(nested_spec.get("nested_fields", [])):
+                                if sn["kind"] != "cstr":
+                                    continue
+                                sub_native = nested.get("native_field", nested["field"])
+                                sn_native = sn.get("native_field", sn["field"])
+                                w("            if (emu_facade_native->%s && emu_nested_token_%d)"
+                                  % (sub_native, ni))
+                                w("            {")
+                                w("                ULONG emu_sub_guest_%d_%d ="
+                                  % (ni, si))
+                                w("                    emu_nested_token_%d + %s;"
+                                  % (ni, sub_off))
+                                w("                emu68k_cstr_to_guest(guest0, emu_sub_guest_%d_%d,"
+                                  % (ni, si))
+                                w("                    emu_facade_native->%s->%s, %d);"
+                                  % (sub_native, sn_native, sn["max_count"]))
+                                w("                emu68k_scalar_to_guest(guest0,")
+                                w("                    emu_nested_token_%d + M68K_%s_%s, 4,"
+                                  % (ni, nested_spec["facade_struct"], sn["field"]))
+                                w("                    emu_facade_native->%s->%s ? emu_sub_guest_%d_%d : 0);"
+                                  % (sub_native, sn_native, ni, si))
+                                w("            }")
+                                sub_off += " + %d" % sn["max_count"]
                     elif nested["kind"] in ("embedded_object", "embedded_facade"):
                         nested_type = nested["type"]
                         nested_spec = object_types[nested_type]
@@ -5570,6 +5615,24 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         w("                    EMU_OBJ_%s, \"%s\", err, errlen) < 0)" %
                           (c_ident(nested_type), nested_type))
                         w("                return 1;")
+                    elif nested["kind"] == "cstr":
+                        # A string a guest library READS out of the structure
+                        # (a font's name is the first case: gadtools builds its
+                        # label from it). The bytes have to live in guest
+                        # memory, so they are copied into the facade's trailing
+                        # area and the guest pointer field names that copy.
+                        max_count = nested["max_count"]
+                        w("            ULONG emu_nested_guest_%d = r->d[0] + %s;"
+                          % (ni, array_offset))
+                        w("            emu68k_cstr_to_guest(guest0, emu_nested_guest_%d,"
+                          % ni)
+                        w("                emu_facade_native->%s, %d);"
+                          % (native_field, max_count))
+                        w("            emu68k_scalar_to_guest(guest0,")
+                        w("                r->d[0] + M68K_%s_%s, 4," % (stype, field))
+                        w("                emu_facade_native->%s ? emu_nested_guest_%d : 0);"
+                          % (native_field, ni))
+                        array_offset += " + %d" % max_count
                 w("        }")
             if result_store_arg:
                 store_index = [n for _t, n in f.args].index(result_store_arg)
@@ -5694,6 +5757,7 @@ static inline void emu68k_double_out(double v, ULONG *hi, ULONG *lo)
 
 UQUAD emu68k_scalar_from_guest(APTR guest0, ULONG addr, UBYTE width);
 void  emu68k_scalar_to_guest(APTR guest0, ULONG addr, UBYTE width, UQUAD value);
+void  emu68k_cstr_to_guest(APTR guest0, ULONG addr, const char *s, ULONG room);
 APTR  emu68k_scratch_alloc(ULONG size, char *err, ULONG errlen);
 void  emu68k_scratch_free(APTR scratch, ULONG size);
 
