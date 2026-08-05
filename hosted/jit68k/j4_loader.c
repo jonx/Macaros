@@ -54,6 +54,14 @@ static int cur_u32(cur *c, uint32_t *out)
     return 0;
 }
 
+static int cur_u16(cur *c, uint32_t *out)
+{
+    if (c->pos + 2 > c->len) return 1;
+    *out = ((uint32_t)c->buf[c->pos] << 8) | c->buf[c->pos + 1];
+    c->pos += 2;
+    return 0;
+}
+
 /* ----- Sandbox bump allocator -------------------------------------------------- */
 int j4_sandbox_init(j4_sandbox *sb, uint8_t *host_mem, uint32_t origin, uint32_t size)
 {
@@ -226,6 +234,44 @@ static int load_hunks(j4_sandbox *sb, const uint8_t *buf, size_t len,
                     sb_write_be32(site, reloc);
                 }
             }
+            continue;
+        }
+
+        if (htype == J4_HUNK_RELOC32SHORT || htype == J4_HUNK_DREL32) {
+            /* internalloadseg_aos.c:395-458 — the same patching as RELOC32, but
+             * every field is a 16-bit word: count, target hunk, then the
+             * offsets. The reader counts EVERY word it consumes (including the
+             * terminating zero) and skips one padding word when that total is
+             * odd, which is what keeps the cursor longword-aligned for the
+             * hunk that follows. */
+            uint32_t words = 0;
+            for (;;) {
+                uint32_t count, target;
+                words++;
+                if (cur_u16(&c, &count)) FAIL("short RELOC32SHORT count");
+                if (count == 0) break;
+                words++;
+                if (cur_u16(&c, &target)) FAIL("short RELOC32SHORT target-hunk");
+                if (target >= numhunks) FAIL("RELOC32SHORT target hunk out of range");
+
+                for (uint32_t k = 0; k < count; k++) {
+                    uint32_t offset;
+                    words++;
+                    if (cur_u16(&c, &offset)) FAIL("short RELOC32SHORT offset");
+
+                    if (skip_reloc)
+                        continue;          /* NEGATIVE CONTROL: leave it raw */
+
+                    uint32_t site_addr = seglist->hunk_base[lasthunk] + offset;
+                    if (offset + 4u > seglist->hunk_size[lasthunk])
+                        FAIL("RELOC32SHORT offset outside lasthunk");
+                    uint8_t *site = j4_sandbox_host(sb, site_addr);
+                    sb_write_be32(site,
+                                  sb_read_be32(site) + seglist->hunk_base[target]);
+                }
+            }
+            if (words & 1u) c.pos += 2;                 /* the padding word */
+            if (c.pos > c.len) FAIL("RELOC32SHORT runs off end");
             continue;
         }
 

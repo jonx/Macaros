@@ -18,6 +18,7 @@
 #include "j5n_diag.h"
 #include "bridge_lab.h"
 #include "emu68k_guest_offsets.h"
+#include "emu68k_internal.h"
 #include "j5n_symbols.h"
 #include "stublib.h"
 
@@ -84,7 +85,7 @@
  * ordinary indirect call in a real program into a call on a library that does
  * not exist. Exec's base is the honest answer there, and is what a 68k program
  * expects to find in A6 anyway. */
-#define RUN_LIBBASE     (g_oscall ? EXEC_BASE : LIBBASE)
+#define RUN_LIBBASE     (emu68k_oscall ? EXEC_BASE : LIBBASE)
 #define HEAP_BASE       0x00231000u
 #define HEAP_END        0x00238000u
 #define PROG_ORIGIN     0x00250000u
@@ -157,49 +158,11 @@
 #define GUEST_BADDR(b)    ((b) << 2)
 
 /* exec LVOs a program uses to get going (negative offset / 6). */
-#define LVO_OPENLIBRARY   92    /* -552 */
-#define LVO_RAWDOFMT      87    /* -522: the printf engine, run in the guest */
-#define LVO_CLOSELIBRARY  69    /* -414 */
-#define LVO_ALLOCMEM      33    /* -198 */
-#define LVO_FREEMEM       35    /* -210 */
-#define LVO_FORBID        22    /* -132 */
-#define LVO_PERMIT        23    /* -138 */
-#define LVO_DISABLE       27    /* -162 */
-#define LVO_ENABLE        28    /* -168 */
-#define LVO_FINDTASK      49    /* -294 */
-#define LVO_SETSIGNAL     51    /* -306 */
-#define LVO_ALLOCSIGNAL   55    /* -330 */
-#define LVO_FREESIGNAL    56    /* -336 */
-#define LVO_OPENDEVICE    74    /* -444 */
-#define LVO_CLOSEDEVICE   75    /* -450 */
-#define LVO_DOIO          76    /* -456 */
-#define LVO_SENDIO        77    /* -462 */
-#define LVO_CHECKIO       78    /* -468 */
-#define LVO_WAITIO        79    /* -474 */
-#define LVO_ABORTIO       80    /* -480 */
-#define LVO_WAIT          53    /* -318 */
-#define LVO_SIGNAL        54    /* -324 */
-#define LVO_ADDPORT       59    /* -354 */
-#define LVO_REMPORT       60    /* -360 */
-#define LVO_PUTMSG        61    /* -366 */
-#define LVO_GETMSG        62    /* -372 */
-#define LVO_REPLYMSG      63    /* -378 */
-#define LVO_WAITPORT      64    /* -384 */
-#define LVO_FINDPORT      65    /* -390 */
 #define MP_SIGTASK   M68K_MsgPort_mp_SigTask
 #define MP_SIGBIT    M68K_MsgPort_mp_SigBit
 #define MP_MSGLIST   M68K_MsgPort_mp_MsgList_lh_Head
 #define MN_REPLYPORT M68K_Message_mn_ReplyPort
 #define TASK_SIGRECVD_OFF M68K_Task_tc_SigRecvd
-#define LVO_OLDOPENLIB    68    /* -408: what pre-2.0 programs still call      */
-#define LVO_AVAILMEM      36    /* -216 */
-#define LVO_ALLOCVEC     114    /* -684: the most-wanted call in the corpus    */
-#define LVO_FREEVEC      115    /* -690 */
-#define LVO_CREATEPOOL   116    /* -696 */
-#define LVO_DELETEPOOL   117    /* -702 */
-#define LVO_ALLOCPOOLED  118    /* -708 */
-#define LVO_FREEPOOLED   119    /* -714 */
-#define LVO_ALLOCENTRY    37    /* -222 */
 #define EXECBASE_THISTASK M68K_ExecBase_ThisTask
 /* struct Library: ln(14) lib_Flags(14) lib_pad(15) lib_NegSize(16)
  * lib_PosSize(18) lib_Version(20) lib_Revision(22). Programs written for
@@ -209,26 +172,59 @@
 #define LIB_REVISION_OFF  M68K_Library_lib_Revision
 #define GUEST_LIB_VERSION 39    /* what an OS 3.0 program expects to find      */
 #define GUEST_LIB_REV     106
-#define LVO_ALLOCATE      31    /* -186: allocate from a specific MemHeader     */
-#define LVO_CREATEMSGPORT 111   /* -666 */
-#define LVO_DELETEMSGPORT 112   /* -672 */
-#define LVO_INSERT        39    /* -234 */
-#define LVO_ADDHEAD       40    /* -240 */
-#define LVO_ADDTAIL       41    /* -246 */
-#define LVO_REMOVE        42    /* -252 */
-#define LVO_COPYMEM      104    /* -624 */
-#define LVO_COPYMEMQUICK 105    /* -630 */
-#define LVO_CACHECLEARU  106    /* -636 */
-#define LVO_CACHECLEARE  107    /* -642 */
-#define LVO_SUPERVISOR     5    /* -30  */
-#define LVO_REMHEAD       43    /* -258 */
-#define LVO_REMTAIL       44    /* -264 */
-#define LVO_ENQUEUE       45    /* -270 */
+/* SysBase fronts the current native AROS Exec, not an OS 3.0 implementation.
+ * AROS-built guest libraries test this before their InitLib runs; advertising
+ * 39 made a current library fail initialization before it could make a single
+ * bridge call. Keep ordinary facade libraries conservative above, while Exec
+ * reports the ABI generation actually behind this hosted boundary. */
+#define GUEST_EXEC_VERSION 51
+#define GUEST_EXEC_REV     8
 #define LVO_STACKSWAP    122    /* -732 */
 #define TASK_SIGALLOC_OFF M68K_Task_tc_SigAlloc
 #define TASK_SPREG_OFF    M68K_Task_tc_SPReg
 #define TASK_SPLOWER_OFF  M68K_Task_tc_SPLower
 #define TASK_SPUPPER_OFF  M68K_Task_tc_SPUpper
+#define TASK_SIGEXCEPT_OFF M68K_Task_tc_SigExcept
+#define TASK_TRAPALLOC_OFF M68K_Task_tc_UnionETask_tc_ETrap_tc_ETrapAlloc
+#define TASK_EXCEPTDATA_OFF M68K_Task_tc_ExceptData
+#define TASK_EXCEPTCODE_OFF M68K_Task_tc_ExceptCode
+#define TF_EXCEPT_GUEST    (1u << 5)
+#define SSM_LENGTH_OFF     M68K_SemaphoreMessage_ssm_Message_mn_Length
+#define SSM_SEMAPHORE_OFF  M68K_SemaphoreMessage_ssm_Semaphore
+#define MH_ATTR_OFF        M68K_MemHeader_mh_Attributes
+#define MH_FIRST_OFF       M68K_MemHeader_mh_First
+#define MH_LOWER_OFF       M68K_MemHeader_mh_Lower
+#define MH_UPPER_OFF       M68K_MemHeader_mh_Upper
+#define MH_FREE_OFF        M68K_MemHeader_mh_Free
+#define MC_NEXT_OFF        M68K_MemChunk_mc_Next
+#define MC_BYTES_OFF       M68K_MemChunk_mc_Bytes
+#define INTR_DATA_OFF      M68K_Interrupt_is_Data
+#define INTR_CODE_OFF      M68K_Interrupt_is_Code
+
+/* struct AVLNode is four guest LONGs: left, right, parent, balance. */
+#define AVL_LEFT_OFF       0u
+#define AVL_RIGHT_OFF      4u
+#define AVL_PARENT_OFF     8u
+
+#define TASKTAG_DUMMY       0x80100000u
+#define TASKTAG_ERROR       (TASKTAG_DUMMY + 0u)
+#define TASKTAG_CODETYPE    (TASKTAG_DUMMY + 1u)
+#define TASKTAG_PC          (TASKTAG_DUMMY + 2u)
+#define TASKTAG_FINALPC     (TASKTAG_DUMMY + 3u)
+#define TASKTAG_STACKSIZE   (TASKTAG_DUMMY + 4u)
+#define TASKTAG_NAME        (TASKTAG_DUMMY + 6u)
+#define TASKTAG_USERDATA    (TASKTAG_DUMMY + 7u)
+#define TASKTAG_PRI         (TASKTAG_DUMMY + 8u)
+#define TASKTAG_POOLPUDDLE  (TASKTAG_DUMMY + 9u)
+#define TASKTAG_POOLTHRESH  (TASKTAG_DUMMY + 10u)
+#define TASKTAG_ARG1        (TASKTAG_DUMMY + 16u)
+#define TASKTAG_ARG8        (TASKTAG_DUMMY + 23u)
+#define TASKTAG_STARTUPMSG  (TASKTAG_DUMMY + 24u)
+#define TASKTAG_TASKMSGPORT (TASKTAG_DUMMY + 25u)
+#define TASKTAG_FLAGS       (TASKTAG_DUMMY + 26u)
+#define TASKTAG_TCBEXTRASIZE (TASKTAG_DUMMY + 28u)
+#define TASKTAG_AFFINITY    (TASKTAG_DUMMY + 29u)
+#define TASKTAG_PRELAUNCHHOOK (TASKTAG_DUMMY + 30u)
 
 /* Private exec vectors used only by synthesized guest loader continuations.
  * They are inside the engine's vector-recognition window but beyond Exec's
@@ -238,143 +234,7 @@
 #define LVO_GL_CLOSE_DONE 652   /* -3912 */
 #define LVO_GL_RECLAIM    653   /* -3918 */
 
-#define GUESTLIB_MAX 16
-#define GUESTSEG_MAX 32
-#define GUESTPOOL_MAX 32
-/* Opens are tracked one entry per live open, not one per library. A library's
- * Open vector returns the base the CALLER must use, and it is free to return a
- * different one to every opener: that is how a library keeps per-opener state,
- * and it is ordinary AmigaOS, not an oddity. Duplicates are expected (a library
- * that hands back its own base every time appears N times) because each entry
- * is one reference, which is exactly what CloseLibrary decrements. */
-#define GUESTLIB_OPENS_MAX 32
-enum guestlib_state {
-    GL_EMPTY = 0, GL_LOADING, GL_OPENING, GL_READY, GL_FAILED, GL_UNLOADED
-};
-
-struct guestlib_live {
-    enum guestlib_state state;
-    char                name[64];
-    char                path[PATH_MAX];
-    j4_seglist          seg;
-    gl68_resident       resident;
-    gl68_init           init;
-    uint32_t            base;
-    uint32_t            requested_version;
-    uint32_t            init_trampoline;
-    uint32_t            open_trampoline;
-    uint32_t            close_trampoline;
-    uint32_t            mem_start;
-    uint32_t            mem_end;
-    uint32_t            open_base[GUESTLIB_OPENS_MAX];  /* one per live open  */
-    int                 open_count;
-    uint32_t            closing_base;   /* which one CloseLibrary is unwinding */
-    int                 parent;
-    int                 reclaim_pending;
-    uint32_t            saved_d[6];       /* ABI-preserved D2-D7 around exec */
-    uint32_t            saved_a[5];       /* ABI-preserved A2-A6 around exec */
-};
-
-struct guestseg_live {
-    int        live;
-    char       name[128];
-    j4_seglist seg;
-    uint32_t   bptr;
-    uint32_t   mem_start;
-    uint32_t   mem_end;
-};
-
-struct guestpool_live {
-    int      live;
-    uint32_t guest;
-    uint32_t requirements;
-};
-
 static const char *g_crash_dir = NULL;
-
-/* ---- 68k CONTEXTS ---------------------------------------------------------
- *
- * CreateNewProc(NP_Entry) asks for a second thread of 68k execution. Both are
- * 68k, everything they share is guest memory, and they talk to each other only
- * through signal bits - so they never need to run at the same instant, only to
- * make progress. They run COOPERATIVELY on this one thread, each with its own
- * engine instance and 68k state, and the switch point is Wait: a context that
- * cannot proceed runs the other one nested until the signal it wants arrives.
- *
- * That removes every problem the threaded shape creates. There is no locking,
- * no race on the object table, and ExecBase->ThisTask - one word in shared
- * guest memory that has to read differently per context - is always right,
- * because only one context is ever current. */
-#include <setjmp.h>
-
-#define EMU68K_MAX_CTX 8
-
-struct emu68k_ctx {
-    j5d_engine           *eng;
-    struct j5d_m68k_state st;
-    uint32_t              task;        /* this context's guest Task/Process   */
-    uint32_t              entry;       /* where it starts (children only)     */
-    uint32_t              stack;       /* its guest stack, low end            */
-    uint32_t              stack_size;
-    uint8_t               live;
-    uint8_t               started;
-    uint8_t               on_stack;    /* nested below us: re-entering dead-locks */
-    uint8_t               finished;
-    uint8_t               blocked;     /* parked in Wait, waiting for wait_mask */
-    uint32_t              wait_mask;
-    jmp_buf               unwind;      /* where a block-back lands             */
-    uint8_t               can_unwind;
-};
-
-struct emu68k_run {
-    void                 *reserve;       /* the PROT_NONE guest-space reservation */
-    uint8_t              *arena;         /* the RW window inside it               */
-    unsigned long         arena_size;    /* page-aligned DOWN (see the mapping)   */
-    unsigned long         hole_mask;
-    j4_sandbox            sb;
-    j4_seglist            seg;
-    stub_lib              lib;
-    struct j5d_m68k_state st;
-    j5d_engine           *eng;
-    j5n_diag              diag;
-    j5n_symtab            symtab;
-    uint8_t              *image;         /* copy kept for the [J5n] bundle      */
-    unsigned long         imagelen;
-    emu68k_sink_fn        sink;
-    void                 *sink_user;
-    long                  flushed;       /* stub output bytes already sunk      */
-    uint32_t              resume_pc;
-    int                   started;
-    int                   done;
-    volatile int          kill_req;      /* async kill flag (one store)         */
-    double                deadline;      /* wall-clock limit, 0 = none          */
-    uint32_t              last_ioerr;    /* what the guest's IoErr() reports    */
-    char                  name[PATH_MAX];/* attribution + PROGDIR host fallback */
-    /* [T3] native facades: guest base -> name, for the OS-call callback */
-    struct { uint32_t base; char name[32]; } openlib[LIBBASE_MAX];
-    int                   nlib;
-    /* [T3e] disk-loaded libraries execute inside this run's guest arena. */
-    struct guestlib_live  guestlib[GUESTLIB_MAX];
-    struct guestseg_live  guestseg[GUESTSEG_MAX];
-    struct guestpool_live guestpool[GUESTPOOL_MAX];
-    int                   active_loader;
-    stub_lib             *run_lib;       /* the corpus stub's small heap        */
-    uint32_t              exec_heap;     /* exec AllocMem cursor (real programs) */
-    uint32_t              exec_heap_end;
-    uint32_t              stack_lower;
-    uint32_t              stack_upper;
-    uint32_t              callback_stack_top;
-    uint32_t              poll_quantum;
-    int                   failed;      /* the run ended badly; run.end says so */
-    /* ctx[0] is the program itself; the rest are what it asked exec for. */
-    /* Guest ports the program bound to a window, and the signal each one
-     * carries, so a Wait knows which of them could answer it. */
-    struct { uint32_t port, mask; } idcmp_port[16];
-    int                    nidcmp;
-    struct emu68k_ctx      ctx[EMU68K_MAX_CTX];
-    int                    nctx;
-    int                    cur_ctx;
-};
 
 /* [T3] The OS-call seam. The engine runs on the HOST; the real AROS libraries
  * live in AROS. So a library call the stub does not implement is handed OUT to
@@ -387,10 +247,10 @@ struct emu68k_run {
  *   regs    : the live 68k register file, marshalled in and out by the callback
  *   base    : host pointer to guest address 0, for translating guest pointers
  * Returns 0 if the call was served, nonzero if not (-> capability gap). */
-static emu68k_oscall_fn g_oscall = NULL;
-static void            *g_oscall_user = NULL;
+emu68k_oscall_fn emu68k_oscall = NULL;
+void            *emu68k_oscall_user = NULL;
 void emu68k_set_oscall(emu68k_oscall_fn fn, void *user)
-{ g_oscall = fn; g_oscall_user = user; }
+{ emu68k_oscall = fn; emu68k_oscall_user = user; }
 
 /* [T2b] the hardware-access classifier. The signal handler hands us the faulting
  * HOST address; subtracting the sandbox base-adjust recovers the guest address
@@ -571,7 +431,7 @@ void emu68k_run_set_name(struct emu68k_run *r, const char *name)
 static struct { int lvo; unsigned long count; char prog[64]; } g_ledger[EMU68K_LEDGER_MAX];
 static int g_ledger_n = 0;
 
-static void ledger_record(int lvo, const char *prog)
+void emu68k_ledger_record(int lvo, const char *prog)
 {
     bl_event(BL_SUMMARY, -1, 0, 0, "bridge.gap",
              "\"lvo\":%d,\"offset\":%d", lvo, -6 * lvo);
@@ -602,7 +462,7 @@ int emu68k_ledger_get(int idx, int *lvo, unsigned long *count)
 struct bctx { stub_lib *lib; j4_sandbox *sb; struct emu68k_run *run; };
 
 /* read a NUL-terminated guest string (bounded by the arena) */
-static const char *guest_cstr(j4_sandbox *sb, uint32_t addr)
+const char *emu68k_guest_cstr(j4_sandbox *sb, uint32_t addr)
 {
     if (addr < sb->sandbox_origin ||
         addr >= sb->sandbox_origin + sb->size) return NULL;
@@ -614,12 +474,29 @@ static const char *guest_cstr(j4_sandbox *sb, uint32_t addr)
 
 /* Guest memory accessors: 68k memory is big-endian, so a pointer written for
  * the guest must be written as big-endian regardless of the host. */
-static uint8_t gread8(j4_sandbox *sb, uint32_t a)
+/* The name of an exec vector, from the generated table (which comes from the
+ * .conf). A gap that says "AddTask" answers the next question; a gap that says
+ * "LVO 47" only starts a lookup. */
+static const char *exec_lvo_name(int lvo)
+{
+#define EMU68K_EXEC_NAME_ROW(n, s) if (lvo == (n)) return s;
+    EMU68K_EXEC_LVO_NAMES(EMU68K_EXEC_NAME_ROW)
+#undef EMU68K_EXEC_NAME_ROW
+    return NULL;
+}
+
+uint8_t emu68k_gread8(j4_sandbox *sb, uint32_t a)
 {
     return *(const uint8_t *)j4_sandbox_host(sb, a);
 }
 
-static uint32_t gread32(j4_sandbox *sb, uint32_t a)
+void emu68k_gwrite8(j4_sandbox *sb, uint32_t a, uint8_t v)
+{
+    if (a < sb->sandbox_origin || a >= sb->sandbox_origin + sb->size) return;
+    *(uint8_t *)j4_sandbox_host(sb, a) = v;
+}
+
+uint32_t emu68k_gread32(j4_sandbox *sb, uint32_t a)
 {
     const uint8_t *p;
     if (a < sb->sandbox_origin || a + 4 > sb->sandbox_origin + sb->size) return 0;
@@ -627,13 +504,27 @@ static uint32_t gread32(j4_sandbox *sb, uint32_t a)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | p[3];
 }
-static void gwrite32(j4_sandbox *sb, uint32_t a, uint32_t v)
+void emu68k_gwrite32(j4_sandbox *sb, uint32_t a, uint32_t v)
 {
     uint8_t *p;
     if (a < sb->sandbox_origin || a + 4 > sb->sandbox_origin + sb->size) return;
     p = j4_sandbox_host(sb, a);
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+uint32_t emu68k_gread16(j4_sandbox *sb, uint32_t a)
+{
+    const uint8_t *p;
+    if (a < sb->sandbox_origin || a + 2 > sb->sandbox_origin + sb->size) return 0;
+    p = j4_sandbox_host(sb, a);
+    return ((uint32_t)p[0] << 8) | p[1];
+}
+void emu68k_gwrite16(j4_sandbox *sb, uint32_t a, uint32_t v)
+{
+    uint8_t *p;
+    if (a < sb->sandbox_origin || a + 2 > sb->sandbox_origin + sb->size) return;
+    p = j4_sandbox_host(sb, a);
+    p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
 }
 
 /* =========================== [T3] ReadArgs ==================================
@@ -672,7 +563,7 @@ struct rda_item {
 };
 
 /* bump-allocate zeroed guest memory for results the program will dereference */
-static uint32_t guest_alloc(struct emu68k_run *r, uint32_t size)
+uint32_t emu68k_guest_alloc(struct emu68k_run *r, uint32_t size)
 {
     uint32_t a;
     size = (size + 7u) & ~7u;
@@ -710,12 +601,12 @@ unsigned long emu68k_run_device_base(emu68k_run *r, const char *name)
 unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size)
 {
     if (!r || size > UINT32_MAX) return 0;
-    return (unsigned long)guest_alloc(r, (uint32_t)size);
+    return (unsigned long)emu68k_guest_alloc(r, (uint32_t)size);
 }
 
-static uint32_t guest_strdup(struct emu68k_run *r, const char *s, size_t n)
+uint32_t emu68k_guest_strdup(struct emu68k_run *r, const char *s, size_t n)
 {
-    uint32_t a = guest_alloc(r, (uint32_t)n + 1);
+    uint32_t a = emu68k_guest_alloc(r, (uint32_t)n + 1);
     if (!a) return 0;
     memcpy(j4_sandbox_host(&r->sb, a), s, n);
     ((char *)j4_sandbox_host(&r->sb, a))[n] = 0;
@@ -768,10 +659,10 @@ static int rda_eqname(const char *tok, const struct rda_item *it)
 }
 
 /* ReadArgs(template D1, array D2, rdargs D3) -> RDArgs* in D0 */
-static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
+int emu68k_dos_readargs(struct emu68k_run *r, j4_sandbox *sb,
                         struct j5d_m68k_state *st, char *e, unsigned el)
 {
-    const char *tmpl = guest_cstr(sb, st->d[1]);
+    const char *tmpl = emu68k_guest_cstr(sb, st->d[1]);
     uint32_t    arr  = st->d[2];
     struct rda_item items[RDA_MAX_ITEMS];
     char  line[1024];
@@ -837,16 +728,16 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
             if (!rda_eqname(tok[i], &items[k])) continue;
             used[i] = 1;
             if (items[k].sw) {
-                gwrite32(sb, arr + 4u * (uint32_t)k, 1u);          /* DOSTRUE-ish */
+                emu68k_gwrite32(sb, arr + 4u * (uint32_t)k, 1u);          /* DOSTRUE-ish */
             } else if (i + 1 < ntok) {
                 used[i + 1] = 1;
                 if (items[k].num) {
-                    uint32_t cell = guest_alloc(r, 4);
-                    gwrite32(sb, cell, (uint32_t)strtol(tok[i + 1], NULL, 10));
-                    gwrite32(sb, arr + 4u * (uint32_t)k, cell);
+                    uint32_t cell = emu68k_guest_alloc(r, 4);
+                    emu68k_gwrite32(sb, cell, (uint32_t)strtol(tok[i + 1], NULL, 10));
+                    emu68k_gwrite32(sb, arr + 4u * (uint32_t)k, cell);
                 } else {
-                    gwrite32(sb, arr + 4u * (uint32_t)k,
-                             guest_strdup(r, tok[i + 1], strlen(tok[i + 1])));
+                    emu68k_gwrite32(sb, arr + 4u * (uint32_t)k,
+                             emu68k_guest_strdup(r, tok[i + 1], strlen(tok[i + 1])));
                 }
             }
             break;
@@ -858,7 +749,7 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
         int t = 0;
         for (i = 0; i < nit; i++) {
             if (items[i].sw || items[i].key) continue;
-            if (gread32(sb, arr + 4u * (uint32_t)i)) continue;     /* already set */
+            if (emu68k_gread32(sb, arr + 4u * (uint32_t)i)) continue;     /* already set */
             while (t < ntok && used[t]) t++;
             if (t >= ntok) continue;
             if (items[i].rest) {                    /* /F: the rest, joined      */
@@ -870,28 +761,28 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
                     memcpy(joined + n, tok[t], l); n += l; used[t] = 1;
                 }
                 joined[n] = 0;
-                gwrite32(sb, arr + 4u * (uint32_t)i, guest_strdup(r, joined, n));
+                emu68k_gwrite32(sb, arr + 4u * (uint32_t)i, emu68k_guest_strdup(r, joined, n));
             } else if (items[i].mult) {             /* /M: a string vector       */
                 uint32_t vec, cnt = 0, j2;
                 for (j2 = (uint32_t)t; j2 < (uint32_t)ntok; j2++) if (!used[j2]) cnt++;
-                vec = guest_alloc(r, (cnt + 1) * 4);
+                vec = emu68k_guest_alloc(r, (cnt + 1) * 4);
                 cnt = 0;
                 for (j2 = (uint32_t)t; j2 < (uint32_t)ntok; j2++) {
                     if (used[j2]) continue;
-                    gwrite32(sb, vec + 4 * cnt,
-                             guest_strdup(r, tok[j2], strlen(tok[j2])));
+                    emu68k_gwrite32(sb, vec + 4 * cnt,
+                             emu68k_guest_strdup(r, tok[j2], strlen(tok[j2])));
                     used[j2] = 1; cnt++;
                 }
-                gwrite32(sb, vec + 4 * cnt, 0);     /* NULL terminator           */
-                gwrite32(sb, arr + 4u * (uint32_t)i, vec);
+                emu68k_gwrite32(sb, vec + 4 * cnt, 0);     /* NULL terminator           */
+                emu68k_gwrite32(sb, arr + 4u * (uint32_t)i, vec);
             } else if (items[i].num) {
-                uint32_t cell = guest_alloc(r, 4);
-                gwrite32(sb, cell, (uint32_t)strtol(tok[t], NULL, 10));
-                gwrite32(sb, arr + 4u * (uint32_t)i, cell);
+                uint32_t cell = emu68k_guest_alloc(r, 4);
+                emu68k_gwrite32(sb, cell, (uint32_t)strtol(tok[t], NULL, 10));
+                emu68k_gwrite32(sb, arr + 4u * (uint32_t)i, cell);
                 used[t] = 1;
             } else {
-                gwrite32(sb, arr + 4u * (uint32_t)i,
-                         guest_strdup(r, tok[t], strlen(tok[t])));
+                emu68k_gwrite32(sb, arr + 4u * (uint32_t)i,
+                         emu68k_guest_strdup(r, tok[t], strlen(tok[t])));
                 used[t] = 1;
             }
         }
@@ -899,14 +790,14 @@ static int rda_readargs(struct emu68k_run *r, j4_sandbox *sb,
 
     /* required arguments must have been satisfied */
     for (i = 0; i < nit; i++)
-        if (items[i].req && !gread32(sb, arr + 4u * (uint32_t)i)) {
+        if (items[i].req && !emu68k_gread32(sb, arr + 4u * (uint32_t)i)) {
             r->last_ioerr = ERROR_REQUIRED_ARG_MISSING_;
             st->d[0] = 0;                            /* the AmigaDOS failure     */
             return 0;
         }
 
     /* a guest RDArgs the program can hold and hand to FreeArgs */
-    st->d[0] = guest_alloc(r, 64);
+    st->d[0] = emu68k_guest_alloc(r, 64);
     r->last_ioerr = 0;
     return 0;
 }
@@ -961,7 +852,7 @@ static void emit_jmp_a6(j4_sandbox *sb, uint32_t *pc, int lvo)
 static uint32_t make_open_trampoline(struct emu68k_run *r, int idx,
                                      uint32_t initpc, int call_init)
 {
-    uint32_t start = guest_alloc(r, call_init ? 40u : 34u), pc = start;
+    uint32_t start = emu68k_guest_alloc(r, call_init ? 40u : 34u), pc = start;
     if (!start) return 0;
     if (call_init) {
         emit_word(&r->sb, &pc, 0x4eb9u);             /* jsr abs.l initpc */
@@ -983,7 +874,7 @@ static uint32_t make_open_trampoline(struct emu68k_run *r, int idx,
  * library ever handed out. */
 static uint32_t make_close_trampoline(struct emu68k_run *r, int idx)
 {
-    uint32_t start = guest_alloc(r, 32u), pc = start;
+    uint32_t start = emu68k_guest_alloc(r, 32u), pc = start;
     if (!start) return 0;
     emit_jsr_a6(&r->sb, &pc, 2);                    /* library Close, -12 */
     emit_move_d1(&r->sb, &pc, (uint32_t)idx);
@@ -1046,8 +937,8 @@ static int loader_dos_call(struct emu68k_run *r, int lvo,
                            struct j5d_m68k_state *st)
 {
     char err[160] = {0};
-    if (!g_oscall) return 1;
-    return g_oscall("dos.library", lvo, st, r->reserve, g_oscall_user,
+    if (!emu68k_oscall) return 1;
+    return emu68k_oscall("dos.library", lvo, st, r->reserve, emu68k_oscall_user,
                     err, sizeof err);
 }
 
@@ -1064,7 +955,7 @@ static uint8_t *read_aros_file(struct emu68k_run *r, const char *path,
     uint32_t size, done = 0;
     size_t pathlen = strlen(path);
 
-    guest_path = guest_strdup(r, path, pathlen);
+    guest_path = emu68k_guest_strdup(r, path, pathlen);
     if (!guest_path) return NULL;
     memset(&st, 0, sizeof st);
     st.d[1] = guest_path; st.d[2] = 1005u;            /* MODE_OLDFILE */
@@ -1081,7 +972,7 @@ static uint8_t *read_aros_file(struct emu68k_run *r, const char *path,
         goto close;
 
     image = malloc(size);
-    scratch = guest_alloc(r, size < 65536u ? size : 65536u);
+    scratch = emu68k_guest_alloc(r, size < 65536u ? size : 65536u);
     if (!image || !scratch) { free(image); image = NULL; goto close; }
     while (done < size) {
         uint32_t want = size - done;
@@ -1111,7 +1002,7 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
     const char *leaf = name, *paths, *slash;
     int progdir_only = 0;
     uint8_t *p;
-    if (g_oscall) {
+    if (emu68k_oscall) {
         char dospath[PATH_MAX];
         if (strchr(name, ':')) {
             if ((p = take_if_hunk(read_aros_file(r, name, imagelen), *imagelen))) {
@@ -1172,11 +1063,11 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
  * proxy, this value is dereferenced by guest code, so it is a classic BPTR chain
  * in the guest arena: BADDR(seg) is the link word and BADDR(seg)+4 is the hunk
  * payload.  The common J4 relocator supplies guest addresses throughout. */
-static int dos_guest_loadseg(struct emu68k_run *r, j4_sandbox *sb,
+int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
                              struct j5d_m68k_state *st,
                              char *e, unsigned el)
 {
-    const char *guest_name = guest_cstr(sb, st->d[1]);
+    const char *guest_name = emu68k_guest_cstr(sb, st->d[1]);
     char name[128], why[256] = {0};
     uint8_t *image;
     size_t imagelen = 0;
@@ -1238,7 +1129,7 @@ static int dos_guest_loadseg(struct emu68k_run *r, j4_sandbox *sb,
     return 0;
 }
 
-static int dos_guest_unloadseg(struct emu68k_run *r,
+int emu68k_dos_unloadseg(struct emu68k_run *r,
                                struct j5d_m68k_state *st)
 {
     uint32_t bptr = st->d[1];
@@ -1265,7 +1156,7 @@ static int dos_guest_unloadseg(struct emu68k_run *r,
     return 0;
 }
 
-static int find_guestlib_name(struct emu68k_run *r, const char *name)
+int emu68k_find_guestlib_name(struct emu68k_run *r, const char *name)
 {
     for (int i = 0; i < GUESTLIB_MAX; i++)
         if (r->guestlib[i].state != GL_EMPTY &&
@@ -1304,7 +1195,7 @@ static int guestlib_owns_base(const struct guestlib_live *g, uint32_t base)
 
 /* The base a program holds is whatever Open handed it, which is not necessarily
  * the library's own. Both answer to CloseLibrary. */
-static int find_guestlib_base(struct emu68k_run *r, uint32_t base)
+int emu68k_find_guestlib_base(struct emu68k_run *r, uint32_t base)
 {
     for (int i = 0; i < GUESTLIB_MAX; i++)
         if (r->guestlib[i].state == GL_READY &&
@@ -1321,7 +1212,7 @@ static int plausible_libbase(const struct emu68k_run *r, uint32_t base)
            (uint64_t)base + 34u <= (uint64_t)r->sb.sandbox_origin + r->sb.size;
 }
 
-static void guestlib_save_preserved(struct guestlib_live *g,
+void emu68k_guestlib_save_preserved(struct guestlib_live *g,
                                     const struct j5d_m68k_state *st)
 {
     memcpy(g->saved_d, &st->d[2], sizeof g->saved_d);
@@ -1350,7 +1241,7 @@ static void rollback_unexecuted(struct emu68k_run *r, uint32_t mark)
     r->sb.next_alloc = mark; r->exec_heap = mark;
 }
 
-static int load_guestlib(struct emu68k_run *r, const char *name, uint32_t version,
+int emu68k_load_guestlib(struct emu68k_run *r, const char *name, uint32_t version,
                          int *idx_out, char *why, unsigned whylen)
 {
     size_t imagelen = 0;
@@ -1403,7 +1294,7 @@ static int load_guestlib(struct emu68k_run *r, const char *name, uint32_t versio
     return 0;
 }
 
-static int guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+int emu68k_guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
                               char *e, unsigned el)
 {
     int idx = (int)st->d[1];
@@ -1430,7 +1321,7 @@ static int guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     return J5D_LVO_REDIRECT;
 }
 
-static int guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+int emu68k_guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
                               char *e, unsigned el)
 {
     int idx = (int)st->d[1];
@@ -1484,7 +1375,7 @@ static int guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     return 0;
 }
 
-static int guestlib_close_done(struct emu68k_run *r, struct j5d_m68k_state *st,
+int emu68k_guestlib_close_done(struct emu68k_run *r, struct j5d_m68k_state *st,
                                char *e, unsigned el)
 {
     int idx = (int)st->d[1];
@@ -1509,7 +1400,7 @@ static int guestlib_close_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     return 0;
 }
 
-static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
+int emu68k_guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
                             char *e, unsigned el)
 {
     int idx = (int)st->d[1];
@@ -1555,48 +1446,130 @@ static int guestlib_reclaim(struct emu68k_run *r, struct j5d_m68k_state *st,
 /* The guest Task of the context that is CURRENTLY running. FindTask(NULL),
  * a signal and a wait are all per-context, and answering them from the one
  * fixed guest Process was right only while there was one. */
-#define LVO_IDCMP_PUMP 9001
+#define LVO_EVENT_PUMP 9001
 
 /* Who is waiting on what. A port value alone cannot say whether the context
  * that OWNS a port ever runs; only the context identity can, and that is the
  * difference between "input is not being delivered" and "this program has not
  * reached its interactive state". Opt-in: EMU68K_TRACE_TASKS=1. */
-static uint32_t ctx_task(struct emu68k_run *r);
+uint32_t emu68k_ctx_task(struct emu68k_run *r);
 
-static int trace_tasks(void)
+int emu68k_trace_tasks(void)
 {
     static int on = -1;
     if (on < 0) on = getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
     return on;
 }
 
-static void trace_port_call(struct emu68k_run *r, const char *what,
+void emu68k_trace_port_call(struct emu68k_run *r, const char *what,
                             struct j5d_m68k_state *st, uint32_t arg)
 {
-    if (!trace_tasks()) return;
+    if (!emu68k_trace_tasks()) return;
     fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x %s %08x\n",
-            r->cur_ctx, ctx_task(r), st->pc, what, arg);
+            r->cur_ctx, emu68k_ctx_task(r), st->pc, what, arg);
 }
 
-/* Drain into `port` whatever native port is bound to it, if any. Called before
- * a wait is answered and before a look, because the ordinary Amiga event loop
- * is Wait -> GetMsg -> ReplyMsg and a program blocked in Wait never reaches
- * GetMsg. A port with nothing bound to it is left completely alone: a worker's
- * own pr_MsgPort is an ordinary mailbox and must never receive native input. */
-static void idcmp_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
-                       uint32_t port)
+static const char *event_kind_name(unsigned kind)
+{
+    switch (kind) {
+    case EMU68K_EVENT_IDCMP: return "idcmp";
+    case EMU68K_EVENT_DEVICE: return "device";
+    default: return "unknown";
+    }
+}
+
+int emu68k_event_bind(struct emu68k_run *r, unsigned kind, uint32_t identity,
+                      uint32_t port, uint32_t mask, const char *reason,
+                      uint32_t pc)
+{
+    int free_slot = -1;
+    for (int i = 0; i < EMU68K_EVENT_MAX; i++) {
+        if (r->event_source[i].live &&
+            r->event_source[i].kind == kind &&
+            r->event_source[i].identity == identity) {
+            r->event_source[i].port = port;
+            r->event_source[i].mask = mask;
+            free_slot = i;
+            break;
+        }
+        if (!r->event_source[i].live && free_slot < 0)
+            free_slot = i;
+    }
+    if (free_slot < 0) {
+        bl_event(BL_SUMMARY, r->cur_ctx, emu68k_ctx_task(r), pc,
+                 "event.source.overflow", "\"kind\":\"%s\"",
+                 event_kind_name(kind));
+        return 1;
+    }
+    r->event_source[free_slot].kind = (uint8_t)kind;
+    r->event_source[free_slot].identity = identity;
+    r->event_source[free_slot].port = port;
+    r->event_source[free_slot].mask = mask;
+    r->event_source[free_slot].live = 1;
+    bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), pc,
+             "event.source.bind",
+             "\"kind\":\"%s\",\"source\":\"%s\","
+             "\"destination\":\"%s\",\"mask\":\"0x%08x\","
+             "\"reason\":\"%s\"",
+             event_kind_name(kind), bl_id("source", identity),
+             bl_id("port", port), mask, reason ? reason : "bind");
+    return 0;
+}
+
+void emu68k_event_unbind_port(struct emu68k_run *r, uint32_t port,
+                              const char *reason)
+{
+    for (int i = 0; i < EMU68K_EVENT_MAX; i++) {
+        if (!r->event_source[i].live || r->event_source[i].port != port)
+            continue;
+        bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), 0,
+                 "event.source.unbind",
+                 "\"kind\":\"%s\",\"source\":\"%s\","
+                 "\"destination\":\"%s\",\"reason\":\"%s\"",
+                 event_kind_name(r->event_source[i].kind),
+                 bl_id("source", r->event_source[i].identity),
+                 bl_id("port", port), reason ? reason : "unbind");
+        memset(&r->event_source[i], 0, sizeof r->event_source[i]);
+    }
+}
+
+/* Ask the OS-side broker to poll typed native sources. `port` selects one
+ * destination for GetMsg/WaitPort; `mask` selects every source able to wake a
+ * Wait. Ordinary guest mailboxes match neither and are never fed native data. */
+int emu68k_event_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
+                      uint32_t port, uint32_t mask, unsigned *matched)
 {
     struct j5d_m68k_state probe;
     char scratch[128];
-    if (!g_oscall || !port) return;
+    unsigned local_matches = 0;
+    int delivered = 0;
+    if (matched) *matched = 0;
+    if (!emu68k_oscall || (!port && !mask)) return 0;
     probe = *st;
     probe.a[0] = port;
-    if (g_oscall("exec.library", LVO_IDCMP_PUMP, &probe, r->reserve,
-                 g_oscall_user, scratch, sizeof scratch) != 0)
-        return;
+    probe.d[0] = mask;
+    probe.d[1] = 0;
+    if (emu68k_oscall("exec.library", LVO_EVENT_PUMP, &probe, r->reserve,
+                      emu68k_oscall_user, scratch, sizeof scratch) != 0)
+        return 0;
+    delivered = (int)probe.d[0];
+    local_matches = (unsigned)probe.d[1];
+    if (matched) *matched = local_matches;
+    if (delivered || local_matches)
+        bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
+                 "event.pump",
+                 "\"destination\":\"%s\",\"mask\":\"0x%08x\","
+                 "\"matched_sources\":%u,\"delivered\":%d",
+                 port ? bl_id("port", port) : "*", mask,
+                 local_matches, delivered);
+    if (delivered && port)
+        bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
+                 "port.pump", "\"port\":\"%s\",\"messages\":%d",
+                 bl_id("port", port), delivered);
+    return delivered;
 }
 
-static uint32_t ctx_task(struct emu68k_run *r)
+uint32_t emu68k_ctx_task(struct emu68k_run *r)
 {
     if (r && r->nctx && r->ctx[r->cur_ctx].live)
         return r->ctx[r->cur_ctx].task;
@@ -1608,7 +1581,7 @@ static uint32_t ctx_task(struct emu68k_run *r)
  * bridge could serve it natively. When the 68k file cannot be found the open
  * FAILS rather than falling back to the bridged one: a run must be entirely
  * one route or the other for the two to be comparable. */
-static int route_guestside(const char *leaf)
+int emu68k_route_guestside(const char *leaf)
 {
     const char *p = getenv("EMU68K_GUESTSIDE_LIBS");
     size_t n = strlen(leaf);
@@ -1621,772 +1594,68 @@ static int route_guestside(const char *leaf)
     return 0;
 }
 
-static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
+int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
                               char *e, unsigned el);
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user,
                   char *e, unsigned el);
 static j5d_poll_action quantum_poll(void *user);
 static j5d_poll_action nested_poll(void *user);
+static j5d_poll_action context_poll(void *user);
 
-static int exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
-                     struct j5d_m68k_state *st, char *e, unsigned el)
+uint32_t emu68k_callback_stack_acquire(struct emu68k_run *r, char *err,
+                                       unsigned errlen)
 {
-    switch (lvo) {
-    case LVO_GL_INIT_DONE:
-        return guestlib_init_done(r, st, e, el);
-    case LVO_GL_OPEN_DONE:
-        return guestlib_open_done(r, st, e, el);
-    case LVO_GL_CLOSE_DONE:
-        return guestlib_close_done(r, st, e, el);
-    case LVO_GL_RECLAIM:
-        return guestlib_reclaim(r, st, e, el);
-
-    case LVO_RAWDOFMT:
-        /* Not served here: RawDoFmt calls the PROGRAM's PutChProc once per
-         * character, so doing it natively would mean re-entering the JIT from
-         * inside a native call, and its argument block cannot be converted
-         * without parsing the format string first (a %s argument is a guest
-         * pointer, a %d argument is not). Redirect into 68k code instead and
-         * all of it stays inside the guest address space. */
-        st->pc = OSCODE_RAWDOFMT;
-        return J5D_LVO_REDIRECT;
-
-    case LVO_OLDOPENLIB:      /* same thing, older entry point: A1 = name     */
-    case LVO_OPENLIBRARY: {
-        const char *nm = guest_cstr(sb, st->a[1]);      /* A1 = name, D0 = ver  */
-        uint32_t requested = (lvo == LVO_OLDOPENLIB) ? 0u : st->d[0];
-        int gi;
-        if (!nm) {
-            snprintf(e, el, "OpenLibrary: name pointer A1=%08x is outside the "
-                     "guest arena %08x..%08x", st->a[1], sb->sandbox_origin,
-                     sb->sandbox_origin + sb->size);
-            return 1;
-        }
-        if (getenv("EMU68K_TRACE_CALLS"))
-            fprintf(stderr, "[68k] OpenLibrary(\"%s\", %u)\n", nm, requested);
-        for (int i = 0; i < r->nlib; i++)                 /* already open?       */
-            if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
-
-        gi = find_guestlib_name(r, nm);
-        if (gi >= 0) {
-            struct guestlib_live *g = &r->guestlib[gi];
-            if (g->state == GL_READY && g->resident.version >= requested) {
-                guestlib_save_preserved(g, st);
-                st->pc = g->open_trampoline;
-                return J5D_LVO_REDIRECT;
-            }
-            /* LOADING/OPENING is an explicit dependency cycle. FAILED and an
-             * unsatisfied version are ordinary OpenLibrary failure too. */
-            st->d[0] = 0;
+    unsigned depth;
+    uint32_t stack;
+    if (!r || r->callback_depth >= EMU68K_CALLBACK_DEPTH_MAX) {
+        if (err && errlen)
+            snprintf(err, errlen, "more than %d nested guest callbacks",
+                     EMU68K_CALLBACK_DEPTH_MAX);
+        return 0;
+    }
+    depth = r->callback_depth++;
+    if (!r->callback_stack_top[depth]) {
+        stack = emu68k_guest_alloc(r, 16384u);
+        if (!stack) {
+            r->callback_depth--;
+            if (err && errlen)
+                snprintf(err, errlen, "guest memory exhausted for callback stack");
             return 0;
         }
-
-        {
-            /* Exactly the libraries the bridge generated crossings for. Kept
-             * in step by generating it: offering a name with nothing behind it
-             * turns the program's first call into a capability gap, and
-             * withholding one we did generate sends it looking on disk for a
-             * 68k library that is not there. */
-#define EMU_SERVABLE_ROW(name) name,
-            static const char *const servable[] = {
-                EMU68K_SERVABLE_LIBS(EMU_SERVABLE_ROW)
-            };
-#undef EMU_SERVABLE_ROW
-            /* Match on the FILE NAME, because "LIBS:diskfont.library" is an
-             * ordinary way to ask for the system library and an exact compare
-             * sends it to the guest loader to look for a 68k file that is not
-             * there. The guest search above has already had its turn, so a
-             * program that ships its own library still gets that one. */
-            const char *leaf = nm;
-            const char *sep;
-            for (sep = nm; *sep; sep++)
-                if (*sep == '/' || *sep == ':') leaf = sep + 1;
-            unsigned k; int known = 0;
-            for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
-                if (!strcmp(leaf, servable[k])) { known = 1; break; }
-            if (known && route_guestside(leaf)) {
-                if (getenv("EMU68K_TRACE_CALLS"))
-                    fprintf(stderr, "[68k] OpenLibrary %s routed guest-side\n",
-                            leaf);
-                known = 0;
-            }
-            if (known && g_oscall) {
-                uint32_t base;
-                if (r->nlib >= LIBBASE_MAX) {
-                    snprintf(e, el, "too many native library facades"); return 1;
-                }
-                base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
-                snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
-                         "%s", leaf);
-                r->openlib[r->nlib].base = base;
-                r->nlib++;
-                j5d_register_libbase(base);
-                {   /* give the handed-out base a version, for the same reason */
-                    uint8_t *lb = j4_sandbox_host(sb, base);
-                    memset(lb, 0, 64);
-                    lb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
-                    lb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
-                    lb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
-                    lb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
-                }
-                st->d[0] = base;
-                return 0;
-            }
-        }
-
-        {   /* Native-name-wins above; an unknown name is now a disk library. */
-            char why[256] = {0};
-            if (load_guestlib(r, nm, requested, &gi, why, sizeof why)) {
-                if (getenv("EMU68K_TRACE_CALLS"))
-                    fprintf(stderr, "[68k] OpenLibrary guest %s failed: %s\n", nm, why);
-                st->d[0] = 0;
-                return 0;
-            }
-            struct guestlib_live *g = &r->guestlib[gi];
-            guestlib_save_preserved(g, st);
-            st->d[0] = (g->resident.flags & GL68_RTF_AUTOINIT) ? g->init.base : 0;
-            st->a[0] = g->init.seglist;
-            st->a[4] = 0;
-            st->a[6] = EXEC_BASE;
-            st->pc = g->init_trampoline;
-            return J5D_LVO_REDIRECT;
-        }
+        r->callback_stack_top[depth] = (stack + 16384u) & ~15u;
     }
-    case LVO_CLOSELIBRARY: {
-        int gi = find_guestlib_base(r, st->a[1]);       /* A1 = library base */
-        if (gi >= 0) {
-            guestlib_save_preserved(&r->guestlib[gi], st);
-            /* Close runs on the base the caller was given, not on the
-             * library's own: that is the only way a per-opener base can free
-             * the right instance. */
-            r->guestlib[gi].closing_base = st->a[1];
-            st->a[6] = st->a[1];
-            st->pc = r->guestlib[gi].close_trampoline;
-            return J5D_LVO_REDIRECT;
-        }
-        st->d[0] = 0;
-        return 0;                                        /* native facade stays */
-    }
-    case LVO_AVAILMEM:
-        st->d[0] = (r->exec_heap_end > r->exec_heap)
-                 ? (r->exec_heap_end - r->exec_heap) : 0;
-        return 0;
-    case LVO_FREEVEC:
-        st->d[0] = 0;                                    /* bump heap: no free  */
-        return 0;
-    case LVO_CREATEPOOL: {
-        /* PoolHeader is opaque to callers. Give it stable guest identity so
-         * accidental field reads remain in-range, while the allocations it
-         * produces come from the same guest heap as AllocMem/AllocVec. */
-        for (int i = 0; i < GUESTPOOL_MAX; i++) {
-            if (r->guestpool[i].live) continue;
-            uint32_t token = guest_alloc(r, 32u);
-            if (!token) { st->d[0] = 0; return 0; }
-            r->guestpool[i].live = 1;
-            r->guestpool[i].guest = token;
-            r->guestpool[i].requirements = st->d[0];
-            st->d[0] = token;
-            return 0;
-        }
-        st->d[0] = 0;
-        return 0;
-    }
-    case LVO_DELETEPOOL:
-        for (int i = 0; i < GUESTPOOL_MAX; i++)
-            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
-                memset(&r->guestpool[i], 0, sizeof r->guestpool[i]);
-                st->d[0] = 0;
-                return 0;
-            }
-        snprintf(e, el, "DeletePool received unknown guest pool %08x", st->a[0]);
-        return 1;
-    case LVO_ALLOCPOOLED:
-        for (int i = 0; i < GUESTPOOL_MAX; i++)
-            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
-                st->d[0] = guest_alloc(r, st->d[0]);
-                return 0;
-            }
-        snprintf(e, el, "AllocPooled received unknown guest pool %08x", st->a[0]);
-        return 1;
-    case LVO_FREEPOOLED:
-        for (int i = 0; i < GUESTPOOL_MAX; i++)
-            if (r->guestpool[i].live && r->guestpool[i].guest == st->a[0]) {
-                st->d[0] = 0;                           /* bump heap: no free */
-                return 0;
-            }
-        snprintf(e, el, "FreePooled received unknown guest pool %08x", st->a[0]);
-        return 1;
-    case LVO_ALLOCATE:       /* Allocate(MemHeader A0, size D0): the header is
-                              * the guest's idea of where memory comes from; in
-                              * this arena there is one place, so serve it. */
-    case LVO_ALLOCVEC:       /* the single most-called allocation in real code */
-    case LVO_ALLOCMEM: {
-        /* Memory a 68k program allocates must live in the GUEST arena: the
-         * program dereferences the pointer itself, so it has to be an address
-         * the program can reach. Real software asks for real amounts (DMS wants
-         * hundreds of KB before it will even start), so this comes from a large
-         * region sized to the arena, not from the corpus stub's small heap. */
-        uint32_t size = (st->d[0] + 7u) & ~7u;
-        if (size == 0 || r->exec_heap + size > r->exec_heap_end) {
-            st->d[0] = 0;                                /* AmigaOS: NULL       */
-            return 0;
-        }
-        st->d[0] = r->exec_heap;
-        r->exec_heap += size;
-        if (r->sb.next_alloc < r->exec_heap) r->sb.next_alloc = r->exec_heap;
-        memset(j4_sandbox_host(sb, st->d[0]), 0, size);  /* MEMF_CLEAR-safe     */
-        return 0;
-    }
-    case LVO_FREEMEM:
-        st->d[0] = 0;                                    /* bump heap: no free  */
-        return 0;
-
-    /* Bookkeeping calls a single-threaded guest can be told the truth about:
-     * there is no other task in its arena to arbitrate against. */
-    case LVO_FORBID: case LVO_PERMIT:
-    case LVO_DISABLE: case LVO_ENABLE:
-        return 0;
-    case LVO_FINDTASK:
-        /* FindTask(NULL) = "me": the guest Process, which exists so that reading
-         * pr_CLI says "launched from the Shell". */
-        st->d[0] = (st->a[1] == 0) ? ctx_task(r) : 0;
-        return 0;
-    /* Exec list handling operates on GUEST structures, so it is performed in
-     * guest memory here rather than handed to the native AROS AddHead, which
-     * would manipulate host pointers in a list the program cannot address.
-     * (struct Node: ln_Succ at 0, ln_Pred at 4; struct List: lh_Head 0,
-     * lh_Tail 4, lh_TailPred 8.) */
-    case LVO_ADDHEAD: {
-        uint32_t list = st->a[0], node = st->a[1];
-        uint32_t head = gread32(sb, list);
-        gwrite32(sb, node, head);              /* node->ln_Succ = list->lh_Head */
-        gwrite32(sb, node + 4, list);          /* node->ln_Pred = &lh_Head      */
-        gwrite32(sb, head + 4, node);          /* head->ln_Pred = node          */
-        gwrite32(sb, list, node);              /* list->lh_Head = node          */
-        return 0;
-    }
-    case LVO_ADDTAIL: {
-        uint32_t list = st->a[0], node = st->a[1];
-        uint32_t tailpred = gread32(sb, list + 8);
-        gwrite32(sb, node, list + 4);          /* node->ln_Succ = &lh_Tail      */
-        gwrite32(sb, node + 4, tailpred);      /* node->ln_Pred = lh_TailPred   */
-        gwrite32(sb, tailpred, node);          /* tailpred->ln_Succ = node      */
-        gwrite32(sb, list + 8, node);          /* list->lh_TailPred = node      */
-        return 0;
-    }
-    case LVO_REMOVE: {
-        uint32_t node = st->a[1];
-        uint32_t succ = gread32(sb, node), pred = gread32(sb, node + 4);
-        gwrite32(sb, pred, succ);
-        gwrite32(sb, succ + 4, pred);
-        return 0;
-    }
-    /* RemHead/RemTail hand back a NODE, and the node is the guest's own: a
-     * native pointer would be an address it cannot dereference, so like the
-     * Add* pair these walk guest memory directly. An empty list is detected the
-     * way exec does it, by the terminator's NULL link rather than by a count. */
-    /* Both operands are GUEST addresses and the payload is plain bytes, so this
-     * is a move inside the arena. Bridging it would hand dos.library two guest
-     * pointers it cannot dereference. Overlap is allowed: CopyMemQuick promises
-     * long-aligned non-overlapping, but a program that gets that wrong should
-     * misbehave the way it does on a real Amiga, not corrupt the host. */
-    case LVO_COPYMEM:
-    case LVO_COPYMEMQUICK: {
-        uint32_t src = st->a[0], dst = st->a[1], n = st->d[0];
-        if (!n) return 0;
-        if (src < sb->sandbox_origin || dst < sb->sandbox_origin ||
-            (uint64_t)src + n > (uint64_t)sb->sandbox_origin + sb->size ||
-            (uint64_t)dst + n > (uint64_t)sb->sandbox_origin + sb->size) {
-            snprintf(e, el, "CopyMem %08x -> %08x (%u bytes) leaves the guest arena",
-                     src, dst, n);
-            return 1;
-        }
-        memmove(j4_sandbox_host(sb, dst), j4_sandbox_host(sb, src), n);
-        return 0;
-    }
-    case LVO_SUPERVISOR:
-        /* Supervisor(A5) runs the CALLER'S OWN routine with the S bit set. It
-         * is not a request for anything the host has to provide: the code is
-         * the guest's, in the guest's memory, and the only thing supervisor
-         * mode buys it is the right to touch the privileged registers. So it
-         * runs, in the guest, exactly where it is - and if it then reaches for
-         * something this machine does not have, that is caught there, by name,
-         * instead of the whole call being refused for what it might do.
-         *
-         * The routine returns with rte, so the dispatcher builds the frame. */
-        if (!st->a[5]) {                             /* nothing to run          */
-            st->d[0] = 0;
-            return 0;
-        }
-        if (getenv("EMU68K_TRACE_CALLS")) {
-            uint32_t target = st->a[5];
-            fprintf(stderr, "[68k] Supervisor target=%08x", target);
-            if (target >= sb->sandbox_origin &&
-                (uint64_t)target + 16u <=
-                    (uint64_t)sb->sandbox_origin + sb->size) {
-                const uint8_t *p = j4_sandbox_host(sb, target);
-                fputs(" bytes=", stderr);
-                for (unsigned i = 0; i < 16; i++)
-                    fprintf(stderr, "%s%02x", i ? " " : "", p[i]);
-            } else {
-                fputs(" (outside guest sandbox)", stderr);
-            }
-            fputc('\n', stderr);
-            if (st->pc >= sb->sandbox_origin + 16u &&
-                (uint64_t)st->pc + 16u <=
-                    (uint64_t)sb->sandbox_origin + sb->size) {
-                const uint8_t *p = j4_sandbox_host(sb, st->pc - 16u);
-                fprintf(stderr, "[68k] Supervisor caller=%08x bytes[-16..+15]=",
-                        st->pc);
-                for (unsigned i = 0; i < 32; i++)
-                    fprintf(stderr, "%s%02x", i ? " " : "", p[i]);
-                fputc('\n', stderr);
-            }
-        }
-        st->pc = st->a[5];
-        return J5D_LVO_REDIRECT_RTE;
-    case LVO_CACHECLEARU:
-    case LVO_CACHECLEARE:
-        /* A 68k program clears the caches when it has just written bytes that
-         * are about to be executed. Under translation that is the notification
-         * that a translated block may no longer match the code it came from,
-         * which no amount of host cache maintenance would fix, so the whole
-         * per-run translation cache goes. CacheClearE names a range; dropping
-         * everything is a superset and a range-precise version would only be
-         * faster, never more correct.
-         *
-         * The return cannot go back into a block that was just freed, so this
-         * takes the same exit as the guest-library reclaim: the permanent RTS,
-         * reached by redirect, which pops the caller's return address and
-         * carries on through freshly translated code. */
-        j5d_run_free();
-        st->pc = OSCODE_RETURN;
-        return J5D_LVO_REDIRECT;
-    case LVO_REMHEAD: {
-        uint32_t list = st->a[0];
-        uint32_t node = gread32(sb, list);           /* lh_Head                */
-        uint32_t succ = gread32(sb, node);           /* node->ln_Succ          */
-        if (!succ) { st->d[0] = 0; return 0; }       /* the list was empty     */
-        gwrite32(sb, list, succ);                    /* lh_Head = succ         */
-        gwrite32(sb, succ + 4, list);                /* succ->ln_Pred = &lh_Head */
-        st->d[0] = node;
-        return 0;
-    }
-    case LVO_REMTAIL: {
-        uint32_t list = st->a[0];
-        uint32_t node = gread32(sb, list + 8);       /* lh_TailPred            */
-        uint32_t pred = gread32(sb, node + 4);       /* node->ln_Pred          */
-        if (!pred) { st->d[0] = 0; return 0; }
-        gwrite32(sb, list + 8, pred);                /* lh_TailPred = pred     */
-        gwrite32(sb, pred, list + 4);                /* pred->ln_Succ = &lh_Tail */
-        st->d[0] = node;
-        return 0;
-    }
-    case LVO_ENQUEUE: {
-        /* Priority-sorted insert: walk to the first node of LOWER priority and
-         * insert before it. ln_Pri is a SIGNED byte at offset 9. */
-        uint32_t list = st->a[0], node = st->a[1];
-        int pri = (int8_t)j4_sandbox_host(sb, node)[9];
-        uint32_t next = gread32(sb, list);           /* lh_Head                */
-        uint32_t succ;
-        while ((succ = gread32(sb, next)) != 0) {    /* not yet the terminator */
-            if ((int8_t)j4_sandbox_host(sb, next)[9] < pri) break;
-            next = succ;
-        }
-        {   uint32_t pred = gread32(sb, next + 4);
-            gwrite32(sb, node, next);                /* node->ln_Succ = next   */
-            gwrite32(sb, node + 4, pred);            /* node->ln_Pred = pred   */
-            gwrite32(sb, pred, node);
-            gwrite32(sb, next + 4, node);
-        }
-        return 0;
-    }
-    case LVO_CREATEMSGPORT: {
-        /* A guest MsgPort. The program holds it and puts it in structures, so
-         * it is built in guest memory - but a port is not just an empty list:
-         * a real Exec port OWNS A SIGNAL BIT AND ITS CREATING TASK, which is
-         * what PutMsg sets and what a Wait/WaitPort event loop blocks on.
-         * Without them every ordinary event loop over this port is a wait on
-         * bit zero of nobody. */
-        uint32_t port = guest_alloc(r, M68K_MsgPort_SIZEOF);
-        uint32_t task = ctx_task(r);
-        uint32_t alloc = gread32(sb, task + TASK_SIGALLOC_OFF);
-        int bit;
-        if (!port) { st->d[0] = 0; return 0; }
-        for (bit = 31; bit >= 16; bit--)
-            if (!(alloc & (1u << bit))) break;
-        if (bit < 16) {
-            snprintf(e, el, "capability gap: no free signal for a message port");
-            return 1;
-        }
-        gwrite32(sb, task + TASK_SIGALLOC_OFF, alloc | (1u << bit));
-        memset(j4_sandbox_host(sb, port), 0, M68K_MsgPort_SIZEOF);
-        j4_sandbox_host(sb, port)[M68K_MsgPort_mp_Node_ln_Type] = 4;  /* NT_MSGPORT */
-        *(uint8_t *)j4_sandbox_host(sb, port + MP_SIGBIT) = (uint8_t)bit;
-        gwrite32(sb, port + MP_SIGTASK, task);
-        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Head,
-                 port + MP_MSGLIST + M68K_List_lh_Tail);
-        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Tail, 0);
-        gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_TailPred,
-                 port + MP_MSGLIST + M68K_List_lh_Head);
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.create",
-                 "\"port\":\"%s\",\"owner\":\"%s\",\"signal_bit\":%d",
-                 bl_id("port", port), bl_id("task", task), bit);
-        st->d[0] = port;
-        return 0;
-    }
-    /* Ports and semaphores. A guest has one thread of control in its own
-     * arena, so arbitration is a no-op; what matters is that the STRUCTURES it
-     * initialises look right afterwards, because the program walks them.
-     * struct SignalSemaphore: ss_Link(0,14) ss_NestCount(14) ss_WaitQueue(16,
-     * MinList: head 16, tail 20, tailpred 24) ss_Owner(36) ss_QueueCount(40) */
-    case 93: {               /* InitSemaphore(sigSem A0)                        */
-        uint32_t ss = st->a[0];
-        if (ss) {
-            memset(j4_sandbox_host(sb, ss), 0, 44);
-            gwrite32(sb, ss + 16, ss + 20);      /* mlh_Head = &mlh_Tail        */
-            gwrite32(sb, ss + 20, 0);            /* mlh_Tail = NULL             */
-            gwrite32(sb, ss + 24, ss + 16);      /* mlh_TailPred = &mlh_Head    */
-            gwrite32(sb, ss + 36, 0);            /* ss_Owner = NULL             */
-            j4_sandbox_host(sb, ss)[40] = 0xFF;  /* ss_QueueCount = -1 (WORD)   */
-            j4_sandbox_host(sb, ss)[41] = 0xFF;
-        }
-        return 0;
-    }
-    case 94: case 95: case 97: case 98: case 113:
-        return 0;            /* Obtain/Release[List]/Shared: nothing to contend */
-    case 96:                 /* AttemptSemaphore: always succeeds               */
-        st->d[0] = 1;
-        return 0;
-    case LVO_ADDPORT: case LVO_REMPORT:  /* no public port list here          */
-        return 0;
-    case LVO_FINDPORT:       /* FindPort(name A1): a guest has no public ports,
-                              * and NULL is the answer callers are written for */
-        st->d[0] = 0;
-        return 0;
-    case LVO_DELETEMSGPORT: {
-        /* The memory is a bump heap, but the SIGNAL is a real resource: a
-         * program that creates and deletes ports in a loop runs out of bits. */
-        uint32_t port = st->a[0];
-        if (port) {
-            uint32_t task = gread32(sb, port + MP_SIGTASK);
-            uint32_t bit = gread8(sb, port + MP_SIGBIT);
-            if (task && bit < 32)
-                gwrite32(sb, task + TASK_SIGALLOC_OFF,
-                         gread32(sb, task + TASK_SIGALLOC_OFF) & ~(1u << bit));
-            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.delete",
-                     "\"port\":\"%s\",\"signal_bit\":%d",
-                     bl_id("port", port), (int)bit);
-        }
-        return 0;
-    }
-    case LVO_SETSIGNAL:
-        /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
-         * signals a guest task yet, so the honest answer is a clean zero. */
-        st->d[0] = 0;
-        return 0;
-    /* A signal BIT is bookkeeping: a program reserves one for a port it is
-     * about to create, long before anything is ever sent to it. Refusing the
-     * reservation stopped programs during startup, at their ARexx port, over a
-     * bit nobody had signalled yet. What a guest still cannot do is WAIT on
-     * one, and that stays a named gap rather than a hang. */
-    /* ---- MESSAGE PORTS ------------------------------------------------------
-     *
-     * Every structure involved - the MsgPort, the Message, the list linking
-     * them - is the GUEST's own memory, so these are guest-memory list
-     * operations exactly like the Add/Rem pair above, plus a signal. Handing
-     * them to the native exec would give it guest addresses it cannot
-     * dereference, and would put the program's messages on a list it cannot
-     * see.
-     *
-     * A port's list is initialised by the program with NewList, so these read
-     * the same lh_Head/lh_Tail/lh_TailPred layout exec does, and an empty list
-     * is detected the way exec detects it: by the terminator's NULL link. */
-    case LVO_PUTMSG: {
-        uint32_t port = st->a[0], msg = st->a[1];
-        uint32_t list = port + MP_MSGLIST;
-        uint32_t tailpred = gread32(sb, list + M68K_List_lh_TailPred);
-        gwrite32(sb, msg, list + M68K_List_lh_Tail);
-        gwrite32(sb, msg + 4, tailpred);
-        gwrite32(sb, tailpred, msg);
-        gwrite32(sb, list + M68K_List_lh_TailPred, msg);
-        /* and tell the port's task, which is what makes a WaitPort return */
-        {
-            uint32_t task = gread32(sb, port + MP_SIGTASK);
-            uint32_t bit  = gread8(sb, port + MP_SIGBIT);
-            if (task && bit < 32)
-                gwrite32(sb, task + TASK_SIGRECVD_OFF,
-                         gread32(sb, task + TASK_SIGRECVD_OFF) | (1u << bit));
-        }
-        return 0;
-    }
-    case LVO_OPENDEVICE: {
-        /* OpenDevice(name A0, unit D0, ioRequest A1, flags D1) -> 0 on success.
-         *
-         * Opened for real, on the AROS side: a device this system does not have
-         * must fail the way a missing device fails, not succeed and then behave
-         * oddly. What the guest gets back is a base in io_Device - the same
-         * facade a bridged library gets - so the device's VECTORS arrive here
-         * like any other call.
-         *
-         * That is deliberately all this contract promises. Sending a COMMAND to
-         * the device is a separate contract (a request queue, DoIO/SendIO/
-         * AbortIO, and a marshalled IORequest per command), and each unserved
-         * command is refused by name at the point it is sent - so a program
-         * that opens a device defensively and never uses it runs, and one that
-         * really does I/O stops at the exact command it needed. */
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;
-        {
-            const char *name = guest_cstr(sb, st->a[0]);
-            snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") is "
-                     "not available yet", name ? name : "?");
-        }
-        return 1;
-    }
-    case LVO_CLOSEDEVICE:
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;
-        return 0;                       /* closing what we never opened is fine */
-    case LVO_DOIO: case LVO_SENDIO: case LVO_ABORTIO:
-    case LVO_CHECKIO: case LVO_WAITIO:
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;
-        ledger_record(lvo, r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: a device command was sent that this "
-                 "bridge does not marshal yet (exec LVO %d)", lvo);
-        return 1;
-    case LVO_WAITPORT: {
-        /* WaitPort(port A0) -> the first message, LEFT ON the port.
-         *
-         * Written in terms of the two pieces that already exist: look, and if
-         * there is nothing, wait on the bit the port names - which is the bit
-         * PutMsg sets. Waiting is where a context hands its turn back, so this
-         * is also where a program that is only waiting stops holding the
-         * machine. */
-        uint32_t port = st->a[0];
-        uint32_t list = port + MP_MSGLIST;
-        trace_port_call(r, "WaitPort port", st, port);
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.wait",
-                 "\"port\":\"%s\"", bl_id("port", port));
-        for (;;) {
-            uint32_t head;
-            idcmp_pump(r, st, port);
-            head = gread32(sb, list + M68K_List_lh_Head);
-            if (head && gread32(sb, head)) { st->d[0] = head; return 0; }
-            {
-                uint32_t bit = gread8(sb, port + MP_SIGBIT);
-                int rc;
-                if (bit > 31) {
-                    snprintf(e, el, "capability gap: WaitPort on a port with no "
-                                    "signal bit");
-                    return 1;
-                }
-                st->d[0] = 1u << bit;
-                rc = exec_call(r, sb, LVO_WAIT, st, e, el);
-                if (rc != 0) return rc;
-            }
-        }
-    }
-    case LVO_GETMSG: {
-        uint32_t port = st->a[0];
-        trace_port_call(r, "GetMsg port", st, port);
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.get",
-                 "\"port\":\"%s\"", bl_id("port", port));
-        idcmp_pump(r, st, port);        /* a program may poll instead of wait */
-        uint32_t list = port + MP_MSGLIST;
-        uint32_t head = gread32(sb, list + M68K_List_lh_Head);
-        uint32_t succ = head ? gread32(sb, head) : 0;
-        if (!head || !succ) { st->d[0] = 0; return 0; }   /* empty */
-        gwrite32(sb, list + M68K_List_lh_Head, succ);
-        gwrite32(sb, succ + 4, list);
-        st->d[0] = head;
-        return 0;
-    }
-    case LVO_REPLYMSG: {
-        uint32_t msg = st->a[1];
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;                     /* it was one of Intuition's       */
-        uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
-        if (!reply) return 0;               /* a message with nowhere to go back */
-        st->a[0] = reply;
-        st->a[1] = msg;
-        return exec_call(r, sb, LVO_PUTMSG, st, e, el);
-    }
-    case LVO_WAIT: {
-        /* Wait(signalSet D0) -> the signals that arrived.
-         *
-         * A signal a program sent to ITSELF is already there, which is the
-         * common shape for "wake me when I have queued my own work" and needs
-         * nothing else to run. Anything else needs a second 68k context to do
-         * the signalling, and until one exists a wait that cannot be satisfied
-         * would be an unbreakable hang inside a translated program. Naming it
-         * is the honest answer: a hang tells the reader nothing, and the run
-         * would have to be killed from outside to find out why. */
-        uint32_t want = st->d[0];
-        uint32_t got;
-        trace_port_call(r, "Wait mask", st, want);
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "signal.wait",
-                 "\"mask\":\"0x%08x\"", want);
-        /* Before answering, give every port bound to a window a chance to
-         * deliver. This is the point the ordinary event loop reaches - Wait
-         * comes BEFORE GetMsg - so pumping only at GetMsg would serve a program
-         * that polls and never one that blocks. Only ports the program bound to
-         * a window are touched; a worker's mailbox is not one of them. */
-        {
-            int k;
-            for (k = 0; k < r->nidcmp; k++)
-                if (r->idcmp_port[k].mask & want)
-                    idcmp_pump(r, st, r->idcmp_port[k].port);
-        }
-        got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
-        if (got) {
-            gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
-                     gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & ~got);
-            st->d[0] = got;
-            return 0;
-        }
-        /* Nothing for us yet.
-         *
-         * If we are running NESTED - a context someone else gave a turn to -
-         * the answer is not to look for work but to hand the turn back. Park
-         * on the mask and unwind to whoever ran us; they resume us when the
-         * signal arrives, and Wait returns then. Without this a child would
-         * spin inside its own WaitPort forever and the parent would never get
-         * to send it anything. */
-        if (r->ctx[r->cur_ctx].can_unwind) {
-            struct emu68k_ctx *me = &r->ctx[r->cur_ctx];
-            me->blocked = 1;
-            me->wait_mask = want;
-            /* Resume AFTER the call: the return address the jsr pushed is what
-             * makes Wait look like it returned. */
-            me->st = *st;
-            me->st.pc = gread32(sb, st->a[7]);
-            me->st.a[7] = st->a[7] + 4;
-            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
-                     "scheduler.yield", "\"reason\":\"Wait\",\"mask\":\"0x%08x\"",
-                     want);
-            longjmp(me->unwind, 1);
-        }
-        /* Nothing for us yet. Give the other contexts a turn; one of them is
-         * why we are waiting. Each runs until it blocks back or finishes, and
-         * we recheck after every one. A context already NESTED BELOW US cannot
-         * be run again - that is a genuine deadlock, and recursing into it
-         * would turn a diagnosable cycle into a stack overflow. */
-        {
-            int spun = 0, i;
-            for (;;) {
-                int progress = 0;
-                for (i = 0; i < r->nctx; i++) {
-                    struct emu68k_ctx *o = &r->ctx[i];
-                    if (i == r->cur_ctx || !o->live || o->finished ||
-                        o->on_stack)
-                        continue;
-                    if (o->blocked &&
-                        !(gread32(sb, o->task + TASK_SIGRECVD_OFF) & o->wait_mask))
-                        continue;                 /* nothing for it either     */
-                    if (run_context_nested(r, sb, i, e, el) != 0)
-                        return 1;
-                    progress = 1;
-                    got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
-                    if (got) {
-                        gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
-                                 gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF)
-                                 & ~got);
-                        st->d[0] = got;
-                        return 0;
-                    }
-                }
-                if (!progress || ++spun > 64) break;
-            }
-        }
-        ledger_record(lvo, r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: Wait($%08lx) cannot be satisfied - "
-                 "nothing that could send it is able to run",
-                 (unsigned long)want);
-        return 1;
-    }
-    case LVO_SIGNAL: {
-        uint32_t task = st->a[1], sigs = st->d[0];
-        if (task)
-            gwrite32(sb, task + TASK_SIGRECVD_OFF,
-                     gread32(sb, task + TASK_SIGRECVD_OFF) | sigs);
-        return 0;
-    }
-    case LVO_ALLOCSIGNAL: {
-        uint32_t alloc = gread32(sb, ctx_task(r) + TASK_SIGALLOC_OFF);
-        int want = (int32_t)st->d[0];
-        int bit = -1;
-        if (want >= 0 && want < 32) {
-            if (!(alloc & (1u << want))) bit = want;
-        } else {
-            for (bit = 31; bit >= 16; bit--)
-                if (!(alloc & (1u << bit))) break;
-            if (bit < 16) bit = -1;
-        }
-        if (bit >= 0)
-            gwrite32(sb, ctx_task(r) + TASK_SIGALLOC_OFF,
-                     alloc | (1u << bit));
-        st->d[0] = (uint32_t)(int32_t)bit;
-        return 0;
-    }
-    case LVO_FREESIGNAL: {
-        int bit = (int32_t)st->d[0];
-        if (bit >= 0 && bit < 32) {
-            uint32_t alloc = gread32(sb, ctx_task(r) + TASK_SIGALLOC_OFF);
-            gwrite32(sb, ctx_task(r) + TASK_SIGALLOC_OFF,
-                     alloc & ~(1u << bit));
-        }
-        return 0;
-    }
-    case LVO_STACKSWAP: {
-        /* struct StackSwapStruct is three guest pointers: lower, upper and
-         * switch-point SP. Swap those values here; a second call restores the
-         * original stack, just like exec.library on a real 68k system. */
-        uint32_t sss = st->a[0];
-        uint32_t new_lower, new_upper, new_sp, old_sp = st->a[7];
-        if (!sss || sss < sb->sandbox_origin ||
-            (uint64_t)sss + 12u > (uint64_t)sb->sandbox_origin + sb->size) {
-            snprintf(e, el, "StackSwap structure A0=%08x is outside guest memory", sss);
-            return 1;
-        }
-        new_lower = gread32(sb, sss);
-        new_upper = gread32(sb, sss + 4u);
-        new_sp = gread32(sb, sss + 8u);
-        if (new_lower < sb->sandbox_origin || new_upper <= new_lower ||
-            new_sp < new_lower || new_sp > new_upper ||
-            (uint64_t)new_upper > (uint64_t)sb->sandbox_origin + sb->size) {
-            snprintf(e, el, "StackSwap requested invalid range %08x..%08x sp=%08x",
-                     new_lower, new_upper, new_sp);
-            return 1;
-        }
-        gwrite32(sb, sss, r->stack_lower);
-        gwrite32(sb, sss + 4u, r->stack_upper);
-        gwrite32(sb, sss + 8u, old_sp);
-        r->stack_lower = new_lower;
-        r->stack_upper = new_upper;
-        st->a[7] = new_sp;
-        gwrite32(sb, GUEST_PROCESS + TASK_SPREG_OFF, new_sp);
-        gwrite32(sb, GUEST_PROCESS + TASK_SPLOWER_OFF, new_lower);
-        gwrite32(sb, GUEST_PROCESS + TASK_SPUPPER_OFF, new_upper);
-        return 0;
-    }
-    default:
-        if (getenv("EMU68K_DEBUG_EXEC"))
-            fprintf(stderr, "[exec_call] unhandled lvo=%d (ADDHEAD=%d)\n",
-                    lvo, LVO_ADDHEAD);
-        return 1;                                        /* not served here     */
-    }
+    return r->callback_stack_top[depth];
 }
 
-/* EMU68K_TRACE_CALLS: log every library call a program makes. A program that
- * produces no output and reports no gap has given up somewhere, and the call
- * sequence is the only thing that says where. */
+void emu68k_callback_stack_release(struct emu68k_run *r)
+{
+    if (r && r->callback_depth) r->callback_depth--;
+}
+int emu68k_run_guest_subroutine(struct emu68k_run *r, uint32_t entry,
+                                struct j5d_m68k_state *initial,
+                                uint32_t stack_top, uint32_t *result,
+                                char *e, unsigned el);
+int emu68k_add_guest_task_context(struct emu68k_run *r, j4_sandbox *sb,
+                                  uint32_t task, uint32_t initial,
+                                  uint32_t final, uint32_t tags,
+                                  struct j5d_m68k_state *caller,
+                                  char *e, unsigned el);
+int emu68k_create_guest_task(struct emu68k_run *r, j4_sandbox *sb,
+                             uint32_t tags, struct j5d_m68k_state *caller,
+                             char *e, unsigned el);
+
+int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
+                     struct j5d_m68k_state *st, char *e, unsigned el);
+
+static int guest_span_ok(j4_sandbox *sb, uint32_t addr, uint32_t size)
+{
+    return addr >= sb->sandbox_origin &&
+           (uint64_t)addr + size <= (uint64_t)sb->sandbox_origin + sb->size;
+}
+
+/* EMU68K_TRACE_CALLS: log every library call a program makes. */
 static int g_trace = -1;
+
 static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
                        struct j5d_m68k_state *st)
 {
@@ -2400,127 +1669,12 @@ static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
     (void)r;
 }
 
-/* utility.library tag walkers operate on structures the guest owns and may
- * return pointers into those structures. Running these over native pointers
- * would be an ABI error even in the installed AROS bridge, so keep the compact
- * pointer-sensitive core in guest memory. */
-static uint32_t utility_next_tag(j4_sandbox *sb, uint32_t statep)
-{
-    uint32_t p;
-    unsigned guard = 0;
-    if (!statep || statep < sb->sandbox_origin ||
-        (uint64_t)statep + 4u > (uint64_t)sb->sandbox_origin + sb->size)
-        return 0;
-    p = gread32(sb, statep);
-    while (p && ++guard < 65536u) {
-        uint32_t tag, data;
-        if (p < sb->sandbox_origin ||
-            (uint64_t)p + 8u > (uint64_t)sb->sandbox_origin + sb->size) {
-            gwrite32(sb, statep, 0); return 0;
-        }
-        tag = gread32(sb, p); data = gread32(sb, p + 4u);
-        switch (tag) {
-        case 0:                                           /* TAG_DONE */
-            gwrite32(sb, statep, 0); return 0;
-        case 1:                                           /* TAG_IGNORE */
-            p += 8u; break;
-        case 2:                                           /* TAG_MORE */
-            p = data; break;
-        case 3:                                           /* TAG_SKIP */
-            if (data > 0x1fffffffu) { gwrite32(sb, statep, 0); return 0; }
-            p += 8u * (data + 1u); break;
-        default:
-            gwrite32(sb, statep, p + 8u); return p;
-        }
-    }
-    gwrite32(sb, statep, 0);
-    return 0;
-}
-
-static uint32_t utility_find_tag(j4_sandbox *sb, uint32_t wanted, uint32_t list)
-{
-    unsigned guard = 0;
-    /* Same TAG control semantics as NextTagItem, without allocating a guest
-     * state cell merely to walk a caller-owned list. */
-    while (list && ++guard < 65536u) {
-        uint32_t tag, data;
-        if (list < sb->sandbox_origin ||
-            (uint64_t)list + 8u > (uint64_t)sb->sandbox_origin + sb->size) return 0;
-        tag = gread32(sb, list); data = gread32(sb, list + 4u);
-        if (tag == 0) return 0;
-        if (tag == 1) { list += 8u; continue; }
-        if (tag == 2) { list = data; continue; }
-        if (tag == 3) {
-            if (data > 0x1fffffffu) return 0;
-            list += 8u * (data + 1u); continue;
-        }
-        if (tag == wanted) return list;
-        list += 8u;
-    }
-    return 0;
-}
-
-static int utility_guest_call(j4_sandbox *sb, int lvo,
-                              struct j5d_m68k_state *st)
-{
-    switch (lvo) {
-    case 5:                                             /* FindTagItem */
-        st->d[0] = utility_find_tag(sb, st->d[0], st->a[0]); return 0;
-    case 6: {                                           /* GetTagData */
-        uint32_t tag = utility_find_tag(sb, st->d[0], st->a[0]);
-        st->d[0] = tag ? gread32(sb, tag + 4u) : st->d[1]; return 0;
-    }
-    case 7: {                                           /* PackBoolTags */
-        uint32_t flags = st->d[0], list = st->a[0];
-        unsigned guard = 0;
-        while (list && ++guard < 65536u) {
-            uint32_t item, tag, data;
-            if (list < sb->sandbox_origin ||
-                (uint64_t)list + 8u > (uint64_t)sb->sandbox_origin + sb->size) break;
-            tag = gread32(sb, list); data = gread32(sb, list + 4u);
-            if (tag == 0) break;
-            if (tag <= 3u) { /* Advance control tags with a temporary guest-free walk. */
-                if (tag == 1) list += 8u;
-                else if (tag == 2) list = data;
-                else if (tag == 3) list += 8u * (data + 1u);
-                continue;
-            }
-            item = utility_find_tag(sb, tag, st->a[1]);
-            if (item) {
-                uint32_t mask = gread32(sb, item + 4u);
-                flags = data ? flags | mask : flags & ~mask;
-            }
-            list += 8u;
-        }
-        st->d[0] = flags; return 0;
-    }
-    case 8:                                             /* NextTagItem */
-        st->d[0] = utility_next_tag(sb, st->a[0]); return 0;
-    case 27: case 28: {                                 /* Stricmp / Strnicmp */
-        const char *a = guest_cstr(sb, st->a[0]);
-        const char *b = guest_cstr(sb, st->a[1]);
-        uint32_t n = lvo == 28 ? st->d[0] : 0xffffffffu;
-        int diff = 0;
-        if (!a || !b) { st->d[0] = a ? 1u : b ? 0xffffffffu : 0u; return 0; }
-        while (n--) {
-            unsigned ca = (unsigned char)*a++, cb = (unsigned char)*b++;
-            diff = toupper(ca) - toupper(cb);
-            if (diff || !ca || !cb) break;
-        }
-        st->d[0] = (uint32_t)diff; return 0;
-    }
-    case 29: st->d[0] = (uint32_t)toupper((unsigned char)st->d[0]); return 0;
-    case 30: st->d[0] = (uint32_t)tolower((unsigned char)st->d[0]); return 0;
-    default: return 1;
-    }
-}
-
 /* Run one context until it blocks back, finishes, or faults.
  *
  * Nested, on this thread, with its own engine instance - the shape the engine
  * already proves in T0P3. `on_stack` marks it for the duration so a wait inside
  * it cannot ask to re-enter a context that is below it on this very stack. */
-static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
+int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
                               char *e, unsigned el)
 {
     struct emu68k_ctx *ctx = &r->ctx[idx];
@@ -2532,17 +1686,26 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
 
     /* Save the caller's live state before we leave it: the engine writes the
      * 68k state through the pointer j5d_run was given, and we are about to
-     * hand it a different one. */
+    * hand it a different one. */
     if (!ctx->started) {
+        uint32_t sp;
         memset(&ctx->st, 0, sizeof ctx->st);
-        ctx->st.a[7] = (ctx->stack + ctx->stack_size) & ~15u;
+        sp = ctx->initial_sp ? ctx->initial_sp :
+             ((ctx->stack + ctx->stack_size) & ~15u);
+        if (sp < ctx->stack + 4u || sp > ctx->stack + ctx->stack_size) {
+            snprintf(e, el, "task %08x has invalid initial SP %08x", ctx->task, sp);
+            return 1;
+        }
+        sp -= 4u;
+        emu68k_gwrite32(sb, sp, ctx->final_entry); /* RTS enters finalizer or stops */
+        ctx->st.a[7] = sp;
         ctx->started = 1;
     } else if (ctx->blocked) {
         /* It parked in Wait. Deliver what arrived and let Wait return it. */
-        uint32_t got = gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ctx->wait_mask;
+        uint32_t got = emu68k_gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ctx->wait_mask;
         if (!got) return 0;                       /* still nothing for it      */
-        gwrite32(sb, ctx->task + TASK_SIGRECVD_OFF,
-                 gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ~got);
+        emu68k_gwrite32(sb, ctx->task + TASK_SIGRECVD_OFF,
+                 emu68k_gread32(sb, ctx->task + TASK_SIGRECVD_OFF) & ~got);
         ctx->st.d[0] = got;
         ctx->blocked = 0;
     }
@@ -2573,16 +1736,26 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
             if (r->guestlib[i].state == GL_READY && r->guestlib[i].base)
                 j5d_register_guest_libbase(r->guestlib[i].base);
     }
-    /* Child contexts run on the parent's native stack; they park via the
-     * unwind longjmp, not a poll yield. Poll for kill/deadline only. */
-    j5d_set_poll(nested_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    /* A child context may be a polling task that never calls Wait.  Give it a
+     * bounded quantum so it can park at an engine safe point and return the
+     * turn without recursively entering the parent below it on this stack. */
+    /* Keep child turns short. A helper may signal its parent and then enter an
+     * endless polling loop; waiting thousands of translated blocks before the
+     * parent observes that signal is user-visible starvation. */
+    j5d_set_poll(context_poll, r, 64u);
     if (setjmp(ctx->unwind) == 0) {
         int dom = domain_enter_guest();   /* this context IS the guest again */
         ctx->can_unwind = 1;
         rc = j5d_run(&nsb, pc, RUN_LIBBASE, &ctx->st, &d0, bridge, &c, e, el);
         ctx->can_unwind = 0;
         domain_leave_guest(dom);
-        if (rc == 0) ctx->finished = 1;   /* it returned: the process exited  */
+        if (rc == 0) {
+            ctx->finished = 1;            /* it returned: the process exited  */
+        } else if (rc == J5D_RC_YIELD) {
+            bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                     "scheduler.yield", "\"reason\":\"quantum\"");
+            rc = 0;                       /* parked safely; parent continues  */
+        }
     } else {
         ctx->can_unwind = 0;              /* it blocked back; state is parked */
         rc = 0;
@@ -2593,6 +1766,300 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     ctx->on_stack = 0;
 
     return rc != 0;
+}
+
+/* Give each runnable sibling guest context one cooperative turn.  Native AROS
+ * may block inside a bridged call such as graphics.WaitTOF, but its scheduler
+ * cannot see our 68k contexts: without an explicit handoff the caller resumes
+ * after the native wait and can starve every guest sibling indefinitely. */
+int emu68k_reschedule_siblings(struct emu68k_run *r, j4_sandbox *sb,
+                               const char *reason, uint32_t pc,
+                               char *e, unsigned el)
+{
+    int outer = r->cur_ctx;
+    int ran = 0;
+
+    bl_event(BL_RUNTIME, outer, emu68k_ctx_task(r), pc, "scheduler.yield",
+             "\"reason\":\"%s\"", reason ? reason : "cooperative");
+    for (int i = 0; i < r->nctx; i++)
+    {
+        struct emu68k_ctx *other = &r->ctx[i];
+        if (i == outer || !other->live || other->finished || other->on_stack)
+            continue;
+        if (other->blocked &&
+            !(emu68k_gread32(sb, other->task + TASK_SIGRECVD_OFF) &
+              other->wait_mask))
+            continue;
+        if (emu68k_run_context_nested(r, sb, i, e, el) != 0)
+            return 1;
+        ran++;
+    }
+    bl_event(BL_RUNTIME, outer, emu68k_ctx_task(r), pc, "scheduler.resume",
+             "\"after\":\"%s\",\"siblings_ran\":%d",
+             reason ? reason : "cooperative", ran);
+    return 0;
+}
+
+static uint32_t task_next_tag(j4_sandbox *sb, uint32_t *cursor,
+                              char *e, unsigned el)
+{
+    unsigned guard = 0;
+    uint32_t p = *cursor;
+    while (p && ++guard < 65536u) {
+        uint32_t tag, data;
+        if (!guest_span_ok(sb, p, 8u)) {
+            snprintf(e, el, "task tag list %08x is outside guest memory", p);
+            *cursor = 0;
+            return UINT32_MAX;
+        }
+        tag = emu68k_gread32(sb, p);
+        data = emu68k_gread32(sb, p + 4u);
+        if (tag == 0) { *cursor = 0; return 0; }          /* TAG_DONE */
+        if (tag == 1) { p += 8u; continue; }             /* TAG_IGNORE */
+        if (tag == 2) { p = data; continue; }            /* TAG_MORE */
+        if (tag == 3) {                                  /* TAG_SKIP */
+            if (data > 0x1fffffffu) {
+                snprintf(e, el, "task TAG_SKIP is out of range");
+                *cursor = 0;
+                return UINT32_MAX;
+            }
+            p += 8u * (data + 1u);
+            continue;
+        }
+        *cursor = p + 8u;
+        return p;
+    }
+    if (p) snprintf(e, el, "task tag list exceeds 65536 items or contains a cycle");
+    *cursor = 0;
+    return p ? UINT32_MAX : 0;
+}
+
+int emu68k_add_guest_task_context(struct emu68k_run *r, j4_sandbox *sb,
+                                  uint32_t task, uint32_t initial,
+                                  uint32_t final, uint32_t tags,
+                                  struct j5d_m68k_state *caller,
+                                  char *e, unsigned el)
+{
+    struct emu68k_ctx *ctx;
+    uint32_t lower, upper, sp, cursor = tags, tagp;
+    uint32_t argv[8] = {0}, argmask = 0, prelaunch = 0;
+    int idx;
+
+    if (!guest_span_ok(sb, task, M68K_Task_SIZEOF) ||
+        !guest_span_ok(sb, initial, 2u)) {
+        snprintf(e, el, "AddTask Task or initialPC is outside guest memory");
+        caller->d[0] = 0;
+        return 1;
+    }
+    while ((tagp = task_next_tag(sb, &cursor, e, el)) != 0) {
+        uint32_t tag, data;
+        if (tagp == UINT32_MAX) { caller->d[0] = 0; return 1; }
+        tag = emu68k_gread32(sb, tagp); data = emu68k_gread32(sb, tagp + 4u);
+        if (tag >= TASKTAG_ARG1 && tag <= TASKTAG_ARG8) {
+            unsigned n = tag - TASKTAG_ARG1;
+            argv[n] = data;
+            argmask |= 1u << n;
+        } else if (tag == TASKTAG_PRELAUNCHHOOK) {
+            prelaunch = data;
+        }
+    }
+    lower = emu68k_gread32(sb, task + TASK_SPLOWER_OFF);
+    upper = emu68k_gread32(sb, task + TASK_SPUPPER_OFF);
+    sp = emu68k_gread32(sb, task + TASK_SPREG_OFF);
+    if (!sp) sp = upper;
+    if (lower < sb->sandbox_origin || upper <= lower || sp < lower || sp > upper ||
+        !guest_span_ok(sb, lower, upper - lower)) {
+        snprintf(e, el, "AddTask has invalid stack %08x..%08x sp=%08x",
+                 lower, upper, sp);
+        caller->d[0] = 0;
+        return 1;
+    }
+    if (argmask) {
+        if (sp < lower + 36u) {
+            snprintf(e, el, "AddTask stack has no room for TASKTAG_ARG1..8");
+            caller->d[0] = 0;
+            return 1;
+        }
+        sp -= 32u;
+        for (unsigned i = 0; i < 8; i++) emu68k_gwrite32(sb, sp + i * 4u, argv[i]);
+    }
+    if (r->nctx == 0) {
+        r->ctx[0].eng = r->eng;
+        r->ctx[0].task = GUEST_PROCESS;
+        r->ctx[0].live = 1;
+        r->ctx[0].started = 1;
+        r->nctx = 1;
+        r->cur_ctx = 0;
+    }
+    if (r->nctx >= EMU68K_MAX_CTX) {
+        snprintf(e, el, "more guest Tasks than this run keeps");
+        caller->d[0] = 0;
+        return 1;
+    }
+    if (!emu68k_gread8(sb, task + M68K_Task_tc_Node_ln_Type))
+        emu68k_gwrite8(sb, task + M68K_Task_tc_Node_ln_Type, 1); /* NT_TASK */
+    emu68k_gwrite8(sb, task + M68K_Task_tc_State, 1);            /* TS_ADDED */
+    emu68k_gwrite8(sb, task + M68K_Task_tc_IDNestCnt, UINT8_MAX);
+    emu68k_gwrite8(sb, task + M68K_Task_tc_TDNestCnt, UINT8_MAX);
+    emu68k_gwrite32(sb, task + M68K_Task_tc_SigWait, 0);
+    emu68k_gwrite32(sb, task + TASK_SIGRECVD_OFF, 0);
+    emu68k_gwrite32(sb, task + TASK_SIGEXCEPT_OFF, 0);
+    if (!emu68k_gread32(sb, task + M68K_Task_tc_MemEntry_lh_Head)) {
+        uint32_t list = task + M68K_Task_tc_MemEntry_lh_Head;
+        emu68k_gwrite32(sb, list, list + 4u);
+        emu68k_gwrite32(sb, list + 4u, 0);
+        emu68k_gwrite32(sb, list + 8u, list);
+    }
+    emu68k_gwrite32(sb, task + TASK_SPREG_OFF, sp);
+
+    idx = r->nctx;
+    ctx = &r->ctx[idx];
+    memset(ctx, 0, sizeof *ctx);
+    ctx->eng = j5d_engine_new();
+    if (!ctx->eng) {
+        snprintf(e, el, "no engine instance for guest Task");
+        caller->d[0] = 0;
+        return 1;
+    }
+    ctx->task = task;
+    ctx->entry = initial;
+    ctx->final_entry = final;
+    ctx->stack = lower;
+    ctx->stack_size = upper - lower;
+    ctx->initial_sp = sp;
+    ctx->live = 1;
+    r->nctx++;
+
+    if (prelaunch) {
+        uint32_t hook_entry;
+        if (!guest_span_ok(sb, prelaunch, M68K_Hook_SIZEOF)) {
+            snprintf(e, el, "TASKTAG_PRELAUNCHHOOK is outside guest memory");
+            return 1;
+        }
+        hook_entry = emu68k_gread32(sb, prelaunch + M68K_Hook_h_Entry);
+        if (emu68k_run_call_hook(r, hook_entry, prelaunch, task, 0, NULL, e, el) != 0)
+            return 1;
+    }
+    if (emu68k_run_context_nested(r, sb, idx, e, el) != 0) return 1;
+    caller->d[0] = task;
+    return 0;
+}
+
+int emu68k_create_guest_task(struct emu68k_run *r, j4_sandbox *sb,
+                             uint32_t tags, struct j5d_m68k_state *caller,
+                             char *e, unsigned el)
+{
+    uint32_t cursor = tags, tagp, errorp = 0, initial = 0, final = 0;
+    uint32_t stacksize = 16384u, name = 0, userdata = 0, flags = 0;
+    uint32_t extra = 0, msgportp = 0, startupmsg = 0;
+    uint32_t task, stack, port = 0, copied_name = 0;
+    int pri = 0;
+
+    while ((tagp = task_next_tag(sb, &cursor, e, el)) != 0) {
+        uint32_t tag, data;
+        if (tagp == UINT32_MAX) goto fail;
+        tag = emu68k_gread32(sb, tagp); data = emu68k_gread32(sb, tagp + 4u);
+        switch (tag) {
+        case TASKTAG_ERROR: errorp = data; break;
+        case TASKTAG_CODETYPE:
+            if (data != 0) {
+                snprintf(e, el, "NewCreateTaskA requests non-68k code type %u", data);
+                goto fail;
+            }
+            break;
+        case TASKTAG_PC: initial = data; break;
+        case TASKTAG_FINALPC: final = data; break;
+        case TASKTAG_STACKSIZE: stacksize = data; break;
+        case TASKTAG_NAME: name = data; break;
+        case TASKTAG_USERDATA: userdata = data; break;
+        case TASKTAG_PRI: pri = (int8_t)data; break;
+        case TASKTAG_POOLPUDDLE: case TASKTAG_POOLTHRESH:
+        case TASKTAG_AFFINITY: case TASKTAG_PRELAUNCHHOOK:
+            break; /* allocator/scheduler hints; semantics are unchanged here */
+        case TASKTAG_STARTUPMSG: startupmsg = data; break;
+        case TASKTAG_TASKMSGPORT: msgportp = data; break;
+        case TASKTAG_FLAGS: flags = data; break;
+        case TASKTAG_TCBEXTRASIZE: extra = data; break;
+        default:
+            if (tag < TASKTAG_ARG1 || tag > TASKTAG_ARG8) {
+                snprintf(e, el, "NewCreateTaskA tag $%08x is not described", tag);
+                goto fail;
+            }
+            break;
+        }
+    }
+    if (!initial || !guest_span_ok(sb, initial, 2u)) {
+        snprintf(e, el, "NewCreateTaskA has no valid TASKTAG_PC");
+        goto fail;
+    }
+    if (stacksize < 16384u) stacksize = 16384u;
+    if (extra > 65536u || stacksize > 8u * 1024u * 1024u) {
+        snprintf(e, el, "NewCreateTaskA allocation sizes are out of range");
+        goto fail;
+    }
+    task = emu68k_guest_alloc(r, M68K_Task_SIZEOF + extra);
+    stack = emu68k_guest_alloc(r, stacksize);
+    if (!task || !stack) {
+        snprintf(e, el, "guest memory exhausted creating Task");
+        goto fail;
+    }
+    if (name) {
+        const char *s = emu68k_guest_cstr(sb, name);
+        if (!s || !(copied_name = emu68k_guest_strdup(r, s, strlen(s)))) {
+            snprintf(e, el, "NewCreateTaskA task name is invalid");
+            goto fail;
+        }
+    }
+    emu68k_gwrite8(sb, task + M68K_Task_tc_Node_ln_Type, 1);     /* NT_TASK */
+    emu68k_gwrite8(sb, task + M68K_Task_tc_Node_ln_Pri, (uint8_t)pri);
+    emu68k_gwrite32(sb, task + M68K_Task_tc_Node_ln_Name, copied_name);
+    emu68k_gwrite8(sb, task + M68K_Task_tc_Flags, (uint8_t)flags);
+    emu68k_gwrite32(sb, task + M68K_Task_tc_UserData, userdata);
+    emu68k_gwrite32(sb, task + TASK_SPLOWER_OFF, stack);
+    emu68k_gwrite32(sb, task + TASK_SPUPPER_OFF, stack + stacksize);
+    emu68k_gwrite32(sb, task + TASK_SPREG_OFF, stack + stacksize);
+    if (msgportp) {
+        if (!guest_span_ok(sb, msgportp, 4u)) {
+            snprintf(e, el, "TASKTAG_TASKMSGPORT result pointer is outside guest memory");
+            goto fail;
+        }
+        port = emu68k_guest_alloc(r, M68K_MsgPort_SIZEOF);
+        if (!port) {
+            snprintf(e, el, "guest memory exhausted creating Task MsgPort");
+            goto fail;
+        }
+        emu68k_gwrite8(sb, port + M68K_MsgPort_mp_Node_ln_Type, 4); /* NT_MSGPORT */
+        emu68k_gwrite8(sb, port + MP_SIGBIT, 15);
+        emu68k_gwrite32(sb, port + MP_SIGTASK, task);
+        emu68k_gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Head,
+                 port + MP_MSGLIST + M68K_List_lh_Tail);
+        emu68k_gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_Tail, 0);
+        emu68k_gwrite32(sb, port + MP_MSGLIST + M68K_List_lh_TailPred,
+                 port + MP_MSGLIST + M68K_List_lh_Head);
+        emu68k_gwrite32(sb, task + TASK_SIGALLOC_OFF,
+                 emu68k_gread32(sb, task + TASK_SIGALLOC_OFF) | (1u << 15));
+        emu68k_gwrite32(sb, msgportp, port);
+    }
+    if (emu68k_add_guest_task_context(r, sb, task, initial, final, tags,
+                               caller, e, el) != 0) goto fail;
+    if (startupmsg) {
+        struct j5d_m68k_state send = *caller;
+        if (!port) {
+            snprintf(e, el, "TASKTAG_STARTUPMSG needs TASKTAG_TASKMSGPORT");
+            goto fail;
+        }
+        send.a[0] = port;
+        send.a[1] = startupmsg;
+        if (emu68k_exec_call(r, sb, LVO_PUTMSG, &send, e, el) != 0) goto fail;
+    }
+    if (errorp && guest_span_ok(sb, errorp, 4u)) emu68k_gwrite32(sb, errorp, 0);
+    caller->d[0] = task;
+    return 0;
+
+fail:
+    if (errorp && guest_span_ok(sb, errorp, 4u)) emu68k_gwrite32(sb, errorp, 1);
+    caller->d[0] = 0;
+    return 1;
 }
 
 /* CreateNewProc(tags D1) -> struct Process *
@@ -2617,7 +2084,7 @@ static int run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
 #define NP_CloseIn   0x800003EEu
 #define NP_CloseOut  0x800003EFu
 
-static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
+int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
                                struct j5d_m68k_state *st, char *e, unsigned el)
 {
     uint32_t tags = st->d[1], entry = 0, stacksize = 4096;
@@ -2626,8 +2093,8 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     int idx;
 
     for (at = tags; at; at += 8) {
-        t = gread32(sb, at);
-        v = gread32(sb, at + 4);
+        t = emu68k_gread32(sb, at);
+        v = emu68k_gread32(sb, at + 4);
         if (!t) break;                                   /* TAG_DONE          */
         switch (t) {
         case NP_Entry:     entry = v; break;
@@ -2665,8 +2132,8 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     memset(ctx, 0, sizeof *ctx);
     if (stacksize < 16384) stacksize = 16384;
     ctx->stack_size = stacksize;
-    ctx->stack = guest_alloc(r, stacksize);
-    ctx->task  = guest_alloc(r, M68K_Process_SIZEOF);
+    ctx->stack = emu68k_guest_alloc(r, stacksize);
+    ctx->task  = emu68k_guest_alloc(r, M68K_Process_SIZEOF);
     if (!ctx->stack || !ctx->task) {
         snprintf(e, el, "guest memory exhausted starting a 68k process");
         return 1;
@@ -2683,8 +2150,10 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         uint8_t *tk = j4_sandbox_host(sb, ctx->task);
         tk[M68K_Process_pr_Task_tc_Node_ln_Type] = NT_PROCESS;
     }
-    gwrite32(sb, ctx->task + TASK_SPLOWER_OFF, ctx->stack);
-    gwrite32(sb, ctx->task + TASK_SPUPPER_OFF, ctx->stack + stacksize);
+    emu68k_gwrite32(sb, ctx->task + TASK_SPLOWER_OFF, ctx->stack);
+    emu68k_gwrite32(sb, ctx->task + TASK_SPUPPER_OFF, ctx->stack + stacksize);
+    emu68k_gwrite32(sb, ctx->task + M68K_Process_pr_TaskNum,
+                    (uint32_t)idx + 1u);
     /* Its pr_MsgPort, ready to be waited on. A process finds itself and waits
      * on this port without ever creating it - it is part of being a Process -
      * so an uninitialised one is a wait on a list that never ends and a signal
@@ -2692,24 +2161,24 @@ static int dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     {
         uint32_t port = ctx->task + PROC_MSGPORT;
         uint32_t list = port + MP_MSGLIST;
-        gwrite32(sb, list + M68K_List_lh_Head, list + M68K_List_lh_Tail);
-        gwrite32(sb, list + M68K_List_lh_Tail, 0);
-        gwrite32(sb, list + M68K_List_lh_TailPred, list + M68K_List_lh_Head);
-        gwrite32(sb, port + MP_SIGTASK, ctx->task);
+        emu68k_gwrite32(sb, list + M68K_List_lh_Head, list + M68K_List_lh_Tail);
+        emu68k_gwrite32(sb, list + M68K_List_lh_Tail, 0);
+        emu68k_gwrite32(sb, list + M68K_List_lh_TailPred, list + M68K_List_lh_Head);
+        emu68k_gwrite32(sb, port + MP_SIGTASK, ctx->task);
         *(uint8_t *)j4_sandbox_host(sb, port + MP_SIGBIT) = EMU68K_PROC_SIGBIT;
-        gwrite32(sb, ctx->task + TASK_SIGALLOC_OFF, 1u << EMU68K_PROC_SIGBIT);
+        emu68k_gwrite32(sb, ctx->task + TASK_SIGALLOC_OFF, 1u << EMU68K_PROC_SIGBIT);
     }
     ctx->entry = entry;
     ctx->live = 1;
     r->nctx++;
     /* Give it its first slice now, so it reaches the port it is about to wait
      * on before the parent sends to it. */
-    if (run_context_nested(r, sb, idx, e, el) != 0)
+    if (emu68k_run_context_nested(r, sb, idx, e, el) != 0)
         return 1;
     bl_event(BL_RUNTIME, idx, ctx->task, entry, "process.create",
              "\"port\":\"%s\",\"stack_size\":%u",
              bl_id("port", ctx->task + PROC_MSGPORT), (unsigned)stacksize);
-    if (trace_tasks())
+    if (emu68k_trace_tasks())
         fprintf(stderr, "[68k/task] ctx=%d CREATED task=%08x entry=%08x "
                 "pr_MsgPort=%08x stack=%08x+%u\n", idx, ctx->task, entry,
                 ctx->task + PROC_MSGPORT, ctx->stack, (unsigned)stacksize);
@@ -2727,6 +2196,16 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e,
     g_in_bridge++;
     rc = bridge_inner(lvo, st, user, e, el);
     g_in_bridge--;
+    /* Pair EMU68K_TRACE_CALLS' entry record with the value the crossing
+     * actually returned.  This is deliberately outside bridge_inner so every
+     * host adapter and generated OS crossing is covered uniformly.  Redirects
+     * are identified explicitly: their register values are only the setup for
+     * the guest routine, not that routine's eventual result. */
+    if (g_trace > 0)
+        fprintf(stderr, "[68k] -> rc=%d d0=%08x d1=%08x a0=%08x a1=%08x"
+                " pc=%08x%s\n", rc, st->d[0], st->d[1], st->a[0], st->a[1],
+                st->pc, (rc == J5D_LVO_REDIRECT ||
+                         rc == J5D_LVO_REDIRECT_RTE) ? " redirect" : "");
     return rc;
 }
 
@@ -2736,37 +2215,54 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
     struct emu68k_run *r = c->run;
     uint32_t a6 = st->a[6];
 
+    /* A vector a guest library PATCHED with SetFunction runs the guest routine
+     * instead of the bridge - that is what patching means, and it has to hold
+     * for bridged libraries too or the patch is silently ignored. Checked
+     * before anything is served, for every library. */
+    if (r) {
+        for (int i = 0; i < EMU68K_PATCH_MAX; i++)
+            if (r->patch[i].base == a6 && r->patch[i].lvo == lvo &&
+                r->patch[i].guest_fn) {
+                st->pc = r->patch[i].guest_fn;
+                return J5D_LVO_REDIRECT;
+            }
+    }
+
     /* which library did the program call through? */
     if (r && a6 == EXEC_BASE) {
         trace_call(r, "exec.library", lvo, st);
         if (el) e[0] = 0;
         {   /* a redirect is neither "served" nor "failed": the guest is about
              * to run 68k code for this vector, so pass it straight through. */
-            int rc = exec_call(r, c->sb, lvo, st, e, el);
+            int rc = emu68k_exec_call(r, c->sb, lvo, st, e, el);
             if (rc == 0 || rc == J5D_LVO_REDIRECT ||
                 rc == J5D_LVO_REDIRECT_RTE) return rc;
         }
         if (e[0]) {          /* exec_call said something specific: do not bury it
                               * under a generic "capability gap" message */
-            ledger_record(lvo, r->name[0] ? r->name : NULL);
+            emu68k_ledger_record(lvo, r->name[0] ? r->name : NULL);
             return 1;
         }
         /* fall through to the OS callback: the embedder may serve more of exec */
-        if (g_oscall &&
-            g_oscall("exec.library", lvo, st, r->reserve, g_oscall_user,
+        if (emu68k_oscall &&
+            emu68k_oscall("exec.library", lvo, st, r->reserve, emu68k_oscall_user,
                      e, el) == 0)
             return 0;
-        ledger_record(lvo, r->name[0] ? r->name : NULL);
+        emu68k_ledger_record(lvo, r->name[0] ? r->name : NULL);
         {
             /* Name what the program ASKED for where the vector says. An LVO
              * number tells the reader to go and look it up; "timer.device" or
              * "console.device" tells them what the program wanted and whether
              * it matters. OpenLibrary already does this. */
             const char *what = NULL;
-            if (lvo == LVO_OPENDEVICE) what = guest_cstr(c->sb, st->a[0]);
+            const char *vname = exec_lvo_name(lvo);
+            if (lvo == LVO_OPENDEVICE) what = emu68k_guest_cstr(c->sb, st->a[0]);
             if (what && *what)
                 snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") "
                                 "is not available yet", what);
+            else if (vname)
+                snprintf(e, el, "capability gap: exec.library.%s (LVO %d, "
+                                "offset %d) is not served", vname, lvo, -6 * lvo);
             else
                 snprintf(e, el, "capability gap: exec.library function LVO %d "
                                 "(offset %d) is not available yet",
@@ -2778,69 +2274,65 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
         for (int i = 0; i < r->nlib; i++) {
             if (r->openlib[i].base != a6) continue;
             trace_call(r, r->openlib[i].name, lvo, st);
+            if (el) e[0] = 0;
             /* [T3] dos calls whose RESULTS are guest pointers are served in the
              * guest: handing back native pointers would give the program
              * addresses it cannot dereference. */
             if (!strcmp(r->openlib[i].name, "dos.library")) {
-                if (lvo == 25) return dos_guest_loadseg(r, c->sb, st, e, el);
-                if (lvo == 26) return dos_guest_unloadseg(r, st);
-                if (lvo == 133) return rda_readargs(r, c->sb, st, e, el);
-                /* FreeArgs is LVO 143 (-858). 134 is FindArg, and having it
-                 * here meant FindArg was answered as if it were FreeArgs while
-                 * FreeArgs itself fell through as a capability gap. Nothing to
-                 * free on this side: the RDArgs and its results live in the
-                 * guest, allocated by rda_readargs above. */
-                if (lvo == 143) { st->d[0] = 0; return 0; }   /* FreeArgs        */
-                if (lvo == 22) {                              /* IoErr           */
-                    st->d[0] = r->last_ioerr; return 0;
-                }
-                if (lvo == 38) {          /* AllocDosObject(type D1, tags D2)   */
-                    /* The program walks and fills these itself (a FileInfoBlock
-                     * is 260 bytes and the largest of the family), so hand back
-                     * zeroed GUEST memory rather than a native structure. */
-                    st->d[0] = guest_alloc(r, 512);
-                    return 0;
-                }
-                if (lvo == 39) { st->d[0] = 0; return 0; }   /* FreeDosObject   */
-                if (lvo == 83)                              /* CreateNewProc   */
-                    return dos_create_new_proc(r, c->sb, st, e, el);
+                int hrc = emu68k_dos_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
             }
-            if (!strcmp(r->openlib[i].name, "intuition.library") && lvo == 25) {
-                /* ModifyIDCMP: remember the port this window's input goes to,
-                 * and the bit it carries, so a Wait can pump it. */
-                uint32_t win = st->a[0];
-                uint32_t port = gread32(c->sb, win + M68K_Window_UserPort);
-                if (port) {
-                    uint32_t bit = gread8(c->sb, port + MP_SIGBIT);
-                    int k, seen = 0;
-                    for (k = 0; k < r->nidcmp; k++)
-                        if (r->idcmp_port[k].port == port) { seen = 1; break; }
-                    if (!seen && r->nidcmp < 16 && bit < 32) {
-                        r->idcmp_port[r->nidcmp].port = port;
-                        r->idcmp_port[r->nidcmp].mask = 1u << bit;
-                        r->nidcmp++;
-                    }
-                    bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
-                             "port.bind",
-                             "\"source\":\"native:idcmp:%s\",\"destination\":\"%s\","
-                             "\"owner\":\"%s\",\"signal_bit\":%d,\"reason\":\"ModifyIDCMP\"",
-                             bl_id("window", win), bl_id("port", port),
-                             bl_id("task", gread32(c->sb, port + MP_SIGTASK)),
-                             (int)bit);
-                    if (trace_tasks())
-                        fprintf(stderr, "[68k/task] IDCMP bind window=%08x "
-                                "port=%08x mp_SigTask=%08x mp_SigBit=%u "
-                                "(bound by ctx=%d task=%08x)\n", win, port,
-                                gread32(c->sb, port + MP_SIGTASK),
-                                (unsigned)bit, r->cur_ctx, ctx_task(r));
-                }
+            if (!strcmp(r->openlib[i].name, "intuition.library")) {
+                int hrc = emu68k_intuition_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
             }
             if (!strcmp(r->openlib[i].name, "utility.library") &&
-                utility_guest_call(c->sb, lvo, st) == 0)
+                emu68k_utility_call(r, c->sb, lvo, st, e, el) == 0)
                 return 0;
-            if (el) e[0] = 0;
-            if (g_oscall &&
-                g_oscall(r->openlib[i].name, lvo, st, r->reserve, g_oscall_user,
+            if (!strcmp(r->openlib[i].name, "utility.library") && e[0])
+                return 1;
+            if (!strcmp(r->openlib[i].name, "graphics.library")) {
+                int hrc = emu68k_graphics_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (!strcmp(r->openlib[i].name, "gadtools.library")) {
+                int hrc = emu68k_gadtools_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (!strcmp(r->openlib[i].name, "layers.library")) {
+                int hrc = emu68k_layers_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (!strcmp(r->openlib[i].name, "cybergraphics.library")) {
+                int hrc = emu68k_cybergraphics_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (!strcmp(r->openlib[i].name, "task.resource")) {
+                int hrc = emu68k_taskresource_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (!strcmp(r->openlib[i].name, "timer.device")) {
+                int hrc = emu68k_timerdevice_call(r, c->sb, lvo, st, e, el);
+                if (hrc == 0 || hrc == J5D_LVO_REDIRECT ||
+                    hrc == J5D_LVO_REDIRECT_RTE) return hrc;
+                if (e[0]) return 1;
+            }
+            if (emu68k_oscall &&
+                emu68k_oscall(r->openlib[i].name, lvo, st, r->reserve, emu68k_oscall_user,
                          e, el) == 0)
                 return 0;
             /* OpenCatalogA is deliberately allowed to fail: locale clients
@@ -2848,14 +2340,14 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
              * no catalog can be opened.  The native bridge cannot safely hand
              * a 64-bit Catalog pointer or native TagItem list to this guest,
              * so until the generated opaque-handle/tag shadow exists, NULL is
-             * the honest compatibility result.  Keep this AFTER g_oscall so an
+             * the honest compatibility result.  Keep this AFTER emu68k_oscall so an
              * embedder with a complete catalog crossing still wins. */
             if (!strcmp(r->openlib[i].name, "locale.library") && lvo == 25) {
                 if (el) e[0] = 0;
                 st->d[0] = 0;
                 return 0;
             }
-            ledger_record(lvo, r->name[0] ? r->name : NULL);
+            emu68k_ledger_record(lvo, r->name[0] ? r->name : NULL);
             /* The type compiler reports the precise missing policy (including
              * tag and domain). Preserve that instead of replacing it with the
              * generic LVO-only message below. */
@@ -2869,7 +2361,7 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
     /* the built-in stub OS (the corpus path: PutChar/AllocMem/FreeMem) */
     int rc = stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
     if (rc) {
-        ledger_record(lvo, r && r->name[0] ? r->name : NULL);
+        emu68k_ledger_record(lvo, r && r->name[0] ? r->name : NULL);
         snprintf(e, el, "capability gap: library function LVO %d (offset %d) on "
                         "an unrecognised base %08x is not marshalled yet",
                  lvo, -6 * lvo, st->a[6]);
@@ -2879,6 +2371,103 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
 
 static j5d_poll_action quantum_poll(void *user);
 static j5d_poll_action nested_poll(void *user);
+static j5d_poll_action context_poll(void *user);
+
+int emu68k_run_guest_subroutine(struct emu68k_run *r, uint32_t entry,
+                                struct j5d_m68k_state *initial,
+                                uint32_t stack_top, uint32_t *result,
+                                char *err, unsigned errlen)
+{
+    struct j5d_m68k_state st;
+    j5d_sandbox sb;
+    struct bctx c;
+    j5d_engine *eng;
+    uint32_t d0 = 0;
+    int owns_stack = 0;
+    int dom, rc;
+
+    if (!r || !entry || !initial || !guest_span_ok(&r->sb, entry, 2u)) {
+        if (err && errlen) snprintf(err, errlen, "invalid guest subroutine context");
+        return 1;
+    }
+    if (!stack_top) {
+        stack_top = emu68k_callback_stack_acquire(r, err, errlen);
+        if (!stack_top) return 1;
+        owns_stack = 1;
+    }
+    st = *initial;
+    st.a[7] = stack_top;
+    sb.host_mem = r->sb.host_mem;
+    sb.origin = r->sb.sandbox_origin;
+    sb.size = r->sb.size;
+    c.lib = &r->lib;
+    c.sb = &r->sb;
+    c.run = r;
+    eng = (r->nctx && r->ctx[r->cur_ctx].eng) ? r->ctx[r->cur_ctx].eng : r->eng;
+    j5d_engine_activate(eng);
+    j5d_set_poll(nested_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    dom = domain_enter_guest();
+    rc = j5d_run(&sb, entry, RUN_LIBBASE, &st, &d0, bridge, &c, err, errlen);
+    domain_leave_guest(dom);
+    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    if (owns_stack) emu68k_callback_stack_release(r);
+    if (rc != 0) return 1;
+    if (result) *result = d0;
+    return 0;
+}
+
+/* RunCommand has one extra control-flow rule: dos.Exit() must unwind only the
+ * command invocation and return its supplied code to the caller.  This is the
+ * hosted equivalent of dos.library's StackState/longjmp implementation. */
+int emu68k_run_guest_command(struct emu68k_run *r, uint32_t entry,
+                             struct j5d_m68k_state *initial,
+                             uint32_t stack_top, uint32_t *result,
+                             char *err, unsigned errlen)
+{
+    struct j5d_m68k_state st;
+    j5d_sandbox sb;
+    struct bctx c;
+    j5d_engine *eng;
+    uint32_t d0 = 0;
+    volatile int dom = 0;
+    int rc;
+
+    if (!r || !entry || !initial || !stack_top ||
+        !guest_span_ok(&r->sb, entry, 2u)) {
+        if (err && errlen) snprintf(err, errlen, "invalid guest command context");
+        return 1;
+    }
+    st = *initial;
+    st.a[7] = stack_top;
+    sb.host_mem = r->sb.host_mem;
+    sb.origin = r->sb.sandbox_origin;
+    sb.size = r->sb.size;
+    c.lib = &r->lib;
+    c.sb = &r->sb;
+    c.run = r;
+    eng = (r->nctx && r->ctx[r->cur_ctx].eng) ? r->ctx[r->cur_ctx].eng : r->eng;
+    j5d_engine_activate(eng);
+    j5d_set_poll(nested_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    r->command_can_unwind = 1;
+    if (setjmp(r->command_unwind) == 0) {
+        dom = domain_enter_guest();
+        rc = j5d_run(&sb, entry, RUN_LIBBASE, &st, &d0,
+                     bridge, &c, err, errlen);
+        domain_leave_guest(dom);
+    } else {
+        /* dos.Exit arrived through the bridge.  It deliberately bypasses the
+         * guest command's C/68k cleanup, but the host execution domain and
+         * poll callback still have to be restored here. */
+        domain_leave_guest(dom);
+        d0 = r->command_return;
+        rc = 0;
+    }
+    r->command_can_unwind = 0;
+    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    if (rc != 0) return 1;
+    if (result) *result = d0;
+    return 0;
+}
 
 int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
                          unsigned long hook, unsigned long object,
@@ -2889,7 +2478,7 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     j5d_sandbox sb;
     struct bctx c;
     uint32_t d0 = 0;
-    uint32_t stack;
+    uint32_t stack_top;
 
     if (!r || entry > UINT32_MAX || hook > UINT32_MAX ||
         object > UINT32_MAX || message > UINT32_MAX)
@@ -2897,21 +2486,13 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
         if (err && errlen) snprintf(err, errlen, "invalid 68k Hook callback context");
         return 1;
     }
-    if (!r->callback_stack_top)
-    {
-        stack = guest_alloc(r, 16384);
-        if (!stack)
-        {
-            if (err && errlen) snprintf(err, errlen, "guest memory exhausted for Hook stack");
-            return 1;
-        }
-        r->callback_stack_top = (stack + 16384u) & ~15u;
-    }
+    stack_top = emu68k_callback_stack_acquire(r, err, errlen);
+    if (!stack_top) return 1;
     memset(&st, 0, sizeof st);
     st.a[0] = (uint32_t)hook;
     st.a[1] = (uint32_t)message;
     st.a[2] = (uint32_t)object;
-    st.a[7] = r->callback_stack_top;
+    st.a[7] = stack_top;
     sb.host_mem = r->sb.host_mem;
     sb.origin = r->sb.sandbox_origin;
     sb.size = r->sb.size;
@@ -2927,6 +2508,7 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
                      bridge, &c, err, errlen);
     domain_leave_guest(dom);
     j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    emu68k_callback_stack_release(r);
     if (rc != 0)
         return 1;
     if (result) *result = d0;
@@ -2965,6 +2547,19 @@ static j5d_poll_action nested_poll(void *user)
         }
     }
     return J5D_POLL_CONTINUE;
+}
+
+/* A cooperatively scheduled 68k child owns no native stack that must complete
+ * atomically.  Unlike a native->guest callback, it can therefore yield at an
+ * engine safe point and resume from ctx->st.pc on its next turn. */
+static j5d_poll_action context_poll(void *user)
+{
+    struct emu68k_run *r = user;
+    j5d_poll_action action = nested_poll(user);
+    if (action != J5D_POLL_CONTINUE)
+        return action;
+    (void)r;
+    return J5D_POLL_YIELD;
 }
 
 static void flush_output(struct emu68k_run *r)
@@ -3114,10 +2709,10 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         {
             uint8_t *eb = j4_sandbox_host(&r->sb, EXEC_BASE);
             memset(eb, 0, 512);
-            eb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
-            eb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
-            eb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
-            eb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_LIB_REV;
+            eb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_EXEC_VERSION >> 8);
+            eb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_EXEC_VERSION;
+            eb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_EXEC_REV >> 8);
+            eb[LIB_REVISION_OFF + 1] = (uint8_t)GUEST_EXEC_REV;
             eb[EXECBASE_THISTASK + 0] = (uint8_t)(GUEST_PROCESS >> 24);
             eb[EXECBASE_THISTASK + 1] = (uint8_t)(GUEST_PROCESS >> 16);
             eb[EXECBASE_THISTASK + 2] = (uint8_t)(GUEST_PROCESS >> 8);
@@ -3130,6 +2725,9 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             pr[PR_CLI_OFFSET + 2] = (uint8_t)(cli_b >> 8);
             pr[PR_CLI_OFFSET + 3] = (uint8_t)(cli_b);
         }
+        emu68k_gwrite32(&r->sb, GUEST_PROCESS + M68K_Process_pr_TaskNum, 1);
+        emu68k_gwrite32(&r->sb, GUEST_PROCESS + M68K_Process_pr_Arguments,
+                        ARGS_BASE);
         {
             uint8_t *cli = j4_sandbox_host(&r->sb, GUEST_CLI);
             uint8_t *cmd = j4_sandbox_host(&r->sb, GUEST_COMMAND);
@@ -3169,9 +2767,9 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     r->sb.next_alloc = r->exec_heap;       /* one cursor for AllocMem + LoadSeg */
     r->stack_lower = r->exec_heap_end;
     r->stack_upper = GUEST_TOP;
-    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPREG_OFF, GUEST_TOP);
-    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPLOWER_OFF, r->stack_lower);
-    gwrite32(&r->sb, GUEST_PROCESS + TASK_SPUPPER_OFF, r->stack_upper);
+    emu68k_gwrite32(&r->sb, GUEST_PROCESS + TASK_SPREG_OFF, GUEST_TOP);
+    emu68k_gwrite32(&r->sb, GUEST_PROCESS + TASK_SPLOWER_OFF, r->stack_lower);
+    emu68k_gwrite32(&r->sb, GUEST_PROCESS + TASK_SPUPPER_OFF, r->stack_upper);
     r->active_loader = -1;
     r->sink      = sink;
     r->sink_user = sink_user;
@@ -3210,8 +2808,15 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     uint32_t d0 = 0;
     char lerr[256] = {0};
 
+    /* The root context is executing on this native stack too.  Mark it just
+     * like a nested context so a sibling that reaches a cooperative yield
+     * cannot recursively re-enter its still-active parent. */
+    if (r->nctx && r->cur_ctx >= 0 && r->cur_ctx < r->nctx)
+        r->ctx[r->cur_ctx].on_stack = 1;
     int rc = j5d_run(&j5sb, r->resume_pc, RUN_LIBBASE, &r->st, &d0,
                      bridge, &c, lerr, sizeof lerr);
+    if (r->nctx && r->cur_ctx >= 0 && r->cur_ctx < r->nctx)
+        r->ctx[r->cur_ctx].on_stack = 0;
     r->resume_pc = r->st.pc;
 
     j5n_signal_remove();

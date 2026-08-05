@@ -1,12 +1,14 @@
 ; genrefused.s - negative control for a reviewed whole-function refusal.
 ;
-; GT_GetIMsg cannot cross until IntuiMessage has a guest-readable facade and
-; paired reply ownership. The generated dispatcher must identify this reviewed
-; refusal before native GadTools dereferences the deliberately NULL MsgPort.
+; GT_FilterIMsg still cannot cross an arbitrary guest IntuiMessage: its result
+; is embedded or allocated mutable state with context-owned lifetime.  The
+; generated dispatcher must identify this reviewed refusal before native
+; GadTools dereferences the deliberately NULL message.  GT_GetIMsg is no longer
+; this negative control: it now has a complete handwritten facade/reply path.
 
 EXEC_OpenLibrary equ -552
 DOS_PutStr        equ -948
-GT_GetIMsg        equ -72
+GT_FilterIMsg     equ -102
 
     move.l  4.w,a6
     lea     dosname(pc),a1
@@ -24,8 +26,8 @@ GT_GetIMsg        equ -72
     beq.s   failed
 
     move.l  d0,a6
-    suba.l  a0,a0
-    jsr     GT_GetIMsg(a6)          ; must stop at the reviewed refusal
+    suba.l  a1,a1
+    jsr     GT_FilterIMsg(a6)       ; must stop at the reviewed refusal
 
 failed:
     lea     failmsg(pc),a0

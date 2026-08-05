@@ -51,5 +51,5 @@ make cocoametal-dylib pasteboard-dylib coreaudio-dylib bsdsock-dylib
 ./aros-ctl deploy && AROS_CTL_STARTUP_MODE=desktop ./run-window.sh
 ```
 
-A window titled "AROS" opens on the Workbench desktop; click it and type at the
+A window titled "Macaros" opens on the Workbench desktop; click it and type at the
 shell. Drive it headlessly with `./aros-ctl run`.

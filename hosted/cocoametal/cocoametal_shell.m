@@ -36,6 +36,7 @@
 extern void cm__inject_key(int vk, int pressed, unsigned mods);
 extern int  cm__logical_w(CMContext *cx);   /* current framebuffer size, for the */
 extern int  cm__logical_h(CMContext *cx);   /* Resolution menu checkmark          */
+extern NSString *cm__app_name(void);        /* host app name for chrome + captures */
 
 /* View ▸ Resolution: the standard sizes the AROS mode ladder offers. A menu tag
  * packs (w << 16) | h; the AROS side snaps a request to its nearest database
@@ -168,7 +169,8 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
     NSDateFormatter *f = [NSDateFormatter new];
     f.dateFormat = @"yyyyMMdd-HHmmss";
     return [dir stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"AROS-%@-%@.%@", prefix, [f stringFromDate:[NSDate date]], ext]];
+            [NSString stringWithFormat:@"%@-%@-%@.%@", cm__app_name(), prefix,
+                                       [f stringFromDate:[NSDate date]], ext]];
 }
 
 @implementation CMShellController

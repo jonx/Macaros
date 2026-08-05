@@ -11,7 +11,8 @@ target and adds a one-command runner. It also documents the floating-point
 `printf` fix the suite surfaced, and the benchmarks that don't yet run cleanly.
 Two complementary perf axes live here: **native aarch64** benchmarks (the suite
 below, via `bench-run`, measuring the M5/AROS) and the **68k→AArch64 JIT**
-(`run68k`, measuring the translator against real-Amiga figures — last section).
+(`run68k`, measuring the translator against real-Amiga figures and against the same
+program compiled natively for this Mac — last section).
 
 ## What it is
 
@@ -212,22 +213,57 @@ fixed load/translate overhead):
 
 | Path | Dhrystones/sec | VAX MIPS (÷1757) |
 |---|---|---|
-| chained hot path (`JIT68K_NO_DIAG=1`) | ~205,000 | ~117 |
-| instrumented (default — diagnostics on, chaining off) | ~51,000 | ~29 |
+| chained hot path (`JIT68K_NO_DIAG=1`) | ~150,000 | ~85 |
+| instrumented (default — diagnostics on, chaining off) | ~49,000 | ~28 |
 
 vs published **real-Amiga** Dhrystone (chained number):
 
 | Real machine | ~Dhry/s | this JIT is |
 |---|---|---|
-| A500 — 68000 @ 7 MHz | ~2,000 | ~102× |
-| A3000 — 68030 @ 25 MHz | ~14,000 | ~15× |
-| A4000/060 — 68060 @ 50 MHz | ~80,000 | ~3× |
+| A500 — 68000 @ 7 MHz | ~2,000 | ~75× |
+| A3000 — 68030 @ 25 MHz | ~14,000 | ~11× |
+| A4000/060 — 68060 @ 50 MHz | ~80,000 | ~1.9× |
+
+The chained path measured **~205,000 Dhry/s (~117 VAX MIPS)** when this section was
+first written (2026-06-28), before the engine gained the **chain-budget safe point**
+(`j5d_engine.c`, the in-OS kill/quantum mechanism): every chain entry now loads,
+decrements and tests a budget word, and Dhrystone's blocks are small, so the check is
+paid often. That is the likely cause of the ~25% drop, not confirmed by A/B — the
+engine has no run-time knob for the quantum (`j5d_set_chain_quantum` is an API call,
+and the budget word is tested unconditionally), so confirming it means building the
+engine at the parent commit. The cost buys in-OS interruptibility, which is what the
+68k-transparent-exec work needs.
+
+### The native baseline (same program, compiled for the host)
+
+`build-dhry-native.sh` compiles the **same freestanding sources** with clang for
+arm64-darwin, so the two numbers measure one program on one machine. Its output is
+byte-identical to the 68k run (only the implementation-dependent pointer values
+differ), and the same two-point method is used:
+
+| Build | Dhrystones/sec | VAX MIPS | vs the chained JIT |
+|---|---|---|---|
+| native, `-O2 -fno-builtin` (matched workload) | ~23,800,000 | ~13,500 | **~158×** |
+| native, `-O3` (builtins on) | ~40,000,000 | ~22,900 | ~265× |
+| 68k through the JIT, chained | ~150,000 | ~85 | 1× |
+
+`-fno-builtin` is the fair comparison: the 68k build has no libc SIMD string routines,
+so both sides run the same naive `strcpy`/`strcmp` byte loops. `-O3` with builtins on is
+the number a native Dhrystone would normally quote.
+
+Two things are stacked inside that ~158×, and it is worth not confusing them: the
+**translation cost** (dispatcher round-trip per `jsr`/`rts`, byte-swap per memory
+access, per-block register frame, chain-budget check) and the **source binary itself** —
+a vbcc-compiled 68020 executable, which is far weaker code than what clang emits for
+this CPU before any translation happens. The JIT is executing the 68k program as
+written; it cannot recover optimizations vbcc never made.
 
 ### Interpreting them
 
-The JIT now **outruns every real Amiga** — ~3× the fastest stock machine (a 50 MHz
-'060) on the chained path. That said, 117 VAX-MIPS is **modest for a native-AArch64
-JIT**, and Dhrystone is close to the **worst case** for this engine:
+The JIT **outruns every real Amiga** — ~1.9× the fastest stock machine (a 50 MHz '060)
+on the chained path. That said, 85 VAX-MIPS is **modest for a native-AArch64 JIT** —
+~1/158 of the same program compiled for this CPU — and Dhrystone is close to the
+**worst case** for this engine:
 
 - **Calls aren't chained.** Dhrystone does ~12 `jsr`/`rts` *per iteration* (Proc_1–8,
   Func_1–3); every one returns to the C dispatcher via the real return stack — *not* a
@@ -240,7 +276,7 @@ JIT**, and Dhrystone is close to the **worst case** for this engine:
 These are deliberate trade-offs — the engine is a block-at-a-time translator built to be
 **byte-exact vs an independent interpreter**, correctness over peak speed. Headroom, in
 bang-for-buck order: **chain across `jsr`/`rts`** (the big Dhrystone win), drop redundant
-byte-swaps, superblock/trace compilation, cross-block register allocation. So ~3× the
+byte-swaps, superblock/trace compilation, cross-block register allocation. So ~1.9× the
 fastest Amiga is the *floor*, on the most call-heavy workload, with no speed optimization
 done yet.
 
@@ -250,9 +286,12 @@ done yet.
 
 ```sh
 make run68k                                   # -> build/run68k
-build/run68k dhry.exe                         # safe path: diagnostics on, byte-exact, crash bundles
-JIT68K_NO_DIAG=1 JIT68K_STEP_CAP=40000000000 build/run68k dhry.exe   # chained hot path, long run
+JIT68K_STEP_CAP=400000000000 build/run68k dhry.exe    # safe path: diagnostics on, byte-exact
+JIT68K_NO_DIAG=1 JIT68K_STEP_CAP=400000000000 build/run68k dhry.exe   # chained hot path
 ```
+
+The step cap is not optional here: even the reference 20,000-run build exceeds `run68k`'s
+default 2M dispatcher-step runaway guard and stops with a crash bundle.
 
 The `dhry.exe` here is a **freestanding Dhrystone 2.1** (static records instead of
 `malloc`, `PutChar` output, no in-program timer — wall time is measured externally),
@@ -261,3 +300,15 @@ compiled to a real Amiga hunk by the project's own 68k cross-toolchain
 artifact, not vendored** into the tree (it pulls in a third-party benchmark); the
 JIT engine fixes above *are* in the tree. See
 [`hosted/jit68k/run68k.md`](../../../hosted/jit68k/run68k.md) for the tool itself.
+
+Reproducing both sides (the builders fetch and patch the third-party sources; only the
+glue and the scripts are vendored):
+
+```sh
+cd hosted/jit68k/bench
+./build-dhry.sh                       # -> bin/dhry.exe (the byte-exact reference build)
+DHRY_RUNS=200000  ./build-dhry.sh     # -> bin/dhry-200000.exe   \  the two points for
+DHRY_RUNS=1000000 ./build-dhry.sh     # -> bin/dhry-1000000.exe  /  the JIT measurement
+./build-dhry-native.sh                # native baseline: builds, checks output, prints the rate
+NATIVE_CFLAGS="-O3" ./build-dhry-native.sh          # the builtins-on upper bound
+```

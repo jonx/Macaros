@@ -410,6 +410,83 @@ static uint32_t brief_ea_i(const struct j5d_m68k_state *st, uint16_t ext,
     return base + (uint32_t)(int32_t)(int8_t)(uint8_t)(ext & 0xFFu) + xn;
 }
 
+/* Independent oracle for the dispatcher's 68020 full indexed control EA. */
+static uint32_t control_indexed_ea_i(j5d_sandbox *sb,
+                                     const struct j5d_m68k_state *st,
+                                     uint32_t pc, uint32_t base,
+                                     uint32_t *after, int *ok)
+{
+    const uint8_t *ip;
+    uint16_t ext;
+    uint32_t cursor, bd = 0, outer = 0, index = 0, pointer, indirect;
+    unsigned bdsize, iis, rn;
+
+    *ok = 0;
+    if (pc < sb->origin ||
+        (uint64_t)pc + 4 > (uint64_t)sb->origin + sb->size) return 0;
+    ip = sb->host_mem + (pc - sb->origin);
+    ext = be16(ip + 2);
+    if (!(ext & 0x0100u))
+    {
+        int brief_ok;
+        uint32_t result = brief_ea_i(st, ext, base, &brief_ok);
+        if (!brief_ok) return 0;
+        *after = pc + 4; *ok = 1; return result;
+    }
+    if (ext & 0x0008u) return 0;
+    cursor = pc + 4;
+    bdsize = (ext >> 4) & 3u;
+    if (!bdsize) return 0;
+#define ORACLE_EXT_NEED(n) do {                                               \
+    if ((uint64_t)cursor + (n) > (uint64_t)sb->origin + sb->size) return 0;   \
+} while (0)
+    if (bdsize == 2)
+    {
+        ORACLE_EXT_NEED(2);
+        bd = (uint32_t)(int32_t)be16s(sb->host_mem + (cursor - sb->origin));
+        cursor += 2;
+    }
+    else if (bdsize == 3)
+    {
+        ORACLE_EXT_NEED(4);
+        bd = be32(sb->host_mem + (cursor - sb->origin)); cursor += 4;
+    }
+    iis = ext & 7u;
+    if (iis == 4u) return 0;
+    if ((iis & 3u) == 2u)
+    {
+        ORACLE_EXT_NEED(2);
+        outer = (uint32_t)(int32_t)be16s(
+            sb->host_mem + (cursor - sb->origin)); cursor += 2;
+    }
+    else if ((iis & 3u) == 3u)
+    {
+        ORACLE_EXT_NEED(4);
+        outer = be32(sb->host_mem + (cursor - sb->origin)); cursor += 4;
+    }
+    if (!(ext & 0x0040u))
+    {
+        rn = (ext >> 12) & 7u;
+        index = (ext & 0x8000u) ? st->a[rn] : st->d[rn];
+        if (!(ext & 0x0800u))
+            index = (uint32_t)(int32_t)(int16_t)(uint16_t)index;
+        index <<= ((ext >> 9) & 3u);
+    }
+    if (ext & 0x0080u) base = 0;
+    if (iis == 0)
+        indirect = base + bd + index;
+    else
+    {
+        pointer = base + bd + ((iis & 4u) ? 0 : index);
+        if (pointer < sb->origin ||
+            (uint64_t)pointer + 4 > (uint64_t)sb->origin + sb->size) return 0;
+        indirect = be32(sb->host_mem + (pointer - sb->origin)) + outer +
+                   ((iis & 4u) ? index : 0);
+    }
+    *after = cursor; *ok = 1; return indirect;
+#undef ORACLE_EXT_NEED
+}
+
 int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                    struct j5d_m68k_state *st, uint32_t *exit_d0,
                    j5d_lvo_fn lvo, void *user, char *errbuf, unsigned errlen)
@@ -804,10 +881,31 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             p[0]=ret>>24; p[1]=ret>>16; p[2]=ret>>8; p[3]=(uint8_t)ret;
             st->a[7] = sp; pc = target; continue;
         }
+        /* jsr full/brief indexed (An), including 68020 memory-indirect forms. */
+        if ((op & 0xFFF8u) == 0x4EB0u) {
+            uint32_t after; int ok;
+            uint32_t target = control_indexed_ea_i(
+                sb, st, pc, st->a[op & 7u], &after, &ok);
+            if (!ok) IFAIL("jsr indexed: invalid full extension");
+            uint32_t sp = st->a[7] - 4u;
+            if (sp < sb->origin ||
+                (uint64_t)sp + 4 > (uint64_t)sb->origin + sb->size)
+                IFAIL("jsr indexed: a7 out of sandbox");
+            uint8_t *p = sb->host_mem + (sp - sb->origin);
+            p[0]=after>>24; p[1]=after>>16; p[2]=after>>8; p[3]=(uint8_t)after;
+            st->a[7] = sp; pc = target; continue;
+        }
         /* jmp abs.l (4EF9) -> jump (no push). */
         if (op == 0x4EF9u) { pc = be32(ip + 2); continue; }
         /* jmp (An) (4ED0|An) -> computed jump (no push). */
         if ((op & 0xFFF8u) == 0x4ED0u) { pc = st->a[op & 7u]; continue; }
+        if ((op & 0xFFF8u) == 0x4EF0u) {
+            uint32_t after; int ok;
+            uint32_t target = control_indexed_ea_i(
+                sb, st, pc, st->a[op & 7u], &after, &ok);
+            if (!ok) IFAIL("jmp indexed: invalid full extension");
+            pc = target; continue;
+        }
         /* jsr (d16,PC) (4EBA) -> push return + PC-relative jump (gcc near call).
          * PRM: the base is the address OF the extension word (pc + 2). */
         if (op == 0x4EBAu) {

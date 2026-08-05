@@ -176,7 +176,8 @@ typedef enum {
 } CMPower;
 
 /* Open the display: build device/queue, framebuffer + offscreen textures, and
- * (best-effort) a live window. Returns NULL on failure. */
+ * (best-effort) a live window. Returns NULL on failure. `title` is unused (kept
+ * for ABI stability): the host titles the window from its own app name. */
 CMContext *cm_open(int w, int h, const CMPixelDesc *fmt, const char *title);
 void       cm_close(CMContext *);
 

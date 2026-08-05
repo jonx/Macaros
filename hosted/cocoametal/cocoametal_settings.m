@@ -32,6 +32,8 @@
 
 #include "cocoametal.h"
 
+extern NSString *cm__app_name(void);   /* host app name for window chrome */
+
 /* Per-context controller registry. We cannot use objc_setAssociatedObject on the
  * CMContext* (it is a plain malloc'd struct, not an Obj-C object — that is UB and
  * crashes), so we key a strong-valued NSMapTable by the opaque context pointer.
@@ -199,7 +201,7 @@ int cm__open_settings_appkit(CMContext *cx) {
                         backing:NSBackingStoreBuffered
                           defer:NO];
         if (!win) return 1;
-        [win setTitle:@"AROS Display Settings"];
+        [win setTitle:[NSString stringWithFormat:@"%@ Display Settings", cm__app_name()]];
         [win setReleasedWhenClosed:NO];
         NSView *cv = win.contentView;
 

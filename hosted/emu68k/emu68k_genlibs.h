@@ -34,4 +34,1554 @@
     X("workbench.library") \
     /* end */
 
+/* exec vector numbers, from rom/exec/exec.conf. The hand-written
+ * dispatch uses these; never write one out by hand. */
+#define LVO_SUPERVISOR              5   /* -30 */
+#define LVO_RESCHEDULE              8   /* -48 */
+#define LVO_EXCEPTION              11   /* -66 */
+#define LVO_INITCODE               12   /* -72 */
+#define LVO_INITSTRUCT             13   /* -78 */
+#define LVO_MAKELIBRARY            14   /* -84 */
+#define LVO_MAKEFUNCTIONS          15   /* -90 */
+#define LVO_FINDRESIDENT           16   /* -96 */
+#define LVO_INITRESIDENT           17   /* -102 */
+#define LVO_ALERT                  18   /* -108 */
+#define LVO_DEBUG                  19   /* -114 */
+#define LVO_DISABLE                20   /* -120 */
+#define LVO_ENABLE                 21   /* -126 */
+#define LVO_FORBID                 22   /* -132 */
+#define LVO_PERMIT                 23   /* -138 */
+#define LVO_SETSR                  24   /* -144 */
+#define LVO_SUPERSTATE             25   /* -150 */
+#define LVO_USERSTATE              26   /* -156 */
+#define LVO_SETINTVECTOR           27   /* -162 */
+#define LVO_ADDINTSERVER           28   /* -168 */
+#define LVO_REMINTSERVER           29   /* -174 */
+#define LVO_CAUSE                  30   /* -180 */
+#define LVO_ALLOCATE               31   /* -186 */
+#define LVO_DEALLOCATE             32   /* -192 */
+#define LVO_ALLOCMEM               33   /* -198 */
+#define LVO_ALLOCABS               34   /* -204 */
+#define LVO_FREEMEM                35   /* -210 */
+#define LVO_AVAILMEM               36   /* -216 */
+#define LVO_ALLOCENTRY             37   /* -222 */
+#define LVO_FREEENTRY              38   /* -228 */
+#define LVO_INSERT                 39   /* -234 */
+#define LVO_ADDHEAD                40   /* -240 */
+#define LVO_ADDTAIL                41   /* -246 */
+#define LVO_REMOVE                 42   /* -252 */
+#define LVO_REMHEAD                43   /* -258 */
+#define LVO_REMTAIL                44   /* -264 */
+#define LVO_ENQUEUE                45   /* -270 */
+#define LVO_FINDNAME               46   /* -276 */
+#define LVO_ADDTASK                47   /* -282 */
+#define LVO_REMTASK                48   /* -288 */
+#define LVO_FINDTASK               49   /* -294 */
+#define LVO_SETTASKPRI             50   /* -300 */
+#define LVO_SETSIGNAL              51   /* -306 */
+#define LVO_SETEXCEPT              52   /* -312 */
+#define LVO_WAIT                   53   /* -318 */
+#define LVO_SIGNAL                 54   /* -324 */
+#define LVO_ALLOCSIGNAL            55   /* -330 */
+#define LVO_FREESIGNAL             56   /* -336 */
+#define LVO_ALLOCTRAP              57   /* -342 */
+#define LVO_FREETRAP               58   /* -348 */
+#define LVO_ADDPORT                59   /* -354 */
+#define LVO_REMPORT                60   /* -360 */
+#define LVO_PUTMSG                 61   /* -366 */
+#define LVO_GETMSG                 62   /* -372 */
+#define LVO_REPLYMSG               63   /* -378 */
+#define LVO_WAITPORT               64   /* -384 */
+#define LVO_FINDPORT               65   /* -390 */
+#define LVO_ADDLIBRARY             66   /* -396 */
+#define LVO_REMLIBRARY             67   /* -402 */
+#define LVO_OLDOPENLIBRARY         68   /* -408 */
+#define LVO_CLOSELIBRARY           69   /* -414 */
+#define LVO_SETFUNCTION            70   /* -420 */
+#define LVO_SUMLIBRARY             71   /* -426 */
+#define LVO_ADDDEVICE              72   /* -432 */
+#define LVO_REMDEVICE              73   /* -438 */
+#define LVO_OPENDEVICE             74   /* -444 */
+#define LVO_CLOSEDEVICE            75   /* -450 */
+#define LVO_DOIO                   76   /* -456 */
+#define LVO_SENDIO                 77   /* -462 */
+#define LVO_CHECKIO                78   /* -468 */
+#define LVO_WAITIO                 79   /* -474 */
+#define LVO_ABORTIO                80   /* -480 */
+#define LVO_ADDRESOURCE            81   /* -486 */
+#define LVO_REMRESOURCE            82   /* -492 */
+#define LVO_OPENRESOURCE           83   /* -498 */
+#define LVO_RAWIOINIT              84   /* -504 */
+#define LVO_RAWMAYGETCHAR          85   /* -510 */
+#define LVO_RAWPUTCHAR             86   /* -516 */
+#define LVO_RAWDOFMT               87   /* -522 */
+#define LVO_GETCC                  88   /* -528 */
+#define LVO_TYPEOFMEM              89   /* -534 */
+#define LVO_PROCURE                90   /* -540 */
+#define LVO_VACATE                 91   /* -546 */
+#define LVO_OPENLIBRARY            92   /* -552 */
+#define LVO_INITSEMAPHORE          93   /* -558 */
+#define LVO_OBTAINSEMAPHORE        94   /* -564 */
+#define LVO_RELEASESEMAPHORE       95   /* -570 */
+#define LVO_ATTEMPTSEMAPHORE       96   /* -576 */
+#define LVO_OBTAINSEMAPHORELIST    97   /* -582 */
+#define LVO_RELEASESEMAPHORELIST   98   /* -588 */
+#define LVO_FINDSEMAPHORE          99   /* -594 */
+#define LVO_ADDSEMAPHORE          100   /* -600 */
+#define LVO_REMSEMAPHORE          101   /* -606 */
+#define LVO_SUMKICKDATA           102   /* -612 */
+#define LVO_ADDMEMLIST            103   /* -618 */
+#define LVO_COPYMEM               104   /* -624 */
+#define LVO_COPYMEMQUICK          105   /* -630 */
+#define LVO_CACHECLEARU           106   /* -636 */
+#define LVO_CACHECLEARE           107   /* -642 */
+#define LVO_CACHECONTROL          108   /* -648 */
+#define LVO_CREATEIOREQUEST       109   /* -654 */
+#define LVO_DELETEIOREQUEST       110   /* -660 */
+#define LVO_CREATEMSGPORT         111   /* -666 */
+#define LVO_DELETEMSGPORT         112   /* -672 */
+#define LVO_OBTAINSEMAPHORESHARED  113   /* -678 */
+#define LVO_ALLOCVEC              114   /* -684 */
+#define LVO_FREEVEC               115   /* -690 */
+#define LVO_CREATEPOOL            116   /* -696 */
+#define LVO_DELETEPOOL            117   /* -702 */
+#define LVO_ALLOCPOOLED           118   /* -708 */
+#define LVO_FREEPOOLED            119   /* -714 */
+#define LVO_ATTEMPTSEMAPHORESHARED  120   /* -720 */
+#define LVO_COLDREBOOT            121   /* -726 */
+#define LVO_CHILDFREE             123   /* -738 */
+#define LVO_CHILDORPHAN           124   /* -744 */
+#define LVO_CHILDSTATUS           125   /* -750 */
+#define LVO_CHILDWAIT             126   /* -756 */
+#define LVO_CACHEPREDMA           127   /* -762 */
+#define LVO_CACHEPOSTDMA          128   /* -768 */
+#define LVO_ADDMEMHANDLER         129   /* -774 */
+#define LVO_REMMEMHANDLER         130   /* -780 */
+#define LVO_OBTAINQUICKVECTOR     131   /* -786 */
+#define LVO_NEWSTACKSWAP          134   /* -804 */
+#define LVO_TAGGEDOPENLIBRARY     135   /* -810 */
+#define LVO_READGAYLE             136   /* -816 */
+#define LVO_VNEWRAWDOFMT          137   /* -822 */
+#define LVO_NEWMINLIST            138   /* -828 */
+#define LVO_AVL_ADDNODE           142   /* -852 */
+#define LVO_AVL_REMNODEBYADDRESS  143   /* -858 */
+#define LVO_AVL_REMNODEBYKEY      144   /* -864 */
+#define LVO_AVL_FINDNODE          145   /* -870 */
+#define LVO_AVL_FINDPREVNODEBYADDRESS  146   /* -876 */
+#define LVO_AVL_FINDPREVNODEBYKEY  147   /* -882 */
+#define LVO_AVL_FINDNEXTNODEBYADDRESS  148   /* -888 */
+#define LVO_AVL_FINDNEXTNODEBYKEY  149   /* -894 */
+#define LVO_AVL_FINDFIRSTNODE     150   /* -900 */
+#define LVO_AVL_FINDLASTNODE      151   /* -906 */
+#define LVO_NEWCREATETASKA        153   /* -918 */
+#define LVO_FINDTASKBYPID         166   /* -996 */
+#define LVO_ADDRESETCALLBACK      167   /* -1002 */
+#define LVO_REMRESETCALLBACK      168   /* -1008 */
+#define LVO_ALLOCVECPOOLED        169   /* -1014 */
+#define LVO_FREEVECPOOLED         170   /* -1020 */
+#define LVO_SHUTDOWNA             173   /* -1038 */
+#define LVO_NEWALLOCENTRY         174   /* -1044 */
+#define LVO_NEWADDTASK            176   /* -1056 */
+
+/* Every exec vector by name, so a vector this bridge does
+ * not serve reports WHICH ONE rather than a number. */
+#define EMU68K_EXEC_LVO_NAMES(X) \
+    X(5, "Supervisor") \
+    X(8, "Reschedule") \
+    X(11, "Exception") \
+    X(12, "InitCode") \
+    X(13, "InitStruct") \
+    X(14, "MakeLibrary") \
+    X(15, "MakeFunctions") \
+    X(16, "FindResident") \
+    X(17, "InitResident") \
+    X(18, "Alert") \
+    X(19, "Debug") \
+    X(20, "Disable") \
+    X(21, "Enable") \
+    X(22, "Forbid") \
+    X(23, "Permit") \
+    X(24, "SetSR") \
+    X(25, "SuperState") \
+    X(26, "UserState") \
+    X(27, "SetIntVector") \
+    X(28, "AddIntServer") \
+    X(29, "RemIntServer") \
+    X(30, "Cause") \
+    X(31, "Allocate") \
+    X(32, "Deallocate") \
+    X(33, "AllocMem") \
+    X(34, "AllocAbs") \
+    X(35, "FreeMem") \
+    X(36, "AvailMem") \
+    X(37, "AllocEntry") \
+    X(38, "FreeEntry") \
+    X(39, "Insert") \
+    X(40, "AddHead") \
+    X(41, "AddTail") \
+    X(42, "Remove") \
+    X(43, "RemHead") \
+    X(44, "RemTail") \
+    X(45, "Enqueue") \
+    X(46, "FindName") \
+    X(47, "AddTask") \
+    X(48, "RemTask") \
+    X(49, "FindTask") \
+    X(50, "SetTaskPri") \
+    X(51, "SetSignal") \
+    X(52, "SetExcept") \
+    X(53, "Wait") \
+    X(54, "Signal") \
+    X(55, "AllocSignal") \
+    X(56, "FreeSignal") \
+    X(57, "AllocTrap") \
+    X(58, "FreeTrap") \
+    X(59, "AddPort") \
+    X(60, "RemPort") \
+    X(61, "PutMsg") \
+    X(62, "GetMsg") \
+    X(63, "ReplyMsg") \
+    X(64, "WaitPort") \
+    X(65, "FindPort") \
+    X(66, "AddLibrary") \
+    X(67, "RemLibrary") \
+    X(68, "OldOpenLibrary") \
+    X(69, "CloseLibrary") \
+    X(70, "SetFunction") \
+    X(71, "SumLibrary") \
+    X(72, "AddDevice") \
+    X(73, "RemDevice") \
+    X(74, "OpenDevice") \
+    X(75, "CloseDevice") \
+    X(76, "DoIO") \
+    X(77, "SendIO") \
+    X(78, "CheckIO") \
+    X(79, "WaitIO") \
+    X(80, "AbortIO") \
+    X(81, "AddResource") \
+    X(82, "RemResource") \
+    X(83, "OpenResource") \
+    X(84, "RawIOInit") \
+    X(85, "RawMayGetChar") \
+    X(86, "RawPutChar") \
+    X(87, "RawDoFmt") \
+    X(88, "GetCC") \
+    X(89, "TypeOfMem") \
+    X(90, "Procure") \
+    X(91, "Vacate") \
+    X(92, "OpenLibrary") \
+    X(93, "InitSemaphore") \
+    X(94, "ObtainSemaphore") \
+    X(95, "ReleaseSemaphore") \
+    X(96, "AttemptSemaphore") \
+    X(97, "ObtainSemaphoreList") \
+    X(98, "ReleaseSemaphoreList") \
+    X(99, "FindSemaphore") \
+    X(100, "AddSemaphore") \
+    X(101, "RemSemaphore") \
+    X(102, "SumKickData") \
+    X(103, "AddMemList") \
+    X(104, "CopyMem") \
+    X(105, "CopyMemQuick") \
+    X(106, "CacheClearU") \
+    X(107, "CacheClearE") \
+    X(108, "CacheControl") \
+    X(109, "CreateIORequest") \
+    X(110, "DeleteIORequest") \
+    X(111, "CreateMsgPort") \
+    X(112, "DeleteMsgPort") \
+    X(113, "ObtainSemaphoreShared") \
+    X(114, "AllocVec") \
+    X(115, "FreeVec") \
+    X(116, "CreatePool") \
+    X(117, "DeletePool") \
+    X(118, "AllocPooled") \
+    X(119, "FreePooled") \
+    X(120, "AttemptSemaphoreShared") \
+    X(121, "ColdReboot") \
+    X(123, "ChildFree") \
+    X(124, "ChildOrphan") \
+    X(125, "ChildStatus") \
+    X(126, "ChildWait") \
+    X(127, "CachePreDMA") \
+    X(128, "CachePostDMA") \
+    X(129, "AddMemHandler") \
+    X(130, "RemMemHandler") \
+    X(131, "ObtainQuickVector") \
+    X(134, "NewStackSwap") \
+    X(135, "TaggedOpenLibrary") \
+    X(136, "ReadGayle") \
+    X(137, "VNewRawDoFmt") \
+    X(138, "NewMinList") \
+    X(142, "AVL_AddNode") \
+    X(143, "AVL_RemNodeByAddress") \
+    X(144, "AVL_RemNodeByKey") \
+    X(145, "AVL_FindNode") \
+    X(146, "AVL_FindPrevNodeByAddress") \
+    X(147, "AVL_FindPrevNodeByKey") \
+    X(148, "AVL_FindNextNodeByAddress") \
+    X(149, "AVL_FindNextNodeByKey") \
+    X(150, "AVL_FindFirstNode") \
+    X(151, "AVL_FindLastNode") \
+    X(153, "NewCreateTaskA") \
+    X(166, "FindTaskByPID") \
+    X(167, "AddResetCallback") \
+    X(168, "RemResetCallback") \
+    X(169, "AllocVecPooled") \
+    X(170, "FreeVecPooled") \
+    X(173, "ShutdownA") \
+    X(174, "NewAllocEntry") \
+    X(176, "NewAddTask") \
+    /* end */
+
+/* dos.library vector numbers from rom/dos/dos.conf. */
+#define DOS_LVO_OPEN                    5   /* -30 */
+#define DOS_LVO_CLOSE                   6   /* -36 */
+#define DOS_LVO_READ                    7   /* -42 */
+#define DOS_LVO_WRITE                   8   /* -48 */
+#define DOS_LVO_INPUT                   9   /* -54 */
+#define DOS_LVO_OUTPUT                 10   /* -60 */
+#define DOS_LVO_SEEK                   11   /* -66 */
+#define DOS_LVO_DELETEFILE             12   /* -72 */
+#define DOS_LVO_RENAME                 13   /* -78 */
+#define DOS_LVO_LOCK                   14   /* -84 */
+#define DOS_LVO_UNLOCK                 15   /* -90 */
+#define DOS_LVO_DUPLOCK                16   /* -96 */
+#define DOS_LVO_EXAMINE                17   /* -102 */
+#define DOS_LVO_EXNEXT                 18   /* -108 */
+#define DOS_LVO_INFO                   19   /* -114 */
+#define DOS_LVO_CREATEDIR              20   /* -120 */
+#define DOS_LVO_CURRENTDIR             21   /* -126 */
+#define DOS_LVO_IOERR                  22   /* -132 */
+#define DOS_LVO_CREATEPROC             23   /* -138 */
+#define DOS_LVO_EXIT                   24   /* -144 */
+#define DOS_LVO_LOADSEG                25   /* -150 */
+#define DOS_LVO_UNLOADSEG              26   /* -156 */
+#define DOS_LVO_DEVICEPROC             29   /* -174 */
+#define DOS_LVO_SETCOMMENT             30   /* -180 */
+#define DOS_LVO_SETPROTECTION          31   /* -186 */
+#define DOS_LVO_DATESTAMP              32   /* -192 */
+#define DOS_LVO_DELAY                  33   /* -198 */
+#define DOS_LVO_WAITFORCHAR            34   /* -204 */
+#define DOS_LVO_PARENTDIR              35   /* -210 */
+#define DOS_LVO_ISINTERACTIVE          36   /* -216 */
+#define DOS_LVO_EXECUTE                37   /* -222 */
+#define DOS_LVO_ALLOCDOSOBJECT         38   /* -228 */
+#define DOS_LVO_FREEDOSOBJECT          39   /* -234 */
+#define DOS_LVO_DOPKT                  40   /* -240 */
+#define DOS_LVO_SENDPKT                41   /* -246 */
+#define DOS_LVO_WAITPKT                42   /* -252 */
+#define DOS_LVO_REPLYPKT               43   /* -258 */
+#define DOS_LVO_ABORTPKT               44   /* -264 */
+#define DOS_LVO_LOCKRECORD             45   /* -270 */
+#define DOS_LVO_LOCKRECORDS            46   /* -276 */
+#define DOS_LVO_UNLOCKRECORD           47   /* -282 */
+#define DOS_LVO_UNLOCKRECORDS          48   /* -288 */
+#define DOS_LVO_SELECTINPUT            49   /* -294 */
+#define DOS_LVO_SELECTOUTPUT           50   /* -300 */
+#define DOS_LVO_FGETC                  51   /* -306 */
+#define DOS_LVO_FPUTC                  52   /* -312 */
+#define DOS_LVO_UNGETC                 53   /* -318 */
+#define DOS_LVO_FREAD                  54   /* -324 */
+#define DOS_LVO_FWRITE                 55   /* -330 */
+#define DOS_LVO_FGETS                  56   /* -336 */
+#define DOS_LVO_FPUTS                  57   /* -342 */
+#define DOS_LVO_VFWRITEF               58   /* -348 */
+#define DOS_LVO_VFPRINTF               59   /* -354 */
+#define DOS_LVO_FLUSH                  60   /* -360 */
+#define DOS_LVO_SETVBUF                61   /* -366 */
+#define DOS_LVO_DUPLOCKFROMFH          62   /* -372 */
+#define DOS_LVO_OPENFROMLOCK           63   /* -378 */
+#define DOS_LVO_PARENTOFFH             64   /* -384 */
+#define DOS_LVO_EXAMINEFH              65   /* -390 */
+#define DOS_LVO_SETFILEDATE            66   /* -396 */
+#define DOS_LVO_NAMEFROMLOCK           67   /* -402 */
+#define DOS_LVO_NAMEFROMFH             68   /* -408 */
+#define DOS_LVO_SPLITNAME              69   /* -414 */
+#define DOS_LVO_SAMELOCK               70   /* -420 */
+#define DOS_LVO_SETMODE                71   /* -426 */
+#define DOS_LVO_EXALL                  72   /* -432 */
+#define DOS_LVO_READLINK               73   /* -438 */
+#define DOS_LVO_MAKELINK               74   /* -444 */
+#define DOS_LVO_CHANGEMODE             75   /* -450 */
+#define DOS_LVO_SETFILESIZE            76   /* -456 */
+#define DOS_LVO_SETIOERR               77   /* -462 */
+#define DOS_LVO_FAULT                  78   /* -468 */
+#define DOS_LVO_PRINTFAULT             79   /* -474 */
+#define DOS_LVO_ERRORREPORT            80   /* -480 */
+#define DOS_LVO_DISPLAYERROR           81   /* -486 */
+#define DOS_LVO_CLI                    82   /* -492 */
+#define DOS_LVO_CREATENEWPROC          83   /* -498 */
+#define DOS_LVO_RUNCOMMAND             84   /* -504 */
+#define DOS_LVO_GETCONSOLETASK         85   /* -510 */
+#define DOS_LVO_SETCONSOLETASK         86   /* -516 */
+#define DOS_LVO_GETFILESYSTASK         87   /* -522 */
+#define DOS_LVO_SETFILESYSTASK         88   /* -528 */
+#define DOS_LVO_GETARGSTR              89   /* -534 */
+#define DOS_LVO_SETARGSTR              90   /* -540 */
+#define DOS_LVO_FINDCLIPROC            91   /* -546 */
+#define DOS_LVO_MAXCLI                 92   /* -552 */
+#define DOS_LVO_SETCURRENTDIRNAME      93   /* -558 */
+#define DOS_LVO_GETCURRENTDIRNAME      94   /* -564 */
+#define DOS_LVO_SETPROGRAMNAME         95   /* -570 */
+#define DOS_LVO_GETPROGRAMNAME         96   /* -576 */
+#define DOS_LVO_SETPROMPT              97   /* -582 */
+#define DOS_LVO_GETPROMPT              98   /* -588 */
+#define DOS_LVO_SETPROGRAMDIR          99   /* -594 */
+#define DOS_LVO_GETPROGRAMDIR         100   /* -600 */
+#define DOS_LVO_SYSTEMTAGLIST         101   /* -606 */
+#define DOS_LVO_ASSIGNLOCK            102   /* -612 */
+#define DOS_LVO_ASSIGNLATE            103   /* -618 */
+#define DOS_LVO_ASSIGNPATH            104   /* -624 */
+#define DOS_LVO_ASSIGNADD             105   /* -630 */
+#define DOS_LVO_REMASSIGNLIST         106   /* -636 */
+#define DOS_LVO_GETDEVICEPROC         107   /* -642 */
+#define DOS_LVO_FREEDEVICEPROC        108   /* -648 */
+#define DOS_LVO_LOCKDOSLIST           109   /* -654 */
+#define DOS_LVO_UNLOCKDOSLIST         110   /* -660 */
+#define DOS_LVO_ATTEMPTLOCKDOSLIST    111   /* -666 */
+#define DOS_LVO_REMDOSENTRY           112   /* -672 */
+#define DOS_LVO_ADDDOSENTRY           113   /* -678 */
+#define DOS_LVO_FINDDOSENTRY          114   /* -684 */
+#define DOS_LVO_NEXTDOSENTRY          115   /* -690 */
+#define DOS_LVO_MAKEDOSENTRY          116   /* -696 */
+#define DOS_LVO_FREEDOSENTRY          117   /* -702 */
+#define DOS_LVO_ISFILESYSTEM          118   /* -708 */
+#define DOS_LVO_FORMAT                119   /* -714 */
+#define DOS_LVO_RELABEL               120   /* -720 */
+#define DOS_LVO_INHIBIT               121   /* -726 */
+#define DOS_LVO_ADDBUFFERS            122   /* -732 */
+#define DOS_LVO_COMPAREDATES          123   /* -738 */
+#define DOS_LVO_DATETOSTR             124   /* -744 */
+#define DOS_LVO_STRTODATE             125   /* -750 */
+#define DOS_LVO_INTERNALLOADSEG       126   /* -756 */
+#define DOS_LVO_INTERNALUNLOADSEG     127   /* -762 */
+#define DOS_LVO_NEWLOADSEG            128   /* -768 */
+#define DOS_LVO_ADDSEGMENT            129   /* -774 */
+#define DOS_LVO_FINDSEGMENT           130   /* -780 */
+#define DOS_LVO_REMSEGMENT            131   /* -786 */
+#define DOS_LVO_CHECKSIGNAL           132   /* -792 */
+#define DOS_LVO_READARGS              133   /* -798 */
+#define DOS_LVO_FINDARG               134   /* -804 */
+#define DOS_LVO_READITEM              135   /* -810 */
+#define DOS_LVO_STRTOLONG             136   /* -816 */
+#define DOS_LVO_MATCHFIRST            137   /* -822 */
+#define DOS_LVO_MATCHNEXT             138   /* -828 */
+#define DOS_LVO_MATCHEND              139   /* -834 */
+#define DOS_LVO_PARSEPATTERN          140   /* -840 */
+#define DOS_LVO_MATCHPATTERN          141   /* -846 */
+#define DOS_LVO_FREEARGS              143   /* -858 */
+#define DOS_LVO_FILEPART              145   /* -870 */
+#define DOS_LVO_PATHPART              146   /* -876 */
+#define DOS_LVO_ADDPART               147   /* -882 */
+#define DOS_LVO_STARTNOTIFY           148   /* -888 */
+#define DOS_LVO_ENDNOTIFY             149   /* -894 */
+#define DOS_LVO_SETVAR                150   /* -900 */
+#define DOS_LVO_GETVAR                151   /* -906 */
+#define DOS_LVO_DELETEVAR             152   /* -912 */
+#define DOS_LVO_FINDVAR               153   /* -918 */
+#define DOS_LVO_CLIINIT               154   /* -924 */
+#define DOS_LVO_CLIINITNEWCLI         155   /* -930 */
+#define DOS_LVO_CLIINITRUN            156   /* -936 */
+#define DOS_LVO_WRITECHARS            157   /* -942 */
+#define DOS_LVO_PUTSTR                158   /* -948 */
+#define DOS_LVO_VPRINTF               159   /* -954 */
+#define DOS_LVO_PARSEPATTERNNOCASE    161   /* -966 */
+#define DOS_LVO_MATCHPATTERNNOCASE    162   /* -972 */
+#define DOS_LVO_DOSGETSTRING          163   /* -978 */
+#define DOS_LVO_SAMEDEVICE            164   /* -984 */
+#define DOS_LVO_EXALLEND              165   /* -990 */
+#define DOS_LVO_SETOWNER              166   /* -996 */
+#define DOS_LVO_SCANVARS              169   /* -1014 */
+#define DOS_LVO_GETSEGLISTINFO        196   /* -1176 */
+#define DOS_LVO_ASSIGNADDTOLIST       226   /* -1356 */
+#define EMU68K_DOS_LVO_NAMES(X) \
+    X(5, "Open") \
+    X(6, "Close") \
+    X(7, "Read") \
+    X(8, "Write") \
+    X(9, "Input") \
+    X(10, "Output") \
+    X(11, "Seek") \
+    X(12, "DeleteFile") \
+    X(13, "Rename") \
+    X(14, "Lock") \
+    X(15, "UnLock") \
+    X(16, "DupLock") \
+    X(17, "Examine") \
+    X(18, "ExNext") \
+    X(19, "Info") \
+    X(20, "CreateDir") \
+    X(21, "CurrentDir") \
+    X(22, "IoErr") \
+    X(23, "CreateProc") \
+    X(24, "Exit") \
+    X(25, "LoadSeg") \
+    X(26, "UnLoadSeg") \
+    X(29, "DeviceProc") \
+    X(30, "SetComment") \
+    X(31, "SetProtection") \
+    X(32, "DateStamp") \
+    X(33, "Delay") \
+    X(34, "WaitForChar") \
+    X(35, "ParentDir") \
+    X(36, "IsInteractive") \
+    X(37, "Execute") \
+    X(38, "AllocDosObject") \
+    X(39, "FreeDosObject") \
+    X(40, "DoPkt") \
+    X(41, "SendPkt") \
+    X(42, "WaitPkt") \
+    X(43, "ReplyPkt") \
+    X(44, "AbortPkt") \
+    X(45, "LockRecord") \
+    X(46, "LockRecords") \
+    X(47, "UnLockRecord") \
+    X(48, "UnLockRecords") \
+    X(49, "SelectInput") \
+    X(50, "SelectOutput") \
+    X(51, "FGetC") \
+    X(52, "FPutC") \
+    X(53, "UnGetC") \
+    X(54, "FRead") \
+    X(55, "FWrite") \
+    X(56, "FGets") \
+    X(57, "FPuts") \
+    X(58, "VFWritef") \
+    X(59, "VFPrintf") \
+    X(60, "Flush") \
+    X(61, "SetVBuf") \
+    X(62, "DupLockFromFH") \
+    X(63, "OpenFromLock") \
+    X(64, "ParentOfFH") \
+    X(65, "ExamineFH") \
+    X(66, "SetFileDate") \
+    X(67, "NameFromLock") \
+    X(68, "NameFromFH") \
+    X(69, "SplitName") \
+    X(70, "SameLock") \
+    X(71, "SetMode") \
+    X(72, "ExAll") \
+    X(73, "ReadLink") \
+    X(74, "MakeLink") \
+    X(75, "ChangeMode") \
+    X(76, "SetFileSize") \
+    X(77, "SetIoErr") \
+    X(78, "Fault") \
+    X(79, "PrintFault") \
+    X(80, "ErrorReport") \
+    X(81, "DisplayError") \
+    X(82, "Cli") \
+    X(83, "CreateNewProc") \
+    X(84, "RunCommand") \
+    X(85, "GetConsoleTask") \
+    X(86, "SetConsoleTask") \
+    X(87, "GetFileSysTask") \
+    X(88, "SetFileSysTask") \
+    X(89, "GetArgStr") \
+    X(90, "SetArgStr") \
+    X(91, "FindCliProc") \
+    X(92, "MaxCli") \
+    X(93, "SetCurrentDirName") \
+    X(94, "GetCurrentDirName") \
+    X(95, "SetProgramName") \
+    X(96, "GetProgramName") \
+    X(97, "SetPrompt") \
+    X(98, "GetPrompt") \
+    X(99, "SetProgramDir") \
+    X(100, "GetProgramDir") \
+    X(101, "SystemTagList") \
+    X(102, "AssignLock") \
+    X(103, "AssignLate") \
+    X(104, "AssignPath") \
+    X(105, "AssignAdd") \
+    X(106, "RemAssignList") \
+    X(107, "GetDeviceProc") \
+    X(108, "FreeDeviceProc") \
+    X(109, "LockDosList") \
+    X(110, "UnLockDosList") \
+    X(111, "AttemptLockDosList") \
+    X(112, "RemDosEntry") \
+    X(113, "AddDosEntry") \
+    X(114, "FindDosEntry") \
+    X(115, "NextDosEntry") \
+    X(116, "MakeDosEntry") \
+    X(117, "FreeDosEntry") \
+    X(118, "IsFileSystem") \
+    X(119, "Format") \
+    X(120, "Relabel") \
+    X(121, "Inhibit") \
+    X(122, "AddBuffers") \
+    X(123, "CompareDates") \
+    X(124, "DateToStr") \
+    X(125, "StrToDate") \
+    X(126, "InternalLoadSeg") \
+    X(127, "InternalUnLoadSeg") \
+    X(128, "NewLoadSeg") \
+    X(129, "AddSegment") \
+    X(130, "FindSegment") \
+    X(131, "RemSegment") \
+    X(132, "CheckSignal") \
+    X(133, "ReadArgs") \
+    X(134, "FindArg") \
+    X(135, "ReadItem") \
+    X(136, "StrToLong") \
+    X(137, "MatchFirst") \
+    X(138, "MatchNext") \
+    X(139, "MatchEnd") \
+    X(140, "ParsePattern") \
+    X(141, "MatchPattern") \
+    X(143, "FreeArgs") \
+    X(145, "FilePart") \
+    X(146, "PathPart") \
+    X(147, "AddPart") \
+    X(148, "StartNotify") \
+    X(149, "EndNotify") \
+    X(150, "SetVar") \
+    X(151, "GetVar") \
+    X(152, "DeleteVar") \
+    X(153, "FindVar") \
+    X(154, "CliInit") \
+    X(155, "CliInitNewcli") \
+    X(156, "CliInitRun") \
+    X(157, "WriteChars") \
+    X(158, "PutStr") \
+    X(159, "VPrintf") \
+    X(161, "ParsePatternNoCase") \
+    X(162, "MatchPatternNoCase") \
+    X(163, "DosGetString") \
+    X(164, "SameDevice") \
+    X(165, "ExAllEnd") \
+    X(166, "SetOwner") \
+    X(169, "ScanVars") \
+    X(196, "GetSegListInfo") \
+    X(226, "AssignAddToList") \
+    /* end */
+
+/* graphics.library vector numbers from rom/graphics/graphics.conf. */
+#define GRAPHICS_LVO_BLTBITMAP               5   /* -30 */
+#define GRAPHICS_LVO_BLTTEMPLATE             6   /* -36 */
+#define GRAPHICS_LVO_CLEAREOL                7   /* -42 */
+#define GRAPHICS_LVO_CLEARSCREEN             8   /* -48 */
+#define GRAPHICS_LVO_TEXTLENGTH              9   /* -54 */
+#define GRAPHICS_LVO_TEXT                   10   /* -60 */
+#define GRAPHICS_LVO_SETFONT                11   /* -66 */
+#define GRAPHICS_LVO_OPENFONT               12   /* -72 */
+#define GRAPHICS_LVO_CLOSEFONT              13   /* -78 */
+#define GRAPHICS_LVO_ASKSOFTSTYLE           14   /* -84 */
+#define GRAPHICS_LVO_SETSOFTSTYLE           15   /* -90 */
+#define GRAPHICS_LVO_ADDBOB                 16   /* -96 */
+#define GRAPHICS_LVO_ADDVSPRITE             17   /* -102 */
+#define GRAPHICS_LVO_DOCOLLISION            18   /* -108 */
+#define GRAPHICS_LVO_DRAWGLIST              19   /* -114 */
+#define GRAPHICS_LVO_INITGELS               20   /* -120 */
+#define GRAPHICS_LVO_INITMASKS              21   /* -126 */
+#define GRAPHICS_LVO_REMIBOB                22   /* -132 */
+#define GRAPHICS_LVO_REMVSPRITE             23   /* -138 */
+#define GRAPHICS_LVO_SETCOLLISION           24   /* -144 */
+#define GRAPHICS_LVO_SORTGLIST              25   /* -150 */
+#define GRAPHICS_LVO_ADDANIMOB              26   /* -156 */
+#define GRAPHICS_LVO_ANIMATE                27   /* -162 */
+#define GRAPHICS_LVO_GETGBUFFERS            28   /* -168 */
+#define GRAPHICS_LVO_INITGMASKS             29   /* -174 */
+#define GRAPHICS_LVO_DRAWELLIPSE            30   /* -180 */
+#define GRAPHICS_LVO_AREAELLIPSE            31   /* -186 */
+#define GRAPHICS_LVO_LOADRGB4               32   /* -192 */
+#define GRAPHICS_LVO_INITRASTPORT           33   /* -198 */
+#define GRAPHICS_LVO_INITVPORT              34   /* -204 */
+#define GRAPHICS_LVO_MRGCOP                 35   /* -210 */
+#define GRAPHICS_LVO_MAKEVPORT              36   /* -216 */
+#define GRAPHICS_LVO_LOADVIEW               37   /* -222 */
+#define GRAPHICS_LVO_WAITBLIT               38   /* -228 */
+#define GRAPHICS_LVO_SETRAST                39   /* -234 */
+#define GRAPHICS_LVO_MOVE                   40   /* -240 */
+#define GRAPHICS_LVO_DRAW                   41   /* -246 */
+#define GRAPHICS_LVO_AREAMOVE               42   /* -252 */
+#define GRAPHICS_LVO_AREADRAW               43   /* -258 */
+#define GRAPHICS_LVO_AREAEND                44   /* -264 */
+#define GRAPHICS_LVO_WAITTOF                45   /* -270 */
+#define GRAPHICS_LVO_QBLIT                  46   /* -276 */
+#define GRAPHICS_LVO_INITAREA               47   /* -282 */
+#define GRAPHICS_LVO_SETRGB4                48   /* -288 */
+#define GRAPHICS_LVO_QBSBLIT                49   /* -294 */
+#define GRAPHICS_LVO_BLTCLEAR               50   /* -300 */
+#define GRAPHICS_LVO_RECTFILL               51   /* -306 */
+#define GRAPHICS_LVO_BLTPATTERN             52   /* -312 */
+#define GRAPHICS_LVO_READPIXEL              53   /* -318 */
+#define GRAPHICS_LVO_WRITEPIXEL             54   /* -324 */
+#define GRAPHICS_LVO_FLOOD                  55   /* -330 */
+#define GRAPHICS_LVO_POLYDRAW               56   /* -336 */
+#define GRAPHICS_LVO_SETAPEN                57   /* -342 */
+#define GRAPHICS_LVO_SETBPEN                58   /* -348 */
+#define GRAPHICS_LVO_SETDRMD                59   /* -354 */
+#define GRAPHICS_LVO_INITVIEW               60   /* -360 */
+#define GRAPHICS_LVO_CBUMP                  61   /* -366 */
+#define GRAPHICS_LVO_CMOVE                  62   /* -372 */
+#define GRAPHICS_LVO_CWAIT                  63   /* -378 */
+#define GRAPHICS_LVO_VBEAMPOS               64   /* -384 */
+#define GRAPHICS_LVO_INITBITMAP             65   /* -390 */
+#define GRAPHICS_LVO_SCROLLRASTER           66   /* -396 */
+#define GRAPHICS_LVO_WAITBOVP               67   /* -402 */
+#define GRAPHICS_LVO_GETSPRITE              68   /* -408 */
+#define GRAPHICS_LVO_FREESPRITE             69   /* -414 */
+#define GRAPHICS_LVO_CHANGESPRITE           70   /* -420 */
+#define GRAPHICS_LVO_MOVESPRITE             71   /* -426 */
+#define GRAPHICS_LVO_LOCKLAYERROM           72   /* -432 */
+#define GRAPHICS_LVO_UNLOCKLAYERROM         73   /* -438 */
+#define GRAPHICS_LVO_SYNCSBITMAP            74   /* -444 */
+#define GRAPHICS_LVO_COPYSBITMAP            75   /* -450 */
+#define GRAPHICS_LVO_OWNBLITTER             76   /* -456 */
+#define GRAPHICS_LVO_DISOWNBLITTER          77   /* -462 */
+#define GRAPHICS_LVO_INITTMPRAS             78   /* -468 */
+#define GRAPHICS_LVO_ASKFONT                79   /* -474 */
+#define GRAPHICS_LVO_ADDFONT                80   /* -480 */
+#define GRAPHICS_LVO_REMFONT                81   /* -486 */
+#define GRAPHICS_LVO_ALLOCRASTER            82   /* -492 */
+#define GRAPHICS_LVO_FREERASTER             83   /* -498 */
+#define GRAPHICS_LVO_ANDRECTREGION          84   /* -504 */
+#define GRAPHICS_LVO_ORRECTREGION           85   /* -510 */
+#define GRAPHICS_LVO_NEWREGION              86   /* -516 */
+#define GRAPHICS_LVO_CLEARRECTREGION        87   /* -522 */
+#define GRAPHICS_LVO_CLEARREGION            88   /* -528 */
+#define GRAPHICS_LVO_DISPOSEREGION          89   /* -534 */
+#define GRAPHICS_LVO_FREEVPORTCOPLISTS      90   /* -540 */
+#define GRAPHICS_LVO_FREECOPLIST            91   /* -546 */
+#define GRAPHICS_LVO_CLIPBLIT               92   /* -552 */
+#define GRAPHICS_LVO_XORRECTREGION          93   /* -558 */
+#define GRAPHICS_LVO_FREECPRLIST            94   /* -564 */
+#define GRAPHICS_LVO_GETCOLORMAP            95   /* -570 */
+#define GRAPHICS_LVO_FREECOLORMAP           96   /* -576 */
+#define GRAPHICS_LVO_GETRGB4                97   /* -582 */
+#define GRAPHICS_LVO_SCROLLVPORT            98   /* -588 */
+#define GRAPHICS_LVO_UCOPPERLISTINIT        99   /* -594 */
+#define GRAPHICS_LVO_FREEGBUFFERS          100   /* -600 */
+#define GRAPHICS_LVO_BLTBITMAPRASTPORT     101   /* -606 */
+#define GRAPHICS_LVO_ORREGIONREGION        102   /* -612 */
+#define GRAPHICS_LVO_XORREGIONREGION       103   /* -618 */
+#define GRAPHICS_LVO_ANDREGIONREGION       104   /* -624 */
+#define GRAPHICS_LVO_SETRGB4CM             105   /* -630 */
+#define GRAPHICS_LVO_BLTMASKBITMAPRASTPORT  106   /* -636 */
+#define GRAPHICS_LVO_ADDDISPLAYDRIVERA     107   /* -642 */
+#define GRAPHICS_LVO_SETDISPLAYDRIVERCALLBACK  108   /* -648 */
+#define GRAPHICS_LVO_ATTEMPTLOCKLAYERROM   109   /* -654 */
+#define GRAPHICS_LVO_GFXNEW                110   /* -660 */
+#define GRAPHICS_LVO_GFXFREE               111   /* -666 */
+#define GRAPHICS_LVO_GFXASSOCIATE          112   /* -672 */
+#define GRAPHICS_LVO_BITMAPSCALE           113   /* -678 */
+#define GRAPHICS_LVO_SCALERDIV             114   /* -684 */
+#define GRAPHICS_LVO_TEXTEXTENT            115   /* -690 */
+#define GRAPHICS_LVO_TEXTFIT               116   /* -696 */
+#define GRAPHICS_LVO_GFXLOOKUP             117   /* -702 */
+#define GRAPHICS_LVO_VIDEOCONTROL          118   /* -708 */
+#define GRAPHICS_LVO_OPENMONITOR           119   /* -714 */
+#define GRAPHICS_LVO_CLOSEMONITOR          120   /* -720 */
+#define GRAPHICS_LVO_FINDDISPLAYINFO       121   /* -726 */
+#define GRAPHICS_LVO_NEXTDISPLAYINFO       122   /* -732 */
+#define GRAPHICS_LVO_GETDISPLAYINFODATA    126   /* -756 */
+#define GRAPHICS_LVO_FONTEXTENT            127   /* -762 */
+#define GRAPHICS_LVO_READPIXELLINE8        128   /* -768 */
+#define GRAPHICS_LVO_WRITEPIXELLINE8       129   /* -774 */
+#define GRAPHICS_LVO_READPIXELARRAY8       130   /* -780 */
+#define GRAPHICS_LVO_WRITEPIXELARRAY8      131   /* -786 */
+#define GRAPHICS_LVO_GETVPMODEID           132   /* -792 */
+#define GRAPHICS_LVO_MODENOTAVAILABLE      133   /* -798 */
+#define GRAPHICS_LVO_WEIGHTAMATCH          134   /* -804 */
+#define GRAPHICS_LVO_ERASERECT             135   /* -810 */
+#define GRAPHICS_LVO_EXTENDFONT            136   /* -816 */
+#define GRAPHICS_LVO_STRIPFONT             137   /* -822 */
+#define GRAPHICS_LVO_CALCIVG               138   /* -828 */
+#define GRAPHICS_LVO_ATTACHPALEXTRA        139   /* -834 */
+#define GRAPHICS_LVO_OBTAINBESTPENA        140   /* -840 */
+#define GRAPHICS_LVO_SETRGB32              142   /* -852 */
+#define GRAPHICS_LVO_GETAPEN               143   /* -858 */
+#define GRAPHICS_LVO_GETBPEN               144   /* -864 */
+#define GRAPHICS_LVO_GETDRMD               145   /* -870 */
+#define GRAPHICS_LVO_GETOUTLINEPEN         146   /* -876 */
+#define GRAPHICS_LVO_LOADRGB32             147   /* -882 */
+#define GRAPHICS_LVO_SETCHIPREV            148   /* -888 */
+#define GRAPHICS_LVO_SETABPENDRMD          149   /* -894 */
+#define GRAPHICS_LVO_GETRGB32              150   /* -900 */
+#define GRAPHICS_LVO_ALLOCBITMAP           153   /* -918 */
+#define GRAPHICS_LVO_FREEBITMAP            154   /* -924 */
+#define GRAPHICS_LVO_GETEXTSPRITEA         155   /* -930 */
+#define GRAPHICS_LVO_COERCEMODE            156   /* -936 */
+#define GRAPHICS_LVO_CHANGEVPBITMAP        157   /* -942 */
+#define GRAPHICS_LVO_RELEASEPEN            158   /* -948 */
+#define GRAPHICS_LVO_OBTAINPEN             159   /* -954 */
+#define GRAPHICS_LVO_GETBITMAPATTR         160   /* -960 */
+#define GRAPHICS_LVO_ALLOCDBUFINFO         161   /* -966 */
+#define GRAPHICS_LVO_FREEDBUFINFO          162   /* -972 */
+#define GRAPHICS_LVO_SETOUTLINEPEN         163   /* -978 */
+#define GRAPHICS_LVO_SETWRITEMASK          164   /* -984 */
+#define GRAPHICS_LVO_SETMAXPEN             165   /* -990 */
+#define GRAPHICS_LVO_SETRGB32CM            166   /* -996 */
+#define GRAPHICS_LVO_SCROLLRASTERBF        167   /* -1002 */
+#define GRAPHICS_LVO_FINDCOLOR             168   /* -1008 */
+#define GRAPHICS_LVO_ALLOCSPRITEDATAA      170   /* -1020 */
+#define GRAPHICS_LVO_CHANGEEXTSPRITEA      171   /* -1026 */
+#define GRAPHICS_LVO_FREESPRITEDATA        172   /* -1032 */
+#define GRAPHICS_LVO_SETRPATTRSA           173   /* -1038 */
+#define GRAPHICS_LVO_GETRPATTRSA           174   /* -1044 */
+#define GRAPHICS_LVO_BESTMODEIDA           175   /* -1050 */
+#define GRAPHICS_LVO_WRITECHUNKYPIXELS     176   /* -1056 */
+#define GRAPHICS_LVO_SETREGION             181   /* -1086 */
+#define GRAPHICS_LVO_CLEARREGIONREGION     182   /* -1092 */
+#define GRAPHICS_LVO_AREREGIONSEQUAL       183   /* -1098 */
+#define GRAPHICS_LVO_ISPOINTINREGION       184   /* -1104 */
+#define GRAPHICS_LVO_SCROLLREGION          185   /* -1110 */
+#define GRAPHICS_LVO_ANDRECTREGIONND       186   /* -1116 */
+#define GRAPHICS_LVO_ANDREGIONREGIONND     187   /* -1122 */
+#define GRAPHICS_LVO_ORRECTREGIONND        188   /* -1128 */
+#define GRAPHICS_LVO_ORREGIONREGIONND      189   /* -1134 */
+#define GRAPHICS_LVO_XORRECTREGIONND       190   /* -1140 */
+#define GRAPHICS_LVO_XORREGIONREGIONND     191   /* -1146 */
+#define GRAPHICS_LVO_CLEARRECTREGIONND     192   /* -1152 */
+#define GRAPHICS_LVO_CLEARREGIONREGIONND   193   /* -1158 */
+#define GRAPHICS_LVO_WRITEPIXELS8          197   /* -1182 */
+#define GRAPHICS_LVO_FILLRECTPENDRMD       198   /* -1188 */
+#define GRAPHICS_LVO_DORENDERFUNC          199   /* -1194 */
+#define GRAPHICS_LVO_DOPIXELFUNC           200   /* -1200 */
+#define GRAPHICS_LVO_UPDATEBITMAP          201   /* -1206 */
+#define EMU68K_GRAPHICS_LVO_NAMES(X) \
+    X(5, "BltBitMap") \
+    X(6, "BltTemplate") \
+    X(7, "ClearEOL") \
+    X(8, "ClearScreen") \
+    X(9, "TextLength") \
+    X(10, "Text") \
+    X(11, "SetFont") \
+    X(12, "OpenFont") \
+    X(13, "CloseFont") \
+    X(14, "AskSoftStyle") \
+    X(15, "SetSoftStyle") \
+    X(16, "AddBob") \
+    X(17, "AddVSprite") \
+    X(18, "DoCollision") \
+    X(19, "DrawGList") \
+    X(20, "InitGels") \
+    X(21, "InitMasks") \
+    X(22, "RemIBob") \
+    X(23, "RemVSprite") \
+    X(24, "SetCollision") \
+    X(25, "SortGList") \
+    X(26, "AddAnimOb") \
+    X(27, "Animate") \
+    X(28, "GetGBuffers") \
+    X(29, "InitGMasks") \
+    X(30, "DrawEllipse") \
+    X(31, "AreaEllipse") \
+    X(32, "LoadRGB4") \
+    X(33, "InitRastPort") \
+    X(34, "InitVPort") \
+    X(35, "MrgCop") \
+    X(36, "MakeVPort") \
+    X(37, "LoadView") \
+    X(38, "WaitBlit") \
+    X(39, "SetRast") \
+    X(40, "Move") \
+    X(41, "Draw") \
+    X(42, "AreaMove") \
+    X(43, "AreaDraw") \
+    X(44, "AreaEnd") \
+    X(45, "WaitTOF") \
+    X(46, "QBlit") \
+    X(47, "InitArea") \
+    X(48, "SetRGB4") \
+    X(49, "QBSBlit") \
+    X(50, "BltClear") \
+    X(51, "RectFill") \
+    X(52, "BltPattern") \
+    X(53, "ReadPixel") \
+    X(54, "WritePixel") \
+    X(55, "Flood") \
+    X(56, "PolyDraw") \
+    X(57, "SetAPen") \
+    X(58, "SetBPen") \
+    X(59, "SetDrMd") \
+    X(60, "InitView") \
+    X(61, "CBump") \
+    X(62, "CMove") \
+    X(63, "CWait") \
+    X(64, "VBeamPos") \
+    X(65, "InitBitMap") \
+    X(66, "ScrollRaster") \
+    X(67, "WaitBOVP") \
+    X(68, "GetSprite") \
+    X(69, "FreeSprite") \
+    X(70, "ChangeSprite") \
+    X(71, "MoveSprite") \
+    X(72, "LockLayerRom") \
+    X(73, "UnlockLayerRom") \
+    X(74, "SyncSBitMap") \
+    X(75, "CopySBitMap") \
+    X(76, "OwnBlitter") \
+    X(77, "DisownBlitter") \
+    X(78, "InitTmpRas") \
+    X(79, "AskFont") \
+    X(80, "AddFont") \
+    X(81, "RemFont") \
+    X(82, "AllocRaster") \
+    X(83, "FreeRaster") \
+    X(84, "AndRectRegion") \
+    X(85, "OrRectRegion") \
+    X(86, "NewRegion") \
+    X(87, "ClearRectRegion") \
+    X(88, "ClearRegion") \
+    X(89, "DisposeRegion") \
+    X(90, "FreeVPortCopLists") \
+    X(91, "FreeCopList") \
+    X(92, "ClipBlit") \
+    X(93, "XorRectRegion") \
+    X(94, "FreeCprList") \
+    X(95, "GetColorMap") \
+    X(96, "FreeColorMap") \
+    X(97, "GetRGB4") \
+    X(98, "ScrollVPort") \
+    X(99, "UCopperListInit") \
+    X(100, "FreeGBuffers") \
+    X(101, "BltBitMapRastPort") \
+    X(102, "OrRegionRegion") \
+    X(103, "XorRegionRegion") \
+    X(104, "AndRegionRegion") \
+    X(105, "SetRGB4CM") \
+    X(106, "BltMaskBitMapRastPort") \
+    X(107, "AddDisplayDriverA") \
+    X(108, "SetDisplayDriverCallback") \
+    X(109, "AttemptLockLayerRom") \
+    X(110, "GfxNew") \
+    X(111, "GfxFree") \
+    X(112, "GfxAssociate") \
+    X(113, "BitMapScale") \
+    X(114, "ScalerDiv") \
+    X(115, "TextExtent") \
+    X(116, "TextFit") \
+    X(117, "GfxLookUp") \
+    X(118, "VideoControl") \
+    X(119, "OpenMonitor") \
+    X(120, "CloseMonitor") \
+    X(121, "FindDisplayInfo") \
+    X(122, "NextDisplayInfo") \
+    X(126, "GetDisplayInfoData") \
+    X(127, "FontExtent") \
+    X(128, "ReadPixelLine8") \
+    X(129, "WritePixelLine8") \
+    X(130, "ReadPixelArray8") \
+    X(131, "WritePixelArray8") \
+    X(132, "GetVPModeID") \
+    X(133, "ModeNotAvailable") \
+    X(134, "WeighTAMatch") \
+    X(135, "EraseRect") \
+    X(136, "ExtendFont") \
+    X(137, "StripFont") \
+    X(138, "CalcIVG") \
+    X(139, "AttachPalExtra") \
+    X(140, "ObtainBestPenA") \
+    X(142, "SetRGB32") \
+    X(143, "GetAPen") \
+    X(144, "GetBPen") \
+    X(145, "GetDrMd") \
+    X(146, "GetOutlinePen") \
+    X(147, "LoadRGB32") \
+    X(148, "SetChipRev") \
+    X(149, "SetABPenDrMd") \
+    X(150, "GetRGB32") \
+    X(153, "AllocBitMap") \
+    X(154, "FreeBitMap") \
+    X(155, "GetExtSpriteA") \
+    X(156, "CoerceMode") \
+    X(157, "ChangeVPBitMap") \
+    X(158, "ReleasePen") \
+    X(159, "ObtainPen") \
+    X(160, "GetBitMapAttr") \
+    X(161, "AllocDBufInfo") \
+    X(162, "FreeDBufInfo") \
+    X(163, "SetOutlinePen") \
+    X(164, "SetWriteMask") \
+    X(165, "SetMaxPen") \
+    X(166, "SetRGB32CM") \
+    X(167, "ScrollRasterBF") \
+    X(168, "FindColor") \
+    X(170, "AllocSpriteDataA") \
+    X(171, "ChangeExtSpriteA") \
+    X(172, "FreeSpriteData") \
+    X(173, "SetRPAttrsA") \
+    X(174, "GetRPAttrsA") \
+    X(175, "BestModeIDA") \
+    X(176, "WriteChunkyPixels") \
+    X(181, "SetRegion") \
+    X(182, "ClearRegionRegion") \
+    X(183, "AreRegionsEqual") \
+    X(184, "IsPointInRegion") \
+    X(185, "ScrollRegion") \
+    X(186, "AndRectRegionND") \
+    X(187, "AndRegionRegionND") \
+    X(188, "OrRectRegionND") \
+    X(189, "OrRegionRegionND") \
+    X(190, "XorRectRegionND") \
+    X(191, "XorRegionRegionND") \
+    X(192, "ClearRectRegionND") \
+    X(193, "ClearRegionRegionND") \
+    X(197, "WritePixels8") \
+    X(198, "FillRectPenDrMd") \
+    X(199, "DoRenderFunc") \
+    X(200, "DoPixelFunc") \
+    X(201, "UpdateBitMap") \
+    /* end */
+
+/* intuition.library vector numbers from rom/intuition/intuition.conf. */
+#define INTUITION_LVO_ADDGADGET               7   /* -42 */
+#define INTUITION_LVO_CLEARDMREQUEST          8   /* -48 */
+#define INTUITION_LVO_CLEARMENUSTRIP          9   /* -54 */
+#define INTUITION_LVO_CLEARPOINTER           10   /* -60 */
+#define INTUITION_LVO_CLOSESCREEN            11   /* -66 */
+#define INTUITION_LVO_CLOSEWINDOW            12   /* -72 */
+#define INTUITION_LVO_CLOSEWORKBENCH         13   /* -78 */
+#define INTUITION_LVO_CURRENTTIME            14   /* -84 */
+#define INTUITION_LVO_DISPLAYALERT           15   /* -90 */
+#define INTUITION_LVO_DISPLAYBEEP            16   /* -96 */
+#define INTUITION_LVO_DOUBLECLICK            17   /* -102 */
+#define INTUITION_LVO_DRAWBORDER             18   /* -108 */
+#define INTUITION_LVO_DRAWIMAGE              19   /* -114 */
+#define INTUITION_LVO_ENDREQUEST             20   /* -120 */
+#define INTUITION_LVO_GETDEFPREFS            21   /* -126 */
+#define INTUITION_LVO_GETPREFS               22   /* -132 */
+#define INTUITION_LVO_INITREQUESTER          23   /* -138 */
+#define INTUITION_LVO_ITEMADDRESS            24   /* -144 */
+#define INTUITION_LVO_MODIFYIDCMP            25   /* -150 */
+#define INTUITION_LVO_MODIFYPROP             26   /* -156 */
+#define INTUITION_LVO_MOVESCREEN             27   /* -162 */
+#define INTUITION_LVO_MOVEWINDOW             28   /* -168 */
+#define INTUITION_LVO_OFFGADGET              29   /* -174 */
+#define INTUITION_LVO_OFFMENU                30   /* -180 */
+#define INTUITION_LVO_ONGADGET               31   /* -186 */
+#define INTUITION_LVO_ONMENU                 32   /* -192 */
+#define INTUITION_LVO_OPENSCREEN             33   /* -198 */
+#define INTUITION_LVO_OPENWINDOW             34   /* -204 */
+#define INTUITION_LVO_OPENWORKBENCH          35   /* -210 */
+#define INTUITION_LVO_PRINTITEXT             36   /* -216 */
+#define INTUITION_LVO_REFRESHGADGETS         37   /* -222 */
+#define INTUITION_LVO_REMOVEGADGET           38   /* -228 */
+#define INTUITION_LVO_REPORTMOUSE            39   /* -234 */
+#define INTUITION_LVO_REQUEST                40   /* -240 */
+#define INTUITION_LVO_SCREENTOBACK           41   /* -246 */
+#define INTUITION_LVO_SCREENTOFRONT          42   /* -252 */
+#define INTUITION_LVO_SETDMREQUEST           43   /* -258 */
+#define INTUITION_LVO_SETMENUSTRIP           44   /* -264 */
+#define INTUITION_LVO_SETPOINTER             45   /* -270 */
+#define INTUITION_LVO_SETWINDOWTITLES        46   /* -276 */
+#define INTUITION_LVO_SHOWTITLE              47   /* -282 */
+#define INTUITION_LVO_SIZEWINDOW             48   /* -288 */
+#define INTUITION_LVO_VIEWADDRESS            49   /* -294 */
+#define INTUITION_LVO_VIEWPORTADDRESS        50   /* -300 */
+#define INTUITION_LVO_WINDOWTOBACK           51   /* -306 */
+#define INTUITION_LVO_WINDOWTOFRONT          52   /* -312 */
+#define INTUITION_LVO_WINDOWLIMITS           53   /* -318 */
+#define INTUITION_LVO_SETPREFS               54   /* -324 */
+#define INTUITION_LVO_INTUITEXTLENGTH        55   /* -330 */
+#define INTUITION_LVO_WBENCHTOBACK           56   /* -336 */
+#define INTUITION_LVO_WBENCHTOFRONT          57   /* -342 */
+#define INTUITION_LVO_AUTOREQUEST            58   /* -348 */
+#define INTUITION_LVO_BEGINREFRESH           59   /* -354 */
+#define INTUITION_LVO_BUILDSYSREQUEST        60   /* -360 */
+#define INTUITION_LVO_ENDREFRESH             61   /* -366 */
+#define INTUITION_LVO_FREESYSREQUEST         62   /* -372 */
+#define INTUITION_LVO_MAKESCREEN             63   /* -378 */
+#define INTUITION_LVO_REMAKEDISPLAY          64   /* -384 */
+#define INTUITION_LVO_RETHINKDISPLAY         65   /* -390 */
+#define INTUITION_LVO_ALLOCREMEMBER          66   /* -396 */
+#define INTUITION_LVO_ALOHAWORKBENCH         67   /* -402 */
+#define INTUITION_LVO_FREEREMEMBER           68   /* -408 */
+#define INTUITION_LVO_LOCKIBASE              69   /* -414 */
+#define INTUITION_LVO_UNLOCKIBASE            70   /* -420 */
+#define INTUITION_LVO_GETSCREENDATA          71   /* -426 */
+#define INTUITION_LVO_REFRESHGLIST           72   /* -432 */
+#define INTUITION_LVO_ADDGLIST               73   /* -438 */
+#define INTUITION_LVO_REMOVEGLIST            74   /* -444 */
+#define INTUITION_LVO_ACTIVATEWINDOW         75   /* -450 */
+#define INTUITION_LVO_REFRESHWINDOWFRAME     76   /* -456 */
+#define INTUITION_LVO_ACTIVATEGADGET         77   /* -462 */
+#define INTUITION_LVO_NEWMODIFYPROP          78   /* -468 */
+#define INTUITION_LVO_QUERYOVERSCAN          79   /* -474 */
+#define INTUITION_LVO_MOVEWINDOWINFRONTOF    80   /* -480 */
+#define INTUITION_LVO_CHANGEWINDOWBOX        81   /* -486 */
+#define INTUITION_LVO_SETEDITHOOK            82   /* -492 */
+#define INTUITION_LVO_SETMOUSEQUEUE          83   /* -498 */
+#define INTUITION_LVO_ZIPWINDOW              84   /* -504 */
+#define INTUITION_LVO_LOCKPUBSCREEN          85   /* -510 */
+#define INTUITION_LVO_UNLOCKPUBSCREEN        86   /* -516 */
+#define INTUITION_LVO_LOCKPUBSCREENLIST      87   /* -522 */
+#define INTUITION_LVO_UNLOCKPUBSCREENLIST    88   /* -528 */
+#define INTUITION_LVO_NEXTPUBSCREEN          89   /* -534 */
+#define INTUITION_LVO_SETDEFAULTPUBSCREEN    90   /* -540 */
+#define INTUITION_LVO_SETPUBSCREENMODES      91   /* -546 */
+#define INTUITION_LVO_PUBSCREENSTATUS        92   /* -552 */
+#define INTUITION_LVO_OBTAINGIRPORT          93   /* -558 */
+#define INTUITION_LVO_RELEASEGIRPORT         94   /* -564 */
+#define INTUITION_LVO_GADGETMOUSE            95   /* -570 */
+#define INTUITION_LVO_SETIPREFS              96   /* -576 */
+#define INTUITION_LVO_GETDEFAULTPUBSCREEN    97   /* -582 */
+#define INTUITION_LVO_EASYREQUESTARGS        98   /* -588 */
+#define INTUITION_LVO_BUILDEASYREQUESTARGS   99   /* -594 */
+#define INTUITION_LVO_SYSREQHANDLER         100   /* -600 */
+#define INTUITION_LVO_OPENWINDOWTAGLIST     101   /* -606 */
+#define INTUITION_LVO_OPENSCREENTAGLIST     102   /* -612 */
+#define INTUITION_LVO_DRAWIMAGESTATE        103   /* -618 */
+#define INTUITION_LVO_POINTINIMAGE          104   /* -624 */
+#define INTUITION_LVO_ERASEIMAGE            105   /* -630 */
+#define INTUITION_LVO_NEWOBJECTA            106   /* -636 */
+#define INTUITION_LVO_DISPOSEOBJECT         107   /* -642 */
+#define INTUITION_LVO_SETATTRSA             108   /* -648 */
+#define INTUITION_LVO_GETATTR               109   /* -654 */
+#define INTUITION_LVO_SETGADGETATTRSA       110   /* -660 */
+#define INTUITION_LVO_NEXTOBJECT            111   /* -666 */
+#define INTUITION_LVO_FINDCLASS             112   /* -672 */
+#define INTUITION_LVO_MAKECLASS             113   /* -678 */
+#define INTUITION_LVO_ADDCLASS              114   /* -684 */
+#define INTUITION_LVO_GETSCREENDRAWINFO     115   /* -690 */
+#define INTUITION_LVO_FREESCREENDRAWINFO    116   /* -696 */
+#define INTUITION_LVO_RESETMENUSTRIP        117   /* -702 */
+#define INTUITION_LVO_REMOVECLASS           118   /* -708 */
+#define INTUITION_LVO_FREECLASS             119   /* -714 */
+#define INTUITION_LVO_ALLOCSCREENBUFFER     128   /* -768 */
+#define INTUITION_LVO_FREESCREENBUFFER      129   /* -774 */
+#define INTUITION_LVO_CHANGESCREENBUFFER    130   /* -780 */
+#define INTUITION_LVO_SCREENDEPTH           131   /* -786 */
+#define INTUITION_LVO_SCREENPOSITION        132   /* -792 */
+#define INTUITION_LVO_SCROLLWINDOWRASTER    133   /* -798 */
+#define INTUITION_LVO_LENDMENUS             134   /* -804 */
+#define INTUITION_LVO_DOGADGETMETHODA       135   /* -810 */
+#define INTUITION_LVO_SETWINDOWPOINTERA     136   /* -816 */
+#define INTUITION_LVO_TIMEDDISPLAYALERT     137   /* -822 */
+#define INTUITION_LVO_HELPCONTROL           138   /* -828 */
+#define INTUITION_LVO_ISWINDOWVISIBLE       139   /* -834 */
+#define INTUITION_LVO_SHOWWINDOW            140   /* -840 */
+#define INTUITION_LVO_HIDEWINDOW            141   /* -846 */
+#define INTUITION_LVO_CHANGEWINDOWSHAPE     143   /* -858 */
+#define INTUITION_LVO_SETDEFAULTSCREENFONT  144   /* -864 */
+#define INTUITION_LVO_DONOTIFY              145   /* -870 */
+#define INTUITION_LVO_FREEICDATA            146   /* -876 */
+#define INTUITION_LVO_ALLOCINTUIMESSAGE     148   /* -888 */
+#define INTUITION_LVO_FREEINTUIMESSAGE      149   /* -894 */
+#define INTUITION_LVO_SENDINTUIMESSAGE      151   /* -906 */
+#define INTUITION_LVO_CHANGEDECORATION      152   /* -912 */
+#define INTUITION_LVO_STARTSCREENNOTIFYTAGLIST  154   /* -924 */
+#define INTUITION_LVO_ENDSCREENNOTIFY       155   /* -930 */
+#define INTUITION_LVO_GETDRAWINFOATTR       156   /* -936 */
+#define INTUITION_LVO_WINDOWACTION          157   /* -942 */
+#define INTUITION_LVO_SCROLLWINDOWRASTERNOFILL  159   /* -954 */
+#define INTUITION_LVO_SETPOINTERBOUNDS      160   /* -960 */
+#define INTUITION_LVO_GETMONITORLIST        161   /* -966 */
+#define INTUITION_LVO_FREEMONITORLIST       162   /* -972 */
+#define EMU68K_INTUITION_LVO_NAMES(X) \
+    X(7, "AddGadget") \
+    X(8, "ClearDMRequest") \
+    X(9, "ClearMenuStrip") \
+    X(10, "ClearPointer") \
+    X(11, "CloseScreen") \
+    X(12, "CloseWindow") \
+    X(13, "CloseWorkBench") \
+    X(14, "CurrentTime") \
+    X(15, "DisplayAlert") \
+    X(16, "DisplayBeep") \
+    X(17, "DoubleClick") \
+    X(18, "DrawBorder") \
+    X(19, "DrawImage") \
+    X(20, "EndRequest") \
+    X(21, "GetDefPrefs") \
+    X(22, "GetPrefs") \
+    X(23, "InitRequester") \
+    X(24, "ItemAddress") \
+    X(25, "ModifyIDCMP") \
+    X(26, "ModifyProp") \
+    X(27, "MoveScreen") \
+    X(28, "MoveWindow") \
+    X(29, "OffGadget") \
+    X(30, "OffMenu") \
+    X(31, "OnGadget") \
+    X(32, "OnMenu") \
+    X(33, "OpenScreen") \
+    X(34, "OpenWindow") \
+    X(35, "OpenWorkBench") \
+    X(36, "PrintIText") \
+    X(37, "RefreshGadgets") \
+    X(38, "RemoveGadget") \
+    X(39, "ReportMouse") \
+    X(40, "Request") \
+    X(41, "ScreenToBack") \
+    X(42, "ScreenToFront") \
+    X(43, "SetDMRequest") \
+    X(44, "SetMenuStrip") \
+    X(45, "SetPointer") \
+    X(46, "SetWindowTitles") \
+    X(47, "ShowTitle") \
+    X(48, "SizeWindow") \
+    X(49, "ViewAddress") \
+    X(50, "ViewPortAddress") \
+    X(51, "WindowToBack") \
+    X(52, "WindowToFront") \
+    X(53, "WindowLimits") \
+    X(54, "SetPrefs") \
+    X(55, "IntuiTextLength") \
+    X(56, "WBenchToBack") \
+    X(57, "WBenchToFront") \
+    X(58, "AutoRequest") \
+    X(59, "BeginRefresh") \
+    X(60, "BuildSysRequest") \
+    X(61, "EndRefresh") \
+    X(62, "FreeSysRequest") \
+    X(63, "MakeScreen") \
+    X(64, "RemakeDisplay") \
+    X(65, "RethinkDisplay") \
+    X(66, "AllocRemember") \
+    X(67, "AlohaWorkbench") \
+    X(68, "FreeRemember") \
+    X(69, "LockIBase") \
+    X(70, "UnlockIBase") \
+    X(71, "GetScreenData") \
+    X(72, "RefreshGList") \
+    X(73, "AddGList") \
+    X(74, "RemoveGList") \
+    X(75, "ActivateWindow") \
+    X(76, "RefreshWindowFrame") \
+    X(77, "ActivateGadget") \
+    X(78, "NewModifyProp") \
+    X(79, "QueryOverscan") \
+    X(80, "MoveWindowInFrontOf") \
+    X(81, "ChangeWindowBox") \
+    X(82, "SetEditHook") \
+    X(83, "SetMouseQueue") \
+    X(84, "ZipWindow") \
+    X(85, "LockPubScreen") \
+    X(86, "UnlockPubScreen") \
+    X(87, "LockPubScreenList") \
+    X(88, "UnlockPubScreenList") \
+    X(89, "NextPubScreen") \
+    X(90, "SetDefaultPubScreen") \
+    X(91, "SetPubScreenModes") \
+    X(92, "PubScreenStatus") \
+    X(93, "ObtainGIRPort") \
+    X(94, "ReleaseGIRPort") \
+    X(95, "GadgetMouse") \
+    X(96, "SetIPrefs") \
+    X(97, "GetDefaultPubScreen") \
+    X(98, "EasyRequestArgs") \
+    X(99, "BuildEasyRequestArgs") \
+    X(100, "SysReqHandler") \
+    X(101, "OpenWindowTagList") \
+    X(102, "OpenScreenTagList") \
+    X(103, "DrawImageState") \
+    X(104, "PointInImage") \
+    X(105, "EraseImage") \
+    X(106, "NewObjectA") \
+    X(107, "DisposeObject") \
+    X(108, "SetAttrsA") \
+    X(109, "GetAttr") \
+    X(110, "SetGadgetAttrsA") \
+    X(111, "NextObject") \
+    X(112, "FindClass") \
+    X(113, "MakeClass") \
+    X(114, "AddClass") \
+    X(115, "GetScreenDrawInfo") \
+    X(116, "FreeScreenDrawInfo") \
+    X(117, "ResetMenuStrip") \
+    X(118, "RemoveClass") \
+    X(119, "FreeClass") \
+    X(128, "AllocScreenBuffer") \
+    X(129, "FreeScreenBuffer") \
+    X(130, "ChangeScreenBuffer") \
+    X(131, "ScreenDepth") \
+    X(132, "ScreenPosition") \
+    X(133, "ScrollWindowRaster") \
+    X(134, "LendMenus") \
+    X(135, "DoGadgetMethodA") \
+    X(136, "SetWindowPointerA") \
+    X(137, "TimedDisplayAlert") \
+    X(138, "HelpControl") \
+    X(139, "IsWindowVisible") \
+    X(140, "ShowWindow") \
+    X(141, "HideWindow") \
+    X(143, "ChangeWindowShape") \
+    X(144, "SetDefaultScreenFont") \
+    X(145, "DoNotify") \
+    X(146, "FreeICData") \
+    X(148, "AllocIntuiMessage") \
+    X(149, "FreeIntuiMessage") \
+    X(151, "SendIntuiMessage") \
+    X(152, "ChangeDecoration") \
+    X(154, "StartScreenNotifyTagList") \
+    X(155, "EndScreenNotify") \
+    X(156, "GetDrawInfoAttr") \
+    X(157, "WindowAction") \
+    X(159, "ScrollWindowRasterNoFill") \
+    X(160, "SetPointerBounds") \
+    X(161, "GetMonitorList") \
+    X(162, "FreeMonitorList") \
+    /* end */
+
+/* layers.library vector numbers from rom/hyperlayers/layers.conf. */
+#define LAYERS_LVO_INITLAYERS              5   /* -30 */
+#define LAYERS_LVO_CREATEUPFRONTLAYER      6   /* -36 */
+#define LAYERS_LVO_CREATEBEHINDLAYER       7   /* -42 */
+#define LAYERS_LVO_UPFRONTLAYER            8   /* -48 */
+#define LAYERS_LVO_BEHINDLAYER             9   /* -54 */
+#define LAYERS_LVO_MOVELAYER              10   /* -60 */
+#define LAYERS_LVO_SIZELAYER              11   /* -66 */
+#define LAYERS_LVO_SCROLLLAYER            12   /* -72 */
+#define LAYERS_LVO_BEGINUPDATE            13   /* -78 */
+#define LAYERS_LVO_ENDUPDATE              14   /* -84 */
+#define LAYERS_LVO_DELETELAYER            15   /* -90 */
+#define LAYERS_LVO_LOCKLAYER              16   /* -96 */
+#define LAYERS_LVO_UNLOCKLAYER            17   /* -102 */
+#define LAYERS_LVO_LOCKLAYERS             18   /* -108 */
+#define LAYERS_LVO_UNLOCKLAYERS           19   /* -114 */
+#define LAYERS_LVO_LOCKLAYERINFO          20   /* -120 */
+#define LAYERS_LVO_SWAPBITSRASTPORTCLIPRECT   21   /* -126 */
+#define LAYERS_LVO_WHICHLAYER             22   /* -132 */
+#define LAYERS_LVO_UNLOCKLAYERINFO        23   /* -138 */
+#define LAYERS_LVO_NEWLAYERINFO           24   /* -144 */
+#define LAYERS_LVO_DISPOSELAYERINFO       25   /* -150 */
+#define LAYERS_LVO_FATTENLAYERINFO        26   /* -156 */
+#define LAYERS_LVO_THINLAYERINFO          27   /* -162 */
+#define LAYERS_LVO_MOVELAYERINFRONTOF     28   /* -168 */
+#define LAYERS_LVO_INSTALLCLIPREGION      29   /* -174 */
+#define LAYERS_LVO_MOVESIZELAYER          30   /* -180 */
+#define LAYERS_LVO_CREATEUPFRONTHOOKLAYER   31   /* -186 */
+#define LAYERS_LVO_CREATEBEHINDHOOKLAYER   32   /* -192 */
+#define LAYERS_LVO_INSTALLLAYERHOOK       33   /* -198 */
+#define LAYERS_LVO_INSTALLLAYERINFOHOOK   34   /* -204 */
+#define LAYERS_LVO_SORTLAYERCR            35   /* -210 */
+#define LAYERS_LVO_DOHOOKCLIPRECTS        36   /* -216 */
+#define LAYERS_LVO_CHANGELAYERSHAPE       37   /* -222 */
+#define LAYERS_LVO_SCALELAYER             38   /* -228 */
+#define LAYERS_LVO_CREATEUPFRONTLAYERTAGLIST   39   /* -234 */
+#define LAYERS_LVO_CREATEBEHINDLAYERTAGLIST   40   /* -240 */
+#define LAYERS_LVO_CHANGELAYERVISIBILITY   41   /* -246 */
+#define LAYERS_LVO_ISLAYERVISIBLE         43   /* -258 */
+#define LAYERS_LVO_ISLAYERHIDDENBYSIBLING   44   /* -264 */
+#define LAYERS_LVO_COLLECTPIXELSLAYER     45   /* -270 */
+#define EMU68K_LAYERS_LVO_NAMES(X) \
+    X(5, "InitLayers") \
+    X(6, "CreateUpfrontLayer") \
+    X(7, "CreateBehindLayer") \
+    X(8, "UpfrontLayer") \
+    X(9, "BehindLayer") \
+    X(10, "MoveLayer") \
+    X(11, "SizeLayer") \
+    X(12, "ScrollLayer") \
+    X(13, "BeginUpdate") \
+    X(14, "EndUpdate") \
+    X(15, "DeleteLayer") \
+    X(16, "LockLayer") \
+    X(17, "UnlockLayer") \
+    X(18, "LockLayers") \
+    X(19, "UnlockLayers") \
+    X(20, "LockLayerInfo") \
+    X(21, "SwapBitsRastPortClipRect") \
+    X(22, "WhichLayer") \
+    X(23, "UnlockLayerInfo") \
+    X(24, "NewLayerInfo") \
+    X(25, "DisposeLayerInfo") \
+    X(26, "FattenLayerInfo") \
+    X(27, "ThinLayerInfo") \
+    X(28, "MoveLayerInFrontOf") \
+    X(29, "InstallClipRegion") \
+    X(30, "MoveSizeLayer") \
+    X(31, "CreateUpfrontHookLayer") \
+    X(32, "CreateBehindHookLayer") \
+    X(33, "InstallLayerHook") \
+    X(34, "InstallLayerInfoHook") \
+    X(35, "SortLayerCR") \
+    X(36, "DoHookClipRects") \
+    X(37, "ChangeLayerShape") \
+    X(38, "ScaleLayer") \
+    X(39, "CreateUpfrontLayerTagList") \
+    X(40, "CreateBehindLayerTagList") \
+    X(41, "ChangeLayerVisibility") \
+    X(43, "IsLayerVisible") \
+    X(44, "IsLayerHiddenBySibling") \
+    X(45, "CollectPixelsLayer") \
+    /* end */
+
+/* utility.library vector numbers from rom/utility/utility.conf. */
+#define UTILITY_LVO_FINDTAGITEM             5   /* -30 */
+#define UTILITY_LVO_GETTAGDATA              6   /* -36 */
+#define UTILITY_LVO_PACKBOOLTAGS            7   /* -42 */
+#define UTILITY_LVO_NEXTTAGITEM             8   /* -48 */
+#define UTILITY_LVO_FILTERTAGCHANGES        9   /* -54 */
+#define UTILITY_LVO_MAPTAGS                10   /* -60 */
+#define UTILITY_LVO_ALLOCATETAGITEMS       11   /* -66 */
+#define UTILITY_LVO_CLONETAGITEMS          12   /* -72 */
+#define UTILITY_LVO_FREETAGITEMS           13   /* -78 */
+#define UTILITY_LVO_REFRESHTAGITEMCLONES   14   /* -84 */
+#define UTILITY_LVO_TAGINARRAY             15   /* -90 */
+#define UTILITY_LVO_FILTERTAGITEMS         16   /* -96 */
+#define UTILITY_LVO_CALLHOOKPKT            17   /* -102 */
+#define UTILITY_LVO_AMIGA2DATE             20   /* -120 */
+#define UTILITY_LVO_DATE2AMIGA             21   /* -126 */
+#define UTILITY_LVO_CHECKDATE              22   /* -132 */
+#define UTILITY_LVO_SMULT32                23   /* -138 */
+#define UTILITY_LVO_UMULT32                24   /* -144 */
+#define UTILITY_LVO_SDIVMOD32              25   /* -150 */
+#define UTILITY_LVO_UDIVMOD32              26   /* -156 */
+#define UTILITY_LVO_STRICMP                27   /* -162 */
+#define UTILITY_LVO_STRNICMP               28   /* -168 */
+#define UTILITY_LVO_TOUPPER                29   /* -174 */
+#define UTILITY_LVO_TOLOWER                30   /* -180 */
+#define UTILITY_LVO_APPLYTAGCHANGES        31   /* -186 */
+#define UTILITY_LVO_SMULT64                33   /* -198 */
+#define UTILITY_LVO_UMULT64                34   /* -204 */
+#define UTILITY_LVO_PACKSTRUCTURETAGS      35   /* -210 */
+#define UTILITY_LVO_UNPACKSTRUCTURETAGS    36   /* -216 */
+#define UTILITY_LVO_ADDNAMEDOBJECT         37   /* -222 */
+#define UTILITY_LVO_ALLOCNAMEDOBJECTA      38   /* -228 */
+#define UTILITY_LVO_ATTEMPTREMNAMEDOBJECT   39   /* -234 */
+#define UTILITY_LVO_FINDNAMEDOBJECT        40   /* -240 */
+#define UTILITY_LVO_FREENAMEDOBJECT        41   /* -246 */
+#define UTILITY_LVO_NAMEDOBJECTNAME        42   /* -252 */
+#define UTILITY_LVO_RELEASENAMEDOBJECT     43   /* -258 */
+#define UTILITY_LVO_REMNAMEDOBJECT         44   /* -264 */
+#define UTILITY_LVO_GETUNIQUEID            45   /* -270 */
+#define UTILITY_LVO_STRLCPY                50   /* -300 */
+#define UTILITY_LVO_STRLCAT                51   /* -306 */
+#define UTILITY_LVO_VSNPRINTF              52   /* -312 */
+#define UTILITY_LVO_SETMEM                 66   /* -396 */
+#define EMU68K_UTILITY_LVO_NAMES(X) \
+    X(5, "FindTagItem") \
+    X(6, "GetTagData") \
+    X(7, "PackBoolTags") \
+    X(8, "NextTagItem") \
+    X(9, "FilterTagChanges") \
+    X(10, "MapTags") \
+    X(11, "AllocateTagItems") \
+    X(12, "CloneTagItems") \
+    X(13, "FreeTagItems") \
+    X(14, "RefreshTagItemClones") \
+    X(15, "TagInArray") \
+    X(16, "FilterTagItems") \
+    X(17, "CallHookPkt") \
+    X(20, "Amiga2Date") \
+    X(21, "Date2Amiga") \
+    X(22, "CheckDate") \
+    X(23, "SMult32") \
+    X(24, "UMult32") \
+    X(25, "SDivMod32") \
+    X(26, "UDivMod32") \
+    X(27, "Stricmp") \
+    X(28, "Strnicmp") \
+    X(29, "ToUpper") \
+    X(30, "ToLower") \
+    X(31, "ApplyTagChanges") \
+    X(33, "SMult64") \
+    X(34, "UMult64") \
+    X(35, "PackStructureTags") \
+    X(36, "UnpackStructureTags") \
+    X(37, "AddNamedObject") \
+    X(38, "AllocNamedObjectA") \
+    X(39, "AttemptRemNamedObject") \
+    X(40, "FindNamedObject") \
+    X(41, "FreeNamedObject") \
+    X(42, "NamedObjectName") \
+    X(43, "ReleaseNamedObject") \
+    X(44, "RemNamedObject") \
+    X(45, "GetUniqueID") \
+    X(50, "Strlcpy") \
+    X(51, "Strlcat") \
+    X(52, "VSNPrintf") \
+    X(66, "SetMem") \
+    /* end */
+
+/* cybergraphics.library vector numbers from workbench/libs/cgfx/cybergraphics.conf. */
+#define CYBERGRAPHICS_LVO_ISCYBERMODEID           9   /* -54 */
+#define CYBERGRAPHICS_LVO_BESTCMODEIDTAGLIST     10   /* -60 */
+#define CYBERGRAPHICS_LVO_ALLOCCMODELISTTAGLIST   12   /* -72 */
+#define CYBERGRAPHICS_LVO_FREECMODELIST          13   /* -78 */
+#define CYBERGRAPHICS_LVO_SCALEPIXELARRAY        15   /* -90 */
+#define CYBERGRAPHICS_LVO_GETCYBERMAPATTR        16   /* -96 */
+#define CYBERGRAPHICS_LVO_GETCYBERIDATTR         17   /* -102 */
+#define CYBERGRAPHICS_LVO_READRGBPIXEL           18   /* -108 */
+#define CYBERGRAPHICS_LVO_WRITERGBPIXEL          19   /* -114 */
+#define CYBERGRAPHICS_LVO_READPIXELARRAY         20   /* -120 */
+#define CYBERGRAPHICS_LVO_WRITEPIXELARRAY        21   /* -126 */
+#define CYBERGRAPHICS_LVO_MOVEPIXELARRAY         22   /* -132 */
+#define CYBERGRAPHICS_LVO_INVERTPIXELARRAY       24   /* -144 */
+#define CYBERGRAPHICS_LVO_FILLPIXELARRAY         25   /* -150 */
+#define CYBERGRAPHICS_LVO_DOCDRAWMETHODTAGLIST   26   /* -156 */
+#define CYBERGRAPHICS_LVO_CVIDEOCTRLTAGLIST      27   /* -162 */
+#define CYBERGRAPHICS_LVO_LOCKBITMAPTAGLIST      28   /* -168 */
+#define CYBERGRAPHICS_LVO_UNLOCKBITMAP           29   /* -174 */
+#define CYBERGRAPHICS_LVO_UNLOCKBITMAPTAGLIST    30   /* -180 */
+#define CYBERGRAPHICS_LVO_EXTRACTCOLOR           31   /* -186 */
+#define CYBERGRAPHICS_LVO_WRITELUTPIXELARRAY     33   /* -198 */
+#define CYBERGRAPHICS_LVO_WRITEPIXELARRAYALPHA   36   /* -216 */
+#define CYBERGRAPHICS_LVO_BLTTEMPLATEALPHA       37   /* -222 */
+#define CYBERGRAPHICS_LVO_PROCESSPIXELARRAY      38   /* -228 */
+#define EMU68K_CYBERGRAPHICS_LVO_NAMES(X) \
+    X(9, "IsCyberModeID") \
+    X(10, "BestCModeIDTagList") \
+    X(12, "AllocCModeListTagList") \
+    X(13, "FreeCModeList") \
+    X(15, "ScalePixelArray") \
+    X(16, "GetCyberMapAttr") \
+    X(17, "GetCyberIDAttr") \
+    X(18, "ReadRGBPixel") \
+    X(19, "WriteRGBPixel") \
+    X(20, "ReadPixelArray") \
+    X(21, "WritePixelArray") \
+    X(22, "MovePixelArray") \
+    X(24, "InvertPixelArray") \
+    X(25, "FillPixelArray") \
+    X(26, "DoCDrawMethodTagList") \
+    X(27, "CVideoCtrlTagList") \
+    X(28, "LockBitMapTagList") \
+    X(29, "UnLockBitMap") \
+    X(30, "UnLockBitMapTagList") \
+    X(31, "ExtractColor") \
+    X(33, "WriteLUTPixelArray") \
+    X(36, "WritePixelArrayAlpha") \
+    X(37, "BltTemplateAlpha") \
+    X(38, "ProcessPixelArray") \
+    /* end */
+
+/* gadtools.library vector numbers from workbench/libs/gadtools/gadtools.conf. */
+#define GADTOOLS_LVO_CREATEGADGETA           5   /* -30 */
+#define GADTOOLS_LVO_FREEGADGETS             6   /* -36 */
+#define GADTOOLS_LVO_GT_SETGADGETATTRSA      7   /* -42 */
+#define GADTOOLS_LVO_CREATEMENUSA            8   /* -48 */
+#define GADTOOLS_LVO_FREEMENUS               9   /* -54 */
+#define GADTOOLS_LVO_LAYOUTMENUITEMSA       10   /* -60 */
+#define GADTOOLS_LVO_LAYOUTMENUSA           11   /* -66 */
+#define GADTOOLS_LVO_GT_GETIMSG             12   /* -72 */
+#define GADTOOLS_LVO_GT_REPLYIMSG           13   /* -78 */
+#define GADTOOLS_LVO_GT_REFRESHWINDOW       14   /* -84 */
+#define GADTOOLS_LVO_GT_BEGINREFRESH        15   /* -90 */
+#define GADTOOLS_LVO_GT_ENDREFRESH          16   /* -96 */
+#define GADTOOLS_LVO_GT_FILTERIMSG          17   /* -102 */
+#define GADTOOLS_LVO_GT_POSTFILTERIMSG      18   /* -108 */
+#define GADTOOLS_LVO_CREATECONTEXT          19   /* -114 */
+#define GADTOOLS_LVO_DRAWBEVELBOXA          20   /* -120 */
+#define GADTOOLS_LVO_GETVISUALINFOA         21   /* -126 */
+#define GADTOOLS_LVO_FREEVISUALINFO         22   /* -132 */
+#define GADTOOLS_LVO_GT_GETGADGETATTRSA     29   /* -174 */
+#define EMU68K_GADTOOLS_LVO_NAMES(X) \
+    X(5, "CreateGadgetA") \
+    X(6, "FreeGadgets") \
+    X(7, "GT_SetGadgetAttrsA") \
+    X(8, "CreateMenusA") \
+    X(9, "FreeMenus") \
+    X(10, "LayoutMenuItemsA") \
+    X(11, "LayoutMenusA") \
+    X(12, "GT_GetIMsg") \
+    X(13, "GT_ReplyIMsg") \
+    X(14, "GT_RefreshWindow") \
+    X(15, "GT_BeginRefresh") \
+    X(16, "GT_EndRefresh") \
+    X(17, "GT_FilterIMsg") \
+    X(18, "GT_PostFilterIMsg") \
+    X(19, "CreateContext") \
+    X(20, "DrawBevelBoxA") \
+    X(21, "GetVisualInfoA") \
+    X(22, "FreeVisualInfo") \
+    X(29, "GT_GetGadgetAttrsA") \
+    /* end */
+
 #endif /* EMU68K_GENLIBS_H */

@@ -4,7 +4,7 @@
 # keyboard + mouse input.
 #
 # Run this from a GUI session (Terminal.app, not over plain ssh): a window titled
-# "AROS" opens showing the blue Workbench screen and the boot console. Click the
+# "Macaros" opens showing the blue Workbench screen and the boot console. Click the
 # window to give it keyboard focus, then type at the "1> " shell prompt.
 #
 #   Dir MacRO:     list the shared Mac folder (read-only volume)

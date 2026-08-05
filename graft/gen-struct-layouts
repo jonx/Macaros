@@ -39,25 +39,36 @@ CLANG = os.environ.get("AROS_CLANG",
 # here because they cross as tokens and are never rebuilt.
 HEADERS = [
     "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
-    "utility/tagitem.h", "utility/hooks.h", "exec/lists.h", "exec/ports.h",
+    "dos/datetime.h", "dos/rdargs.h", "dos/var.h",
+    "utility/tagitem.h", "utility/hooks.h", "utility/date.h",
+    "exec/lists.h", "exec/ports.h",
     "exec/tasks.h", "exec/execbase.h", "exec/libraries.h",
+    "exec/semaphores.h", "exec/memory.h", "exec/interrupts.h",
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
     "graphics/regions.h", "graphics/rastport.h", "graphics/gfx.h",
     "graphics/text.h", "graphics/displayinfo.h",
+    "graphics/gels.h", "graphics/copper.h", "graphics/sprite.h",
     "intuition/preferences.h", "intuition/screens.h",
     "libraries/gadtools.h",
+    "gadgets/colorwheel.h",
+    "cybergraphx/cybergraphics.h",
 ]
 
 TYPES = [
-    "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "InfoData",
+    "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "DateTime", "CSource", "InfoData",
+    "DosPacket", "LocalVar", "ExAllControl",
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
-    "Window", "Screen", "RastPort", "Preferences", "BitMap",
-    "TextAttr", "TextFont", "TextExtent", "IntuiText",
+    "Window", "Screen", "NewWindow", "NewScreen", "RastPort", "Preferences", "BitMap",
+    "AreaInfo", "TmpRas", "GelsInfo", "collTable", "AnimOb", "AnimComp",
+    "Bob", "VSprite", "UCopList", "CopList", "CopIns", "SimpleSprite",
+    "TextAttr", "TextFont", "TextExtent", "IntuiText", "EasyStruct",
+    "ColorWheelHSB", "ColorWheelRGB",
     "DimensionInfo", "DrawInfo",
-    "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage",
+    "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage", "Remember",
     "Gadget", "ExtGadget",
+    "CyberModeNode", "CDrawMsg",
 ]
 
 # Not marshalled, read by OFFSET: the structures the 68k execution service
@@ -65,7 +76,13 @@ TYPES = [
 # rest, but they get no conversion table - nothing converts a Task.
 OFFSET_TYPES = ["Task", "ExecBase", "Library", "CommandLineInterface",
                 "MsgPort", "Message", "List", "Node", "Process", "IORequest",
-                "Window"]
+                "SemaphoreMessage", "MemHeader", "MemChunk", "Interrupt",
+                "Hook", "Window", "ClockData", "NewWindow", "NewScreen", "EasyStruct", "Remember",
+                "CSource", "DosPacket", "LocalVar", "ExAllControl",
+                "FileInfoBlock", "ExAllData", "GelsInfo", "collTable",
+                "AnimOb", "AnimComp", "Bob", "VSprite", "UCopList",
+                "CopList", "CopIns", "SimpleSprite", "Rectangle",
+                "CyberModeNode", "CDrawMsg"]
 
 # `struct Screen` is intentionally only marshalled through byte 83. Its head is
 # the AmigaOS ABI exactly (LeftEdge 8, Flags 20, Font 40, ViewPort 44, RastPort
@@ -83,6 +100,8 @@ KNOWN_M68K = {
                            "ln_Pri": 9, "ln_Name": 10}),
     "DateStamp":     (12, {"ds_Days": 0, "ds_Minute": 4, "ds_Tick": 8}),
     "TagItem":       (8,  {"ti_Tag": 0, "ti_Data": 4}),
+    "ClockData":     (14, {"sec": 0, "min": 2, "hour": 4, "mday": 6,
+                             "month": 8, "year": 10, "wday": 12}),
     "FileInfoBlock": (260, {"fib_DiskKey": 0, "fib_DirEntryType": 4,
                             "fib_FileName": 8, "fib_Protection": 116,
                             "fib_Size": 124, "fib_NumBlocks": 128}),
@@ -95,6 +114,12 @@ KNOWN_M68K = {
     "ExecBase":      (640, {"ThisTask": 276}),
     "Library":       (34, {"lib_Version": 20, "lib_Revision": 22}),
     "CommandLineInterface": (68, {"cli_CommandName": 16}),
+    "SemaphoreMessage": (24, {"ssm_Message_mn_Length": 18,
+                                "ssm_Semaphore": 20}),
+    "MemHeader": (32, {"mh_Attributes": 14, "mh_First": 16,
+                        "mh_Lower": 20, "mh_Upper": 24, "mh_Free": 28}),
+    "MemChunk": (8, {"mc_Next": 0, "mc_Bytes": 4}),
+    "Interrupt": (22, {"is_Data": 14, "is_Code": 18}),
     "Window":        (156, {"LeftEdge": 4, "TopEdge": 6, "Width": 8,
                               "Height": 10, "RPort": 50, "UserPort": 86}),
     "Screen":        (354, {"LeftEdge": 8, "Flags": 20, "Font": 40,
@@ -336,6 +361,9 @@ GUEST_BYTE_POINTER_FIELDS = {
     ("BitMap", "Planes"),
     ("TextAttr", "ta_Name"),
     ("IntuiText", "IText"),
+    ("EasyStruct", "es_Title"),
+    ("EasyStruct", "es_TextFormat"),
+    ("EasyStruct", "es_GadgetFormat"),
 }
 
 ARRAY_RE = re.compile(r"^(.*?)\[(\d+)\]$")
@@ -494,7 +522,7 @@ def emit_offsets(m68k, out):
          "#ifndef EMU68K_GUEST_OFFSETS_H",
          "#define EMU68K_GUEST_OFFSETS_H",
          ""]
-    for t in OFFSET_TYPES:
+    for t in OFFSET_TYPES + ["AreaInfo", "TmpRas"]:
         an, a = resolve(m68k, t)
         if not a:
             continue

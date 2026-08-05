@@ -522,6 +522,124 @@ static int brief_ea(const struct j5d_m68k_state *st, uint16_t ext,
     return 0;
 }
 
+/* Decode the 68020 full indexed form used by computed JSR/JMP.  Besides the
+ * brief form this covers base/index suppression, word/long base and outer
+ * displacements, and pre/post-indexed memory indirection.  `after` is the
+ * exact return PC after all extension words. */
+static int control_indexed_ea(j5d_sandbox *sb,
+                              const struct j5d_m68k_state *st,
+                              uint32_t tpc, uint32_t base,
+                              uint32_t *out, uint32_t *after,
+                              char *err, unsigned errlen)
+{
+    const uint8_t *ip;
+    uint16_t ext;
+    uint32_t cursor, bd = 0, outer = 0, index = 0, indirect;
+    unsigned bdsize, iis, rn;
+
+    if (tpc < sb->origin ||
+        (uint64_t)tpc + 4 > (uint64_t)sb->origin + sb->size)
+        goto truncated;
+    ip = sb->host_mem + (tpc - sb->origin);
+    ext = be16(ip + 2);
+    if (!(ext & 0x0100u))
+    {
+        if (brief_ea(st, ext, base, out)) return 1;
+        *after = tpc + 4;
+        return 0;
+    }
+    if (ext & 0x0008u)
+    {
+        if (err) snprintf(err, errlen,
+            "full indexed control EA has reserved extension bit set @pc=%08x ext=%04x",
+            tpc, ext);
+        return 1;
+    }
+
+    cursor = tpc + 4;
+    bdsize = (ext >> 4) & 3u;
+    if (bdsize == 0)
+    {
+        if (err) snprintf(err, errlen,
+            "full indexed control EA has reserved base displacement size @pc=%08x ext=%04x",
+            tpc, ext);
+        return 1;
+    }
+#define CONTROL_EXT_NEED(n) do {                                             \
+    if ((uint64_t)cursor + (n) > (uint64_t)sb->origin + sb->size)            \
+        goto truncated;                                                       \
+} while (0)
+    if (bdsize == 2)
+    {
+        CONTROL_EXT_NEED(2);
+        bd = (uint32_t)(int32_t)be16s(sb->host_mem + (cursor - sb->origin));
+        cursor += 2;
+    }
+    else if (bdsize == 3)
+    {
+        CONTROL_EXT_NEED(4);
+        bd = be32(sb->host_mem + (cursor - sb->origin));
+        cursor += 4;
+    }
+
+    iis = ext & 7u;
+    if (iis == 4u)
+    {
+        if (err) snprintf(err, errlen,
+            "full indexed control EA has reserved indirect selector @pc=%08x ext=%04x",
+            tpc, ext);
+        return 1;
+    }
+    if ((iis & 3u) == 2u)
+    {
+        CONTROL_EXT_NEED(2);
+        outer = (uint32_t)(int32_t)be16s(
+            sb->host_mem + (cursor - sb->origin));
+        cursor += 2;
+    }
+    else if ((iis & 3u) == 3u)
+    {
+        CONTROL_EXT_NEED(4);
+        outer = be32(sb->host_mem + (cursor - sb->origin));
+        cursor += 4;
+    }
+
+    if (!(ext & 0x0040u))
+    {
+        rn = (ext >> 12) & 7u;
+        index = (ext & 0x8000u) ? st->a[rn] : st->d[rn];
+        if (!(ext & 0x0800u))
+            index = (uint32_t)(int32_t)(int16_t)(uint16_t)index;
+        index <<= ((ext >> 9) & 3u);
+    }
+    if (ext & 0x0080u) base = 0;
+
+    if (iis == 0)
+        *out = base + bd + index;
+    else
+    {
+        uint32_t pointer = base + bd + ((iis & 4u) ? 0 : index);
+        if (pointer < sb->origin ||
+            (uint64_t)pointer + 4 > (uint64_t)sb->origin + sb->size)
+        {
+            if (err) snprintf(err, errlen,
+                "full indexed control EA indirect read %08x outside sandbox @pc=%08x",
+                pointer, tpc);
+            return 1;
+        }
+        indirect = be32(sb->host_mem + (pointer - sb->origin));
+        *out = indirect + outer + ((iis & 4u) ? index : 0);
+    }
+    *after = cursor;
+    return 0;
+
+truncated:
+    if (err) snprintf(err, errlen,
+        "full indexed control EA extensions truncated @pc=%08x", tpc);
+    return 1;
+#undef CONTROL_EXT_NEED
+}
+
 /* ---- THE WORD SOURCE OF A DIVIDE ------------------------------------------
  * DIVU/DIVS are computed in C rather than emitted, so that a zero divisor can
  * take the 68k exception path. That made the SOURCE this function's problem,
@@ -2792,36 +2910,36 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
          * second word of a 4-byte instruction. For the PC-relative modes the
          * base is the address OF that extension word (tpc + 2), per the PRM. */
         else if ((top & 0xFFF8u) == 0x4EB0u) {       /* jsr (d8,An,Xn) -> push + jump */
-            uint32_t target;
-            if (brief_ea(st, be16(thost + 2), st->a[top & 7u], &target))
-                RFAIL("jsr (d8,An,Xn): 68020 full extension word not decoded");
-            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+            uint32_t target, after;
+            if (control_indexed_ea(sb, st, tpc, st->a[top & 7u],
+                                   &target, &after, errbuf, errlen)) return 1;
+            if (sp_push(sb, st, after, errbuf, errlen)) return 1;
             g_stats.calls_pushed++;
             g_stats.computed_jumps++;
             if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
             pc = target;
         }
         else if ((top & 0xFFF8u) == 0x4EF0u) {       /* jmp (d8,An,Xn) -> jump      */
-            uint32_t target;
-            if (brief_ea(st, be16(thost + 2), st->a[top & 7u], &target))
-                RFAIL("jmp (d8,An,Xn): 68020 full extension word not decoded");
+            uint32_t target, after;
+            if (control_indexed_ea(sb, st, tpc, st->a[top & 7u],
+                                   &target, &after, errbuf, errlen)) return 1;
             g_stats.computed_jumps++;
             pc = target;
         }
         else if (top == 0x4EBBu) {                   /* jsr (d8,PC,Xn) -> push + jump */
-            uint32_t target;
-            if (brief_ea(st, be16(thost + 2), tpc + 2u, &target))
-                RFAIL("jsr (d8,PC,Xn): 68020 full extension word not decoded");
-            if (sp_push(sb, st, tpc + 4, errbuf, errlen)) return 1;
+            uint32_t target, after;
+            if (control_indexed_ea(sb, st, tpc, tpc + 2u,
+                                   &target, &after, errbuf, errlen)) return 1;
+            if (sp_push(sb, st, after, errbuf, errlen)) return 1;
             g_stats.calls_pushed++;
             g_stats.computed_jumps++;
             if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
             pc = target;
         }
         else if (top == 0x4EFBu) {                   /* jmp (d8,PC,Xn) -> jump      */
-            uint32_t target;
-            if (brief_ea(st, be16(thost + 2), tpc + 2u, &target))
-                RFAIL("jmp (d8,PC,Xn): 68020 full extension word not decoded");
+            uint32_t target, after;
+            if (control_indexed_ea(sb, st, tpc, tpc + 2u,
+                                   &target, &after, errbuf, errlen)) return 1;
             g_stats.computed_jumps++;
             pc = target;
         }

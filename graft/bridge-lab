@@ -221,6 +221,60 @@ def check_binding(ev, counts, gaps):
                    summary, ev_block, None, counts)
 
 
+def check_event_broker(ev, counts, gaps):
+    binds = ev.get("event.source.bind", [])
+    pumps = ev.get("event.pump", [])
+    unbinds = ev.get("event.source.unbind", [])
+    overflows = ev.get("event.source.overflow", [])
+    unbound_waits = ev.get("event.wait.unbound", [])
+    inv = ("every native event source has an explicit type and destination; "
+           "a pump reaches only a registered destination; an idle registered "
+           "source is distinguishable from an unbound wait")
+    if not binds and not pumps and not unbound_waits:
+        return not_exercised("event.broker.routing", inv,
+                             ["event.source.bind", "event.pump",
+                              "event.wait.unbound"], counts)
+    known_kinds = {"idcmp", "device"}
+    bad_kind = [b for b in binds if b.get("kind") not in known_kinds]
+    destinations = {b.get("destination") for b in binds}
+    unsolicited = [p for p in pumps
+                   if p.get("destination") != "*" and
+                   p.get("destination") not in destinations]
+    idle_misclassified = [p for p in pumps
+                          if p.get("matched_sources", 0) < 1 and
+                          p.get("destination") in destinations]
+    bad = bad_kind + unsolicited + idle_misclassified + overflows
+    rows = binds + pumps + unbinds + overflows + unbound_waits
+    ev_block = {
+        "seq_range": seq_range(rows),
+        "aggregate": [
+            {"sources_bound": len(binds), "sources_unbound": len(unbinds)},
+            {"pumps": len(pumps),
+             "delivered": sum(p.get("delivered", 0) for p in pumps),
+             "unbound_waits": len(unbound_waits)},
+            {"kinds": dict(sorted(collections.Counter(
+                b.get("kind") for b in binds).items()))}
+        ],
+        "sample_seq": [e["seq"] for e in (bad or rows)[:4]]
+    }
+    summary = ("%d typed source(s), %d pump(s), %d unbound wait(s), "
+               "%d routing violation(s)" %
+               (len(binds), len(pumps), len(unbound_waits), len(bad)))
+    if bad:
+        return finding("event.broker.routing", "exercised-violated", inv,
+                       summary, ev_block,
+                       {"kind": "fix-invariant",
+                        "hypothesis": "the broker pumped an unregistered or "
+                                      "untyped native source",
+                        "confirms_if": "the sample event names an unknown kind, "
+                                       "destination, or source-table overflow",
+                        "command": "graft/bridge-lab events <trace> --seq %s" %
+                                   "..".join(str(x) for x in seq_range(bad))},
+                       counts)
+    return finding("event.broker.routing", "exercised-conformant", inv,
+                   summary, ev_block, None, counts)
+
+
 def check_mailbox(ev, counts, gaps):
     procs = ev.get("process.create", [])
     inv = "a process's own pr_MsgPort never receives native input"
@@ -307,7 +361,8 @@ def check_scheduler(ev, counts, gaps):
                    ev_block, None, counts)
 
 
-CHECKS = [check_port_lifecycle, check_binding, check_mailbox, check_scheduler]
+CHECKS = [check_port_lifecycle, check_binding, check_event_broker,
+          check_mailbox, check_scheduler]
 
 
 # An observation is only meaningful for ONE run. Aggregating several programs

@@ -72,6 +72,12 @@
 #define J4_HUNK_DATA     1002u
 #define J4_HUNK_BSS      1003u
 #define J4_HUNK_RELOC32  1004u
+/* The compact relocation forms: counts, target hunk and offsets are 16-bit,
+ * and the block is padded to a longword. Modern linkers emit these instead of
+ * HUNK_RELOC32, so every current AROS m68k library uses them. DREL32 is the
+ * V37 spelling of the same thing (internalloadseg_aos.c:396). */
+#define J4_HUNK_DREL32        1017u
+#define J4_HUNK_RELOC32SHORT  1021u
 #define J4_HUNK_SYMBOL   1008u   /* debug symbol table — SKIPPED (internalloadseg_aos.c:231) */
 #define J4_HUNK_DEBUG    1009u   /* debug info        — SKIPPED (internalloadseg_aos.c:478) */
 #define J4_HUNK_END      1010u

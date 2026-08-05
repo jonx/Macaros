@@ -308,7 +308,20 @@ static void cm__host_tick(CMContext *cx) {
     }
 }
 
+/* The product name shown in window chrome. Read from the bundle when running as
+ * an app, so a renamed/rebranded bundle titles its own windows; the loose-binary
+ * path (aros-ctl) has no Info.plist and falls back to the fixed name. The guest's
+ * cm_open title argument is deliberately not used for this: the host app owns its
+ * own chrome. */
+NSString *cm__app_name(void) {
+    NSBundle *b = [NSBundle mainBundle];
+    NSString *n = [b objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+    if (!n.length) n = [b objectForInfoDictionaryKey:@"CFBundleName"];
+    return n.length ? n : @"Macaros";
+}
+
 void cm_try_window(CMContext *cx, const char *title) {
+    (void)title;
     if (!cx) return;
 
     /* No window server (headless / launchd without a session) -> bail quietly. */
@@ -339,7 +352,7 @@ void cm_try_window(CMContext *cx, const char *title) {
         if (!win) return;
         /* Keep drags inside the mode range the AROS side can honor. */
         win.contentMinSize = NSMakeSize(640, 480 + FOOTER_H);
-        [win setTitle:[NSString stringWithUTF8String:(title ? title : "AROS")]];
+        [win setTitle:cm__app_name()];
 
         /* BLACK backgrounds so the fullscreen letterbox / any uncovered area is
          * never white (the reported bug showed white around a small rect). */

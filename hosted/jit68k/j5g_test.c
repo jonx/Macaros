@@ -256,6 +256,47 @@ static void run_eamodes(void)
     j5d_run_free(); free(mem); free(mem2);
 }
 
+/* 68020 full-extension memory-indirect JSR, the form emitted by Photogenics'
+ * pgsdemo.library: jsr ([bd.l,a4]) with index suppressed and no outer
+ * displacement (extension 0x0171).  The pointer slot, return PC, target and
+ * final D0 are all asserted against the independent oracle. */
+static void run_fullindexed_jsr(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    static const uint8_t CODE[] = {
+        0x4e,0xb4,0x01,0x71,0x00,0x00,0x00,0x26, /* jsr ([0x26,a4]) */
+        0x20,0x01,                               /* move.l d1,d0     */
+        0x4e,0x75                                /* rts              */
+    };
+    static const uint8_t TARGET[] = {
+        0x72,0x2a,                               /* moveq #42,d1     */
+        0x4e,0x75                                /* rts              */
+    };
+    uint32_t a4 = ORG + 0x100, target = ORG + 0x80;
+    for (uint8_t **m = (uint8_t*[]){mem, mem2, NULL}, **p = m; *p; p++) {
+        memcpy(*p, CODE, sizeof CODE);
+        memcpy(*p + 0x80, TARGET, sizeof TARGET);
+        uint8_t *slot = *p + 0x126;
+        slot[0]=target>>24; slot[1]=target>>16; slot[2]=target>>8;
+        slot[3]=(uint8_t)target;
+    }
+    j5d_sandbox a={mem,ORG,SZ}, b={mem2,ORG,SZ};
+    struct j5d_m68k_state jit, ref;
+    memset(&jit,0,sizeof jit); memset(&ref,0,sizeof ref);
+    jit.a[4]=a4; ref.a[4]=a4;
+    uint32_t d0=0, r0=0; char e1[200]={0}, e2[200]={0};
+    int rc=j5d_run(&a,ORG,0,&jit,&d0,NULL,NULL,e1,sizeof e1);
+    int irc=j5d_interp_run(&b,ORG,0,&ref,&r0,NULL,NULL,e2,sizeof e2);
+    int ok=(rc==0)&&(irc==0)&&(d0==42)&&(r0==42)&&eq_regs(&jit,&ref)&&
+           (memcmp(mem,mem2,SZ)==0);
+    printf("  68020 full indexed jsr ([bd.l,a4]): d0=%u oracle=%u -> %s\n",
+           d0, r0, ok?"PASS":"FAIL");
+    if (rc) printf("    run error: %s\n",e1);
+    if (irc) printf("    interp error: %s\n",e2);
+    if (!ok) g_fail=1;
+    j5d_run_free(); free(mem); free(mem2);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -270,6 +311,7 @@ int main(void)
 
     run_bubsort();
     run_eamodes();
+    run_fullindexed_jsr();
     neg_corrupt();
 
     if (g_fail) { printf("\n[J5g] FAIL\n"); return 1; }

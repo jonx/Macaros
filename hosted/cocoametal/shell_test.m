@@ -58,7 +58,7 @@ static int saw_setting(CMEvent *ev, int n, int code, int x) {
 static int dir_has_png(NSString *dir) {
     NSArray<NSString *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
     for (NSString *f in files)
-        if ([f hasPrefix:@"AROS-screenshot-"] && [f hasSuffix:@".png"]) return 1;
+        if ([f hasPrefix:@"Macaros-screenshot-"] && [f hasSuffix:@".png"]) return 1;
     return 0;
 }
 
@@ -96,6 +96,12 @@ int main(int argc, const char **argv) {
         /* (1) cm_open installed the menu bar */
         NSMenu *bar = [NSApp mainMenu];
         check(bar && bar.itemArray.count >= 7, "cm_open installed a menu bar (>=7 menus)");
+
+        /* (1a) The window carries the HOST app name, not the guest's cm_open title
+         * argument (deliberately "AROS [GSHELL]" above). */
+        NSWindow *dispWin = [NSApp windows].firstObject;
+        check(dispWin && [dispWin.title isEqual:@"Macaros"],
+              "display window is titled by the host app, not the cm_open argument");
         NSMenu *file = sub(bar, @"File"), *view = sub(bar, @"View"), *machine = sub(bar, @"Machine");
         NSMenuItem *shot = item(file, @"Take Screenshot");
         check(shot && [shot.keyEquivalent isEqual:@"3"], "File ▸ Take Screenshot = ⇧⌘3");
@@ -115,7 +121,7 @@ int main(int argc, const char **argv) {
                                   withIntermediateDirectories:YES attributes:nil error:NULL];
         setenv("AROS_RUN_DIR", shotDir.UTF8String, 1);
         [NSApp sendAction:shot.action to:shot.target from:shot];
-        check(dir_has_png(shotDir), "Take Screenshot wrote AROS-screenshot-*.png to AROS_RUN_DIR");
+        check(dir_has_png(shotDir), "Take Screenshot wrote Macaros-screenshot-*.png to AROS_RUN_DIR");
         [[NSFileManager defaultManager] removeItemAtPath:shotDir error:NULL];
 
         /* (2a) host-acted: Scanlines -> cm_set_option(EFFECT) inside the dylib */
@@ -200,7 +206,7 @@ int main(int argc, const char **argv) {
         [NSApp sendAction:settings.action to:settings.target from:settings];
         NSWindow *sw = nil;
         for (NSWindow *w in [NSApp windows])
-            if ([w.title hasPrefix:@"AROS Settings"]) { sw = w; break; }
+            if ([w.title hasPrefix:@"Macaros Settings"]) { sw = w; break; }
         check(sw != nil, "Settings… opened the schema-driven settings window");
         check(sw && sw.toolbar.items.count >= 4, "settings window generated tab toolbar from schema");
         check(sw && view_has_label(sw.contentView, @"Schema:"),

@@ -3528,8 +3528,12 @@ def import_library(name, output_dir=None, check=False):
 
 TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
              "refuse": "EMU_TAG_REFUSE", "struct": "EMU_TAG_STRUCT",
+             "struct_inout": "EMU_TAG_STRUCT_INOUT",
              "null": "EMU_TAG_NULL", "u16_ffff": "EMU_TAG_U16_FFFF",
              "rgb32": "EMU_TAG_RGB32", "object": "EMU_TAG_OBJECT",
+             "object_or_ffff": "EMU_TAG_OBJECT_OR_FFFF",
+             "node_list": "EMU_TAG_NODELIST",
+             "cstr_array": "EMU_TAG_CSTR_ARRAY",
              "out_u32": "EMU_TAG_OUT_U32"}
 
 
@@ -3572,8 +3576,8 @@ def inferred_object_policy(lib, f, object_types):
     objects = {}
     for atype, aname in f.args:
         kind = classify(atype)
-        if kind in ("scalar", "widen"):
-            continue
+        if kind in ("scalar", "widen", "string"):
+            continue          # already derivable; a string is a guest pointer
         oname = sole_object(atype) if kind in ("struct", "aptr", "other") else None
         if not oname:
             return None                     # an argument nobody has described
@@ -3633,6 +3637,7 @@ def validate_policy(targets):
         oid = o.get("id")
         ctype = o.get("c_type")
         destructor = o.get("destructor")
+        destructor_dummy_first = o.get("destructor_dummy_first", False)
         if not re.fullmatch(r"[A-Za-z_]\w*", name):
             errors.append("object type %r has an invalid name" % name)
         if not isinstance(oid, int) or oid < 1 or oid > 255:
@@ -3708,15 +3713,25 @@ def validate_policy(targets):
                       object_types[nested_type].get("kind") != "facade"):
                     errors.append("object type %s nested field %s needs a facade object"
                                   % (name, field))
+            elif kind == "guest_value":
+                pass
             else:
                 errors.append("object type %s nested field %s has invalid kind %r"
                               % (name, field, kind))
+        if destructor_dummy_first not in (True, False):
+            errors.append("object type %s destructor_dummy_first must be boolean" % name)
         if destructor is not None:
             df = bykey.get(destructor)
             if not isinstance(destructor, str) or not df:
                 errors.append("object type %s has invalid destructor %r" % (name, destructor))
-            elif (classify(df.ret) not in ("void", "scalar") or len(df.args) != 1 or
-                  object_canon(df.args[0][0]) != object_canon(ctype)):
+            elif (classify(df.ret) not in ("void", "scalar") or
+                  (not destructor_dummy_first and
+                   (len(df.args) != 1 or
+                    object_canon(df.args[0][0]) != object_canon(ctype))) or
+                  (destructor_dummy_first and
+                   (len(df.args) != 2 or classify(df.args[0][0]) not in
+                    ("scalar", "widen") or
+                    object_canon(df.args[1][0]) != object_canon(ctype)))):
                 errors.append("object type %s destructor %s has incompatible signature"
                               % (name, destructor))
 
@@ -3741,7 +3756,7 @@ def validate_policy(targets):
             if kind not in TAG_KINDS:
                 errors.append("tag domain %s tag %s has unknown kind %r"
                               % (name, macro, kind))
-            elif kind == "struct" and not re.fullmatch(
+            elif kind in ("struct", "struct_inout") and not re.fullmatch(
                     r"[A-Za-z_]\w*", t.get("type", "")):
                 errors.append("tag domain %s tag %s needs a structure type"
                               % (name, macro))
@@ -3753,7 +3768,17 @@ def validate_policy(targets):
                                        t["max_longs"] < 1 or t["max_longs"] > 4096):
                 errors.append("tag domain %s tag %s needs max_longs 1..4096"
                               % (name, macro))
-            elif kind == "object":
+            elif kind == "node_list" and (not isinstance(t.get("max_count"), int) or
+                                            t["max_count"] < 1 or
+                                            t["max_count"] > 1024):
+                errors.append("tag domain %s tag %s needs max_count 1..1024"
+                              % (name, macro))
+            elif kind == "cstr_array" and (not isinstance(t.get("max_count"), int) or
+                                             t["max_count"] < 1 or
+                                             t["max_count"] > 1024):
+                errors.append("tag domain %s tag %s needs max_count 1..1024"
+                              % (name, macro))
+            elif kind in ("object", "object_or_ffff"):
                 if t.get("type") not in object_types:
                     errors.append("tag domain %s tag %s uses missing object type %r"
                                   % (name, macro, t.get("type")))
@@ -3839,9 +3864,11 @@ def validate_policy(targets):
             continue
         taglists = p.get("taglists", {})
         structs = p.get("structs", {})
+        deep_structs = p.get("deep_structs", {})
         tagged_structs = p.get("tagged_structs", {})
         objects = p.get("objects", {})
         callbacks = p.get("callbacks", {})
+        buffers = p.get("buffers", {})
         pointers = p.get("pointers", {})
         arrays = p.get("arrays", {})
         record_arrays = p.get("record_arrays", {})
@@ -3904,12 +3931,21 @@ def validate_policy(targets):
                 if not re.fullmatch(r"[A-Za-z_]\w*", field):
                     errors.append("function policy %s struct %s has invalid field %r"
                                   % (key, arg, field))
-                if kind not in ("cstr", "struct", "object", "guest_value"):
+                if kind not in ("cstr", "struct", "embedded_struct", "object", "guest_value"):
                     errors.append("function policy %s struct %s field %s has invalid kind %r"
                                   % (key, arg, field, kind))
-                if kind == "struct" and not re.fullmatch(
+                if kind in ("struct", "embedded_struct") and not re.fullmatch(
                         r"[A-Za-z_]\w*", fp.get("type", "")):
                     errors.append("function policy %s struct %s field %s needs a type"
+                                  % (key, arg, field))
+                if (kind == "embedded_struct" and not re.fullmatch(
+                        r"[A-Za-z_]\w*", fp.get("guest_field", ""))):
+                    errors.append("function policy %s struct %s field %s needs a guest_field offset anchor"
+                                  % (key, arg, field))
+                if (kind == "cstr" and fp.get("max_count") is not None and
+                        (not isinstance(fp.get("max_count"), int) or
+                         fp.get("max_count") < 1 or fp.get("max_count") > 65536)):
+                    errors.append("function policy %s struct %s field %s has invalid max_count"
                                   % (key, arg, field))
                 nested_fields = fp.get("fields", {}) if kind == "struct" else {}
                 if not isinstance(nested_fields, dict):
@@ -3943,6 +3979,28 @@ def validate_policy(targets):
                 if fp.get("nullable", True) not in (True, False):
                     errors.append("function policy %s struct %s field %s nullable must be boolean"
                                   % (key, arg, field))
+        for arg, sp in deep_structs.items():
+            stype = sp.get("type")
+            if arg not in args:
+                errors.append("function policy %s names missing deep structure %s"
+                              % (key, arg))
+            elif (not isinstance(stype, str) or
+                  "struct %s" % stype not in norm(args[arg]) or
+                  "*" not in args[arg]):
+                errors.append("function policy %s argument %s is not struct %s *"
+                              % (key, arg, stype))
+            if stype not in POLICY.get("struct_metadata", {}).get("follow_fields", {}):
+                errors.append("function policy %s deep structure %s has no follow metadata"
+                              % (key, stype))
+            if sp.get("nullable", False) not in (True, False):
+                errors.append("function policy %s deep structure %s nullable must be boolean"
+                              % (key, arg))
+            if (arg in taglists or arg in structs or arg in tagged_structs or
+                    arg in objects or arg in callbacks or arg in pointers or
+                    arg in buffers or arg in arrays or arg in record_arrays or
+                    arg in guest_values or arg in strings or arg in null_args):
+                errors.append("function policy %s argument %s has two policies"
+                              % (key, arg))
         for arg, sp in tagged_structs.items():
             tag_arg, size_arg = sp.get("tag_arg"), sp.get("size_arg")
             variants = sp.get("variants")
@@ -4012,22 +4070,64 @@ def validate_policy(targets):
                               % (key, arg))
             if arg in taglists or arg in structs:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
+        for arg, bp in buffers.items():
+            if arg not in args:
+                errors.append("function policy %s names missing buffer %s" % (key, arg))
+            elif "*" not in args[arg] and norm(args[arg]) not in ("APTR", "CONST_APTR",
+                                                                  "PLANEPTR") and classify(args[arg]) != "string":
+                errors.append("function policy %s buffer %s is not a pointer" % (key, arg))
+            if bp.get("direction") not in ("in", "out", "inout"):
+                errors.append("function policy %s buffer %s has invalid direction" % (key, arg))
+            extent = bp.get("extent")
+            if not isinstance(extent, list) or not extent or len(extent) > 4:
+                errors.append("function policy %s buffer %s needs 1..4 extent factors"
+                              % (key, arg))
+                extent = []
+            for factor in extent:
+                names = []
+                if isinstance(factor, str):
+                    names = [factor]
+                elif isinstance(factor, int) and factor > 0:
+                    pass
+                elif (isinstance(factor, dict) and
+                      isinstance(factor.get("sum"), list) and
+                      1 <= len(factor["sum"]) <= 4 and
+                      all(isinstance(x, str) for x in factor["sum"])):
+                    names = factor["sum"]
+                elif (isinstance(factor, dict) and
+                      isinstance(factor.get("span"), list) and
+                      len(factor["span"]) == 2 and
+                      all(isinstance(x, str) for x in factor["span"])):
+                    names = factor["span"]
+                else:
+                    errors.append("function policy %s buffer %s has invalid extent factor"
+                                  % (key, arg))
+                for name_arg in names:
+                    if name_arg not in args or norm(args[name_arg]) not in SIZE_WIDTHS:
+                        errors.append("function policy %s buffer %s extent argument %s "
+                                      "is not a scalar" % (key, arg, name_arg))
+            if bp.get("nullable", False) not in (True, False):
+                errors.append("function policy %s buffer %s nullable must be boolean"
+                              % (key, arg))
+            if (arg in taglists or arg in structs or arg in tagged_structs or
+                    arg in objects or arg in callbacks or arg in pointers or
+                    arg in arrays or arg in record_arrays or
+                    arg in guest_values or arg in strings or arg in null_args):
+                errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, ap in arrays.items():
             kind, direction = ap.get("kind"), ap.get("direction")
             if arg not in args:
                 errors.append("function policy %s names missing array %s" % (key, arg))
-            elif "*" not in args[arg]:
+            elif ("*" not in args[arg] and
+                  norm(args[arg]) not in ("APTR", "CONST_APTR")):
                 errors.append("function policy %s array %s is not a pointer" % (key, arg))
-            elif kind == "rgb32" and object_canon(args[arg]).replace("const ", "") not in (
-                    "ULONG *", "const ULONG *"):
-                errors.append("function policy %s RGB32 array %s is not ULONG *"
-                              % (key, arg))
-            if kind != "rgb32":
+            if kind not in ("rgb32", "u32", "u16"):
                 errors.append("function policy %s array %s has invalid kind %r"
-                              % (key, arg, kind))
-            if direction != "in":
-                errors.append("function policy %s array %s currently requires direction in"
                               % (key, arg))
+            if direction not in ("in", "out", "inout"):
+                errors.append("function policy %s array %s has invalid direction" % (key, arg))
+            if kind == "rgb32" and direction != "in":
+                errors.append("function policy %s RGB32 stream %s must be input" % (key, arg))
             count = ap.get("max_count")
             if not isinstance(count, int) or count < 1 or count > 4096:
                 errors.append("function policy %s array %s needs max_count 1..4096"
@@ -4035,8 +4135,19 @@ def validate_policy(targets):
             if ap.get("nullable", True) not in (True, False):
                 errors.append("function policy %s array %s nullable must be boolean"
                               % (key, arg))
+            count_arg = ap.get("count_arg")
+            if count_arg is not None and (count_arg not in args or
+                                           norm(args[count_arg]) not in SIZE_WIDTHS):
+                errors.append("function policy %s array %s count_arg is not a scalar"
+                              % (key, arg))
+            count_scale = ap.get("count_scale", 1)
+            if (not isinstance(count_scale, int) or count_scale < 1 or
+                    count_scale > 16 or (count_scale != 1 and count_arg is None)):
+                errors.append("function policy %s array %s has invalid count_scale"
+                              % (key, arg))
             if (arg in taglists or arg in structs or arg in tagged_structs or
-                    arg in objects or arg in callbacks or arg in pointers):
+                    arg in objects or arg in callbacks or arg in pointers or
+                    arg in buffers):
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, ap in record_arrays.items():
             stype, direction = ap.get("type"), ap.get("direction")
@@ -4092,7 +4203,8 @@ def validate_policy(targets):
                     errors.append("function policy %s record array %s field %s needs sentinel"
                                   % (key, arg, field))
             if (arg in taglists or arg in structs or arg in tagged_structs or
-                    arg in arrays or arg in objects or arg in callbacks or arg in pointers):
+                    arg in arrays or arg in objects or arg in callbacks or
+                    arg in pointers or arg in buffers):
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         if record_arrays and callbacks:
             errors.append("function policy %s cannot yet combine record arrays and callbacks"
@@ -4135,7 +4247,7 @@ def validate_policy(targets):
                     not ospec.get("linked_field")):
                 errors.append("function policy %s object %s consume_family needs a linked "
                               "object type and consume" % (key, arg))
-            if arg in taglists or arg in structs or arg in pointers:
+            if arg in taglists or arg in structs or arg in pointers or arg in buffers:
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         for arg, cb in callbacks.items():
             if arg not in args:
@@ -4150,13 +4262,15 @@ def validate_policy(targets):
                 if cb.get(role) not in args:
                     errors.append("function policy %s callback %s has missing %s"
                                   % (key, arg, role))
-            if arg in taglists or arg in structs or arg in objects or arg in pointers:
+            if (arg in taglists or arg in structs or arg in objects or
+                    arg in pointers or arg in buffers):
                 errors.append("function policy %s argument %s has two policies" % (key, arg))
         if not isinstance(guest_values, list) or any(a not in args for a in guest_values):
             errors.append("function policy %s has invalid guest_values" % key)
         else:
             for arg in guest_values:
-                if classify(args[arg]) != "aptr":
+                if (classify(args[arg]) != "aptr" and
+                        norm(args[arg]) not in ("void *", "const void *")):
                     errors.append("function policy %s guest value %s is not APTR"
                                   % (key, arg))
         if not isinstance(strings, list) or any(a not in args for a in strings):
@@ -4165,27 +4279,41 @@ def validate_policy(targets):
             errors.append("function policy %s has invalid null_args" % key)
         else:
             for arg in null_args:
-                if "*" not in args[arg]:
+                if ("*" not in args[arg] and
+                        norm(args[arg]) not in ("APTR", "CONST_APTR", "PLANEPTR")):
                     errors.append("function policy %s NULL-only argument %s is not a pointer"
                                   % (key, arg))
                 if (arg in taglists or arg in structs or arg in tagged_structs or
                         arg in objects or arg in callbacks or arg in pointers or
+                        arg in buffers or
                         arg in arrays or arg in record_arrays or
                         arg in guest_values or arg in strings):
                     errors.append("function policy %s argument %s has two policies"
                                   % (key, arg))
         if boopsi:
             class_arg = boopsi.get("class_arg")
-            if class_arg not in objects or objects[class_arg].get("type") != "Class":
+            object_arg = boopsi.get("object_arg")
+            if bool(class_arg) == bool(object_arg):
+                errors.append("function policy %s BOOPSI needs exactly one of "
+                              "class_arg or object_arg" % key)
+            elif class_arg and (class_arg not in objects or
+                                objects[class_arg].get("type") != "Class"):
                 errors.append("function policy %s BOOPSI class_arg is not a Class object"
+                              % key)
+            elif object_arg and (object_arg not in objects or
+                                 objects[object_arg].get("type") != "Object"):
+                errors.append("function policy %s BOOPSI object_arg is not an Object"
                               % key)
         result = p.get("result")
         if result:
             if result.get("kind") == "guest_arg":
                 if result.get("arg") not in args:
                     errors.append("function policy %s has invalid guest_arg result" % key)
-                elif result.get("arg") not in structs:
-                    errors.append("function policy %s result argument is not a struct shadow" % key)
+                elif (result.get("arg") not in structs and
+                      result.get("arg") not in buffers and
+                      result.get("arg") not in arrays):
+                    errors.append("function policy %s result argument is not a converted guest argument"
+                                  % key)
             elif result.get("kind") == "object":
                 otype = result.get("type")
                 ospec = object_types.get(otype)
@@ -4207,7 +4335,7 @@ def validate_policy(targets):
                     if store_arg not in args or args[store_arg].count("*") < 2:
                         errors.append("function policy %s object store_arg must be a "
                                       "pointer-to-pointer argument" % key)
-                    elif store_arg in (set(taglists) | set(structs) |
+                    elif store_arg in (set(taglists) | set(structs) | set(deep_structs) |
                                        set(tagged_structs) | set(objects) |
                                        set(callbacks) | set(pointers) |
                                        set(arrays) | set(record_arrays) |
@@ -4227,6 +4355,14 @@ def validate_policy(targets):
                     if not isinstance(fname, str) or not fname or "\0" in fname:
                         errors.append("function policy %s font fallback needs a valid name"
                                       % key)
+            elif result.get("kind") == "cstr":
+                if classify(f.ret) != "string":
+                    errors.append("function policy %s cstr result is not a string pointer"
+                                  % key)
+                max_count = result.get("max_count")
+                if not isinstance(max_count, int) or max_count < 1 or max_count > 65536:
+                    errors.append("function policy %s cstr result needs max_count 1..65536"
+                                  % key)
             else:
                 errors.append("function policy %s has invalid result policy" % key)
         blockers = []
@@ -4236,8 +4372,8 @@ def validate_policy(targets):
                 continue
             if n in (attr_get.get("attr_arg"), attr_get.get("storage_arg")):
                 continue           # the attr_get crossing owns these two
-            if (n in taglists or n in structs or n in tagged_structs or
-                    n in pointers or n in arrays or n in record_arrays or
+            if (n in taglists or n in structs or n in deep_structs or n in tagged_structs or
+                    n in pointers or n in buffers or n in arrays or n in record_arrays or
                     n in objects or n in callbacks or
                     n in guest_values or n in strings or n in null_args):
                 continue
@@ -4381,15 +4517,26 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         for op in p.get("objects", {}).values():
             if op.get("type") not in used_objects:
                 used_objects.append(op.get("type"))
+        for sp in p.get("structs", {}).values():
+            for fp in sp.get("fields", {}).values():
+                if fp.get("kind") == "object" and fp.get("type") not in used_objects:
+                    used_objects.append(fp.get("type"))
+                if fp.get("kind") == "struct":
+                    for nested in fp.get("fields", {}).values():
+                        if (nested.get("kind") == "object" and
+                                nested.get("type") not in used_objects):
+                            used_objects.append(nested.get("type"))
         result = p.get("result", {})
         if result.get("kind") == "object" and result.get("type") not in used_objects:
             used_objects.append(result.get("type"))
     uses_structs = (any(function_policy(lib, f) and
                         (function_policy(lib, f).get("structs") or
+                         function_policy(lib, f).get("deep_structs") or
                          function_policy(lib, f).get("tagged_structs") or
                          function_policy(lib, f).get("record_arrays")) for f in funcs) or
                     any(object_types[o].get("kind") == "facade" for o in used_objects) or
-                    any(t.get("kind") == "struct"
+                    any(object_types[o].get("guest_owned") for o in used_objects) or
+                    any(t.get("kind") in ("struct", "struct_inout")
                         for d in used_domains for t in domains[d]["tags"]))
     uses_nested_fields = any(object_types[o].get("nested_fields") for o in used_objects)
     out = []
@@ -4479,7 +4626,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         w("{")
         tags = domains[d]["tags"]
         for tag in tags:
-            if tag["kind"] == "struct":
+            if tag["kind"] in ("struct", "struct_inout"):
                 st = tag["type"]
                 follow = POLICY.get("struct_metadata", {}).get(
                     "follow_fields", {})
@@ -4503,7 +4650,15 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
                    tag["max_longs"]))
-            elif tag["kind"] == "object":
+            elif tag["kind"] == "node_list":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_count"]))
+            elif tag["kind"] == "cstr_array":
+                w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
+                  (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
+                   tag["max_count"]))
+            elif tag["kind"] in ("object", "object_or_ffff"):
                 if tag.get("adopt"):
                     # The mirror is emitted with the library's adopting
                     # functions; a tag naming a type with no mirror in this
@@ -4544,7 +4699,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
           c_ident(oname))
         w("{")
         w("    %s *%s = emu_base;" % (btype, base))
-        w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
+        if ospec.get("destructor_dummy_first"):
+            w("    %s(0, (%s)emu_object);" % (destructor, ospec["c_type"]))
+        else:
+            w("    %s((%s)emu_object);" % (destructor, ospec["c_type"]))
         w("}")
         w("")
     w("int emu68k_gen_%s(int lvo, struct Emu68kRegs *r, APTR guest0, APTR base," % short)
@@ -4603,8 +4761,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             continue
         taglists = policy.get("taglists", {}) if policy else {}
         structs = policy.get("structs", {}) if policy else {}
+        deep_structs = policy.get("deep_structs", {}) if policy else {}
         tagged_structs = policy.get("tagged_structs", {}) if policy else {}
         pointers = policy.get("pointers", {}) if policy else {}
+        buffers = policy.get("buffers", {}) if policy else {}
         arrays = policy.get("arrays", {}) if policy else {}
         record_arrays = policy.get("record_arrays", {}) if policy else {}
         objects = policy.get("objects", {}) if policy else {}
@@ -4613,6 +4773,13 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         strings = policy.get("strings", []) if policy else []
         null_args = policy.get("null_args", []) if policy else []
         boopsi = policy.get("boopsi") if policy else None
+        boopsi_class_src = None
+        if boopsi:
+            class_arg = boopsi.get("class_arg")
+            for (_bt, bn), br in zip(f.args, f.regs):
+                if bn == class_arg:
+                    boopsi_class_src = reg_expr(br)
+                    break
         result_policy = policy.get("result") if policy else None
         result_store_arg = (result_policy or {}).get("store_arg")
         # A case body that DECLARES anything needs a block of its own; C does
@@ -4632,6 +4799,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         heap_array_scratch = []
         heap_record_scratch = []
         tag_copybacks = []
+        array_copybacks = []
         # A "how much of this structure do you want" argument is clamped before
         # anything else: it bounds the guest range check as well as the copy, so
         # it cannot be computed inside the block that already needs it. The
@@ -4770,6 +4938,15 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     ])
                     post.append((["if (emu68k_boopsi_finish(&emu_boopsi_%d, err, errlen) < 0)" % ai,
                                   "    return 1;"], "always"))
+                if boopsi and boopsi.get("object_arg") == aname:
+                    w("        struct Emu68kBoopsiBridge emu_boopsi_%d;" % ai)
+                    precall.extend([
+                        "        if (emu68k_boopsi_prepare_object(guest0, emu_object_%d, 0," % ai,
+                        "                    &emu_boopsi_%d, err, errlen) < 0)" % ai,
+                        "            return 1;",
+                    ])
+                    post.append((["if (emu68k_boopsi_finish(&emu_boopsi_%d, err, errlen) < 0)" % ai,
+                                  "    return 1;"], "always"))
                 if op.get("release", False) or op.get("consume", False):
                     ospec = object_types[oname]
                     stype = ospec.get("facade_struct")
@@ -4782,6 +4959,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                 "    EMU_OBJ_%s);" % c_ident(nested["type"]),
                             ], "always"))
                         elif nested["kind"] in ("embedded_object", "embedded_facade"):
+                            if nested["kind"] == "embedded_facade":
+                                nested_spec = object_types[nested["type"]]
+                                nested_struct = nested_spec["facade_struct"]
+                                for sn in nested_spec.get("nested_fields", []):
+                                    if sn["kind"] != "object":
+                                        continue
+                                    post.append(([
+                                        "emu68k_object_release(guest0,",
+                                        "    (ULONG)emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s + M68K_%s_%s, 4),"
+                                        % (src, stype, nested["field"],
+                                           nested_struct, sn["field"]),
+                                        "    EMU_OBJ_%s);" % c_ident(sn["type"]),
+                                    ], "always"))
                             post.append(([
                                 "emu68k_object_release(guest0,",
                                 "    %s + M68K_%s_%s," % (src, stype, nested["field"]),
@@ -4839,6 +5029,28 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         % (stype, stype, stype),
                     ], "always"))
                 continue
+            if aname in deep_structs:
+                dp = deep_structs[aname]
+                stype = dp["type"]
+                if not dp.get("nullable", False):
+                    w("        if (!%s)" % src)
+                    w("        {")
+                    w("            if (err && errlen)")
+                    w('                snprintf(err, errlen, "%s.%s requires a non-NULL structure");'
+                      % (f.name, aname))
+                    w("            return 1;")
+                    w("        }")
+                w("        APTR emu_deep_%d = NULL;" % ai)
+                w("        if (%s)" % src)
+                w("        {")
+                w("            emu_deep_%d = emu68k_struct_graph_to_native(guest0, %s,"
+                  % (ai, src))
+                w("                emu_sdescs, EMU_SDESC_%s, \"%s.%s\", err, errlen);"
+                  % (stype, f.name, aname))
+                w("            if (!emu_deep_%d) return 1;" % ai)
+                w("        }")
+                call_args.append("(%s)emu_deep_%d" % (norm(atype), ai))
+                continue
             if aname in callbacks:
                 w("        struct Emu68kHookBridge emu_hook_%d;" % ai)
                 w("        if (emu68k_hook_prepare(guest0, %s, &emu_hook_%d, err, errlen) < 0)"
@@ -4887,13 +5099,22 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                       % (stype, stype, span))
                     for fi, (field, fp) in enumerate(sp.get("fields", {}).items()):
                         kind = fp["kind"]
+                        if kind == "embedded_struct":
+                            embedded = fp["type"]
+                            w("        emu68k_from_guest_sized(guest0, %s + M68K_%s_%s,"
+                              % (src, stype, fp["guest_field"]))
+                            w("            &emu_struct_%d.%s, emu_fields_%s,"
+                              % (ai, field, embedded))
+                            w("            EMU_NFIELDS(emu_fields_%s), M68K_%s_SIZEOF);"
+                              % (embedded, embedded))
+                            continue
                         w("        ULONG emu_struct_field_%d_%d = (ULONG)" % (ai, fi))
                         w("            emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s, 4);"
                           % (src, stype, field))
                         if kind == "cstr":
                             w("        if (emu_struct_field_%d_%d &&" % (ai, fi))
-                            w("            emu68k_require_guest_range(emu_struct_field_%d_%d, 1,"
-                              % (ai, fi))
+                            w("            emu68k_require_guest_range(emu_struct_field_%d_%d, %d,"
+                              % (ai, fi, fp.get("max_count", 1)))
                             w('                "%s.%s.%s", err, errlen) < 0)'
                               % (f.name, aname, field))
                             w("            return 1;")
@@ -4915,13 +5136,23 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         elif kind == "object":
                             nested_type = fp["type"]
                             w("        APTR emu_struct_object_%d_%d;" % (ai, fi))
-                            w("        if (emu68k_object_from_guest(guest0, emu_struct_field_%d_%d,"
-                              % (ai, fi))
-                            w("                EMU_OBJ_%s, %d, \"%s\", &emu_struct_object_%d_%d,"
-                              % (c_ident(nested_type),
-                                 1 if fp.get("nullable", True) else 0,
-                                 nested_type, ai, fi))
-                            w("                err, errlen) < 0)")
+                            nested_owned = object_types[nested_type].get("guest_owned")
+                            if nested_owned:
+                                w("        if (emu68k_object_adopt_guest(guest0, emu_struct_field_%d_%d,"
+                                  % (ai, fi))
+                                w("                EMU_OBJ_%s, \"%s\", &emu_mirror_%s,"
+                                  % (c_ident(nested_type), nested_type,
+                                     c_ident(nested_type)))
+                                w("                &emu_struct_object_%d_%d, err, errlen) < 0)"
+                                  % (ai, fi))
+                            else:
+                                w("        if (emu68k_object_from_guest(guest0, emu_struct_field_%d_%d,"
+                                  % (ai, fi))
+                                w("                EMU_OBJ_%s, %d, \"%s\", &emu_struct_object_%d_%d,"
+                                  % (c_ident(nested_type),
+                                     1 if fp.get("nullable", True) else 0,
+                                     nested_type, ai, fi))
+                                w("                err, errlen) < 0)")
                             w("            return 1;")
                             w("        emu_struct_%d.%s = (__typeof__(emu_struct_%d.%s))"
                               "emu_struct_object_%d_%d;"
@@ -5027,6 +5258,44 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     lines += ["emu68k_to_guest_sized(guest0, %s, &emu_struct_%d," % (src, ai),
                               "                   emu_fields_%s, EMU_NFIELDS(emu_fields_%s), %s);"
                               % (stype, stype, span)]
+                    for fi, (field, fp) in enumerate(sp.get("fields", {}).items()):
+                        kind = fp["kind"]
+                        if kind == "embedded_struct":
+                            embedded = fp["type"]
+                            lines += [
+                                "emu68k_to_guest_sized(guest0, %s + M68K_%s_%s," %
+                                (src, stype, fp["guest_field"]),
+                                "    &emu_struct_%d.%s, emu_fields_%s," %
+                                (ai, field, embedded),
+                                "    EMU_NFIELDS(emu_fields_%s), M68K_%s_SIZEOF);" %
+                                (embedded, embedded),
+                            ]
+                        elif kind in ("guest_value", "cstr"):
+                            lines += [
+                                "ULONG emu_post_guest_%d_%d;" % (ai, fi),
+                                "if (emu68k_host_ptr_to_guest(guest0, (APTR)emu_struct_%d.%s,"
+                                % (ai, field),
+                                "        &emu_post_guest_%d_%d, \"%s.%s.%s\", err, errlen) < 0)"
+                                % (ai, fi, f.name, aname, field),
+                                "    return 1;",
+                                "emu68k_scalar_to_guest(guest0, %s + M68K_%s_%s, 4,"
+                                % (src, stype, field),
+                                "                         emu_post_guest_%d_%d);" % (ai, fi),
+                            ]
+                        elif kind == "object":
+                            nested_type = fp["type"]
+                            lines += [
+                                "ULONG emu_post_object_%d_%d;" % (ai, fi),
+                                "if (emu68k_object_to_guest(guest0, (APTR)emu_struct_%d.%s,"
+                                % (ai, field),
+                                "        EMU_OBJ_%s, NULL, NULL, \"%s\","
+                                % (c_ident(nested_type), nested_type),
+                                "        &emu_post_object_%d_%d, err, errlen) < 0)" % (ai, fi),
+                                "    return 1;",
+                                "emu68k_scalar_to_guest(guest0, %s + M68K_%s_%s, 4,"
+                                % (src, stype, field),
+                                "                         emu_post_object_%d_%d);" % (ai, fi),
+                            ]
                     if nullable:
                         lines = (["if (emu_structp_%d)" % ai, "{"] +
                                  ["    " + x for x in lines] + ["}"])
@@ -5065,6 +5334,55 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                   % (src, width, ai)], pp.get("copy_on", "always")))
                 call_args.append("(%s)&emu_scalar_%d" % (norm(atype), ai))
                 continue
+            if aname in buffers:
+                bp = buffers[aname]
+                w("        UQUAD emu_buffer_size_%d = 1;" % ai)
+                for fi, factor in enumerate(bp["extent"]):
+                    if isinstance(factor, int):
+                        factor_expr = str(factor)
+                    elif isinstance(factor, str):
+                        factor_reg = f.regs[[n for _t, n in f.args].index(factor)]
+                        factor_expr = "(ULONG)%s" % reg_expr(factor_reg)
+                    elif "sum" in factor:
+                        pieces = []
+                        for factor_arg in factor["sum"]:
+                            factor_reg = f.regs[[n for _t, n in f.args].index(factor_arg)]
+                            pieces.append("(UQUAD)(ULONG)%s" % reg_expr(factor_reg))
+                        factor_expr = " + ".join(pieces)
+                    else:
+                        first, last = factor["span"]
+                        first_reg = f.regs[[n for _t, n in f.args].index(first)]
+                        last_reg = f.regs[[n for _t, n in f.args].index(last)]
+                        factor_expr = ("(UQUAD)((LONG)%s - (LONG)%s + 1)" %
+                                       (reg_expr(last_reg), reg_expr(first_reg)))
+                    w("        UQUAD emu_buffer_factor_%d_%d = %s;"
+                      % (ai, fi, factor_expr))
+                    w("        if (emu_buffer_factor_%d_%d && emu_buffer_size_%d >"
+                      % (ai, fi, ai))
+                    w("            0xffffffffUL / emu_buffer_factor_%d_%d)" % (ai, fi))
+                    w("        {")
+                    w("            if (err && errlen)")
+                    w('                snprintf(err, errlen, "%s.%s extent overflows guest memory");'
+                      % (f.name, aname))
+                    w("            return 1;")
+                    w("        }")
+                    w("        emu_buffer_size_%d *= emu_buffer_factor_%d_%d;"
+                      % (ai, ai, fi))
+                if not bp.get("nullable", False):
+                    w("        if (!%s)" % src)
+                    w("        {")
+                    w("            if (err && errlen)")
+                    w('                snprintf(err, errlen, "%s.%s requires a non-NULL buffer");'
+                      % (f.name, aname))
+                    w("            return 1;")
+                    w("        }")
+                w("        if (%s && emu68k_require_guest_range(%s,"
+                  % (src, src))
+                w("                (ULONG)emu_buffer_size_%d, \"%s.%s\", err, errlen) < 0)"
+                  % (ai, f.name, aname))
+                w("            return 1;")
+                call_args.append("(%s)EMU_GPTR(guest0, %s)" % (norm(atype), src))
+                continue
             if aname in record_arrays:
                 ap = record_arrays[aname]
                 stype = ap["type"]
@@ -5078,9 +5396,68 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             if aname in arrays:
                 ap = arrays[aname]
                 cap = ap["max_count"]
-                w("        ULONG emu_array_size_%d = sizeof(ULONG) * %d;" % (ai, cap))
+                width = 2 if ap["kind"] == "u16" else 4
+                native_scalar = "UWORD" if width == 2 else "ULONG"
+                count_arg = ap.get("count_arg")
+                if count_arg:
+                    count_reg = f.regs[[n for _t, n in f.args].index(count_arg)]
+                    w("        UQUAD emu_array_wide_count_%d = (UQUAD)(ULONG)%s * %d;"
+                      % (ai, reg_expr(count_reg), ap.get("count_scale", 1)))
+                    w("        if (emu_array_wide_count_%d > %d)" % (ai, cap))
+                    w("        {")
+                    w("            if (err && errlen)")
+                    w('                snprintf(err, errlen, "%s.%s count exceeds %d");'
+                      % (f.name, aname, cap))
+                    w("            return 1;")
+                    w("        }")
+                    w("        ULONG emu_array_count_%d = (ULONG)emu_array_wide_count_%d;"
+                      % (ai, ai))
+                else:
+                    w("        ULONG emu_array_count_%d = %d;" % (ai, cap))
+                w("        ULONG emu_array_size_%d = sizeof(%s) * %d;"
+                  % (ai, native_scalar, cap))
                 w("        APTR emu_array_scratch_%d = NULL;" % ai)
                 prior_arrays = list(heap_array_scratch)
+                range_lines = [
+                    "            if (emu68k_require_guest_range(%s, emu_array_count_%d * %d," %
+                    (src, ai, width),
+                    '                    "%s.%s", err, errlen) < 0)' % (f.name, aname),
+                    "            {",
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (ai, ai),
+                ] + [
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (old, old) for old in prior_arrays
+                ] + [
+                    "                return 1;",
+                    "            }",
+                ]
+                if ap["kind"] == "rgb32":
+                    convert_lines = [
+                    "            if (emu68k_rgb32_to_native(guest0, %s," % src,
+                    "                    (ULONG *)emu_array_scratch_%d, %d," % (ai, cap),
+                    "                    \"%s.%s\", err, errlen) < 0)" % (f.name, aname),
+                    "            {",
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (ai, ai),
+                ] + [
+                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
+                    % (old, old) for old in prior_arrays
+                ] + [
+                    "                return 1;",
+                    "            }",
+                    ]
+                elif ap["direction"] in ("in", "inout"):
+                    convert_lines = range_lines + [
+                        "            for (ULONG emu_array_i_%d = 0; emu_array_i_%d < emu_array_count_%d; emu_array_i_%d++)"
+                        % (ai, ai, ai, ai),
+                        "                ((%s *)emu_array_scratch_%d)[emu_array_i_%d] = (%s)"
+                        % (native_scalar, ai, ai, native_scalar),
+                        "                    emu68k_scalar_from_guest(guest0, %s + emu_array_i_%d * %d, %d);"
+                        % (src, ai, width, width),
+                    ]
+                else:
+                    convert_lines = range_lines
                 array_pre.extend([
                     "        if (%s)" % src,
                     "        {",
@@ -5094,21 +5471,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 ] + [
                     "                return 1;",
                     "            }",
-                    "            if (emu68k_rgb32_to_native(guest0, %s," % src,
-                    "                    (ULONG *)emu_array_scratch_%d, %d," % (ai, cap),
-                    "                    \"%s.%s\", err, errlen) < 0)" % (f.name, aname),
-                    "            {",
-                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
-                    % (ai, ai),
-                ] + [
-                    "                emu68k_scratch_free(emu_array_scratch_%d, emu_array_size_%d);"
-                    % (old, old) for old in prior_arrays
-                ] + [
-                    "                return 1;",
-                    "            }",
+                ] + convert_lines + [
                     "        }",
                 ])
                 heap_array_scratch.append(ai)
+                if ap["direction"] in ("out", "inout"):
+                    array_copybacks.append((ai, src, width, native_scalar))
                 if not ap.get("nullable", True):
                     array_pre[0:0] = [
                         "        if (!%s)" % src,
@@ -5161,7 +5529,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             # compiler sizes it, so the scratch cannot drift from the types.
             # A domain with no structure tags emits no scratch at all.
             structs = [t["type"] for t in domains[dname]["tags"]
-                       if t.get("kind") == "struct"]
+                       if t.get("kind") in ("struct", "struct_inout")]
             array_counts = [t["max_count"] for t in domains[dname]["tags"]
                             if t.get("kind") == "u16_ffff"]
             rgb32_sizes = [t["max_longs"] for t in domains[dname]["tags"]
@@ -5192,7 +5560,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                          if heap_scratch else
                          "emu_tagscratch_%d, sizeof emu_tagscratch_%d" % (ai, ai)
                          if scratch_parts else "NULL, 0"))
-            if has_outputs:
+            if boopsi_class_src:
+                # A guest class parses its original guest tags in the bridged
+                # dispatcher.  Giving native NewObjectA an empty list prevents
+                # private guest-class tags from being interpreted before that
+                # dispatcher runs; the later super call converts only tags the
+                # native superclass knows.
+                w("        if (%s)" % boopsi_class_src)
+                w("        {")
+                w("            emu_tags_%d[0].ti_Tag = TAG_DONE;" % ai)
+                w("            emu_tags_%d[0].ti_Data = 0;" % ai)
+                w("        }")
+                w("        else if (%s < 0)" % tag_call)
+            elif has_outputs:
                 w("        LONG emu_tagcount_%d = %s;" % (ai, tag_call))
                 w("        if (emu_tagcount_%d < 0)" % ai)
                 tag_copybacks.append((ai, ident))
@@ -5357,6 +5737,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         args = ",\n              ".join(call_args)
         call = "%s(%s)" % (f.name, args)
         def emit_heap_cleanup():
+            for copy_ai, copy_src, copy_width, copy_type in array_copybacks:
+                w("        for (ULONG emu_array_out_i_%d = 0;" % copy_ai)
+                w("             emu_array_out_i_%d < emu_array_count_%d; emu_array_out_i_%d++)"
+                  % (copy_ai, copy_ai, copy_ai))
+                w("            emu68k_scalar_to_guest(guest0, %s + emu_array_out_i_%d * %d, %d,"
+                  % (copy_src, copy_ai, copy_width, copy_width))
+                w("                ((%s *)emu_array_scratch_%d)[emu_array_out_i_%d]);"
+                  % (copy_type, copy_ai, copy_ai))
             for copy_ai, copy_ident in tag_copybacks:
                 w("        if (emu68k_tags_to_guest(guest0, emu_tags_%d,"
                   % copy_ai)
@@ -5414,14 +5802,52 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("            emu68k_tag_lookup(&emu_tagdomain_%s, %s);"
               % (dom_ident, attr_src))
             w("        if (!emu_attr || (emu_attr->kind != EMU_TAG_U32 &&")
-            w("                          emu_attr->kind != EMU_TAG_OUT_U32))")
+            w("                          emu_attr->kind != EMU_TAG_OUT_U32 &&")
+            w("                          emu_attr->kind != EMU_TAG_STRUCT_INOUT))")
             w("        {")
             w("            if (err && errlen)")
             w('                snprintf(err, errlen, "capability gap: attribute "')
-            w('                         "%%08lx is not a served scalar in %s",'
+            w('                         "%%08lx is not a served output in %s",'
               % attr_get["domain"])
             w("                         (unsigned long)%s);" % attr_src)
             w("            return 1;")
+            w("        }")
+            w("        struct Emu68kBoopsiBridge emu_attr_boopsi;")
+            object_arg = attr_get.get("object_arg", "object")
+            object_index = [n for _t, n in f.args].index(object_arg)
+            w("        if (emu_attr->kind == EMU_TAG_STRUCT_INOUT)")
+            w("        {")
+            w("            APTR emu_attr_struct;")
+            w('            if (emu68k_require_guest_range(%s, emu_attr->guest_size,'
+              % store_src)
+            w('                                             "%s storage", err, errlen) < 0)'
+              % f.name)
+            w("                return 1;")
+            w("            emu_attr_struct = emu68k_scratch_alloc(emu_attr->native_size,")
+            w("                                                     err, errlen);")
+            w("            if (!emu_attr_struct) return 1;")
+            w("            memset(emu_attr_struct, 0, emu_attr->native_size);")
+            w("            if (emu68k_boopsi_prepare_object(guest0, emu_object_%d, 0,"
+              % object_index)
+            w("                    &emu_attr_boopsi, err, errlen) < 0)")
+            w("            {")
+            w("                emu68k_scratch_free(emu_attr_struct, emu_attr->native_size);")
+            w("                return 1;")
+            w("            }")
+            struct_cargs = ["(IPTR *)emu_attr_struct" if n2 == attr_get["storage_arg"] else a
+                            for a, (_t2, n2) in zip(cargs, f.args)]
+            w("            r->d[0] = (ULONG)%s(%s);" %
+              (f.name, ", ".join(struct_cargs)))
+            w("            if (emu68k_boopsi_finish(&emu_attr_boopsi, err, errlen) < 0)")
+            w("            {")
+            w("                emu68k_scratch_free(emu_attr_struct, emu_attr->native_size);")
+            w("                return 1;")
+            w("            }")
+            w("            if (r->d[0])")
+            w("                emu68k_to_guest(guest0, %s, emu_attr_struct," % store_src)
+            w("                                  emu_attr->fields, emu_attr->nfields);")
+            w("            emu68k_scratch_free(emu_attr_struct, emu_attr->native_size);")
+            w("            return 0;")
             w("        }")
             w('        if (emu68k_require_guest_range(%s, 4, "%s storage",'
               % (store_src, f.name))
@@ -5429,7 +5855,13 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
             w("            return 1;")
             w("        {")
             w("            IPTR emu_attr_value = 0;")
+            w("            if (emu68k_boopsi_prepare_object(guest0, emu_object_%d, 0,"
+              % object_index)
+            w("                    &emu_attr_boopsi, err, errlen) < 0)")
+            w("                return 1;")
             w("            r->d[0] = (ULONG)%s(%s);" % (f.name, ", ".join(cargs)))
+            w("            if (emu68k_boopsi_finish(&emu_attr_boopsi, err, errlen) < 0)")
+            w("                return 1;")
             w("            emu68k_scalar_to_guest(guest0, %s, 4,"
               % store_src)
             w("                                   (ULONG)emu_attr_value);")
@@ -5686,6 +6118,52 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         w("                    EMU_OBJ_%s, \"%s\", err, errlen) < 0)" %
                           (c_ident(nested_type), nested_type))
                         w("                return 1;")
+                        if nested["kind"] == "embedded_facade":
+                            # An inline facade is still a complete guest-visible
+                            # structure.  Publish the object identities it
+                            # contains after the scalar layout copy, just as we
+                            # do when that facade is returned by pointer.
+                            for si, sn in enumerate(nested_spec.get("nested_fields", [])):
+                                if sn["kind"] != "object":
+                                    continue
+                                sn_type = sn["type"]
+                                sn_spec = object_types[sn_type]
+                                sn_native = sn.get("native_field", sn["field"])
+                                w("            ULONG emu_embedded_token_%d_%d = 0;" %
+                                  (ni, si))
+                                if sn_spec.get("kind") == "facade":
+                                    sn_struct = sn_spec["facade_struct"]
+                                    sn_size = "M68K_%s_SIZEOF" % sn_struct
+                                    for snf in sn_spec.get("nested_fields", []):
+                                        if snf["kind"] == "u16_array":
+                                            sn_size += " + sizeof(UWORD) * %d" % snf["max_count"]
+                                        elif snf["kind"] == "cstr":
+                                            sn_size += " + %d" % snf["max_count"]
+                                    w("            if (emu68k_object_to_guest_facade(guest0,")
+                                    w("                    emu_facade_native->%s.%s, EMU_OBJ_%s," %
+                                      (native_field, sn_native, c_ident(sn_type)))
+                                    w("                    NULL, NULL, \"%s\", %s," %
+                                      (sn_type, sn_size))
+                                    w("                    emu_fields_%s, EMU_NFIELDS(emu_fields_%s)," %
+                                      (sn_struct, sn_struct))
+                                    w("                    &emu_embedded_token_%d_%d, err, errlen) < 0)" %
+                                      (ni, si))
+                                else:
+                                    w("            if (emu68k_object_to_guest(guest0,")
+                                    w("                    emu_facade_native->%s.%s, EMU_OBJ_%s," %
+                                      (native_field, sn_native, c_ident(sn_type)))
+                                    w("                    NULL, NULL, \"%s\"," % sn_type)
+                                    w("                    &emu_embedded_token_%d_%d, err, errlen) < 0)" %
+                                      (ni, si))
+                                w("                return 1;")
+                                w("            emu68k_scalar_to_guest(guest0,")
+                                w("                emu_nested_token_%d + M68K_%s_%s, 4," %
+                                  (ni, nested_struct, sn["field"]))
+                                w("                emu_embedded_token_%d_%d);" % (ni, si))
+                    elif nested["kind"] == "guest_value":
+                        w("            emu68k_scalar_to_guest(guest0,")
+                        w("                r->d[0] + M68K_%s_%s, 4," % (stype, field))
+                        w("                (ULONG)(IPTR)emu_facade_native->%s);" % native_field)
                     elif nested["kind"] == "cstr":
                         # A string a guest library READS out of the structure
                         # (a font's name is the first case: gadtools builds its
@@ -5710,6 +6188,14 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 store_src = reg_expr(f.regs[store_index])
                 w("        emu68k_scalar_to_guest(guest0, %s, 4, r->d[0]);"
                   % store_src)
+        elif result_policy and result_policy.get("kind") == "cstr":
+            w("        CONST_STRPTR emu_result = (CONST_STRPTR)%s;" % call)
+            emit_heap_cleanup()
+            emit_post(post, "emu_result")
+            w("        if (emu68k_cstr_result_to_guest(guest0, emu_result, %d,"
+              % result_policy["max_count"])
+            w("                                           &r->d[0], err, errlen) < 0)")
+            w("            return 1;")
         elif classify(f.ret) == "void":
             w("        %s%s;" % ("    " if policy else "", call))
             emit_heap_cleanup()
@@ -5829,6 +6315,10 @@ static inline void emu68k_double_out(double v, ULONG *hi, ULONG *lo)
 UQUAD emu68k_scalar_from_guest(APTR guest0, ULONG addr, UBYTE width);
 void  emu68k_scalar_to_guest(APTR guest0, ULONG addr, UBYTE width, UQUAD value);
 void  emu68k_cstr_to_guest(APTR guest0, ULONG addr, const char *s, ULONG room);
+LONG  emu68k_cstr_result_to_guest(APTR guest0, const char *s, ULONG max_count,
+                                  ULONG *guest, char *err, ULONG errlen);
+LONG  emu68k_host_ptr_to_guest(APTR guest0, APTR native, ULONG *guest,
+                               const char *what, char *err, ULONG errlen);
 APTR  emu68k_scratch_alloc(ULONG size, char *err, ULONG errlen);
 void  emu68k_scratch_free(APTR scratch, ULONG size);
 
@@ -5895,6 +6385,10 @@ LONG emu68k_hook_finish(const struct Emu68kHookBridge *bridge,
 LONG emu68k_boopsi_prepare(APTR guest0, ULONG guest_class, APTR native_class,
                            ULONG guest_tags, struct Emu68kBoopsiBridge *bridge,
                            char *err, ULONG errlen);
+LONG emu68k_boopsi_prepare_object(APTR guest0, APTR native_object,
+                                  ULONG guest_tags,
+                                  struct Emu68kBoopsiBridge *bridge,
+                                  char *err, ULONG errlen);
 LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
                           char *err, ULONG errlen);
 
@@ -5910,6 +6404,10 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_RGB32    6  /* LoadRGB32 block stream terminated by zero         */
 #define EMU_TAG_OBJECT   7  /* typed native object represented by a guest token  */
 #define EMU_TAG_OUT_U32  8  /* ti_Data points at a guest ULONG copyback slot      */
+#define EMU_TAG_OBJECT_OR_FFFF 9 /* object token, NULL, or sign-extended -1 sentinel */
+#define EMU_TAG_NODELIST 10 /* retained guest Exec List rebuilt with Node names */
+#define EMU_TAG_CSTR_ARRAY 11 /* retained NULL-terminated guest string-pointer array */
+#define EMU_TAG_STRUCT_INOUT 12 /* flat structure accepted as tag input and GetAttr output */
 struct EmuTagOutSlot
 {
     IPTR value;             /* first: native ti_Data can point at the whole slot */
@@ -5944,6 +6442,10 @@ struct EmuTagDesc
     const struct EmuMirror *mirror;
 };
 struct EmuStructDesc;
+APTR emu68k_struct_graph_to_native(APTR guest0, ULONG guest_addr,
+                                    const struct EmuStructDesc *descs,
+                                    UWORD desc_index, const char *what,
+                                    char *err, ULONG errlen);
 /* Run-lifetime allocator for retained deep conversions, installed by the
  * run owner; deep marshalling refuses by name while it is unset. */
 extern APTR (*emu68k_persist_alloc)(ULONG size);
@@ -5958,6 +6460,11 @@ LONG emu68k_tags_to_native(APTR guest0, ULONG guest_tags,
                            struct TagItem *native_tags, ULONG capacity,
                            APTR scratch, ULONG scratch_size,
                            char *err, ULONG errlen);
+LONG emu68k_tags_to_native_known(APTR guest0, ULONG guest_tags,
+                                 const struct EmuTagDomain *domain,
+                                 struct TagItem *native_tags, ULONG capacity,
+                                 APTR scratch, ULONG scratch_size,
+                                 char *err, ULONG errlen);
 LONG emu68k_tags_to_guest(APTR guest0, struct TagItem *native_tags,
                           ULONG count, const struct EmuTagDomain *domain,
                           char *err, ULONG errlen);
@@ -6064,6 +6571,11 @@ def emit(outdir, check=False):
     # we generated for sends it looking for a disk library that is not there.
     host_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "..", "hosted", "emu68k", "emu68k_genlibs.h")
+    lvo_body = exec_lvo_defines()
+    os_lvo_path = os.path.join(outdir, "emu68k_lvos.h")
+    os_lvo_src = ("/* GENERATED from the library .conf files - do not edit. */\n"
+                  "#ifndef EMU68K_LVOS_H\n#define EMU68K_LVOS_H\n\n" +
+                  lvo_body + "#endif /* EMU68K_LVOS_H */\n")
     host_src = ("/* GENERATED by graft/gen-emu68k-bridge - do not edit.\n"
                 " *\n"
                 " * The libraries the bridge has generated crossings for, and\n"
@@ -6074,7 +6586,8 @@ def emit(outdir, check=False):
                 "#define EMU68K_SERVABLE_LIBS(X) \\\n"
                 + "".join('    X("%s.library") \\\n' % s for s in emitted)
                 + "    /* end */\n\n"
-                "#endif /* EMU68K_GENLIBS_H */\n")
+                + lvo_body
+                + "#endif /* EMU68K_GENLIBS_H */\n")
     if check:
         cur = open(hpath).read() if os.path.exists(hpath) else None
         if cur != hsrc:
@@ -6083,6 +6596,10 @@ def emit(outdir, check=False):
                if os.path.exists(host_path) else None)
         if cur != host_src:
             stale.append(os.path.normpath(host_path))
+        cur = (open(os_lvo_path).read()
+               if os.path.exists(os_lvo_path) else None)
+        if cur != os_lvo_src:
+            stale.append(os.path.normpath(os_lvo_path))
         if stale:
             print("STALE - regenerate with --emit:")
             for x in stale:
@@ -6095,6 +6612,8 @@ def emit(outdir, check=False):
         fh.write(hsrc)
     with open(host_path, "w") as fh:
         fh.write(host_src)
+    with open(os_lvo_path, "w") as fh:
+        fh.write(os_lvo_src)
     print("  %-28s %3d total" % ("emu68k_gen.h", total))
     return 0
 
@@ -6140,6 +6659,56 @@ def report_all():
     return 0
 
 
+def handwritten_function_names(short, funcs):
+    """Return functions dispatched by a per-library handwritten handler.
+
+    The handler uses constants generated from the same .conf, so matching the
+    symbolic case labels back to function names keeps --gaps honest without
+    duplicating vector numbers in this tool.  A reviewed refusal is deliberately
+    *not* callable; this is the second callable source alongside generated
+    crossings, not another spelling for policy refusal.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "hosted", "emu68k", "emu68k_%s.c" % short)
+    if not os.path.exists(path):
+        return set()
+    host_src = open(path, encoding="utf-8", errors="replace").read()
+    # Irreducible native-side overrides (persistent native objects, native
+    # locks, callback adapters) live in emu68k_oscall.c for every library, not
+    # just DOS.  Count their generated symbolic case labels exactly like the
+    # per-library host handler; otherwise --gaps calls working OS-side cases
+    # refusals and pushes maintainers toward duplicate host implementations.
+    oscall = os.path.join(AROS, "arch", "all-darwin", "libs", "emu68k",
+                          "emu68k_oscall.c")
+    os_src = (open(oscall, encoding="utf-8", errors="replace").read()
+              if os.path.exists(oscall) else "")
+    prefix = "LVO_" if short == "exec" else short.upper() + "_LVO_"
+    # Host handlers use switch cases for completed calls.  A few host-side
+    # `if (lvo == ...)` blocks are only preflight/bookkeeping and deliberately
+    # fall through to the generated crossing, so they must not be promoted to
+    # implementations.  OS-side conditionals, in contrast, return after doing
+    # the native operation and are the implementation.
+    labels = set(re.findall(r"case\s+" + re.escape(prefix) +
+                            r"([A-Z_0-9]+)\s*:", host_src))
+    labels.update(re.findall(r"case\s+" + re.escape(prefix) +
+                             r"([A-Z_0-9]+)\s*:", os_src))
+    labels.update(re.findall(r"\blvo\s*==\s*" + re.escape(prefix) +
+                             r"([A-Z_0-9]+)\b", os_src))
+    by_symbol = {re.sub(r"[^A-Z0-9]", "", f.name.upper()): f.name
+                 for f in funcs}
+    names = {by_symbol[s.replace("_", "")] for s in labels
+             if s.replace("_", "") in by_symbol}
+    # Some vectors have a deliberately narrow handwritten overlay (for
+    # example, resolving a run-local guest BOOPSI class before falling through
+    # to the generated native FindClass crossing).  They are still generated
+    # crossings; recording the shared ownership in policy keeps both the gap
+    # counts and the shadow validator honest.
+    return {name for name in names
+            if not (function_policy(short + ".library",
+                                    next(f for f in funcs if f.name == name))
+                    or {}).get("handwritten_overlay")}
+
+
 def report_gaps(names):
     """The WORK QUEUE for one library, whole: every public vector that has no
     crossing, with what blocks it and whether a policy entry already exists.
@@ -6158,24 +6727,34 @@ def report_gaps(names):
         rel = target[0][1]
         lib = name if name.endswith(".library") else short + ".library"
         funcs = parse_conf(os.path.join(AROS, rel))
-        served, blocked, types = [], [], collections.Counter()
+        generated, handwritten, refused, blocked = [], [], [], []
+        types = collections.Counter()
+        hand_names = handwritten_function_names(short, funcs)
         for f in funcs:
             if f.private:
                 continue
             tier, why = f.tier(lib)
-            has_policy = (function_policy(lib, f) is not None or
-                          refusal_policy(lib, f) is not None or
-                          inferred_object_policy(lib, f,
-                                                 POLICY.get("object_types", {}))
-                          is not None)
-            if tier or has_policy:
-                served.append(f.name)
+            has_crossing = (function_policy(lib, f) is not None or
+                            inferred_object_policy(lib, f,
+                                                   POLICY.get("object_types", {}))
+                            is not None)
+            refusal = refusal_policy(lib, f)
+            if f.name in hand_names:
+                handwritten.append(f.name)
+            elif refusal:
+                refused.append((f.name, refusal))
+            elif tier or has_crossing:
+                generated.append(f.name)
             else:
                 blocked.append((f.name, why or "?"))
                 for part in (why or "?").split(", "):
                     types[part] += 1
-        print("%s: %d public vectors, %d served, %d without a crossing"
-              % (name, len(served) + len(blocked), len(served), len(blocked)))
+        public = len(generated) + len(handwritten) + len(refused) + len(blocked)
+        callable_count = len(generated) + len(handwritten)
+        print("%s: %d public vectors, %d callable (%d generated, %d handwritten), "
+              "%d reviewed refusals, %d without a crossing"
+              % (name, public, callable_count, len(generated), len(handwritten),
+                 len(refused), len(blocked)))
         if types:
             print("  blocking types, most vectors first:")
             for t, c in types.most_common():
@@ -6184,7 +6763,167 @@ def report_gaps(names):
             print("  vectors:")
             for fname, why in blocked:
                 print("    %-32s %s" % (fname, why))
+        if refused:
+            print("  reviewed refusals (not callable):")
+            for fname, policy in refused:
+                reason = policy.get("reason", "policy refusal") \
+                         if isinstance(policy, dict) else str(policy)
+                print("    %-32s %s" % (fname, reason))
     return 0
+
+
+def exec_lvo_defines():
+    """LVO constants for every hand-served waterline vector, from the .conf.
+
+    The hand-written half of the bridge dispatches on these. Written out by
+    hand they are numbers from memory, and two of them were wrong for months:
+    Disable and Enable pointed at SetIntVector and AddIntServer, so the calls
+    a program actually makes were never served and two interrupt vectors were
+    answered as if they were something else. Generated from the same file the
+    crossings come from, that class of bug cannot occur."""
+    target = [t for t in all_targets() if t[0] == "exec.library"]
+    if not target:
+        return ""
+    out = ["/* exec vector numbers, from rom/exec/exec.conf. The hand-written\n"
+           " * dispatch uses these; never write one out by hand. */\n"]
+    for f in parse_conf(os.path.join(AROS, target[0][1])):
+        if f.private:
+            continue
+        out.append("#define LVO_%-20s %4d   /* %d */\n"
+                   % (f.name.upper(), f.lvo, f.offset))
+    out.append("\n/* Every exec vector by name, so a vector this bridge does\n"
+               " * not serve reports WHICH ONE rather than a number. */\n"
+               "#define EMU68K_EXEC_LVO_NAMES(X) \\\n")
+    for f in parse_conf(os.path.join(AROS, target[0][1])):
+        if f.private:
+            continue
+        out.append('    X(%d, "%s") \\\n' % (f.lvo, f.name))
+    out.append("    /* end */\n\n")
+
+    # The other six waterline handlers are separate translation units. Prefix
+    # their constants with the library name so common API names (Close, Move,
+    # Open...) cannot collide, while retaining Exec's historical LVO_* names.
+    for short in ("dos", "graphics", "intuition", "layers", "utility",
+                  "cybergraphics", "gadtools"):
+        lib = short + ".library"
+        match = [t for t in all_targets() if t[0] == lib]
+        if not match:
+            continue
+        funcs = parse_conf(os.path.join(AROS, match[0][1]))
+        prefix = short.upper()
+        out.append("/* %s vector numbers from %s. */\n" % (lib, match[0][1]))
+        for f in funcs:
+            if f.private:
+                continue
+            out.append("#define %s_LVO_%-20s %4d   /* %d */\n"
+                       % (prefix, f.name.upper(), f.lvo, f.offset))
+        out.append("#define EMU68K_%s_LVO_NAMES(X) \\\n" % prefix)
+        for f in funcs:
+            if f.private:
+                continue
+            out.append('    X(%d, "%s") \\\n' % (f.lvo, f.name))
+        out.append("    /* end */\n\n")
+    return "".join(out)
+
+
+def validate_handwritten(path):
+    """Check the DERIVED crossings against the hand-written bridge.
+
+    The hand-written dispatch is the oracle: those vectors were written by
+    hand precisely because their semantics are not derivable (a message port
+    is guest memory, AvailMem must report the guest arena). Generation must
+    therefore NOT quietly cover them - the hand-written path wins at runtime,
+    so a derived duplicate is invisible until someone removes the hand-written
+    case and the wrong one takes over.
+
+    Anything reported here is either a missing reviewed refusal or a real
+    disagreement about who serves the vector."""
+    host_src = open(path, encoding="utf-8", errors="replace").read()
+    src = host_src
+    stem = os.path.basename(path)
+    match = re.fullmatch(r"emu68k_(exec|dos|graphics|intuition|layers|utility|cybergraphics|gadtools)\.c",
+                         stem)
+    if not match:
+        print("cannot derive a waterline library from %s" % path,
+              file=sys.stderr)
+        return 2
+    short = match.group(1)
+    lib = short + ".library"
+    prefix = "LVO_" if short == "exec" else short.upper() + "_LVO_"
+    # The constants now come from the GENERATED header; only synthetic ones
+    # (private vectors this bridge invents) are still declared by hand. Read
+    # both, so the shadow check below sees every dispatched vector.
+    text = src
+    # Some irreducible crossings have to execute inside AROS because their
+    # native objects, locks or callbacks cannot cross into the host process.
+    # They are handwritten decisions just as much as the per-library host
+    # cases, so validate that shared dispatcher for every waterline library.
+    oscall = os.path.join(AROS, "arch", "all-darwin", "libs", "emu68k",
+                          "emu68k_oscall.c")
+    os_src = ""
+    if os.path.exists(oscall):
+        os_src = open(oscall, encoding="utf-8", errors="replace").read()
+        src += os_src
+        text += os_src
+    genlibs = os.path.join(os.path.dirname(os.path.abspath(path)),
+                           "emu68k_genlibs.h")
+    if os.path.exists(genlibs):
+        text += open(genlibs, encoding="utf-8", errors="replace").read()
+    defs = dict((m.group(1), int(m.group(2)))
+                for m in re.finditer(r"#define " + re.escape(prefix) +
+                                     r"([A-Z_0-9]+)\s+(\d+)", text))
+    symbols = {m.group(1) for m in re.finditer(
+        r"case\s+" + re.escape(prefix) + r"([A-Z_0-9]+)\s*:", host_src)}
+    symbols.update(m.group(1) for m in re.finditer(
+        r"case\s+" + re.escape(prefix) + r"([A-Z_0-9]+)\s*:", os_src))
+    symbols.update(m.group(1) for m in re.finditer(
+        r"\blvo\s*==\s*" + re.escape(prefix) + r"([A-Z_0-9]+)\b", os_src))
+    hand = {defs[s] for s in symbols if s in defs}
+    target = [t for t in all_targets() if t[0] == lib]
+    if not target:
+        print("%s not found" % lib, file=sys.stderr)
+        return 2
+    funcs = parse_conf(os.path.join(AROS, target[0][1]))
+
+    # The .conf is the INTERFACE oracle: it is where the vector order comes
+    # from, so a constant written from memory rather than read from it calls
+    # the wrong function and the failure looks like the library misbehaving.
+    by_name = {f.name.upper(): f for f in funcs}
+    wrong = []
+    for cname, value in sorted(defs.items()):
+        f = by_name.get(cname.replace("_", ""))
+        if f and f.lvo != value:
+            wrong.append((cname, value, f.name, f.lvo))
+    if wrong:
+        print("LVO constants that disagree with the .conf:")
+        for cname, value, real_name, real_lvo in wrong:
+            print("    %s%-18s = %-4d but %s is %d"
+                  % (prefix, cname, value, real_name, real_lvo))
+    else:
+        print("every recognised LVO constant matches the .conf")
+
+    bad = []
+    for f in funcs:
+        if f.private or f.lvo not in hand:
+            continue
+        if (function_policy(lib, f) or {}).get("handwritten_overlay"):
+            continue                        # reviewed partial interception
+        if refusal_policy(lib, f):
+            continue                        # reviewed: generation stays away
+        if (f.tier(lib)[0] in (1, 2) or
+                function_policy(lib, f) or
+                inferred_object_policy(lib, f,
+                                       POLICY.get("object_types", {}))):
+            bad.append(f.name)
+    print("hand-written %s vectors: %d" % (short, len(hand)))
+    if not bad:
+        print("no derived crossing shadows a hand-written one")
+        return 1 if wrong else 0
+    print("SHADOWED, needs a reviewed refusal (or the hand-written case "
+          "retired deliberately):")
+    for name in bad:
+        print("    %s.%s" % (lib, name))
+    return 1
 
 
 POLICY_ORIGIN_KEY = "origin"
@@ -6317,6 +7056,13 @@ def main():
     if "--emit" in sys.argv:
         i = sys.argv.index("--emit")
         return emit(sys.argv[i + 1])
+    if "--validate-handwritten" in sys.argv:
+        i = sys.argv.index("--validate-handwritten")
+        if i + 1 >= len(sys.argv):
+            print("usage: gen-emu68k-bridge --validate-handwritten "
+                  "<emu68k_exec.c>", file=sys.stderr)
+            return 2
+        return validate_handwritten(sys.argv[i + 1])
     if "--gaps" in sys.argv:
         i = sys.argv.index("--gaps")
         names = [a for a in sys.argv[i + 1:] if not a.startswith("-")]

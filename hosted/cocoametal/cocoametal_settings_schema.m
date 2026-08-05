@@ -28,6 +28,8 @@
 #include <dlfcn.h>
 #include "cocoametal.h"
 
+extern NSString *cm__app_name(void);   /* host app name for window chrome */
+
 /* ---- the descriptor vocabulary (was cmsettings.h in the POC) ---- */
 typedef enum { CMCtlCheckbox, CMCtlPopup, CMCtlSlider, CMCtlText, CMCtlPath } CMCtl;
 typedef enum { CMStoreDefaults, CMStoreConf } CMStoreKind;
@@ -357,7 +359,7 @@ static NSString *symbol_for_tab(NSString *tab) {
 - (void)selectTab:(NSString *)tab {
     NSView *v = self.tabViews[tab]; if (!v) return;
     self.window.contentView = v;
-    self.window.title = [NSString stringWithFormat:@"AROS Settings — %@", tab];
+    self.window.title = [NSString stringWithFormat:@"%@ Settings — %@", cm__app_name(), tab];
     [self.window setContentSize:v.fittingSize];
     self.window.toolbar.selectedItemIdentifier = tab;
 }

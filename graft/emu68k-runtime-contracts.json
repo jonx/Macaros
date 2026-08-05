@@ -46,6 +46,25 @@
       ]
     },
     {
+      "id": "event.broker.routing",
+      "status": "supported",
+      "triggers": [
+        "event.source.bind",
+        "event.source.unbind",
+        "event.pump",
+        "event.wait.unbound"
+      ],
+      "invariants": [
+        "every native source is registered with an explicit adapter kind and guest destination",
+        "a pump never routes native data to an unregistered guest mailbox",
+        "an idle registered source is reported separately from an unbound wait",
+        "source-table exhaustion fails loudly"
+      ],
+      "tests": [
+        "T3BROKER.typed_source_routing"
+      ]
+    },
+    {
       "id": "process.mailbox",
       "status": "supported",
       "triggers": [
@@ -62,7 +81,7 @@
     },
     {
       "id": "scheduler.yield.frame_wait",
-      "status": "needs-review",
+      "status": "supported",
       "triggers": [
         "scheduler.yield",
         "scheduler.resume",
@@ -73,14 +92,15 @@
         "a context that never calls a blocking primitive must not starve its siblings"
       ],
       "evidence_note": [
-        "Observed: a child context polls a port tens of thousands of times and",
-        "never blocks, so a scheduler that only switches at Wait never resumes",
-        "the sibling that owns the input port. On real hardware preemption",
-        "hides this. The open question is which calls declare a yield;",
-        "a frame wait blocks until vertical blank on real hardware and is",
-        "therefore the first candidate."
+        "Observed in PhotoDemo and the focused genframeyield fixture: a context",
+        "polling around WaitTOF starved its sibling because native AROS cannot",
+        "schedule guest contexts hidden inside one hosted task. WaitTOF now",
+        "gives each runnable guest sibling one cooperative turn before making",
+        "the native vertical-blank wait; the trace proves both contexts progress."
       ],
-      "tests": []
+      "tests": [
+        "T3YIELD.frame_wait_runs_runnable_sibling"
+      ]
     },
     {
       "id": "device.open",

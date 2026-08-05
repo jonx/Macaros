@@ -497,7 +497,7 @@ bug reports:
 - **`aros-ctl shot [PATH]`** — the harness wrapper: runs `GrabScreen`, converts to
   PNG via `sips`. See [control-harness](../control-harness/README.md).
 - **In-app "Take Screenshot" (⇧⌘3)** — the Macaros menu; writes
-  `AROS-screenshot-*.png` under `$AROS_RUN_DIR` when launched by `aros-ctl` /
+  `Macaros-screenshot-*.png` under `$AROS_RUN_DIR` when launched by `aros-ctl` /
   `run-window.sh`, or `~/Desktop` when used as a standalone app. It uses the host
   `cm_capture_png` → `cm_readback` path. (Captures the Metal framebuffer as
   **opaque** — AROS leaves the alpha byte at 0, so this path must ignore alpha or

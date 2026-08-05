@@ -296,7 +296,10 @@ This is the design.md "main-thread crux", pinned so D2 proves the *real* model.
 
 - `cm_open(w, h, fmt, title)` → `CMContext*` or NULL. Builds device/queue,
   framebuffer + offscreen oracle textures, best-effort live window. Called lazily
-  on first `moHidd_Gfx_Show` (the SDL lazy-window pattern).
+  on first `moHidd_Gfx_Show` (the SDL lazy-window pattern). `title` is kept in the
+  signature for ABI stability but is **not** used: the host owns its own chrome and
+  titles the window from the app bundle's display name (`Macaros`), falling back to
+  that same name when running as a loose binary.
 - `cm_upload_rect(ctx, src, srcStride, x, y, w, h)` — copy a logical sub-rect from
   the AROS framebuffer into the GPU texture. Driven by `moHidd_BitMap_UpdateRect`.
 - `cm_present(ctx)` — render framebuffer texture → offscreen oracle (pass-through)

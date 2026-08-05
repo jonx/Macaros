@@ -71,6 +71,11 @@
      "type": "ColorMap"
     },
     {
+     "field": "Font",
+     "kind": "object",
+     "type": "TextAttr"
+    },
+    {
      "field": "RastPort_Layer",
      "native_field": "RastPort",
      "kind": "embedded_facade",
@@ -95,6 +100,19 @@
     {
      "field": "tf_Message_mn_Node_ln_Name",
      "native_field": "tf_Message.mn_Node.ln_Name",
+     "kind": "cstr",
+     "max_count": 64
+    }
+   ]
+  },
+  "TextAttr": {
+   "id": 61,
+   "c_type": "struct TextAttr *",
+   "kind": "facade",
+   "facade_struct": "TextAttr",
+   "nested_fields": [
+    {
+     "field": "ta_Name",
      "kind": "cstr",
      "max_count": 64
     }
@@ -128,17 +146,21 @@
   "ColorMap": {
    "id": 14,
    "c_type": "struct ColorMap *",
-   "kind": "opaque"
+   "kind": "opaque",
+   "destructor": "graphics.library.FreeColorMap"
   },
   "Layer": {
    "id": 22,
    "c_type": "struct Layer *",
-   "kind": "opaque"
+   "kind": "opaque",
+   "destructor": "layers.library.DeleteLayer",
+   "destructor_dummy_first": true
   },
   "Layer_Info": {
    "id": 23,
    "c_type": "struct Layer_Info *",
-   "kind": "opaque"
+   "kind": "opaque",
+   "destructor": "layers.library.DisposeLayerInfo"
   },
   "View": {
    "id": 24,
@@ -184,7 +206,19 @@
    "id": 18,
    "c_type": "struct RastPort *",
    "kind": "facade",
-   "facade_struct": "RastPort"
+   "facade_struct": "RastPort",
+   "nested_fields": [
+    {
+     "field": "Layer",
+     "kind": "object",
+     "type": "Layer"
+    },
+    {
+     "field": "BitMap",
+     "kind": "object",
+     "type": "BitMap"
+    }
+   ]
   },
   "Window": {
    "id": 19,
@@ -234,7 +268,19 @@
   "Gadget": {
    "id": 20,
    "c_type": "struct Gadget *",
-   "kind": "opaque",
+   "kind": "facade",
+   "facade_struct": "Gadget",
+   "nested_fields": [
+    {
+     "field": "NextGadget",
+     "kind": "object",
+     "type": "Gadget"
+    },
+    {
+     "field": "UserData",
+     "kind": "guest_value"
+    }
+   ],
    "linked_field": "NextGadget",
    "linked_limit": 4096,
    "destructor": "gadtools.library.FreeGadgets",
@@ -255,6 +301,185 @@
    "c_type": "struct MenuItem *",
    "kind": "facade",
    "facade_struct": "MenuItem"
+  },
+  "AnimOb": {
+   "id": 27,
+   "c_type": "struct AnimOb *",
+   "kind": "opaque"
+  },
+  "AreaInfo": {
+   "id": 28,
+   "c_type": "struct AreaInfo *",
+   "kind": "opaque",
+   "guest_owned": { "struct": "AreaInfo" }
+  },
+  "BitScaleArgs": {
+   "id": 29,
+   "c_type": "struct BitScaleArgs *",
+   "kind": "opaque"
+  },
+  "Bob": {
+   "id": 30,
+   "c_type": "struct Bob *",
+   "kind": "opaque"
+  },
+  "Border": {
+   "id": 31,
+   "c_type": "struct Border *",
+   "kind": "opaque"
+  },
+  "CopList": {
+   "id": 32,
+   "c_type": "struct CopList *",
+   "kind": "opaque"
+  },
+  "DBufInfo": {
+   "id": 33,
+   "c_type": "struct DBufInfo *",
+   "kind": "opaque"
+  },
+  "ExtSprite": {
+   "id": 34,
+   "c_type": "struct ExtSprite *",
+   "kind": "opaque",
+   "destructor": "graphics.library.FreeSpriteData"
+  },
+  "ExtendedNode": {
+   "id": 35,
+   "c_type": "struct ExtendedNode *",
+   "kind": "opaque",
+   "destructor": "graphics.library.GfxFree"
+  },
+  "GadgetInfo": {
+   "id": 36,
+   "c_type": "struct GadgetInfo *",
+   "kind": "opaque"
+  },
+  "GelsInfo": {
+   "id": 37,
+   "c_type": "struct GelsInfo *",
+   "kind": "opaque"
+  },
+  "ICData": {
+   "id": 38,
+   "c_type": "struct ICData *",
+   "kind": "opaque"
+  },
+  "Image": {
+   "id": 39,
+   "c_type": "struct Image *",
+   "kind": "opaque"
+  },
+  "LocalVar": {
+   "id": 40,
+   "c_type": "struct LocalVar *",
+   "kind": "opaque"
+  },
+  "MonitorSpec": {
+   "id": 41,
+   "c_type": "struct MonitorSpec *",
+   "kind": "opaque",
+   "destructor": "graphics.library.CloseMonitor"
+  },
+  "NewDecorator": {
+   "id": 42,
+   "c_type": "struct NewDecorator *",
+   "kind": "opaque"
+  },
+  "NotifyRequest": {
+   "id": 43,
+   "c_type": "struct NotifyRequest *",
+   "kind": "opaque"
+  },
+  "RecordLock": {
+   "id": 44,
+   "c_type": "struct RecordLock *",
+   "kind": "opaque"
+  },
+  "Remember": {
+   "id": 45,
+   "c_type": "struct Remember *",
+   "kind": "opaque"
+  },
+  "Requester": {
+   "id": 46,
+   "c_type": "struct Requester *",
+   "kind": "opaque"
+  },
+  "ScreenBuffer": {
+   "id": 47,
+   "c_type": "struct ScreenBuffer *",
+   "kind": "opaque"
+  },
+  "Segment": {
+   "id": 48,
+   "c_type": "struct Segment *",
+   "kind": "opaque"
+  },
+  "SimpleSprite": {
+   "id": 49,
+   "c_type": "struct SimpleSprite *",
+   "kind": "opaque"
+  },
+  "TmpRas": {
+   "id": 50,
+   "c_type": "struct TmpRas *",
+   "kind": "opaque",
+   "guest_owned": { "struct": "TmpRas" }
+  },
+  "UCopList": {
+   "id": 51,
+   "c_type": "struct UCopList *",
+   "kind": "opaque"
+  },
+  "VSprite": {
+   "id": 52,
+   "c_type": "struct VSprite *",
+   "kind": "opaque"
+  },
+  "cprlist": {
+   "id": 53,
+   "c_type": "struct cprlist *",
+   "kind": "opaque"
+  },
+  "bltnode": {
+   "id": 54,
+   "c_type": "struct bltnode *",
+   "kind": "opaque"
+  },
+  "DevProc": {
+   "id": 55,
+   "c_type": "struct DevProc *",
+   "kind": "opaque",
+   "destructor": "dos.library.FreeDeviceProc"
+  },
+  "DosList": {
+   "id": 56,
+   "c_type": "struct DosList *",
+   "kind": "opaque"
+  },
+  "CommandLineInterface": {
+   "id": 57,
+   "c_type": "struct CommandLineInterface *",
+   "kind": "opaque"
+  },
+  "Process": {
+   "id": 58,
+   "c_type": "struct Process *",
+   "kind": "opaque"
+  },
+  "Message": {
+   "id": 59,
+   "c_type": "struct Message *",
+   "kind": "opaque"
+  },
+  "BitMap": {
+   "id": 60,
+   "c_type": "struct BitMap *",
+   "kind": "opaque",
+   "guest_owned": {
+    "struct": "BitMap"
+   }
   }
  },
  "tag_domains": {
@@ -807,7 +1032,9 @@
     "intuition/classes.h",
     "intuition/imageclass.h",
     "intuition/pointerclass.h",
-    "intuition/gadgetclass.h"
+    "intuition/gadgetclass.h",
+    "intuition/icclass.h",
+    "gadgets/colorwheel.h"
    ],
    "max_items": 70,
    "tags": [
@@ -916,6 +1143,126 @@
     },
     {
      "name": "SYSIA_Depth",
+     "kind": "u32"
+    },
+    {
+     "name": "ICA_TARGET",
+     "kind": "object_or_ffff",
+     "type": "Object",
+     "nullable": true
+    },
+    {
+     "name": "PGA_Freedom",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_Borderless",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_HorizPot",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_HorizBody",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_VertPot",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_VertBody",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_Total",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_Visible",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_Top",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_NewLook",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_DisplayHook",
+     "kind": "refuse"
+    },
+    {
+     "name": "PGA_NotifyBehaviour",
+     "kind": "u32"
+    },
+    {
+     "name": "PGA_RenderBehaviour",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_Hue",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_Saturation",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_Brightness",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_HSB",
+     "kind": "struct_inout",
+     "type": "ColorWheelHSB"
+    },
+    {
+     "name": "WHEEL_Red",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_Green",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_Blue",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_RGB",
+     "kind": "struct_inout",
+     "type": "ColorWheelRGB"
+    },
+    {
+     "name": "WHEEL_Screen",
+     "kind": "object",
+     "type": "Screen",
+     "nullable": true
+    },
+    {
+     "name": "WHEEL_Abbrv",
+     "kind": "cstr"
+    },
+    {
+     "name": "WHEEL_Donation",
+     "kind": "refuse"
+    },
+    {
+     "name": "WHEEL_BevelBox",
+     "kind": "u32"
+    },
+    {
+     "name": "WHEEL_GradientSlider",
+     "kind": "object",
+     "type": "Object",
+     "nullable": true
+    },
+    {
+     "name": "WHEEL_MaxPens",
      "kind": "u32"
     },
     {
@@ -1236,6 +1583,15 @@
      "nullable": true
     },
     {
+     "name": "WA_PubScreenFallBack",
+     "kind": "u32"
+    },
+    {
+     "name": "WA_Zoom",
+     "kind": "struct",
+     "type": "Rectangle"
+    },
+    {
      "name": "WA_MouseQueue",
      "kind": "u32"
     },
@@ -1391,7 +1747,8 @@
      "name": "WA_Gadgets",
      "kind": "object",
      "type": "Gadget",
-     "nullable": true
+     "nullable": true,
+     "adopt": true
     },
     {
      "name": "WA_BackFill",
@@ -1470,7 +1827,8 @@
     },
     {
      "name": "GTCY_Labels",
-     "kind": "refuse"
+     "kind": "cstr_array",
+     "max_count": 256
     },
     {
      "name": "GTIN_MaxChars",
@@ -1490,7 +1848,8 @@
     },
     {
      "name": "GTLV_Labels",
-     "kind": "refuse"
+     "kind": "node_list",
+     "max_count": 256
     },
     {
      "name": "GTLV_MakeVisible",
@@ -1528,7 +1887,8 @@
     },
     {
      "name": "GTMX_Labels",
-     "kind": "refuse"
+     "kind": "cstr_array",
+     "max_count": 256
     },
     {
      "name": "GTMX_Scaled",
@@ -1731,9 +2091,864 @@
     }
    ],
    "origin": "import"
+  },
+  "utility.named_object": {
+   "tags": [
+    {
+     "name": "ANO_NameSpace",
+     "kind": "object",
+     "type": "NamedObject",
+     "nullable": true
+    },
+    {
+     "name": "ANO_UserSpace",
+     "kind": "u32"
+    },
+    {
+     "name": "ANO_Priority",
+     "kind": "u32"
+    },
+    {
+     "name": "ANO_Flags",
+     "kind": "u32"
+    }
+   ],
+   "max_items": 16
+  },
+  "layers.create": {
+   "headers": [
+    "graphics/layersext.h"
+   ],
+   "max_items": 16,
+   "tags": [
+    { "name": "LA_BackfillHook", "kind": "refuse" },
+    { "name": "LA_SuperBitMap", "kind": "object", "type": "BitMap", "nullable": true },
+    { "name": "LA_ChildOf", "kind": "object", "type": "Layer", "nullable": true },
+    { "name": "LA_InFrontOf", "kind": "object", "type": "Layer", "nullable": true },
+    { "name": "LA_Behind", "kind": "object", "type": "Layer", "nullable": true },
+    { "name": "LA_Hidden", "kind": "u32" },
+    { "name": "LA_ShapeRegion", "kind": "object", "type": "Region", "nullable": true },
+    { "name": "LA_ShapeHook", "kind": "refuse" },
+    { "name": "LA_WindowPtr", "kind": "u32" }
+   ]
+  },
+  "layers.scale": {
+   "headers": [
+    "graphics/clip.h"
+   ],
+   "max_items": 12,
+   "tags": [
+    { "name": "LA_SRCX", "kind": "u32" },
+    { "name": "LA_SRCY", "kind": "u32" },
+    { "name": "LA_DESTX", "kind": "u32" },
+    { "name": "LA_DESTY", "kind": "u32" },
+    { "name": "LA_SRCWIDTH", "kind": "u32" },
+    { "name": "LA_SRCHEIGHT", "kind": "u32" },
+    { "name": "LA_DESTWIDTH", "kind": "u32" },
+    { "name": "LA_DESTHEIGHT", "kind": "u32" }
+   ]
+  },
+  "cybergraphics.video_control": {
+   "headers": [ "cybergraphx/cybergraphics.h" ],
+   "max_items": 4,
+   "tags": [
+    { "name": "SETVC_DPMSLevel", "kind": "u32" }
+   ]
+  },
+  "cybergraphics.process_pixels": {
+   "headers": [ "cybergraphx/cybergraphics.h" ],
+   "max_items": 8,
+   "tags": [
+    { "name": "PPAOPTAG_GRADIENTTYPE", "kind": "u32" },
+    { "name": "PPAOPTAG_GRADCOLOR1", "kind": "u32" },
+    { "name": "PPAOPTAG_GRADCOLOR2", "kind": "u32" },
+    { "name": "PPAOPTAG_GRADFULLSCALE", "kind": "u32" },
+    { "name": "PPAOPTAG_GRADOFFSET", "kind": "u32" }
+   ]
+  },
+  "graphics.sprite_alloc": {
+   "headers": [ "graphics/sprite.h" ],
+   "max_items": 12,
+   "tags": [
+    { "name": "SPRITEA_Width", "kind": "u32" },
+    { "name": "SPRITEA_XReplication", "kind": "u32" },
+    { "name": "SPRITEA_YReplication", "kind": "u32" },
+    { "name": "SPRITEA_OutputHeight", "kind": "u32" },
+    { "name": "SPRITEA_Attached", "kind": "u32" },
+    { "name": "SPRITEA_OldDataFormat", "kind": "u32" }
+   ]
+  },
+  "graphics.sprite_get": {
+   "headers": [ "graphics/sprite.h" ],
+   "max_items": 4,
+   "tags": [
+    { "name": "GSTAG_SPRITE_NUM", "kind": "u32" }
+   ]
+  },
+  "graphics.ignored_tags": {
+   "max_items": 4,
+   "tags": []
+  },
+  "graphics.rp_set": {
+   "headers": [ "graphics/rpattr.h" ],
+   "max_items": 20,
+   "tags": [
+    { "name": "RPTAG_Font", "kind": "object", "type": "TextFont", "nullable": true },
+    { "name": "RPTAG_APen", "kind": "u32" },
+    { "name": "RPTAG_BPen", "kind": "u32" },
+    { "name": "RPTAG_DrMd", "kind": "u32" },
+    { "name": "RPTAG_OutlinePen", "kind": "u32" },
+    { "name": "RPTAG_WriteMask", "kind": "u32" },
+    { "name": "RPTAG_MaxPen", "kind": "u32" },
+    { "name": "RPTAG_DrawBounds", "kind": "u32" },
+    { "name": "RPTAG_PenMode", "kind": "u32" },
+    { "name": "RPTAG_FgColor", "kind": "u32" },
+    { "name": "RPTAG_BgColor", "kind": "u32" },
+    { "name": "RPTAG_ClipRectangle", "kind": "struct", "type": "Rectangle" },
+    { "name": "RPTAG_ClipRectangleFlags", "kind": "u32" },
+    { "name": "RPTAG_RemapColorFonts", "kind": "u32" }
+   ]
+  },
+  "graphics.rp_get": {
+   "headers": [ "graphics/rpattr.h" ],
+   "max_items": 20,
+   "tags": [
+    { "name": "RPTAG_Font", "kind": "refuse" },
+    { "name": "RPTAG_APen", "kind": "out_u32" },
+    { "name": "RPTAG_BPen", "kind": "out_u32" },
+    { "name": "RPTAG_DrMd", "kind": "out_u32" },
+    { "name": "RPTAG_OutlinePen", "kind": "out_u32" },
+    { "name": "RPTAG_WriteMask", "kind": "out_u32" },
+    { "name": "RPTAG_MaxPen", "kind": "out_u32" },
+    { "name": "RPTAG_DrawBounds", "kind": "refuse" },
+    { "name": "RPTAG_PenMode", "kind": "out_u32" },
+    { "name": "RPTAG_FgColor", "kind": "out_u32" },
+    { "name": "RPTAG_BgColor", "kind": "out_u32" },
+    { "name": "RPTAG_ClipRectangle", "kind": "refuse" },
+    { "name": "RPTAG_ClipRectangleFlags", "kind": "out_u32" },
+    { "name": "RPTAG_RemapColorFonts", "kind": "out_u32" }
+   ]
+  },
+  "intuition.window_pointer": {
+   "headers": [ "intuition/intuition.h" ],
+   "max_items": 6,
+   "tags": [
+    { "name": "WA_Pointer", "kind": "object", "type": "Object", "nullable": true },
+    { "name": "WA_BusyPointer", "kind": "u32" },
+    { "name": "WA_PointerDelay", "kind": "u32" }
+   ]
+  },
+  "intuition.ignored_tags": {
+   "max_items": 4,
+   "tags": []
   }
  },
  "refused_functions": {
+  "utility.library.AllocNamedObjectA": {
+   "reason": "served by the handwritten Utility handler because the NamedObject and its user space must remain guest-addressable",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 386, "line_end": 426 } ]
+  },
+  "utility.library.AddNamedObject": {
+   "reason": "served by the handwritten Utility handler because the named-object namespace is owned by the isolated guest run",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 428, "line_end": 446 } ]
+  },
+  "utility.library.FindNamedObject": {
+   "reason": "served by the handwritten Utility handler so lookup returns guest object identities from the run-local namespace",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 447, "line_end": 466 } ]
+  },
+  "utility.library.NamedObjectName": {
+   "reason": "served by the handwritten Utility handler so the returned name pointer addresses retained guest memory",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 467, "line_end": 472 } ]
+  },
+  "utility.library.ReleaseNamedObject": {
+   "reason": "served by the handwritten Utility handler to update references in the run-local guest namespace",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 473, "line_end": 479 } ]
+  },
+  "utility.library.AttemptRemNamedObject": {
+   "reason": "served by the handwritten Utility handler to preserve run-local guest reference and removal semantics",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 480, "line_end": 489 } ]
+  },
+  "utility.library.RemNamedObject": {
+   "reason": "served by the handwritten Utility handler because removal and its optional reply message use guest identities",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 490, "line_end": 506 } ]
+  },
+  "utility.library.FreeNamedObject": {
+   "reason": "served by the handwritten Utility handler as the paired release for run-owned guest NamedObjects",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_utility.c", "line_start": 507, "line_end": 513 } ]
+  },
+  "dos.library.LoadSeg": {
+   "reason": "served by the handwritten DOS handler because a guest BPTR seglist is a guest-arena hunk chain, not a native AROS seglist",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_dos.c",
+     "line_start": 8,
+     "line_end": 10
+    }
+   ]
+  },
+  "dos.library.IoErr": {
+   "reason": "served by the handwritten DOS handler so IoErr reports the isolated guest run's last error rather than the native host task's error",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_dos.c",
+     "line_start": 19,
+     "line_end": 21
+    }
+   ]
+  },
+  "dos.library.UnLoadSeg": {
+   "reason": "served by the handwritten DOS handler because it releases a guest hunk chain rather than a native seglist",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 10, "line_end": 11 } ]
+  },
+  "dos.library.ReadArgs": {
+   "reason": "served by the handwritten DOS handler because the RDArgs result and parsed storage must be guest-addressable",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 12, "line_end": 13 } ]
+  },
+  "dos.library.FreeArgs": {
+   "reason": "paired handwritten release for run-owned guest ReadArgs storage",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 14, "line_end": 18 } ]
+  },
+  "dos.library.AllocDosObject": {
+   "reason": "served by the handwritten DOS handler so caller-readable DosObject payloads live in guest memory",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 26, "line_end": 30 } ]
+  },
+  "dos.library.FreeDosObject": {
+   "reason": "paired handwritten release for a run-owned guest DosObject allocation",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 31, "line_end": 33 } ]
+  },
+  "dos.library.CreateNewProc": {
+   "reason": "served by the handwritten DOS handler because the created process executes a guest seglist in a guest execution context",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 34, "line_end": 35 } ]
+  },
+  "dos.library.NewLoadSeg": {
+   "reason": "served by the handwritten guest hunk loader when its currently undefined taglist is empty",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 16, "line_end": 23 } ]
+  },
+  "dos.library.MakeLink": {
+   "reason": "served by the OS-side DOS handler because dest is conditionally a guest string or a BPTR token according to soft",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2001, "line_end": 2007 } ]
+  },
+  "dos.library.VPrintf": {
+   "reason": "served by the handwritten guest formatter and run output sink so RAWARG remains a 68k argument stream",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_dos.c", "line_start": 55, "line_end": 74 } ]
+  },
+  "dos.library.CreateProc": {
+   "reason": "accepts a guest hunk seglist but would create a native process that cannot execute it; CreateNewProc has the guest-aware path",
+   "evidence": [ { "source": "rom/dos/createproc.c", "line_start": 40, "line_end": 75 } ]
+  },
+  "dos.library.Exit": {
+   "reason": "would unwind the native task that owns the JIT; guest programs terminate by returning through the execution context",
+   "evidence": [ { "source": "rom/dos/exit.c", "line_start": 43, "line_end": 63 } ]
+  },
+  "dos.library.SendPkt": {
+   "reason": "queues a pointer-bearing DosPacket and reply port whose message lifecycle has no guest/native packet facade",
+   "evidence": [ { "source": "rom/dos/sendpkt.c", "line_start": 45, "line_end": 79 } ]
+  },
+  "dos.library.WaitPkt": {
+   "reason": "returns a native DosPacket owned by a native message port with no guest-readable packet facade",
+   "evidence": [ { "source": "rom/dos/waitpkt.c", "line_start": 40, "line_end": 63 } ]
+  },
+  "dos.library.ReplyPkt": {
+   "reason": "replies a native DosPacket whose ownership and embedded reply port cannot be reconstructed from guest memory",
+   "evidence": [ { "source": "rom/dos/replypkt.c", "line_start": 43, "line_end": 77 } ]
+  },
+  "dos.library.AbortPkt": {
+   "reason": "operates on a native in-flight DosPacket/message pair for which the bridge has no guest facade",
+   "evidence": [ { "source": "rom/dos/abortpkt.c", "line_start": 41, "line_end": 68 } ]
+  },
+  "dos.library.VFWritef": {
+   "reason": "RAWARG is a 68k-width typed argument stream and cannot be passed to native formatting unchanged",
+   "evidence": [ { "source": "rom/dos/vfwritef.c", "line_start": 41, "line_end": 75 } ]
+  },
+  "dos.library.VFPrintf": {
+   "reason": "RAWARG is a 68k-width typed argument stream and cannot be passed to native formatting unchanged",
+   "evidence": [ { "source": "rom/dos/vfprintf.c", "line_start": 41, "line_end": 75 } ]
+  },
+  "dos.library.ExAll": {
+   "reason": "fills a variable-format linked ExAllData record stream with embedded native pointers and retains ExAllControl scan state",
+   "evidence": [ { "source": "rom/dos/exall.c", "line_start": 110, "line_end": 244 } ]
+  },
+  "dos.library.ExAllEnd": {
+   "reason": "paired termination for the refused retained ExAllControl scan state",
+   "evidence": [ { "source": "rom/dos/exallend.c", "line_start": 54, "line_end": 76 } ]
+  },
+  "dos.library.DisplayError": {
+   "reason": "formats an untyped 68k RAWARG array and may open process-global UI",
+   "evidence": [ { "source": "rom/dos/displayerror.c", "line_start": 45, "line_end": 91 } ]
+  },
+  "dos.library.Cli": {
+   "reason": "returns the host process CommandLineInterface structure, which is pointer-bearing and not the isolated guest CLI",
+   "evidence": [ { "source": "rom/dos/cli.c", "line_start": 39, "line_end": 57 } ]
+  },
+  "dos.library.RunCommand": {
+   "reason": "would ask the native process to execute a guest hunk seglist as native code",
+   "evidence": [ { "source": "rom/dos/runcommand.c", "line_start": 52, "line_end": 109 } ]
+  },
+  "dos.library.GetArgStr": {
+   "reason": "the native result is the host process argument string, not the guest launch argument storage",
+   "evidence": [ { "source": "rom/dos/getargstr.c", "line_start": 39, "line_end": 56 } ]
+  },
+  "dos.library.SetArgStr": {
+   "reason": "would rebind the host process argument string rather than isolated guest state",
+   "evidence": [ { "source": "rom/dos/setargstr.c", "line_start": 42, "line_end": 62 } ]
+  },
+  "dos.library.FindCliProc": {
+   "reason": "returns a native Process from the host CLI table, not a guest execution context",
+   "evidence": [ { "source": "rom/dos/findcliproc.c", "line_start": 43, "line_end": 76 } ]
+  },
+  "dos.library.MaxCli": {
+   "reason": "reports the host CLI table rather than isolated guest processes",
+   "evidence": [ { "source": "rom/dos/maxcli.c", "line_start": 39, "line_end": 56 } ]
+  },
+  "dos.library.SetCurrentDirName": {
+   "reason": "would mutate the host process CLI state rather than the guest's current-directory identity",
+   "evidence": [ { "source": "rom/dos/setcurrentdirname.c", "line_start": 42, "line_end": 66 } ]
+  },
+  "dos.library.SetProgramName": {
+   "reason": "would rename the host process rather than the isolated guest",
+   "evidence": [ { "source": "rom/dos/setprogramname.c", "line_start": 42, "line_end": 65 } ]
+  },
+  "dos.library.SetPrompt": {
+   "reason": "would replace the host shell prompt rather than guest-owned CLI state",
+   "evidence": [ { "source": "rom/dos/setprompt.c", "line_start": 42, "line_end": 65 } ]
+  },
+  "dos.library.SystemTagList": {
+   "reason": "launches a native command/process with host streams; it cannot route a classic command back through the guest loader",
+   "evidence": [ { "source": "rom/dos/systemtaglist.c", "line_start": 58, "line_end": 153 } ]
+  },
+  "dos.library.Format": {
+   "reason": "destructive device-level formatting is outside an isolated guest run",
+   "evidence": [ { "source": "rom/dos/format.c", "line_start": 46, "line_end": 91 } ]
+  },
+  "dos.library.Relabel": {
+   "reason": "mutates a host-mounted volume label and is outside isolated guest routing",
+   "evidence": [ { "source": "rom/dos/relabel.c", "line_start": 44, "line_end": 90 } ]
+  },
+  "dos.library.Inhibit": {
+   "reason": "inhibits a host filesystem device and is outside isolated guest routing",
+   "evidence": [ { "source": "rom/dos/inhibit.c", "line_start": 43, "line_end": 84 } ]
+  },
+  "dos.library.AddBuffers": {
+   "reason": "changes host filesystem device buffering and is outside isolated guest routing",
+   "evidence": [ { "source": "rom/dos/addbuffers.c", "line_start": 43, "line_end": 82 } ]
+  },
+  "dos.library.InternalLoadSeg": {
+   "reason": "combines native file handles with function-pointer arrays and loader callbacks that cannot execute as 68k callbacks",
+   "evidence": [ { "source": "rom/dos/internalloadseg.c", "line_start": 54, "line_end": 124 } ]
+  },
+  "dos.library.InternalUnLoadSeg": {
+   "reason": "walks a seglist using a native free callback; guest seglists are owned by the handwritten hunk loader",
+   "evidence": [ { "source": "rom/dos/internalunloadseg.c", "line_start": 46, "line_end": 86 } ]
+  },
+  "dos.library.AddSegment": {
+   "reason": "would publish a guest executable seglist in the native DOS segment registry",
+   "evidence": [ { "source": "rom/dos/addsegment.c", "line_start": 44, "line_end": 90 } ]
+  },
+  "dos.library.CheckSignal": {
+   "reason": "the native task signals belong to the JIT host task, not the guest task model",
+   "evidence": [ { "source": "rom/dos/checksignal.c", "line_start": 42, "line_end": 61 } ]
+  },
+  "dos.library.ReadItem": {
+   "reason": "CSource contains a retained guest buffer whose validated extent depends on its mutable CS_Length and CS_CurChr fields",
+   "evidence": [ { "source": "rom/dos/readitem.c", "line_start": 77, "line_end": 230 } ]
+  },
+  "dos.library.FindVar": {
+   "reason": "returns a linked LocalVar inside the host process's local-variable list, not guest CLI state",
+   "evidence": [ { "source": "rom/dos/findvar.c", "line_start": 42, "line_end": 75 } ]
+  },
+  "dos.library.CliInit": {
+   "reason": "consumes a native startup DosPacket to initialize the host CLI, not a guest packet facade",
+   "evidence": [ { "source": "rom/dos/cliinit.c", "line_start": 43, "line_end": 78 } ]
+  },
+  "dos.library.CliInitNewcli": {
+   "reason": "consumes a native startup DosPacket and mutates host CLI process state",
+   "evidence": [ { "source": "rom/dos/cliinitnewcli.c", "line_start": 43, "line_end": 83 } ]
+  },
+  "dos.library.CliInitRun": {
+   "reason": "consumes a native startup DosPacket and launches through the host CLI",
+   "evidence": [ { "source": "rom/dos/cliinitrun.c", "line_start": 43, "line_end": 83 } ]
+  },
+  "dos.library.SetOwner": {
+   "reason": "changes host filesystem ownership metadata and is outside isolated guest routing",
+   "evidence": [ { "source": "rom/dos/setowner.c", "line_start": 43, "line_end": 87 } ]
+  },
+  "dos.library.ScanVars": {
+   "reason": "invokes a guest Hook from native DOS with a native pointer-bearing local-variable message",
+   "evidence": [ { "source": "rom/dos/scanvars.c", "line_start": 52, "line_end": 102 } ]
+  },
+  "dos.library.GetSegListInfo": {
+   "reason": "queries a native seglist with output-pointer tags, while guest seglists are guest-arena hunk chains",
+   "evidence": [ { "source": "rom/dos/getseglistinfo.c", "line_start": 47, "line_end": 116 } ]
+  },
+  "dos.library.SetIoErr": {
+   "reason": "served by the OS-side DOS handler to update the native task error read by the paired IoErr crossing",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1918, "line_end": 1920 } ]
+  },
+  "dos.library.PrintFault": {
+   "reason": "served by the OS-side DOS handler with the guest header string rebased into the guest arena",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1922, "line_end": 1925 } ]
+  },
+  "dos.library.Output": {
+   "reason": "served by the OS-side DOS handler so the native BPTR becomes a run-local guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1927, "line_end": 1933 } ]
+  },
+  "dos.library.Input": {
+   "reason": "served by the OS-side DOS handler so the native BPTR becomes a run-local guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1927, "line_end": 1933 } ]
+  },
+  "dos.library.Write": {
+   "reason": "served by the OS-side DOS handler with a checked guest buffer and BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1935, "line_end": 1939 } ]
+  },
+  "dos.library.Read": {
+   "reason": "served by the OS-side DOS handler with a guest output buffer and BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1940, "line_end": 1944 } ]
+  },
+  "dos.library.Open": {
+   "reason": "served by the OS-side DOS handler so the native file BPTR becomes a run-local guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1945, "line_end": 1949 } ]
+  },
+  "dos.library.Close": {
+   "reason": "served by the OS-side DOS handler to release both the native BPTR and its run-local token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1950, "line_end": 1954 } ]
+  },
+  "dos.library.Seek": {
+   "reason": "served by the OS-side DOS handler with BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1955, "line_end": 1959 } ]
+  },
+  "dos.library.Delay": {
+   "reason": "served by the OS-side DOS handler in the native AROS task that owns the guest run",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1960, "line_end": 1963 } ]
+  },
+  "dos.library.IsInteractive": {
+   "reason": "served by the OS-side DOS handler with BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1968, "line_end": 1971 } ]
+  },
+  "dos.library.WaitForChar": {
+   "reason": "served by the OS-side DOS handler with BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1972, "line_end": 1975 } ]
+  },
+  "dos.library.Flush": {
+   "reason": "served by the OS-side DOS handler with BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1976, "line_end": 1979 } ]
+  },
+  "dos.library.Lock": {
+   "reason": "served by the OS-side DOS handler so the native lock BPTR becomes a run-local guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1983, "line_end": 1987 } ]
+  },
+  "dos.library.UnLock": {
+   "reason": "served by the OS-side DOS handler to release both the native lock and its run-local token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1988, "line_end": 1992 } ]
+  },
+  "dos.library.DupLock": {
+   "reason": "served by the OS-side DOS handler so the duplicated native BPTR becomes a guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1993, "line_end": 1996 } ]
+  },
+  "dos.library.CreateDir": {
+   "reason": "served by the OS-side DOS handler so the returned native lock BPTR becomes a guest handle token",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1997, "line_end": 2000 } ]
+  },
+  "dos.library.FilePart": {
+   "reason": "served by the OS-side DOS handler to return an offset into the original guest string rather than a native pointer",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2005, "line_end": 2013 } ]
+  },
+  "dos.library.PathPart": {
+   "reason": "served by the OS-side DOS handler to return an offset into the original guest string rather than a native pointer",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2005, "line_end": 2013 } ]
+  },
+  "dos.library.MatchFirst": {
+   "reason": "served by an OS-side retained AnchorPath shadow whose result is copied back to guest layout",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2018, "line_end": 2083 } ]
+  },
+  "dos.library.MatchNext": {
+   "reason": "served by the OS-side retained AnchorPath scan shadow created by MatchFirst",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2018, "line_end": 2083 } ]
+  },
+  "dos.library.MatchEnd": {
+   "reason": "paired OS-side release for a retained native AnchorPath scan shadow",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2086, "line_end": 2091 } ]
+  },
+  "dos.library.CurrentDir": {
+   "reason": "served by the OS-side DOS handler with bidirectional BPTR token translation",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2094, "line_end": 2096 } ]
+  },
+  "dos.library.GetVar": {
+   "reason": "served by the OS-side DOS handler so native DOS writes directly into checked guest byte storage",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2098, "line_end": 2108 } ]
+  },
+  "dos.library.SetVar": {
+   "reason": "served by the OS-side DOS handler with both guest strings rebased for the native call",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2111, "line_end": 2115 } ]
+  },
+  "dos.library.GetProgramName": {
+   "reason": "served by the OS-side DOS handler so the program name is copied into guest storage",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 2117, "line_end": 2130 } ]
+  },
+  "layers.library.InstallLayerHook": {
+   "reason": "requires a run-lifetime native-to-68k backfill hook adapter and preservation of the previous guest hook identity",
+   "evidence": [
+    { "source": "rom/hyperlayers/installlayerhook.c", "line_start": 68, "line_end": 68 }
+   ]
+  },
+  "layers.library.InstallLayerInfoHook": {
+   "reason": "requires a run-lifetime native-to-68k blank hook adapter and preservation of the previous guest hook identity",
+   "evidence": [
+    { "source": "rom/hyperlayers/installlayerinfohook.c", "line_start": 71, "line_end": 76 }
+   ]
+  },
+  "layers.library.DoHookClipRects": {
+   "reason": "calls the guest hook from native Layers with native RastPort, Layer and Rectangle message pointers that require callback-specific facades",
+   "evidence": [
+    { "source": "rom/hyperlayers/dohookcliprects.c", "line_start": 199, "line_end": 205 }
+   ]
+  },
+  "layers.library.CollectPixelsLayer": {
+   "reason": "calls the guest hook repeatedly with native Layer and CollectPixelsLayerMsg data that requires a callback-specific mirror",
+   "evidence": [
+    { "source": "rom/hyperlayers/collectpixelslayer.c", "line_start": 141, "line_end": 141 }
+   ]
+  },
+  "cybergraphics.library.AllocCModeListTagList": {
+   "reason": "returns a guest-traversed List whose dynamically allocated CyberModeNode chain and embedded mode names require linked facades",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/alloccmodelisttaglist.c", "line_start": 229, "line_end": 229 }
+   ]
+  },
+  "cybergraphics.library.FreeCModeList": {
+   "reason": "paired handwritten release for the guest-linked CyberModeNode facade list",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/freecmodelist.c", "line_start": 45, "line_end": 56 }
+   ]
+  },
+  "cybergraphics.library.DoCDrawMethodTagList": {
+   "reason": "invokes a guest hook from native code with native RastPort and CDrawMsg pointers requiring callback-specific facades",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/docdrawmethodtaglist.c", "line_start": 181, "line_end": 181 }
+   ]
+  },
+  "cybergraphics.library.LockBitMapTagList": {
+   "reason": "exposes a native framebuffer base address through LBMI_BASEADDRESS, which is not addressable by the 32-bit guest",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/lockbitmaptaglist.c", "line_start": 156, "line_end": 158 }
+   ]
+  },
+  "cybergraphics.library.UnLockBitMap": {
+   "reason": "paired release for the refused native framebuffer lock handle",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/unlockbitmap.c", "line_start": 55, "line_end": 55 }
+   ]
+  },
+  "cybergraphics.library.UnLockBitMapTagList": {
+   "reason": "paired release for the refused native framebuffer lock handle",
+   "evidence": [
+    { "source": "workbench/libs/cgfx/unlockbitmaptaglist.c", "line_start": 31, "line_end": 31 }
+   ]
+  },
+  "graphics.library.InitArea": {
+   "reason": "served by the handwritten Graphics handler because AreaInfo retains guest pointers into the caller's vector buffer",
+   "evidence": [
+    { "source": "hosted/emu68k/emu68k_graphics.c", "line_start": 20, "line_end": 38 }
+   ]
+  },
+  "graphics.library.InitTmpRas": {
+   "reason": "served by the handwritten Graphics handler because TmpRas retains a guest raster pointer",
+   "evidence": [
+    { "source": "hosted/emu68k/emu68k_graphics.c", "line_start": 40, "line_end": 47 }
+   ]
+  },
+  "graphics.library.BltClear": {
+   "reason": "served directly in guest memory by the handwritten Graphics handler",
+   "evidence": [
+    { "source": "hosted/emu68k/emu68k_graphics.c", "line_start": 49, "line_end": 57 }
+   ]
+  },
+  "graphics.library.AllocRaster": {
+   "reason": "served by the handwritten Graphics handler so the returned raster is addressable 32-bit guest memory",
+   "evidence": [
+    { "source": "hosted/emu68k/emu68k_graphics.c", "line_start": 59, "line_end": 64 }
+   ]
+  },
+  "graphics.library.FreeRaster": {
+   "reason": "paired handwritten release for a run-owned guest raster allocation",
+   "evidence": [
+    { "source": "hosted/emu68k/emu68k_graphics.c", "line_start": 66, "line_end": 67 }
+   ]
+  },
+  "graphics.library.SetCollision": {
+   "reason": "retains a 68k collision callback which native graphics.library cannot invoke without a callback adapter",
+   "evidence": [
+    { "source": "rom/graphics/setcollision.c", "line_start": 49, "line_end": 49 }
+   ]
+  },
+  "graphics.library.AddAnimOb": {
+   "reason": "mutates and retains a guest AnimOb linked list through a pointer-to-pointer graph",
+   "evidence": [
+    { "source": "rom/graphics/addanimob.c", "line_start": 68, "line_end": 79 }
+   ]
+  },
+  "graphics.library.Animate": {
+   "reason": "walks retained guest animation graphs and may execute their guest callbacks",
+   "evidence": [
+    { "source": "rom/graphics/animate.c", "line_start": 71, "line_end": 132 }
+   ]
+  },
+  "graphics.library.CMove": {
+   "reason": "the register argument is an Amiga custom-chip address and has no valid hosted native pointer meaning",
+   "evidence": [
+    { "source": "rom/graphics/cmove.c", "line_start": 45, "line_end": 74 }
+   ]
+  },
+  "graphics.library.ChangeSprite": {
+   "reason": "accepts raw chipset sprite words whose retained extent and hardware representation are not described by the ABI",
+   "evidence": [
+    { "source": "rom/graphics/changesprite.c", "line_start": 41, "line_end": 81 }
+   ]
+  },
+  "graphics.library.BltMaskBitMapRastPort": {
+   "reason": "the mask pointer has no length argument; its extent depends on native bitmap layout and source coordinates",
+   "evidence": [
+    { "source": "rom/graphics/bltmaskbitmaprastport.c", "line_start": 85, "line_end": 141 }
+   ]
+  },
+  "graphics.library.BltBitMapRastPort": {
+   "reason": "served by the OS-side planar RastPort adapter, which constructs validated transient native views for program-owned source BitMaps and destination RastPorts",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/bltbitmaprastport.c", "line_start": 108, "line_end": 139 }
+   ]
+  },
+  "graphics.library.SetFont": {
+   "reason": "served by the OS-side RastPort adapter: issued RastPorts update natively, while program-owned RastPorts receive the exact guest-visible Font and text-metric mutations",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setfont.c", "line_start": 45, "line_end": 75 }
+   ]
+  },
+  "graphics.library.SetAPen": {
+   "reason": "served by the OS-side RastPort adapter, which mirrors the exact pen, line-pattern and flag mutations into program-owned guest RastPorts",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setapen.c", "line_start": 45, "line_end": 61 }
+   ]
+  },
+  "graphics.library.SetBPen": {
+   "reason": "served by the OS-side RastPort adapter, including the guest ABI minterm regeneration performed by graphics.library",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setbpen.c", "line_start": 45, "line_end": 60 }
+   ]
+  },
+  "graphics.library.SetDrMd": {
+   "reason": "served by the OS-side RastPort adapter, including the guest ABI minterm regeneration performed by graphics.library",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setdrmd.c", "line_start": 45, "line_end": 58 }
+   ]
+  },
+  "graphics.library.SetABPenDrMd": {
+   "reason": "served by the OS-side RastPort adapter, which applies the combined scalar and minterm mutations to issued or program-owned RastPorts",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setabpendrmd.c", "line_start": 53, "line_end": 71 }
+   ]
+  },
+  "graphics.library.SetOutlinePen": {
+   "reason": "served by the OS-side RastPort adapter so the old pen result and AREAOUTLINE guest mutation remain ABI-correct",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setoutlinepen.c", "line_start": 48, "line_end": 61 }
+   ]
+  },
+  "graphics.library.SetWriteMask": {
+   "reason": "served by the OS-side RastPort adapter so a program-owned guest RastPort receives the native one-byte mask mutation",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setwritemask.c", "line_start": 48, "line_end": 53 }
+   ]
+  },
+  "graphics.library.SetMaxPen": {
+   "reason": "served by the OS-side RastPort adapter, which computes the same highest-set-bit write mask for program-owned guest RastPorts",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setmaxpen.c", "line_start": 48, "line_end": 112 }
+   ]
+  },
+  "graphics.library.SetSoftStyle": {
+   "reason": "served by the OS-side RastPort adapter, which reads the guest TextFont style and mirrors the exact AlgoStyle mutation and result",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setsoftstyle.c", "line_start": 49, "line_end": 65 },
+    { "source": "rom/graphics/asksoftstyle.c", "line_start": 45, "line_end": 57 }
+   ]
+  },
+  "graphics.library.TextLength": {
+   "reason": "served by the OS-side text adapter, which constructs a native RastPort view from validated guest scalar state and an issued TextFont",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/textlength.c", "line_start": 45, "line_end": 110 }
+   ]
+  },
+  "graphics.library.TextExtent": {
+   "reason": "served by the OS-side text adapter, including explicit big-endian TextExtent output conversion for program-owned RastPorts",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/textextent.c", "line_start": 54, "line_end": 137 }
+   ]
+  },
+  "graphics.library.TextFit": {
+   "reason": "served by the OS-side text adapter, including explicit conversion of both constraining and returned TextExtent structures",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/textfit.c", "line_start": 58, "line_end": 185 }
+   ]
+  },
+  "graphics.library.SetRast": {
+   "reason": "served by the OS-side planar RastPort adapter, which fills program-owned guest bitplanes according to the requested pen",
+   "evidence": [
+    { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 },
+    { "source": "rom/graphics/setrast.c", "line_start": 47, "line_end": 68 }
+   ]
+  },
+  "graphics.library.AddDisplayDriverA": {
+   "reason": "registers a native HIDD driver object and driver attribute contracts that cannot be represented by a guest token alone",
+   "evidence": [
+    { "source": "rom/graphics/adddisplaydrivera.c", "line_start": 49, "line_end": 91 }
+   ]
+  },
+  "graphics.library.SetDisplayDriverCallback": {
+   "reason": "retains and invokes a callback using the native display-driver ABI",
+   "evidence": [
+    { "source": "rom/graphics/setdisplaydrivercallback.c", "line_start": 42, "line_end": 55 }
+   ]
+  },
+  "graphics.library.VideoControl": {
+   "reason": "its bidirectional tag API includes retained native pointers and output pointer values without a complete guest representation",
+   "evidence": [
+    { "source": "rom/graphics/videocontrol.c", "line_start": 52, "line_end": 195 }
+   ]
+  },
+  "graphics.library.WritePixels8": {
+   "reason": "pixlut is an undocumented pointer-bearing PixelLUT contract and cannot safely be treated as either guest bytes or a native pointer",
+   "evidence": [
+    { "source": "rom/graphics/writepixels8.c", "line_start": 51, "line_end": 108 }
+   ]
+  },
+  "graphics.library.DoRenderFunc": {
+   "reason": "invokes a native render callback with native RastPort, Point and Rectangle pointers",
+   "evidence": [
+    { "source": "rom/graphics/dorenderfunc.c", "line_start": 46, "line_end": 94 }
+   ]
+  },
+  "graphics.library.DoPixelFunc": {
+   "reason": "invokes a native per-pixel callback and cannot call a 68k function pointer directly",
+   "evidence": [
+    { "source": "rom/graphics/dopixelfunc.c", "line_start": 43, "line_end": 76 }
+   ]
+  },
+  "intuition.library.AutoRequest": {
+   "reason": "served by the handwritten hosted requester policy with the documented negative answer",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 20, "line_end": 31 } ]
+  },
+  "intuition.library.EasyRequestArgs": {
+   "reason": "served by the OS-side requester adapter, which converts EasyStruct, formats the 68k RAWARG stream, and opens a real native requester",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 } ]
+  },
+  "intuition.library.SetWindowTitles": {
+   "reason": "served by the OS-side retained-string adapter because (STRPTR)-1 is a native sentinel, not a guest address, and Intuition retains real title pointers after return",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 1, "line_end": 1 } ]
+  },
+  "intuition.library.BuildSysRequest": {
+   "reason": "served by the handwritten hosted requester policy without creating process-global UI",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 20, "line_end": 31 } ]
+  },
+  "intuition.library.BuildEasyRequestArgs": {
+   "reason": "served by the handwritten hosted requester policy without creating process-global UI",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 20, "line_end": 31 } ]
+  },
+  "intuition.library.SysReqHandler": {
+   "reason": "served by the handwritten hosted requester policy as the cancel/error completion",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 20, "line_end": 31 } ]
+  },
+  "intuition.library.AllocRemember": {
+   "reason": "served in guest memory by the handwritten Intuition handler so both allocation and Remember chain are guest-addressable",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 33, "line_end": 52 } ]
+  },
+  "intuition.library.FreeRemember": {
+   "reason": "paired handwritten release for run-owned guest Remember allocations",
+   "evidence": [ { "source": "hosted/emu68k/emu68k_intuition.c", "line_start": 54, "line_end": 58 } ]
+  },
+  "intuition.library.SetPointer": {
+   "reason": "retains endian-sensitive chipset pointer words after return; they require a per-window native shadow through ClearPointer",
+   "evidence": [ { "source": "rom/intuition/setpointer.c", "line_start": 47, "line_end": 113 } ]
+  },
+  "intuition.library.GetScreenData": {
+   "reason": "writes one of several size-selected screen structure contracts into an untyped buffer and may expose native pointers",
+   "evidence": [ { "source": "rom/intuition/getscreendata.c", "line_start": 48, "line_end": 119 } ]
+  },
+  "intuition.library.SetEditHook": {
+   "reason": "installs a retained 68k edit callback and returns the previous native Hook pointer",
+   "evidence": [ { "source": "rom/intuition/setedithook.c", "line_start": 48, "line_end": 67 } ]
+  },
+  "intuition.library.LockPubScreenList": {
+   "reason": "returns a native List whose nodes and public-screen records have no guest linked facade",
+   "evidence": [ { "source": "rom/intuition/lockpubscreenlist.c", "line_start": 45, "line_end": 57 } ]
+  },
+  "intuition.library.UnlockPubScreenList": {
+   "reason": "paired unlock for the refused native public-screen List lock; forwarding it alone would release an unheld semaphore",
+   "evidence": [ { "source": "rom/intuition/unlockpubscreenlist.c", "line_start": 42, "line_end": 51 } ]
+  },
+  "intuition.library.NextPubScreen": {
+   "reason": "enumerates the native public-screen List under LockPubScreenList, whose linked records have no guest facade",
+   "evidence": [ { "source": "rom/intuition/nextpubscreen.c", "line_start": 49, "line_end": 92 } ]
+  },
+  "intuition.library.GadgetMouse": {
+   "reason": "GadgetInfo is a transient native callback structure; no native-to-68k gadget callback facade issues it",
+   "evidence": [ { "source": "rom/intuition/gadgetmouse.c", "line_start": 69, "line_end": 87 } ]
+  },
+  "intuition.library.NextObject": {
+   "reason": "mutates a pointer-to-pointer into BOOPSI's private native list-node representation",
+   "evidence": [ { "source": "rom/intuition/nextobject.c", "line_start": 63, "line_end": 79 } ]
+  },
+  "intuition.library.DoGadgetMethodA": {
+   "reason": "the untyped BOOPSI message is method-specific and may contain guest pointers or invoke guest dispatchers",
+   "evidence": [ { "source": "rom/intuition/dogadgetmethoda.c", "line_start": 49, "line_end": 91 } ]
+  },
+  "intuition.library.DoNotify": {
+   "reason": "dispatches an opUpdate message across BOOPSI classes using pointer-bearing ICData and message structures",
+   "evidence": [ { "source": "rom/intuition/donotify.c", "line_start": 49, "line_end": 105 } ]
+  },
+  "intuition.library.AllocIntuiMessage": {
+   "reason": "returns a mutable pointer-bearing IntuiMessage whose paired send path requires a bidirectional facade",
+   "evidence": [ { "source": "rom/intuition/allocintuimessage.c", "line_start": 42, "line_end": 73 } ]
+  },
+  "intuition.library.FreeIntuiMessage": {
+   "reason": "paired release for the refused mutable IntuiMessage facade",
+   "evidence": [ { "source": "rom/intuition/freeintuimessage.c", "line_start": 40, "line_end": 58 } ]
+  },
+  "intuition.library.SendIntuiMessage": {
+   "reason": "queues a mutable native IntuiMessage whose guest pointer fields and ownership need a bidirectional facade",
+   "evidence": [ { "source": "rom/intuition/sendintuimessage.c", "line_start": 45, "line_end": 77 } ]
+  },
+  "intuition.library.StartScreenNotifyTagList": {
+   "reason": "registers retained task, port or Hook notification targets that native Intuition cannot deliver into guest execution",
+   "evidence": [ { "source": "rom/intuition/startscreennotifytaglist.c", "line_start": 57, "line_end": 110 } ]
+  },
+  "intuition.library.EndScreenNotify": {
+   "reason": "paired release for the refused retained screen-notification registration",
+   "evidence": [ { "source": "rom/intuition/endscreennotify.c", "line_start": 48, "line_end": 73 } ]
+  },
+  "intuition.library.GetDrawInfoAttr": {
+   "reason": "some attribute IDs return native Font or Image pointers while others return scalars; the result needs an attribute-specific token policy",
+   "evidence": [ { "source": "rom/intuition/getdrawinfoattr.c", "line_start": 87, "line_end": 151 } ]
+  },
+  "intuition.library.GetMonitorList": {
+   "reason": "returns a variable NULL-terminated native Object pointer array that must remain paired with its native allocation",
+   "evidence": [ { "source": "rom/intuition/getmonitorlist.c", "line_start": 73, "line_end": 105 } ]
+  },
+  "intuition.library.FreeMonitorList": {
+   "reason": "paired release for the refused native monitor object array",
+   "evidence": [ { "source": "rom/intuition/freemonitorlist.c", "line_start": 45, "line_end": 52 } ]
+  },
   "gadtools.library.GT_GetIMsg": {
    "reason": "IntuiMessage results need a guest-readable facade and paired reply ownership",
    "evidence": [
@@ -1773,6 +2988,196 @@
      "line_end": 83
     }
    ]
+  },
+  "exec.library.AvailMem": {
+   "reason": "served in the guest by the hand-written bridge: the structure lives in guest memory, so a native call would receive an address it cannot dereference (validated against the hand-written exec dispatch)",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 1770,
+     "line_end": 1773
+    }
+   ]
+  },
+  "exec.library.AddPort": {
+   "reason": "served in the guest by the hand-written bridge: the structure lives in guest memory, so a native call would receive an address it cannot dereference (validated against the hand-written exec dispatch)",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2061,
+     "line_end": 2066
+    }
+   ]
+  },
+  "exec.library.RemPort": {
+   "reason": "served in the guest by the hand-written bridge: the structure lives in guest memory, so a native call would receive an address it cannot dereference (validated against the hand-written exec dispatch)",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2061,
+     "line_end": 2066
+    }
+   ]
+  },
+  "exec.library.DeleteMsgPort": {
+   "reason": "served in the guest by the hand-written bridge: the structure lives in guest memory, so a native call would receive an address it cannot dereference (validated against the hand-written exec dispatch)",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2067,
+     "line_end": 2075
+    }
+   ]
+  },
+  "exec.library.PutMsg": {
+   "reason": "served in the guest by the hand-written bridge: MsgPort and Message are guest-owned structures, and queueing must update their guest-memory links and signal the guest task",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2430,
+     "line_end": 2462
+    }
+   ]
+  },
+  "exec.library.GetMsg": {
+   "reason": "served in the guest by the hand-written bridge: the message queue and returned Message address both live in guest memory",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2531,
+     "line_end": 2545
+    }
+   ]
+  },
+  "exec.library.ReplyMsg": {
+   "reason": "served in the guest by the hand-written bridge: guest messages must be returned through their guest-owned reply ports, while native Intuition messages retain the existing OS-side path",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2546,
+     "line_end": 2556
+    }
+   ]
+  },
+  "exec.library.WaitPort": {
+   "reason": "served in the guest by the hand-written bridge: it waits on and inspects a guest-owned MsgPort queue and cooperatively yields the guest context",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2499,
+     "line_end": 2530
+    }
+   ]
+  },
+  "exec.library.InitSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: SignalSemaphore is a guest-owned structure whose big-endian list and bookkeeping fields must be initialized in guest memory",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2019,
+     "line_end": 2030
+    }
+   ]
+  },
+  "exec.library.ObtainSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: a SignalSemaphore is guest memory and one cooperative context never contends, so obtaining is bookkeeping the native call cannot do on the guest's structure",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2031,
+     "line_end": 2048
+    }
+   ]
+  },
+  "exec.library.ReleaseSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: a SignalSemaphore is guest memory and one cooperative context never contends, so releasing is bookkeeping the native call cannot do on the guest's structure",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2031,
+     "line_end": 2048
+    }
+   ]
+  },
+  "exec.library.AttemptSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: a SignalSemaphore is guest memory and an attempt always succeeds while one cooperative context runs",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2031,
+     "line_end": 2048
+    }
+   ]
+  },
+  "exec.library.FindSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: the guest has no public native semaphore namespace, so a native SignalSemaphore token would describe the wrong world",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2047,
+     "line_end": 2049
+    }
+   ]
+  },
+  "exec.library.AddSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: the guest has no public semaphore list and the SignalSemaphore structure lives in guest memory",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2031,
+     "line_end": 2048
+    }
+   ]
+  },
+  "exec.library.RemSemaphore": {
+   "reason": "served in the guest by the hand-written bridge: the guest has no public semaphore list and the SignalSemaphore structure lives in guest memory",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2031,
+     "line_end": 2048
+    }
+   ]
+  },
+  "exec.library.ObtainSemaphoreShared": {
+   "reason": "served in the guest by the hand-written bridge: a SignalSemaphore is guest memory and one cooperative context never contends, so obtaining is bookkeeping the native call cannot do on the guest's structure",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2039,
+     "line_end": 2043
+    }
+   ]
+  },
+  "exec.library.AttemptSemaphoreShared": {
+   "reason": "served in the guest by the hand-written bridge: a SignalSemaphore is guest memory and one cooperative context never contends, so obtaining is bookkeeping the native call cannot do on the guest's structure",
+   "evidence": [
+    {
+     "source": "hosted/emu68k/emu68k_exec.c",
+     "line_start": 2044,
+     "line_end": 2047
+    }
+   ]
+  },
+  "exec.library.ColdReboot": {
+   "reason": "routing verdict: a hosted guest cannot reboot the macOS process or the native AROS instance on behalf of one classic program",
+   "evidence": [
+    {
+     "source": "rom/exec/coldreboot.c",
+     "line_start": 29,
+     "line_end": 75
+    }
+   ]
+  },
+  "exec.library.ShutdownA": {
+   "reason": "routing verdict: power-off and system reboot are machine-level operations outside an isolated hosted guest run",
+   "evidence": [
+    {
+     "source": "rom/exec/shutdowna.c",
+     "line_start": 31,
+     "line_end": 75
+    }
+   ]
   }
  },
  "functions": {
@@ -1785,53 +3190,6 @@
     "micros": {
      "kind": "u32",
      "direction": "out"
-    }
-   }
-  },
-  "exec.library.FindSemaphore": {
-   "result": {
-    "kind": "object",
-    "type": "SignalSemaphore",
-    "owned": false
-   }
-  },
-  "exec.library.ObtainSemaphore": {
-   "objects": {
-    "sigSem": {
-     "type": "SignalSemaphore",
-     "nullable": false
-    }
-   }
-  },
-  "exec.library.ReleaseSemaphore": {
-   "objects": {
-    "sigSem": {
-     "type": "SignalSemaphore",
-     "nullable": false
-    }
-   }
-  },
-  "exec.library.AttemptSemaphore": {
-   "objects": {
-    "sigSem": {
-     "type": "SignalSemaphore",
-     "nullable": false
-    }
-   }
-  },
-  "exec.library.ObtainSemaphoreShared": {
-   "objects": {
-    "sigSem": {
-     "type": "SignalSemaphore",
-     "nullable": false
-    }
-   }
-  },
-  "exec.library.AttemptSemaphoreShared": {
-   "objects": {
-    "sigSem": {
-     "type": "SignalSemaphore",
-     "nullable": false
     }
    }
   },
@@ -1898,6 +3256,136 @@
     "object",
     "paramPacket"
    ]
+  },
+  "layers.library.CreateUpfrontLayer": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false },
+    "bm2": { "type": "BitMap", "nullable": true }
+   },
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "layers.library.CreateBehindLayer": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false },
+    "bm2": { "type": "BitMap", "nullable": true }
+   },
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "layers.library.NewLayerInfo": {
+   "result": { "kind": "object", "type": "Layer_Info" }
+  },
+  "layers.library.CreateUpfrontHookLayer": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false },
+    "bm2": { "type": "BitMap", "nullable": true }
+   },
+   "null_args": [ "hook" ],
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "layers.library.CreateBehindHookLayer": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false },
+    "bm2": { "type": "BitMap", "nullable": true }
+   },
+   "null_args": [ "hook" ],
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "layers.library.ChangeLayerShape": {
+   "objects": {
+    "l": { "type": "Layer", "nullable": false },
+    "newshape": { "type": "Region", "nullable": true }
+   },
+   "null_args": [ "callback" ],
+   "result": { "kind": "object", "type": "Region", "owned": false }
+  },
+  "layers.library.ScaleLayer": {
+   "objects": {
+    "l": { "type": "Layer", "nullable": false }
+   },
+   "taglists": { "taglist": "layers.scale" }
+  },
+  "layers.library.CreateUpfrontLayerTagList": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false }
+   },
+   "taglists": { "tagList": "layers.create" },
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "layers.library.CreateBehindLayerTagList": {
+   "objects": {
+    "li": { "type": "Layer_Info", "nullable": false },
+    "bm": { "type": "BitMap", "nullable": false }
+   },
+   "taglists": { "tagList": "layers.create" },
+   "result": { "kind": "object", "type": "Layer" }
+  },
+  "cybergraphics.library.ScalePixelArray": {
+   "buffers": {
+    "srcRect": { "direction": "in", "extent": [ "SrcMod", "SrcH" ] }
+   },
+   "objects": {
+    "RastPort": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.ReadPixelArray": {
+   "buffers": {
+    "dst": { "direction": "out", "extent": [ "dstmod", { "sum": [ "desty", "height" ] } ] }
+   },
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.WritePixelArray": {
+   "buffers": {
+    "src": { "direction": "in", "extent": [ "srcmod", { "sum": [ "srcy", "height" ] } ] }
+   },
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.CVideoCtrlTagList": {
+   "objects": {
+    "vp": { "type": "ViewPort", "nullable": false }
+   },
+   "taglists": { "tags": "cybergraphics.video_control" }
+  },
+  "cybergraphics.library.WriteLUTPixelArray": {
+   "buffers": {
+    "srcRect": { "direction": "in", "extent": [ "SrcMod", { "sum": [ "SrcY", "SizeY" ] } ] }
+   },
+   "arrays": {
+    "CTable": { "kind": "u32", "direction": "in", "max_count": 256, "nullable": false }
+   },
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.WritePixelArrayAlpha": {
+   "buffers": {
+    "src": { "direction": "in", "extent": [ "srcmod", { "sum": [ "srcy", "height" ] } ] }
+   },
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.BltTemplateAlpha": {
+   "buffers": {
+    "src": { "direction": "in", "extent": [ "srcmod", "height" ] }
+   },
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   }
+  },
+  "cybergraphics.library.ProcessPixelArray": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   },
+   "taglists": { "taglist": "cybergraphics.process_pixels" }
   },
   "intuition.library.ModifyIDCMP": {
    "objects": {
@@ -2040,6 +3528,7 @@
    }
   },
   "intuition.library.MakeClass": {
+   "handwritten_overlay": true,
    "strings": [
     "classID",
     "superClassID"
@@ -2056,6 +3545,7 @@
    }
   },
   "intuition.library.AddClass": {
+   "handwritten_overlay": true,
    "objects": {
     "classPtr": {
      "type": "Class",
@@ -2064,6 +3554,7 @@
    }
   },
   "intuition.library.RemoveClass": {
+   "handwritten_overlay": true,
    "objects": {
     "classPtr": {
      "type": "Class",
@@ -2086,11 +3577,15 @@
      "type": "Object"
     }
    },
+   "boopsi": {
+    "object_arg": "object"
+   },
    "taglists": {
     "tagList": "intuition.new_object"
    }
   },
   "intuition.library.NewObjectA": {
+   "handwritten_overlay": true,
    "objects": {
     "classPtr": {
      "type": "Class",
@@ -2115,6 +3610,9 @@
      "nullable": true,
      "consume": true
     }
+   },
+   "boopsi": {
+    "object_arg": "object"
    }
   },
   "graphics.library.BestModeIDA": {
@@ -2213,6 +3711,7 @@
    }
   },
   "graphics.library.OpenFont": {
+   "handwritten_overlay": true,
    "structs": {
     "textAttr": {
      "type": "TextAttr",
@@ -2984,15 +4483,6 @@
    },
    "origin": "import"
   },
-  "intuition.library.SetWindowTitles": {
-   "objects": {
-    "window": {
-     "type": "Window",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
   "intuition.library.ShowTitle": {
    "objects": {
     "screen": {
@@ -3362,73 +4852,6 @@
    },
    "origin": "import"
   },
-  "graphics.library.SetABPenDrMd": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetAPen": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetBPen": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetDrMd": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetFont": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    },
-    "textFont": {
-     "type": "TextFont",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetMaxPen": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetOutlinePen": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
   "graphics.library.SetRGB32": {
    "objects": {
     "vp": {
@@ -3465,33 +4888,6 @@
    },
    "origin": "import"
   },
-  "graphics.library.SetRast": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetSoftStyle": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.SetWriteMask": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
   "graphics.library.SortGList": {
    "objects": {
     "rp": {
@@ -3511,15 +4907,6 @@
    "origin": "import"
   },
   "graphics.library.Text": {
-   "objects": {
-    "rp": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "graphics.library.TextLength": {
    "objects": {
     "rp": {
      "type": "RastPort",
@@ -4075,39 +5462,6 @@
    },
    "origin": "import"
   },
-  "dos.library.MatchEnd": {
-   "structs": {
-    "AP": {
-     "type": "AnchorPath",
-     "direction": "inout",
-     "nullable": true,
-     "clear": false
-    }
-   },
-   "origin": "import"
-  },
-  "dos.library.MatchFirst": {
-   "structs": {
-    "AP": {
-     "type": "AnchorPath",
-     "direction": "inout",
-     "nullable": true,
-     "clear": false
-    }
-   },
-   "origin": "import"
-  },
-  "dos.library.MatchNext": {
-   "structs": {
-    "AP": {
-     "type": "AnchorPath",
-     "direction": "inout",
-     "nullable": true,
-     "clear": false
-    }
-   },
-   "origin": "import"
-  },
   "cybergraphics.library.ExtractColor": {
    "objects": {
     "RastPort": {
@@ -4118,17 +5472,6 @@
    "structs": {
     "SingleMap": {
      "type": "BitMap",
-     "direction": "inout",
-     "nullable": false,
-     "clear": false
-    }
-   },
-   "origin": "import"
-  },
-  "cybergraphics.library.FreeCModeList": {
-   "structs": {
-    "modeList": {
-     "type": "List",
      "direction": "inout",
      "nullable": false,
      "clear": false
@@ -4164,23 +5507,6 @@
    },
    "origin": "import"
   },
-  "graphics.library.BltBitMapRastPort": {
-   "objects": {
-    "destRP": {
-     "type": "RastPort",
-     "nullable": true
-    }
-   },
-   "structs": {
-    "srcBitMap": {
-     "type": "BitMap",
-     "direction": "inout",
-     "nullable": true,
-     "clear": false
-    }
-   },
-   "origin": "import"
-  },
   "graphics.library.ClipBlit": {
    "objects": {
     "srcRP": {
@@ -4206,12 +5532,10 @@
    "origin": "import"
   },
   "graphics.library.GetBitMapAttr": {
-   "structs": {
+   "objects": {
     "bitmap": {
      "type": "BitMap",
-     "direction": "inout",
-     "nullable": false,
-     "clear": false
+     "nullable": false
     }
    },
    "origin": "import"
@@ -4303,6 +5627,343 @@
     "storage_arg": "storagePtr",
     "domain": "intuition.new_object"
    }
+  },
+  "dos.library.FRead": {
+   "buffers": {
+    "block": { "direction": "out", "nullable": false, "extent": [ "blocklen", "number" ] }
+   }
+  },
+  "dos.library.FWrite": {
+   "buffers": {
+    "block": { "direction": "in", "nullable": false, "extent": [ "blocklen", "numblocks" ] }
+   }
+  },
+  "dos.library.FGets": {
+   "buffers": {
+    "buf": { "direction": "out", "nullable": false, "extent": [ "buflen" ] }
+   },
+   "result": { "kind": "guest_arg", "arg": "buf" }
+  },
+  "dos.library.ExamineFH": {
+   "structs": {
+    "fib": { "type": "FileInfoBlock", "direction": "out", "copy_on": "nonzero" }
+   }
+  },
+  "dos.library.SetFileDate": {
+   "structs": { "date": { "type": "DateStamp", "direction": "in" } }
+  },
+  "dos.library.ReadLink": {
+   "objects": { "port": { "type": "MsgPort", "nullable": true } },
+   "buffers": {
+    "buffer": { "direction": "out", "nullable": false, "extent": [ "size" ] }
+   }
+  },
+  "dos.library.DeviceProc": {
+   "result": { "kind": "object", "type": "MsgPort", "owned": false }
+  },
+  "dos.library.GetConsoleTask": {
+   "result": { "kind": "object", "type": "MsgPort", "owned": false }
+  },
+  "dos.library.GetFileSysTask": {
+   "result": { "kind": "object", "type": "MsgPort", "owned": false }
+  },
+  "dos.library.GetDeviceProc": {
+   "objects": { "dp": { "type": "DevProc", "nullable": true } },
+   "result": { "kind": "object", "type": "DevProc" }
+  },
+  "dos.library.FreeDeviceProc": {
+   "objects": { "dp": { "type": "DevProc", "nullable": true, "consume": true } }
+  },
+  "dos.library.LockDosList": {
+   "result": { "kind": "object", "type": "DosList", "owned": false }
+  },
+  "dos.library.UnLockDosList": {},
+  "dos.library.AttemptLockDosList": {
+   "result": { "kind": "object", "type": "DosList", "owned": false }
+  },
+  "dos.library.MakeDosEntry": {
+   "result": { "kind": "object", "type": "DosList", "owned": false }
+  },
+  "dos.library.FreeDosEntry": {
+   "objects": { "dlist": { "type": "DosList", "nullable": true, "consume": true } }
+  },
+  "dos.library.DateToStr": {
+   "structs": {
+    "datetime": {
+     "type": "DateTime", "direction": "inout", "clear": false,
+     "fields": {
+      "dat_Stamp": { "kind": "embedded_struct", "type": "DateStamp", "guest_field": "dat_Stamp_ds_Days" },
+      "dat_StrDay": { "kind": "cstr", "max_count": 16 },
+      "dat_StrDate": { "kind": "cstr", "max_count": 16 },
+      "dat_StrTime": { "kind": "cstr", "max_count": 16 }
+     }
+    }
+   }
+  },
+  "dos.library.StrToDate": {
+   "structs": {
+    "datetime": {
+     "type": "DateTime", "direction": "inout", "clear": false,
+     "fields": {
+      "dat_Stamp": { "kind": "embedded_struct", "type": "DateStamp", "guest_field": "dat_Stamp_ds_Days" },
+      "dat_StrDay": { "kind": "cstr", "max_count": 16 },
+      "dat_StrDate": { "kind": "cstr", "max_count": 16 },
+      "dat_StrTime": { "kind": "cstr", "max_count": 16 }
+     }
+    }
+   }
+  },
+  "dos.library.StrToLong": {
+   "pointers": { "value": { "kind": "s32", "direction": "out" } }
+  },
+  "dos.library.DosGetString": {
+   "result": { "kind": "cstr", "max_count": 4096 }
+  },
+  "intuition.library.OpenScreen": {
+   "structs": {
+    "newScreen": {
+     "type": "NewScreen", "direction": "in",
+     "fields": {
+      "Font": { "kind": "struct", "type": "TextAttr", "fields": {
+       "ta_Name": { "kind": "cstr", "nullable": false }
+      } },
+      "DefaultTitle": { "kind": "cstr" },
+      "Gadgets": { "kind": "object", "type": "Gadget" },
+      "CustomBitMap": { "kind": "object", "type": "BitMap" }
+     }
+    }
+   },
+   "result": { "kind": "object", "type": "Screen" }
+  },
+  "intuition.library.OpenWindow": {
+   "structs": {
+    "newWindow": {
+     "type": "NewWindow", "direction": "in",
+     "fields": {
+      "FirstGadget": { "kind": "object", "type": "Gadget" },
+      "CheckMark": { "kind": "object", "type": "Image" },
+      "Title": { "kind": "cstr" },
+      "Screen": { "kind": "object", "type": "Screen" },
+      "BitMap": { "kind": "object", "type": "BitMap" }
+     }
+    }
+   },
+   "result": { "kind": "object", "type": "Window" }
+  },
+  "intuition.library.PrintIText": {
+   "objects": { "rp": { "type": "RastPort", "nullable": false } },
+   "deep_structs": { "iText": { "type": "IntuiText", "nullable": true } }
+  },
+  "intuition.library.ViewAddress": {
+   "result": { "kind": "object", "type": "View", "owned": false }
+  },
+  "intuition.library.SetPrefs": {
+   "structs": {
+    "prefbuffer": { "type": "Preferences", "direction": "in", "size_arg": "size" }
+   },
+   "result": { "kind": "guest_arg", "arg": "prefbuffer" }
+  },
+  "intuition.library.IntuiTextLength": {
+   "deep_structs": { "iText": { "type": "IntuiText", "nullable": false } }
+  },
+  "intuition.library.GetDefaultPubScreen": {
+   "buffers": {
+    "nameBuffer": { "direction": "out", "nullable": true, "extent": [ 139 ] }
+   },
+   "result": { "kind": "object", "type": "Screen", "owned": false }
+  },
+  "intuition.library.SetIPrefs": {
+   "buffers": {
+    "data": { "direction": "in", "nullable": false, "extent": [ "length" ] }
+   }
+  },
+  "intuition.library.SetGadgetAttrsA": {
+   "objects": {
+    "gadget": { "type": "Gadget", "nullable": false },
+    "window": { "type": "Window", "nullable": true },
+    "requester": { "type": "Requester", "nullable": true }
+   },
+   "taglists": { "tagList": "intuition.new_object" }
+  },
+  "intuition.library.FindClass": {
+   "handwritten_overlay": true,
+   "strings": [ "classID" ],
+   "result": { "kind": "object", "type": "Class", "owned": false }
+  },
+  "intuition.library.ScreenDepth": {
+   "objects": { "screen": { "type": "Screen", "nullable": false } },
+   "null_args": [ "reserved" ]
+  },
+  "intuition.library.SetWindowPointerA": {
+   "objects": { "window": { "type": "Window", "nullable": true } },
+   "taglists": { "taglist": "intuition.window_pointer" }
+  },
+  "intuition.library.ChangeWindowShape": {
+   "objects": {
+    "window": { "type": "Window", "nullable": false },
+    "newshape": { "type": "Region", "nullable": true }
+   },
+   "null_args": [ "callback" ],
+   "result": { "kind": "object", "type": "Region", "owned": false }
+  },
+  "intuition.library.WindowAction": {
+   "objects": { "window": { "type": "Window", "nullable": false } },
+   "taglists": { "tags": "intuition.ignored_tags" }
+  },
+  "intuition.library.SetPointerBounds": {
+   "objects": { "screen": { "type": "Screen", "nullable": true } },
+   "structs": {
+    "rect": { "type": "Rectangle", "direction": "in", "nullable": true }
+   },
+   "taglists": { "tags": "intuition.ignored_tags" }
+  },
+  "graphics.library.BltBitMap": {
+   "objects": {
+    "srcBitMap": { "type": "BitMap", "nullable": false },
+    "destBitMap": { "type": "BitMap", "nullable": false }
+   },
+   "null_args": [ "tempA" ]
+  },
+  "graphics.library.BltTemplate": {
+   "objects": {
+    "destRP": { "type": "RastPort", "nullable": false }
+   },
+   "buffers": {
+    "source": { "direction": "in", "nullable": false, "extent": [ "srcMod", "ySize" ] }
+   }
+  },
+  "graphics.library.LoadRGB4": {
+   "objects": {
+    "vp": { "type": "ViewPort", "nullable": false }
+   },
+   "arrays": {
+    "colors": { "kind": "u16", "direction": "in", "count_arg": "count", "max_count": 256, "nullable": false }
+   }
+  },
+  "graphics.library.BltPattern": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   },
+   "buffers": {
+    "mask": { "direction": "in", "nullable": true, "extent": [ "byteCnt", { "span": [ "yMin", "yMax" ] } ] }
+   }
+  },
+  "graphics.library.PolyDraw": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   },
+   "arrays": {
+    "polyTable": { "kind": "u16", "direction": "in", "count_arg": "count", "count_scale": 2, "max_count": 4096, "nullable": false }
+   }
+  },
+  "graphics.library.GetColorMap": {
+   "result": { "kind": "object", "type": "ColorMap" }
+  },
+  "graphics.library.GfxNew": {
+   "result": { "kind": "object", "type": "ExtendedNode" }
+  },
+  "graphics.library.GfxAssociate": {
+   "guest_values": [ "pointer" ],
+   "objects": {
+    "node": { "type": "ExtendedNode", "nullable": false }
+   }
+  },
+  "graphics.library.GfxLookUp": {
+   "guest_values": [ "pointer" ],
+   "result": { "kind": "object", "type": "ExtendedNode", "owned": false }
+  },
+  "graphics.library.OpenMonitor": {
+   "result": { "kind": "object", "type": "MonitorSpec" }
+  },
+  "graphics.library.WeighTAMatch": {
+   "structs": {
+    "reqTextAttr": { "type": "TextAttr", "direction": "in" },
+    "targetTextAttr": { "type": "TextAttr", "direction": "in" }
+   },
+   "taglists": { "targetTags": "graphics.ignored_tags" }
+  },
+  "graphics.library.ExtendFont": {
+   "objects": {
+    "font": { "type": "TextFont", "nullable": false }
+   },
+   "taglists": { "fontTags": "graphics.ignored_tags" }
+  },
+  "graphics.library.GetRGB32": {
+   "objects": {
+    "cm": { "type": "ColorMap", "nullable": false }
+   },
+   "arrays": {
+    "table": { "kind": "u32", "direction": "out", "count_arg": "ncolors", "count_scale": 3, "max_count": 3072, "nullable": false }
+   }
+  },
+  "graphics.library.GetExtSpriteA": {
+   "objects": {
+    "sprite": { "type": "ExtSprite", "nullable": false }
+   },
+   "taglists": { "tags": "graphics.sprite_get" }
+  },
+  "graphics.library.AllocSpriteDataA": {
+   "objects": {
+    "bitmap": { "type": "BitMap", "nullable": false }
+   },
+   "taglists": { "tagList": "graphics.sprite_alloc" },
+   "result": { "kind": "object", "type": "ExtSprite" }
+  },
+  "graphics.library.ChangeExtSpriteA": {
+   "objects": {
+    "vp": { "type": "ViewPort", "nullable": true },
+    "oldsprite": { "type": "ExtSprite", "nullable": false },
+    "newsprite": { "type": "ExtSprite", "nullable": false }
+   },
+   "taglists": { "tags": "graphics.ignored_tags" }
+  },
+  "graphics.library.SetRPAttrsA": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   },
+   "taglists": { "tags": "graphics.rp_set" }
+  },
+  "graphics.library.GetRPAttrsA": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false }
+   },
+   "taglists": { "tags": "graphics.rp_get" }
+  },
+  "graphics.library.AndRectRegionND": {
+   "objects": {
+    "Reg": { "type": "Region", "nullable": false }
+   },
+   "structs": {
+    "Rect": { "type": "Rectangle", "direction": "in" }
+   },
+   "result": { "kind": "object", "type": "Region" }
+  },
+  "graphics.library.OrRectRegionND": {
+   "objects": {
+    "Reg": { "type": "Region", "nullable": false }
+   },
+   "structs": {
+    "Rect": { "type": "Rectangle", "direction": "in" }
+   },
+   "result": { "kind": "object", "type": "Region" }
+  },
+  "graphics.library.XorRectRegionND": {
+   "objects": {
+    "Reg": { "type": "Region", "nullable": false }
+   },
+   "structs": {
+    "Rect": { "type": "Rectangle", "direction": "in" }
+   },
+   "result": { "kind": "object", "type": "Region" }
+  },
+  "graphics.library.ClearRectRegionND": {
+   "objects": {
+    "Reg": { "type": "Region", "nullable": false }
+   },
+   "structs": {
+    "Rect": { "type": "Rectangle", "direction": "in" }
+   },
+   "result": { "kind": "object", "type": "Region" }
   }
  },
  "struct_metadata": {

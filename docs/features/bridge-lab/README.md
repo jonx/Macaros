@@ -43,7 +43,7 @@ importer trustworthy and it is not negotiable here.
    ```json
    {
      "contract": "scheduler.yield.frame_wait",
-     "status": "needs-review",
+     "status": "supported",
      "invariant": "a context that never calls a blocking primitive must not starve its siblings",
      "evidence": {
        "seq_range": [1204, 20698],
@@ -53,13 +53,7 @@ importer trustworthy and it is not negotiable here.
        ],
        "sample_seq": [1204, 1205, 1206]
      },
-     "next_action": {
-       "kind": "propose-contract",
-       "hypothesis": "WaitTOF blocks on real hardware and is therefore a yield point",
-       "confirms_if": "ctx 0 resumes and its GetMsg count rises above 1",
-       "refutes_if": "ctx 1 stops making progress it needs",
-       "command": "graft/bridge-lab compare <trace> baselines/photodemo-startup.json"
-     }
+     "observation": "exercised-conformant"
    }
    ```
 
@@ -122,13 +116,13 @@ ctx=1 CREATED task=00317a20 entry=002dd11c
 ```
 
 Three windows bind correctly to one shared port owned by ctx 0; ctx 1 then spins
-in `GetMsg` and never calls a blocking primitive, so the cooperative scheduler —
-which only switches at `Wait` — never runs ctx 0 again. The owner of the input
-port is starved by a sibling that never yields.
+in `GetMsg` around `WaitTOF`. Native AROS cannot schedule the guest contexts
+hidden inside one hosted task, so `WaitTOF` explicitly gives each runnable guest
+sibling one turn before making the native vertical-blank wait.
 
 That is `scheduler.yield.frame_wait`: **a context that never calls a blocking
-primitive must not starve its siblings.** Stated generically, with no program
-named, which is the test every contract has to pass.
+primitive must not starve its siblings.** PhotoDemo and `genframeyield` supplied
+the independent evidence; `T3YIELD` now makes it a required supported contract.
 
 ## Rollout
 

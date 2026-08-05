@@ -326,6 +326,53 @@
 #define M68K_IORequest_io_Flags 30
 #define M68K_IORequest_io_Error 31
 
+/* struct SemaphoreMessage: 24 bytes on m68k (SemaphoreMessage) */
+#define M68K_SemaphoreMessage_SIZEOF 24
+#define M68K_SemaphoreMessage_ssm_Message_mn_Node_ln_Succ 0
+#define M68K_SemaphoreMessage_ssm_Message_mn_Node_ln_Pred 4
+#define M68K_SemaphoreMessage_ssm_Message_mn_Node_ln_Type 8
+#define M68K_SemaphoreMessage_ssm_Message_mn_Node_ln_Pri 9
+#define M68K_SemaphoreMessage_ssm_Message_mn_Node_ln_Name 10
+#define M68K_SemaphoreMessage_ssm_Message_mn_ReplyPort 14
+#define M68K_SemaphoreMessage_ssm_Message_mn_Length 18
+#define M68K_SemaphoreMessage_ssm_Semaphore 20
+
+/* struct MemHeader: 32 bytes on m68k (MemHeader) */
+#define M68K_MemHeader_SIZEOF 32
+#define M68K_MemHeader_mh_Node_ln_Succ 0
+#define M68K_MemHeader_mh_Node_ln_Pred 4
+#define M68K_MemHeader_mh_Node_ln_Type 8
+#define M68K_MemHeader_mh_Node_ln_Pri 9
+#define M68K_MemHeader_mh_Node_ln_Name 10
+#define M68K_MemHeader_mh_Attributes 14
+#define M68K_MemHeader_mh_First 16
+#define M68K_MemHeader_mh_Lower 20
+#define M68K_MemHeader_mh_Upper 24
+#define M68K_MemHeader_mh_Free 28
+
+/* struct MemChunk: 8 bytes on m68k (MemChunk) */
+#define M68K_MemChunk_SIZEOF 8
+#define M68K_MemChunk_mc_Next 0
+#define M68K_MemChunk_mc_Bytes 4
+
+/* struct Interrupt: 22 bytes on m68k (Interrupt) */
+#define M68K_Interrupt_SIZEOF 22
+#define M68K_Interrupt_is_Node_ln_Succ 0
+#define M68K_Interrupt_is_Node_ln_Pred 4
+#define M68K_Interrupt_is_Node_ln_Type 8
+#define M68K_Interrupt_is_Node_ln_Pri 9
+#define M68K_Interrupt_is_Node_ln_Name 10
+#define M68K_Interrupt_is_Data 14
+#define M68K_Interrupt_is_Code 18
+
+/* struct Hook: 20 bytes on m68k (Hook) */
+#define M68K_Hook_SIZEOF 20
+#define M68K_Hook_h_MinNode_mln_Succ 0
+#define M68K_Hook_h_MinNode_mln_Pred 4
+#define M68K_Hook_h_Entry 8
+#define M68K_Hook_h_SubEntry 12
+#define M68K_Hook_h_Data 16
+
 /* struct Window: 156 bytes on m68k (Window) */
 #define M68K_Window_SIZEOF 156
 #define M68K_Window_NextWindow 0
@@ -383,5 +430,309 @@
 #define M68K_Window_prevchild 144
 #define M68K_Window_nextchild 148
 #define M68K_Window_parent 152
+
+/* struct ClockData: 14 bytes on m68k (ClockData) */
+#define M68K_ClockData_SIZEOF 14
+#define M68K_ClockData_sec 0
+#define M68K_ClockData_min 2
+#define M68K_ClockData_hour 4
+#define M68K_ClockData_mday 6
+#define M68K_ClockData_month 8
+#define M68K_ClockData_year 10
+#define M68K_ClockData_wday 12
+
+/* struct NewWindow: 48 bytes on m68k (NewWindow) */
+#define M68K_NewWindow_SIZEOF 48
+#define M68K_NewWindow_LeftEdge 0
+#define M68K_NewWindow_TopEdge 2
+#define M68K_NewWindow_Width 4
+#define M68K_NewWindow_Height 6
+#define M68K_NewWindow_DetailPen 8
+#define M68K_NewWindow_BlockPen 9
+#define M68K_NewWindow_IDCMPFlags 10
+#define M68K_NewWindow_Flags 14
+#define M68K_NewWindow_FirstGadget 18
+#define M68K_NewWindow_CheckMark 22
+#define M68K_NewWindow_Title 26
+#define M68K_NewWindow_Screen 30
+#define M68K_NewWindow_BitMap 34
+#define M68K_NewWindow_MinWidth 38
+#define M68K_NewWindow_MinHeight 40
+#define M68K_NewWindow_MaxWidth 42
+#define M68K_NewWindow_MaxHeight 44
+#define M68K_NewWindow_Type 46
+
+/* struct NewScreen: 32 bytes on m68k (NewScreen) */
+#define M68K_NewScreen_SIZEOF 32
+#define M68K_NewScreen_LeftEdge 0
+#define M68K_NewScreen_TopEdge 2
+#define M68K_NewScreen_Width 4
+#define M68K_NewScreen_Height 6
+#define M68K_NewScreen_Depth 8
+#define M68K_NewScreen_DetailPen 10
+#define M68K_NewScreen_BlockPen 11
+#define M68K_NewScreen_ViewModes 12
+#define M68K_NewScreen_Type 14
+#define M68K_NewScreen_Font 16
+#define M68K_NewScreen_DefaultTitle 20
+#define M68K_NewScreen_Gadgets 24
+#define M68K_NewScreen_CustomBitMap 28
+
+/* struct EasyStruct: 20 bytes on m68k (EasyStruct) */
+#define M68K_EasyStruct_SIZEOF 20
+#define M68K_EasyStruct_es_StructSize 0
+#define M68K_EasyStruct_es_Flags 4
+#define M68K_EasyStruct_es_Title 8
+#define M68K_EasyStruct_es_TextFormat 12
+#define M68K_EasyStruct_es_GadgetFormat 16
+
+/* struct Remember: 12 bytes on m68k (Remember) */
+#define M68K_Remember_SIZEOF 12
+#define M68K_Remember_NextRemember 0
+#define M68K_Remember_RememberSize 4
+#define M68K_Remember_Memory 8
+
+/* struct CSource: 12 bytes on m68k (CSource) */
+#define M68K_CSource_SIZEOF 12
+#define M68K_CSource_CS_Buffer 0
+#define M68K_CSource_CS_Length 4
+#define M68K_CSource_CS_CurChr 8
+
+/* struct DosPacket: 48 bytes on m68k (DosPacket) */
+#define M68K_DosPacket_SIZEOF 48
+#define M68K_DosPacket_dp_Link 0
+#define M68K_DosPacket_dp_Port 4
+#define M68K_DosPacket_dp_Type 8
+#define M68K_DosPacket_dp_Res1 12
+#define M68K_DosPacket_dp_Res2 16
+#define M68K_DosPacket_dp_Arg1 20
+#define M68K_DosPacket_dp_Arg2 24
+#define M68K_DosPacket_dp_Arg3 28
+#define M68K_DosPacket_dp_Arg4 32
+#define M68K_DosPacket_dp_Arg5 36
+#define M68K_DosPacket_dp_Arg6 40
+#define M68K_DosPacket_dp_Arg7 44
+
+/* struct LocalVar: 24 bytes on m68k (LocalVar) */
+#define M68K_LocalVar_SIZEOF 24
+#define M68K_LocalVar_lv_Node_ln_Succ 0
+#define M68K_LocalVar_lv_Node_ln_Pred 4
+#define M68K_LocalVar_lv_Node_ln_Type 8
+#define M68K_LocalVar_lv_Node_ln_Pri 9
+#define M68K_LocalVar_lv_Node_ln_Name 10
+#define M68K_LocalVar_lv_Flags 14
+#define M68K_LocalVar_lv_Value 16
+#define M68K_LocalVar_lv_Len 20
+
+/* struct ExAllControl: 16 bytes on m68k (ExAllControl) */
+#define M68K_ExAllControl_SIZEOF 16
+#define M68K_ExAllControl_eac_Entries 0
+#define M68K_ExAllControl_eac_LastKey 4
+#define M68K_ExAllControl_eac_MatchString 8
+#define M68K_ExAllControl_eac_MatchFunc 12
+
+/* struct FileInfoBlock: 260 bytes on m68k (FileInfoBlock32) */
+#define M68K_FileInfoBlock_SIZEOF 260
+#define M68K_FileInfoBlock_fib_DiskKey 0
+#define M68K_FileInfoBlock_fib_DirEntryType 4
+#define M68K_FileInfoBlock_fib_FileName 8
+#define M68K_FileInfoBlock_fib_Protection 116
+#define M68K_FileInfoBlock_fib_EntryType 120
+#define M68K_FileInfoBlock_fib_Size 124
+#define M68K_FileInfoBlock_fib_NumBlocks 128
+#define M68K_FileInfoBlock_fib_Date_ds_Days 132
+#define M68K_FileInfoBlock_fib_Date_ds_Minute 136
+#define M68K_FileInfoBlock_fib_Date_ds_Tick 140
+#define M68K_FileInfoBlock_fib_Comment 144
+#define M68K_FileInfoBlock_fib_OwnerUID 224
+#define M68K_FileInfoBlock_fib_OwnerGID 226
+#define M68K_FileInfoBlock_fib_Reserved 228
+
+/* struct ExAllData: 40 bytes on m68k (ExAllData32) */
+#define M68K_ExAllData_SIZEOF 40
+#define M68K_ExAllData_ed_Next 0
+#define M68K_ExAllData_ed_Name 4
+#define M68K_ExAllData_ed_Type 8
+#define M68K_ExAllData_ed_Size 12
+#define M68K_ExAllData_ed_Prot 16
+#define M68K_ExAllData_ed_Days 20
+#define M68K_ExAllData_ed_Mins 24
+#define M68K_ExAllData_ed_Ticks 28
+#define M68K_ExAllData_ed_Comment 32
+#define M68K_ExAllData_ed_OwnerUID 36
+#define M68K_ExAllData_ed_OwnerGID 38
+
+/* struct GelsInfo: 38 bytes on m68k (GelsInfo) */
+#define M68K_GelsInfo_SIZEOF 38
+#define M68K_GelsInfo_sprRsrvd 0
+#define M68K_GelsInfo_Flags 1
+#define M68K_GelsInfo_gelHead 2
+#define M68K_GelsInfo_gelTail 6
+#define M68K_GelsInfo_nextLine 10
+#define M68K_GelsInfo_lastColor 14
+#define M68K_GelsInfo_collHandler 18
+#define M68K_GelsInfo_leftmost 22
+#define M68K_GelsInfo_rightmost 24
+#define M68K_GelsInfo_topmost 26
+#define M68K_GelsInfo_bottommost 28
+#define M68K_GelsInfo_firstBlissObj 30
+#define M68K_GelsInfo_lastBlissObj 34
+
+/* struct collTable: 64 bytes on m68k (collTable) */
+#define M68K_collTable_SIZEOF 64
+#define M68K_collTable_collPtrs 0
+
+/* struct AnimOb: 42 bytes on m68k (AnimOb) */
+#define M68K_AnimOb_SIZEOF 42
+#define M68K_AnimOb_NextOb 0
+#define M68K_AnimOb_PrevOb 4
+#define M68K_AnimOb_Clock 8
+#define M68K_AnimOb_AnOldY 12
+#define M68K_AnimOb_AnOldX 14
+#define M68K_AnimOb_AnY 16
+#define M68K_AnimOb_AnX 18
+#define M68K_AnimOb_YVel 20
+#define M68K_AnimOb_XVel 22
+#define M68K_AnimOb_YAccel 24
+#define M68K_AnimOb_XAccel 26
+#define M68K_AnimOb_RingYTrans 28
+#define M68K_AnimOb_RingXTrans 30
+#define M68K_AnimOb_AnimORoutine 32
+#define M68K_AnimOb_HeadComp 36
+#define M68K_AnimOb_AUserExt 40
+
+/* struct AnimComp: 38 bytes on m68k (AnimComp) */
+#define M68K_AnimComp_SIZEOF 38
+#define M68K_AnimComp_Flags 0
+#define M68K_AnimComp_Timer 2
+#define M68K_AnimComp_TimeSet 4
+#define M68K_AnimComp_NextComp 6
+#define M68K_AnimComp_PrevComp 10
+#define M68K_AnimComp_NextSeq 14
+#define M68K_AnimComp_PrevSeq 18
+#define M68K_AnimComp_AnimCRoutine 22
+#define M68K_AnimComp_YTrans 26
+#define M68K_AnimComp_XTrans 28
+#define M68K_AnimComp_HeadOb 30
+#define M68K_AnimComp_AnimBob 34
+
+/* struct Bob: 32 bytes on m68k (Bob) */
+#define M68K_Bob_SIZEOF 32
+#define M68K_Bob_Flags 0
+#define M68K_Bob_SaveBuffer 2
+#define M68K_Bob_ImageShadow 6
+#define M68K_Bob_Before 10
+#define M68K_Bob_After 14
+#define M68K_Bob_BobVSprite 18
+#define M68K_Bob_BobComp 22
+#define M68K_Bob_DBuffer 26
+#define M68K_Bob_BUserExt 30
+
+/* struct VSprite: 60 bytes on m68k (VSprite) */
+#define M68K_VSprite_SIZEOF 60
+#define M68K_VSprite_NextVSprite 0
+#define M68K_VSprite_PrevVSprite 4
+#define M68K_VSprite_IntVSprite 8
+#define M68K_VSprite_ClearPath 12
+#define M68K_VSprite_OldY 16
+#define M68K_VSprite_OldX 18
+#define M68K_VSprite_Flags 20
+#define M68K_VSprite_Y 22
+#define M68K_VSprite_X 24
+#define M68K_VSprite_Height 26
+#define M68K_VSprite_Width 28
+#define M68K_VSprite_Depth 30
+#define M68K_VSprite_MeMask 32
+#define M68K_VSprite_HitMask 34
+#define M68K_VSprite_ImageData 36
+#define M68K_VSprite_BorderLine 40
+#define M68K_VSprite_CollMask 44
+#define M68K_VSprite_SprColors 48
+#define M68K_VSprite_VSBob 52
+#define M68K_VSprite_PlanePick 56
+#define M68K_VSprite_PlaneOnOff 57
+#define M68K_VSprite_VUserExt 58
+
+/* struct UCopList: 12 bytes on m68k (UCopList) */
+#define M68K_UCopList_SIZEOF 12
+#define M68K_UCopList_Next 0
+#define M68K_UCopList_FirstCopList 4
+#define M68K_UCopList_CopList 8
+
+/* struct CopList: 38 bytes on m68k (CopList) */
+#define M68K_CopList_SIZEOF 38
+#define M68K_CopList_Next 0
+#define M68K_CopList__CopList 4
+#define M68K_CopList__ViewPort 8
+#define M68K_CopList_CopIns 12
+#define M68K_CopList_CopPtr 16
+#define M68K_CopList_CopLStart 20
+#define M68K_CopList_CopSStart 24
+#define M68K_CopList_Count 28
+#define M68K_CopList_MaxCount 30
+#define M68K_CopList_DyOffset 32
+#define M68K_CopList_SLRepeat 34
+#define M68K_CopList_Flags 36
+
+/* struct CopIns: 6 bytes on m68k (CopIns) */
+#define M68K_CopIns_SIZEOF 6
+#define M68K_CopIns_OpCode 0
+#define M68K_CopIns_u3_nxtlist 2
+
+/* struct SimpleSprite: 12 bytes on m68k (SimpleSprite) */
+#define M68K_SimpleSprite_SIZEOF 12
+#define M68K_SimpleSprite_posctldata 0
+#define M68K_SimpleSprite_height 4
+#define M68K_SimpleSprite_x 6
+#define M68K_SimpleSprite_y 8
+#define M68K_SimpleSprite_num 10
+
+/* struct Rectangle: 8 bytes on m68k (Rectangle) */
+#define M68K_Rectangle_SIZEOF 8
+#define M68K_Rectangle_MinX 0
+#define M68K_Rectangle_MinY 2
+#define M68K_Rectangle_MaxX 4
+#define M68K_Rectangle_MaxY 6
+
+/* struct CyberModeNode: 60 bytes on m68k (CyberModeNode) */
+#define M68K_CyberModeNode_SIZEOF 60
+#define M68K_CyberModeNode_Node_ln_Succ 0
+#define M68K_CyberModeNode_Node_ln_Pred 4
+#define M68K_CyberModeNode_Node_ln_Type 8
+#define M68K_CyberModeNode_Node_ln_Pri 9
+#define M68K_CyberModeNode_Node_ln_Name 10
+#define M68K_CyberModeNode_ModeText 14
+#define M68K_CyberModeNode_DisplayID 46
+#define M68K_CyberModeNode_Width 50
+#define M68K_CyberModeNode_Height 52
+#define M68K_CyberModeNode_Depth 54
+#define M68K_CyberModeNode_DisplayTagList 56
+
+/* struct CDrawMsg: 26 bytes on m68k (CDrawMsg) */
+#define M68K_CDrawMsg_SIZEOF 26
+#define M68K_CDrawMsg_cdm_MemPtr 0
+#define M68K_CDrawMsg_cdm_offx 4
+#define M68K_CDrawMsg_cdm_offy 8
+#define M68K_CDrawMsg_cdm_xsize 12
+#define M68K_CDrawMsg_cdm_ysize 16
+#define M68K_CDrawMsg_cdm_BytesPerRow 20
+#define M68K_CDrawMsg_cdm_BytesPerPix 22
+#define M68K_CDrawMsg_cdm_ColorModel 24
+
+/* struct AreaInfo: 24 bytes on m68k (AreaInfo) */
+#define M68K_AreaInfo_SIZEOF 24
+#define M68K_AreaInfo_VctrTbl 0
+#define M68K_AreaInfo_VctrPtr 4
+#define M68K_AreaInfo_FlagTbl 8
+#define M68K_AreaInfo_FlagPtr 12
+#define M68K_AreaInfo_Count 16
+#define M68K_AreaInfo_MaxCount 18
+#define M68K_AreaInfo_FirstX 20
+#define M68K_AreaInfo_FirstY 22
+
+/* struct TmpRas: 8 bytes on m68k (TmpRas) */
+#define M68K_TmpRas_SIZEOF 8
+#define M68K_TmpRas_RasPtr 0
+#define M68K_TmpRas_Size 4
 
 #endif /* EMU68K_GUEST_OFFSETS_H */
