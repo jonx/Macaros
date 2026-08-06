@@ -38,6 +38,10 @@
 #   aros-ctl warn           extract non-fatal warning lines from the log
 #   aros-ctl libs           list host dylibs mapped by AROSBootstrap (path + version)
 #   aros-ctl wait [SECS]    sleep, letting AROS run/render (default 1)
+#
+# `run` is non-destructive by default: if a hosted instance is already alive it
+# reports that instance and exits. Set AROS_CTL_RESTART=1 (or use `stop`/`kill`)
+# when replacing it is intentional.
 set -u
 
 # --- Relocatable paths -----------------------------------------------------
@@ -96,6 +100,15 @@ stop_pid() {
     kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
 }
 
+bootd_pids() {
+    local bootd="$1"
+    ps -axo pid=,command= 2>/dev/null | awk -v conf="$bootd/AROSBootstrap.conf" '
+        index($0, conf) &&
+        (index($0,"/Macaros ")||index($0,"./Macaros ")||index($0," Macaros ")||
+         index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||
+         index($0," AROSBootstrap ")) {print $1}'
+}
+
 # Stop the instance(s) bound to this boot tree. Reports each pid it actually
 # signalled and leaves the running tally in STOPPED_COUNT for the caller. The
 # pidfile target is killed first, so the boot-tree sweep then skips it (it is
@@ -119,10 +132,7 @@ stop_instances_for_bootd() {
         # Same matcher run-window.sh and `run`'s self-heal use (conf substring +
         # a Macaros/AROSBootstrap binary token). Done in awk, not a shell `case`
         # inside $(...), because macOS bash 3.2 mis-parses that nesting at runtime.
-        others="$(ps -axo pid=,command= 2>/dev/null | awk -v conf="$bootd/AROSBootstrap.conf" '
-            index($0, conf) &&
-            (index($0,"/Macaros ")||index($0,"./Macaros ")||index($0," Macaros ")||
-             index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
+        others="$(bootd_pids "$bootd")"
         for pid in $others; do
             if stop_pid "$pid"; then
                 echo ">> stopped pid $pid (boot tree)"
@@ -601,6 +611,12 @@ run)
         exit 1
     fi
     echo "boot dir: $BOOTD" >&2
+    LIVE_PIDS="$(bootd_pids "$BOOTD")"
+    if [ -n "$LIVE_PIDS" ] && [ "${AROS_CTL_RESTART:-0}" != 1 ]; then
+        echo "aros-ctl: an instance is already running for this boot tree: $LIVE_PIDS" >&2
+        echo "  use aros-ctl stop/kill, or set AROS_CTL_RESTART=1 to replace it" >&2
+        exit 2
+    fi
     stop_instances_for_bootd "$BOOTD"
     deploy_boot_artifacts
     artifact_line "AROSBootstrap" "$BOOTD/AROSBootstrap"
@@ -621,19 +637,6 @@ run)
     artifact_line "TestLib" "$AROS/C/TestLib"
     artifact_line "LoadMatrix" "$AROS/C/LoadMatrix"
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
-    # Kill any stale Macaros/AROSBootstrap for THIS boot tree before launching.
-    # A clean window-close or a CPU-fault guru does _exit() the process, but a hang
-    # or a crash that never reached that path leaves an instance holding the control
-    # FIFO + the window, so the next boot collides ("why can't AROS start again?").
-    # run-window.sh already does this; do it here too so every launch self-heals.
-    STALE_PIDS="$(ps -axo pid=,command= | awk -v conf="$BOOTD/AROSBootstrap.conf" '
-        index($0, conf) && (index($0,"/Macaros ")||index($0,"./Macaros ")||index($0," Macaros ")||index($0,"/AROSBootstrap ")||index($0,"./AROSBootstrap ")||index($0," AROSBootstrap ")) {print $1}')"
-    if [ -n "$STALE_PIDS" ]; then
-        echo ">> stopping previous Macaros instance(s) for this boot tree: $STALE_PIDS"
-        for p in $STALE_PIDS; do kill "$p" 2>/dev/null || true; done
-        sleep 0.4
-        for p in $STALE_PIDS; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true; done
-    fi
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
     mkdir -p "$ROOT/run/darwin-aarch64"
     ( cd "$BOOTD" && exec nohup env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
