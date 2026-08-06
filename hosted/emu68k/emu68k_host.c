@@ -2438,12 +2438,14 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     if (emu68k_run_context_nested(r, sb, idx, e, el) != 0)
         return 1;
     bl_event(BL_RUNTIME, idx, ctx->task, entry, "process.create",
-             "\"port\":\"%s\",\"stack_size\":%u",
-             bl_id("port", ctx->task + PROC_MSGPORT), (unsigned)stacksize);
+             "\"port\":\"%s\",\"stack_size\":%u,\"name\":\"%s\"",
+             bl_id("port", ctx->task + PROC_MSGPORT), (unsigned)stacksize,
+             name ? emu68k_guest_cstr(sb, name) : "");
     if (emu68k_trace_tasks())
         fprintf(stderr, "[68k/task] ctx=%d CREATED task=%08x entry=%08x "
-                "pr_MsgPort=%08x stack=%08x+%u\n", idx, ctx->task, entry,
-                ctx->task + PROC_MSGPORT, ctx->stack, (unsigned)stacksize);
+                "pr_MsgPort=%08x stack=%08x+%u name=%s\n", idx, ctx->task, entry,
+                ctx->task + PROC_MSGPORT, ctx->stack, (unsigned)stacksize,
+                name ? emu68k_guest_cstr(sb, name) : "");
     st->d[0] = ctx->task;
     return 0;
 }

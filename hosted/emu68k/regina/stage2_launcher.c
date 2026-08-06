@@ -57,10 +57,15 @@ int main(void)
     }
 
     /* TCALC publishes its public port before the GUI task has finished
-     * opening its first sheet and entering its command loop.  Give that
-     * task a bounded startup quantum before RX sends the first request;
-     * otherwise the request can arrive during initialization and leave
-     * the Rexx process waiting forever for a reply. */
+     * opening its first sheet and entering its command loop.  Wait for the
+     * worker's private port as the stronger readiness boundary, then give the
+     * application a bounded startup quantum before RX sends the first request.
+     * Otherwise the request can arrive during initialization and leave the
+     * Rexx process waiting forever for a reply. */
+    if (!wait_for_port("TurboCalc WINDOW-Port")) {
+        PutStr("STAGE2-FAIL TurboCalc window port did not appear\n");
+        return 21;
+    }
     Delay(1000);
 
     /* RX is a real guest process.  Do not make the launcher sit in a

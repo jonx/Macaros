@@ -942,8 +942,12 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         r->public_port[slot].guest_name = name;
         r->public_port[slot].live = 1;
         bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.publish",
-                 "\"port\":\"%s\",\"name\":\"%s\"", bl_id("port", port),
-                 guest_cstr(sb, name) ? guest_cstr(sb, name) : "");
+                 "\"port\":\"%s\",\"raw\":\"0x%08x\",\"name\":\"%s\","
+                 "\"owner\":\"%s\",\"signal_bit\":%u,\"head\":\"0x%08x\"",
+                 bl_id("port", port), port, guest_cstr(sb, name) ? guest_cstr(sb, name) : "",
+                 bl_id("task", gread32(sb, port + MP_SIGTASK)),
+                 (unsigned)gread8(sb, port + MP_SIGBIT),
+                 gread32(sb, port + MP_MSGLIST + M68K_List_lh_Head));
         return 0;
     }
     case LVO_REMPORT: {
@@ -1455,10 +1459,16 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_PUTMSG: {
         uint32_t port = st->a[0], msg = st->a[1];
         uint32_t list = port + MP_MSGLIST;
+        uint32_t port_task = gread32(sb, port + MP_SIGTASK);
+        uint32_t port_bit = gread8(sb, port + MP_SIGBIT);
+        uint32_t sig_before = (port_task && port_bit < 32)
+            ? gread32(sb, port_task + TASK_SIGRECVD_OFF) : 0;
+        uint32_t head_before = gread32(sb, list + M68K_List_lh_Head);
         uint32_t tailpred = gread32(sb, list + M68K_List_lh_TailPred);
         uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
         uint16_t length = gread16(sb, msg + M68K_Message_mn_Length);
         uint32_t word20 = 0, word24 = 0, word28 = 0, word32 = 0, word36 = 0;
+        uint32_t word40 = 0, word44 = 0;
         /* The message header is universal Exec ABI.  The words following it
          * deliberately remain untyped: recording them lets Bridge Lab
          * correlate protocols such as ARexx without pretending every message
@@ -1469,7 +1479,11 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             word28 = gread32(sb, msg + 28);
             word32 = gread32(sb, msg + 32);
             word36 = gread32(sb, msg + 36);
+            word40 = gread32(sb, msg + 40);
+            word44 = gread32(sb, msg + 44);
         }
+        list = port + MP_MSGLIST;
+        tailpred = gread32(sb, list + M68K_List_lh_TailPred);
         gwrite32(sb, msg, list + M68K_List_lh_Tail);
         gwrite32(sb, msg + 4, tailpred);
         gwrite32(sb, tailpred, msg);
@@ -1481,17 +1495,23 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (task && bit < 32)
                 gwrite32(sb, task + TASK_SIGRECVD_OFF,
                          gread32(sb, task + TASK_SIGRECVD_OFF) | (1u << bit));
+            uint32_t sig_after = (task && bit < 32)
+                ? gread32(sb, task + TASK_SIGRECVD_OFF) : 0;
             bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.put",
                      "\"port\":\"%s\",\"message\":\"%s\","
                      "\"reply_port\":\"%s\",\"owner\":\"%s\","
                      "\"signal_bit\":%u,\"length\":%u,"
                      "\"word20\":\"0x%08x\",\"word24\":\"0x%08x\","
                      "\"word28\":\"0x%08x\",\"word32\":\"0x%08x\","
-                     "\"word36\":\"0x%08x\"",
+                     "\"word36\":\"0x%08x\",\"word40\":\"0x%08x\","
+                     "\"word44\":\"0x%08x\",\"head_before\":\"0x%08x\","
+                     "\"tailpred_before\":\"0x%08x\",\"sig_before\":\"0x%08x\","
+                     "\"sig_after\":\"0x%08x\"",
                      bl_id("port", port), bl_id("message", msg),
                      reply ? bl_id("port", reply) : "",
                      bl_id("task", task), (unsigned)bit, (unsigned)length,
-                     word20, word24, word28, word32, word36);
+                     word20, word24, word28, word32, word36, word40, word44,
+                     head_before, tailpred, sig_before, sig_after);
             if (emu68k_trace_tasks())
                 fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x PutMsg "
                         "port=%08x msg=%08x head=%08x tailpred=%08x owner=%08x "
@@ -1620,6 +1640,11 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
         uint32_t succ = head ? gread32(sb, head) : 0;
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.get.state",
+                 "\"port\":\"%s\",\"raw\":\"0x%08x\",\"owner\":\"%s\","
+                 "\"signal_bit\":%u,\"head\":\"0x%08x\",\"succ\":\"0x%08x\"",
+                 bl_id("port", port), port, bl_id("task", gread32(sb, port + MP_SIGTASK)),
+                 (unsigned)gread8(sb, port + MP_SIGBIT), head, succ);
         if (emu68k_trace_tasks())
             fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x GetMsg queue "
                     "port=%08x head=%08x succ=%08x tailpred=%08x\n",
@@ -1654,6 +1679,16 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_REPLYMSG: {
         uint32_t msg = st->a[1];
+        if (emu68k_host_getenv("EMU68K_TRACE_REXX") &&
+            guest_span_ok(sb, msg, 44u)) {
+            uint32_t action = gread32(sb, msg + 28u);
+            uint32_t result1 = gread32(sb, msg + 32u);
+            uint32_t result2 = gread32(sb, msg + 36u);
+            uint32_t arg0 = gread32(sb, msg + 40u);
+            fprintf(stderr, "[68k/rexx] ReplyMsg ctx=%d task=%08x msg=%08x "
+                    "action=%08x result1=%08x result2=%08x arg0=%08x\n",
+                    r->cur_ctx, ctx_task(r), msg, action, result1, result2, arg0);
+        }
         if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
                                  g_oscall_user, e, el) == 0) {
             /* The OS-side bridge recognised a native Intuition message.  It
@@ -1691,6 +1726,19 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * would have to be killed from outside to find out why. */
         uint32_t want = st->d[0];
         uint32_t got;
+        if (emu68k_trace_tasks() && want == 0xc0000000u &&
+            guest_span_ok(sb, st->a[5], 630u)) {
+            uint32_t base = st->a[5];
+            fprintf(stderr, "[68k/task] ctx=%d task=%08x Wait-debug a5=%08x "
+                    "p574=%08x p582=%08x p590=%08x p598=%08x p602=%08x "
+                    "p610=%08x p618=%08x s614=%08x s622=%08x\n",
+                    r->cur_ctx, ctx_task(r), base,
+                    gread32(sb, base + 574), gread32(sb, base + 582),
+                    gread32(sb, base + 590), gread32(sb, base + 598),
+                    gread32(sb, base + 602), gread32(sb, base + 610),
+                    gread32(sb, base + 618), gread32(sb, base + 614),
+                    gread32(sb, base + 622));
+        }
         trace_port_call(r, "Wait mask", st, want);
         bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "signal.wait",
                  "\"mask\":\"0x%08x\"", want);

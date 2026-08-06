@@ -292,20 +292,25 @@ token.  It moved the application past the raw-pointer fault at `0x003d9180`.
 The current Stage 2 blocker is an ARexx scheduling/protocol stall, not a JIT
 fault or unsafe bridge conversion.  The latest traces show the real guest
 RexxMast/RX/TurboCalc chain publishing `REXX` and `TCALC`, finding both ports,
-and putting the first `GETCURSORPOS` request on TurboCalc's public `TCALC`
-port.  That message remains queued: TurboCalc's guest command loop consumes
-its internal `TurboCalc Parent Port`/`TurboCalc WINDOW-Port` traffic, but never
-takes the ARexx request or replies on RX's port.  The deterministic result
-file therefore contains only `STEP getcursorpos`, never `STAGE2-PASS`.
+and putting requests on TurboCalc's public `TCALC` port with the expected
+`RXCOMM|RXFF_RESULT` RexxMsg layout.  TurboCalc's main task observes the public
+signal but continues its internal `TurboCalc Parent Port`/`TurboCalc WINDOW-Port`
+loop; it never consumes the queued ARexx message or replies on RX's port.  The
+deterministic result file therefore stops at `STEP getcursorpos` (or, on the
+older private-port experiment, records empty results), never `STAGE2-PASS`.
 
 The launcher now starts RX asynchronously, inherits the invoking CLI streams,
-and stays at cooperative scheduler waits until the result file reaches
-`PASS`/`FAIL`; DOS `Delay()` now yields guest siblings instead of spinning.
-These are generic fixes and are deployed in the dylib.  `port.put` records
-reply ports and `signal.wait.check` records the observed mask, so the next
-step is to resolve TurboCalc's own ARexx-port consumer/ABI contract rather than
-add another blind routing shim.  Do not call the partial result a Stage 2
-pass.
+waits for TurboCalc's `TurboCalc WINDOW-Port` before sending RX, and stays at
+cooperative scheduler waits until the result file reaches `PASS`/`FAIL`; DOS
+`Delay()` now yields guest siblings instead of spinning.
+These are generic fixes and are deployed in the dylib.  `port.publish`,
+`port.put`, `port.get.state`, `port.reply`, and `signal.wait.check` record the
+raw guest port, owner task, signal bit, queue links, and Rexx words needed to
+distinguish delivery from consumption.  An opt-in private-port experiment was
+useful diagnostically but produced empty replies and is not part of the generic
+bridge.  The next step is to resolve TurboCalc's own ARexx-port consumer/ABI
+contract rather than add another blind routing shim.  Do not call the partial
+result a Stage 2 pass.
 
 One concrete cause of such inconsistent guest IPC state has been fixed and
 regression-tested: `exec.SetSignal` was an old zero-returning startup stub even
@@ -320,17 +325,12 @@ resolves its environment lookups past AROSBootstrap's exported guest-libc
 trace path appear to be ignored.  The same focused fixture verifies the host
 lookup before it exercises the signal contract.
 
-At handover time the user has a live Macaros corpus instance whose
-`Startup-Sequence` was changed externally.  **Do not overwrite or kill it.**
-A second Macaros process exits immediately while that instance owns the host
-session, so wait for an explicitly permitted restart before running Stage 2
-again.  The private copy-on-write test tree is
-`~/aros-stage2-20260806/AROS`; it has its own Stage 2 Startup-Sequence and
-Bootstrap configuration, but it is only useful once the existing Macaros
-session has ended.  When permitted, deploy the rebuilt dylib, launch that
-private tree with the Stage 2 environment below, and retain the resulting
-trace.  Do not infer success from the old trace: it predates reply-port
-recording and the SetSignal repair.
+The harness no longer kills an existing Macaros process unless explicitly
+requested (`AROS_CTL_RESTART=1`, `stop`, or `kill`).  A Stage 2 run may be
+restarted when needed; remove or rename the previous
+`Regina68k/stage2.result` before judging a new run.  A successful boot alone is
+not a Stage 2 proof: retain the fresh Bridge Lab trace and verify that the
+result file contains `STAGE2-PASS` with both formula and value checks.
 
 If a boot reaches only a blank Cocoa screen and logs `Could not open version
 36 or higher of library "dos.library"`, it is an independent staged-OS boot
