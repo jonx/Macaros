@@ -942,7 +942,8 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         r->public_port[slot].guest_name = name;
         r->public_port[slot].live = 1;
         bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.publish",
-                 "\"port\":\"%s\"", bl_id("port", port));
+                 "\"port\":\"%s\",\"name\":\"%s\"", bl_id("port", port),
+                 guest_cstr(sb, name) ? guest_cstr(sb, name) : "");
         return 0;
     }
     case LVO_REMPORT: {
@@ -967,6 +968,9 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             published = guest_cstr(sb, r->public_port[i].guest_name);
             if (published && !strcmp(published, wanted)) {
                 st->d[0] = r->public_port[i].port;
+                bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.find",
+                         "\"name\":\"%s\",\"port\":\"%s\"",
+                         wanted, bl_id("port", st->d[0]));
                 break;
             }
         }
@@ -1697,6 +1701,9 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * a window are touched; a worker's mailbox is not one of them. */
         event_pump(r, st, 0, want, NULL);
         got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                 "signal.wait.check", "\"mask\":\"0x%08x\",\"got\":\"0x%08x\"",
+                 want, got);
         if (got) {
             gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
                      gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & ~got);

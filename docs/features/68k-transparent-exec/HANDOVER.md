@@ -290,15 +290,22 @@ generated guest-readable facade (168-byte 68k layout), instead of an opaque
 token.  It moved the application past the raw-pointer fault at `0x003d9180`.
 
 The current Stage 2 blocker is an ARexx scheduling/protocol stall, not a JIT
-fault or unsafe bridge conversion.  Trace
-`~/AROS/Shared/Regina68k/bridge-stage2-11.trace.jsonl` shows the real guest
-RexxMast/RX/TurboCalc chain exchanging several messages successfully.  The
-last TurboCalc request is taken, after which the application stays alive in a
-normal `Wait($d0000000)` but no ARexx completion reaches the root launcher's
-reply port (`Wait($80000000)`).  `port.put` now records the message's reply
-port, and `ReplyMsg` records whether it was a native IDCMP reply, a guest IPC
-reply, or a deliberate no-reply message.  Those diagnostics must be in the
-deployed dylib before the next trace is interpreted.
+fault or unsafe bridge conversion.  The latest traces show the real guest
+RexxMast/RX/TurboCalc chain publishing `REXX` and `TCALC`, finding both ports,
+and putting the first `GETCURSORPOS` request on TurboCalc's public `TCALC`
+port.  That message remains queued: TurboCalc's guest command loop consumes
+its internal `TurboCalc Parent Port`/`TurboCalc WINDOW-Port` traffic, but never
+takes the ARexx request or replies on RX's port.  The deterministic result
+file therefore contains only `STEP getcursorpos`, never `STAGE2-PASS`.
+
+The launcher now starts RX asynchronously, inherits the invoking CLI streams,
+and stays at cooperative scheduler waits until the result file reaches
+`PASS`/`FAIL`; DOS `Delay()` now yields guest siblings instead of spinning.
+These are generic fixes and are deployed in the dylib.  `port.put` records
+reply ports and `signal.wait.check` records the observed mask, so the next
+step is to resolve TurboCalc's own ARexx-port consumer/ABI contract rather than
+add another blind routing shim.  Do not call the partial result a Stage 2
+pass.
 
 One concrete cause of such inconsistent guest IPC state has been fixed and
 regression-tested: `exec.SetSignal` was an old zero-returning startup stub even

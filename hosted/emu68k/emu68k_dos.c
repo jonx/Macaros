@@ -22,6 +22,9 @@
 #define NP_STACKSIZE  0x800003f3u
 #define NP_NAME       0x800003f4u
 #define NP_PRIORITY   0x800003f5u
+#define NP_INPUT      0x800003ecu
+#define NP_OUTPUT     0x800003edu
+#define NP_ERROR      0x800003f0u
 #define NP_CLI        0x800003fau
 #define NP_ARGUMENTS  0x800003fdu
 #define GSLI_68KHUNK  0x80000fa5u
@@ -528,7 +531,8 @@ static int dos_system(struct emu68k_run *r, j4_sandbox *sb,
     if (!call.d[0]) { st->d[0] = 0xffffffffu; return 0; }
     if (async) {
         struct guestseg_live *seg = dos_guest_segment(r, call.d[0]);
-        uint32_t ptags = emu68k_guest_alloc(r, 6u * 8u);
+        uint32_t parent = dos_current_process(r);
+        uint32_t ptags = emu68k_guest_alloc(r, 9u * 8u);
         if (!seg || !ptags) { st->d[0] = 0xffffffffu; return 0; }
         emu68k_gwrite32(sb, ptags, NP_ENTRY);
         emu68k_gwrite32(sb, ptags + 4, seg->seg.entry);
@@ -536,15 +540,28 @@ static int dos_system(struct emu68k_run *r, j4_sandbox *sb,
         emu68k_gwrite32(sb, ptags + 12, 16384);
         emu68k_gwrite32(sb, ptags + 16, NP_NAME);
         emu68k_gwrite32(sb, ptags + 20, name);
+        /* Async commands inherit the invoking CLI's streams.  RX and other
+         * shell tools legitimately read/write these handles while their
+         * parent remains in a different guest process; leaving them zero
+         * turns normal I/O into a tight failed-read loop. */
+        emu68k_gwrite32(sb, ptags + 24, NP_INPUT);
+        emu68k_gwrite32(sb, ptags + 28,
+                        emu68k_gread32(sb, parent + CLASSIC_PR_CIS));
+        emu68k_gwrite32(sb, ptags + 32, NP_OUTPUT);
+        emu68k_gwrite32(sb, ptags + 36,
+                        emu68k_gread32(sb, parent + CLASSIC_PR_COS));
+        emu68k_gwrite32(sb, ptags + 40, NP_ERROR);
+        emu68k_gwrite32(sb, ptags + 44,
+                        emu68k_gread32(sb, parent + CLASSIC_PR_CES));
         /* A loaded executable enters the ordinary C startup, which chooses
          * Shell versus Workbench from pr_CLI and reads pr_Arguments. Without
          * these tags it waits forever for a Workbench startup message. */
-        emu68k_gwrite32(sb, ptags + 24, NP_CLI);
-        emu68k_gwrite32(sb, ptags + 28, 1);
-        emu68k_gwrite32(sb, ptags + 32, NP_ARGUMENTS);
-        emu68k_gwrite32(sb, ptags + 36, args);
-        emu68k_gwrite32(sb, ptags + 40, 0);
-        emu68k_gwrite32(sb, ptags + 44, 0);
+        emu68k_gwrite32(sb, ptags + 48, NP_CLI);
+        emu68k_gwrite32(sb, ptags + 52, 1);
+        emu68k_gwrite32(sb, ptags + 56, NP_ARGUMENTS);
+        emu68k_gwrite32(sb, ptags + 60, args);
+        emu68k_gwrite32(sb, ptags + 64, 0);
+        emu68k_gwrite32(sb, ptags + 68, 0);
         call.d[1] = ptags;
         if (emu68k_dos_create_new_proc(r, sb, &call, e, el) != 0) return 1;
         st->d[0] = call.d[0] ? 0 : 0xffffffffu;
@@ -570,6 +587,12 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                     struct j5d_m68k_state *st, char *e, unsigned el)
 {
     switch (lvo) {
+    case DOS_LVO_DELAY:
+        /* Hosted guest tasks have no native tick scheduler to sleep on.  A
+         * cooperative handoff is the useful Delay contract here: it lets
+         * sibling processes (RexxMast, TurboCalc, RX) make progress without
+         * spinning the caller through thousands of no-op DOS calls. */
+        return emu68k_reschedule_siblings(r, sb, "Delay", st->pc, e, el);
     case DOS_LVO_CREATEPROC: {
         struct guestseg_live *seg = dos_guest_segment(r, st->d[3]);
         struct j5d_m68k_state call = *st;
