@@ -87,11 +87,22 @@ Invoke as `aros-ctl <cmd> [args]`.
 ### Lifecycle
 | Command | Effect |
 |---|---|
-| `run` | Boot AROS windowed in the background with the control FIFO; log to `$LOG`, pid to `$PIDF`. Stages a known-good boot (see [design.md](design.md) → "What `run` sets up"). |
+| `run` | Boot AROS windowed in the background with the control FIFO; log to `$LOG`, pid to `$PIDF`. Stages a persistent desktop/session (see [design.md](design.md) → "What `run` sets up"). If an instance for the same boot tree is already alive, it refuses instead of replacing it. |
 | `status` | Report whether the app is running, which pid source was used, whether the control FIFO/log exist, and whether crash markers are already present. Exit 0 = running/clean, 1 = stopped, 2 = running but stale control/log or crash markers. |
 | `stop` | Ask the guest to power down (`CM_OPT_POWER`), then TERM/KILL the pidfile pid and any process bound to **this boot tree**, remove the FIFO + pidfile, and report how many instances it stopped. |
 | `kill` | Force teardown. Skips the graceful power-down and is **not** scoped to the current boot tree: it signals every hosted-AROS process by name (`Macaros`/`AROSBootstrap`), reports each pid, and clears the FIFO + pidfile. Use it when a crashed app left an instance wedged and `run` will not open a fresh window. Machine-wide, so prefer `stop` if you run parallel isolated instances. |
 | `wait [SECS]` | `sleep` (default 1) — let AROS run/render between actions. |
+
+`run` is deliberately non-destructive. To replace a session, use `stop` or
+`kill`, or make the intent explicit with `AROS_CTL_RESTART=1 graft/aros-ctl run`.
+The latter is useful for automated development loops; it is never implicit.
+
+When `AROS_CTL_STARTUP_FILE` is supplied, the file is treated as a payload by
+default: `aros-ctl` boots the persistent desktop first, copies the file into the
+guest `S:` volume, and executes it there. The payload finishing does not end the
+Macaros session. Isolated harnesses that intentionally own the entire guest
+lifecycle must opt into the old replacement semantics with
+`AROS_CTL_STARTUP_FILE_MODE=replace`.
 
 ### Input
 | Command | Effect |
@@ -137,6 +148,8 @@ Override these to isolate a second instance (set all three together):
 | `AROS_CTL_FIFO` | `/tmp/aros-cm.ctl` | the control FIFO (becomes `$AROS_CM_CONTROL`) |
 | `AROS_CTL_LOG` | `/tmp/aros-window.log` | stdout/stderr of the booted AROS |
 | `AROS_CTL_PIDF` | `/tmp/aros-cm.pid` | pidfile for `stop` |
+| `AROS_CTL_RESTART` | unset/`0` | with `run`, explicitly replace a live instance when set to `1` |
+| `AROS_CTL_STARTUP_FILE_MODE` | `payload` | `payload` runs a startup file inside the persistent desktop; `replace` makes it the complete `Startup-Sequence` for isolated tests |
 
 Build inputs are **relocatable, with overrides** (the script resolves its own dir →
 repo root, so in-repo artifacts are found wherever the checkout lives):
