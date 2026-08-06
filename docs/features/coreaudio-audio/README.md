@@ -136,6 +136,59 @@ Two things made it first-class (`workbench/devs/AHI/mmakefile.src`):
 The translation catalogs (`workbench/devs/AHI/{AHI,Device}/translations`) must
 be present as git submodules; they are already initialized in `../aros-upstream`.
 
+## Streaming Clients (Moonstone)
+
+`C:Moonstone` is the first application that *streams* through this path rather
+than playing one preloaded sample. Its shim is
+[hosted/rust/aros_moonstone_audio.c](../../../hosted/rust/aros_moonstone_audio.c):
+two `AHIST_DYNAMICSAMPLE` buffers on one channel, flipped by AHI's `SoundFunc`
+hook, refilled by the game loop. Two things are worth reusing:
+
+- **Pick the mode by driver name.** Nine audio modes are registered here and
+  only `coreaudio` has a host behind it. With no AHI prefs file, the device's
+  default unit falls back to `AHI_BestAudioID`, which can name a driver for
+  hardware this machine does not have. The shim walks `AHI_NextAudioID` and
+  matches `AHIDB_Driver` against `coreaudio` instead.
+- **Open the device after loading assets.** Host-backed file reads block the
+  whole guest, so reading a sample bank with AHI already streaming empties the
+  driver's ring (21 ring underruns became 12 by swapping the order).
+
+`Moonstone audio` is a windowless check: it plays one tune for five seconds and
+reports how many buffers went out stale. Measured on this port, playback holds
+0 stale buffers once the host file cache is warm. A first cold play stutters
+about ten times in 40 s, and the game's own worst-frame counter says why: a
+cold frame can reach **920 ms**, far beyond any buffering an application can
+queue.
+
+Ring underruns are not the same measure: the reference `AHISmoke` (one static
+sample, no file I/O) reports 0, while a streaming client that also reads assets
+sees a couple of dozen over a 40 s run, nearly all of them at startup.
+
+### Setting the audio buffer
+
+`MOONSTONE_AUDIO_FRAMES` is the sample frames per AHI buffer. Two buffers are
+in flight, so it sets both how far ahead sound is queued (the slack against a
+slow frame) and how late a combat sample is heard. Those move together: more
+lookahead is always more latency.
+
+| Value | Buffer | Queued ahead | Effect |
+| --- | --- | --- | --- |
+| `1024` | 46 ms | 93 ms | snappiest samples, stutters soonest |
+| `2048` (default) | 93 ms | 186 ms | clean once the file cache is warm |
+| `4096` | 186 ms | 372 ms | about half the cold-play stutter |
+| `0` | | | run silent |
+
+Out of range values are clamped to 256..16384, and AHI raises anything below
+the mode's own minimum. Set it for one session, or in `ENVARC:` so it survives
+a reboot:
+
+```
+setenv MOONSTONE_AUDIO_FRAMES 4096          ; this session
+copy ENV:MOONSTONE_AUDIO_FRAMES ENVARC:     ; and the next ones
+```
+
+`MOONSTONE_AUDIO_SECS` sets how long `Moonstone audio` plays (default 5).
+
 ## Remaining Polish
 
 The low-level playback path works and its build is first-class. Remaining work

@@ -10,6 +10,7 @@ extern unsigned int aros_moonstone_render(void);
 extern unsigned int aros_moonstone_play(void);
 extern unsigned int aros_moonstone_game(void);
 extern unsigned int aros_moonstone_game_skip(void);
+extern unsigned int aros_moonstone_audio(void);
 
 /* std's args pal reads these (see rs3_main.c). */
 int aros_argc = 0;
@@ -26,9 +27,12 @@ int main(int argc, char **argv)
      *   Moonstone skip          -> the game, starting at the menu (skip intro)
      *   Moonstone --skip-intro  -> same (any '-' flag = skip-intro)
      *   Moonstone render        -> headless PNG of one frame
-     *   Moonstone demo          -> the shim demo (background + movable cursor) */
+     *   Moonstone demo          -> the shim demo (background + movable cursor)
+     *   Moonstone audio         -> windowless AHI check (plays one tune) */
     if (c == 'r')
         rc = aros_moonstone_render();
+    else if (c == 'a')
+        rc = aros_moonstone_audio();
     else if (c == 'd')
         rc = aros_moonstone_play();
     else if (c == 's' || c == '-')

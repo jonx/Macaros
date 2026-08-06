@@ -42,8 +42,8 @@ MEMORY="${AROS_HOST_MEMORY:-1280}"
 # pre-rename Ferail copy.
 EXCLUDE_C="ZedAros Feraille"
 
-# The game reads its assets from one root. The music is 15 MB of OPL streams
-# that nothing plays yet (no AHI backend on AROS), so it stays out.
+# The game reads its assets from one root, music included: the soundtrack is
+# 15 MB of pre-rendered tunes the AHI backend streams.
 MOONSTONE_SRC="${MOONSTONE_SRC:-$HOME/AROS/Shared/Moonstone}"
 
 INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
@@ -222,6 +222,7 @@ if [ "${1:-}" = "--check" ]; then
     [ -e "$A/Resources/AROS/C/Moonstone" ];             ck $? "Moonstone embedded (C:Moonstone)"
     [ -d "$A/Resources/AROS/Moonstone/extracted/moonahdk" ]; ck $? "Moonstone game assets"
     [ -d "$A/Resources/AROS/Moonstone/assets/data" ];   ck $? "Moonstone data tables"
+    [ -d "$A/Resources/AROS/Moonstone/assets/music" ];  ck $? "Moonstone soundtrack"
     [ -f "$A/Resources/AROS/C/Zed.info" ];              ck $? "Zed icon"
     [ -f "$A/Resources/AROS/C/Ferail.info" ];           ck $? "Ferail icon"
     [ -f "$A/Resources/AROS/C/Moonstone.info" ];        ck $? "Moonstone icon"
@@ -285,6 +286,9 @@ echo ">> embedding Moonstone assets ..."
 mkdir -p "$DST/Moonstone/assets"
 /usr/bin/ditto "$MOONSTONE_SRC/extracted"   "$DST/Moonstone/extracted"
 /usr/bin/ditto "$MOONSTONE_SRC/assets/data" "$DST/Moonstone/assets/data"
+# The soundtrack: pre-rendered tunes (.wav) with the OPL captures (.dro) they
+# were rendered from, which the game falls back to when a .wav is missing.
+/usr/bin/ditto "$MOONSTONE_SRC/assets/music" "$DST/Moonstone/assets/music"
 cp -f "$MOONSTONE_SRC/CH.PIV" "$DST/Moonstone/CH.PIV" 2>/dev/null || true
 : > "$DST/Moonstone/.moonstone-root"
 
