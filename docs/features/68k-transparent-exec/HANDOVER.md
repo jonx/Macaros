@@ -302,7 +302,11 @@ older private-port experiment, records empty results), never `STAGE2-PASS`.
 The launcher now starts RX asynchronously, inherits the invoking CLI streams,
 waits for TurboCalc's `TurboCalc WINDOW-Port` before sending RX, and stays at
 cooperative scheduler waits until the result file reaches `PASS`/`FAIL`; DOS
-`Delay()` now yields guest siblings instead of spinning.
+`Delay()` now honors its guest tick argument with a bounded sequence of
+cooperative sibling turns instead of silently collapsing every delay to one
+turn.  This is a generic scheduler fix, but it does not by itself clear the
+TurboCalc stall: a fresh run with the corrected delay still stops at
+`STEP getcursorpos`.
 These are generic fixes and are deployed in the dylib.  `port.publish`,
 `port.put`, `port.get.state`, `port.reply`, and `signal.wait.check` record the
 raw guest port, owner task, signal bit, queue links, and Rexx words needed to
@@ -311,6 +315,24 @@ useful diagnostically but produced empty replies and is not part of the generic
 bridge.  The next step is to resolve TurboCalc's own ARexx-port consumer/ABI
 contract rather than add another blind routing shim.  Do not call the partial
 result a Stage 2 pass.
+
+The latest diagnostic (`~/AROS/Shared/Regina68k/bridge-stage2-delay512.trace.jsonl`)
+is the clean discriminant.  The public `TCALC` message is correctly laid out and
+queued (`RXCOMM|RXFF_RESULT`, length 128); TurboCalc's task receives the public
+signal and then continues consuming its private `TurboCalc Parent Port` and
+`TurboCalc WINDOW-Port` traffic.  There is no guest `GetMsg(TCALC)` and no reply
+on RX's port.  Increasing the readiness delay therefore changes scheduling
+volume, not the outcome.  The generic bridge is delivering the request; the
+remaining work is to identify why this binary's ARexx dispatch path never
+dequeues it (likely its application-side handoff, not a queue or signal
+corruption).
+
+For a long-lived diagnostic boot, make the launcher the synchronous startup
+command rather than `Run`ning it asynchronously.  An asynchronous one-shot
+payload can let the initial CLI finish and tear down the hosted instance while
+its child contexts are still waiting; the direct command keeps the instance
+alive long enough to inspect the trace.  This is a harness-lifecycle detail,
+not a TurboCalc bridge workaround.
 
 One concrete cause of such inconsistent guest IPC state has been fixed and
 regression-tested: `exec.SetSignal` was an old zero-returning startup stub even

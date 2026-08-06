@@ -591,8 +591,19 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         /* Hosted guest tasks have no native tick scheduler to sleep on.  A
          * cooperative handoff is the useful Delay contract here: it lets
          * sibling processes (RexxMast, TurboCalc, RX) make progress without
-         * spinning the caller through thousands of no-op DOS calls. */
-        return emu68k_reschedule_siblings(r, sb, "Delay", st->pc, e, el);
+         * blocking the host thread.  Preserve the guest's tick argument,
+         * while bounding a single call so a damaged program cannot monopolise
+         * the hosted scheduler with an unbounded delay. */
+        {
+            uint32_t ticks = st->d[1];
+            unsigned rounds = ticks > 512u ? 512u : (unsigned)ticks;
+            if (!rounds) rounds = 1u;
+            for (unsigned i = 0; i < rounds; i++)
+                if (emu68k_reschedule_siblings(r, sb, "Delay", st->pc,
+                                               e, el) != 0)
+                    return 1;
+            return 0;
+        }
     case DOS_LVO_CREATEPROC: {
         struct guestseg_live *seg = dos_guest_segment(r, st->d[3]);
         struct j5d_m68k_state call = *st;
