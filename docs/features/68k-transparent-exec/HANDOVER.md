@@ -330,15 +330,18 @@ scripted Macaros instance.
 
 ## Repo state — IMPORTANT
 
-Current graft HEAD is pushed `1ea5065` (`origin/main`).  The AROS checkout HEAD
-is `026038f40e` on `exfat-handler`; the bridge work belongs on
-`aarch64-darwin-graft`, so reconcile the dirty OS tree before committing.  The
-runtime work below is **uncommitted** in both working trees.  There are also
-unrelated existing changes (notably Moonstone audio in this repo and the exFAT
-branch context in the OS checkout); preserve them.  The user has authorized
-committing and pushing work in their own `jonx` repositories once it is stable,
-but that is not permission to publish elsewhere or to mix bridge changes into
-the wrong AROS branch.
+The pre-TurboCalc graft baseline was pushed `1ea5065`; the interactive bridge
+checkpoint is pushed as `5ef3cfb` on `origin/main`.  The current AROS checkout
+HEAD is `026038f40e` on `exfat-handler` and remains dirty so parallel work is
+not disturbed.  Its exact 15-file emu68k diff is safely committed and pushed
+as `589340275f` on `fork/checkpoint/emu68k-interactive-20260806`, based on that
+exFAT HEAD.  Reconcile that checkpoint with the intended
+`aarch64-darwin-graft` history before making it the permanent bridge branch.
+There are unrelated existing changes (notably Moonstone audio in this repo and
+the exFAT branch context in the OS checkout); preserve them.  The user has
+authorized committing and pushing work in their own `jonx` repositories once
+it is stable, but that is not permission to publish elsewhere or to mix bridge
+changes into the wrong AROS branch.
 
 - `hosted/jit68k/j4_loader.c` + `j4_hunk.h`: HUNK_RELOC32SHORT/DREL32 support.
   This is what let five tail libraries load at all.
@@ -399,8 +402,9 @@ at SHA-256
    keyboard entry, and leave the working TurboCalc instance alive.
 2. Restore the full `hosted-emu68k-t3gen` gate without weakening its unsafe
    input negative controls.  Run `git diff --check` in both trees.
-3. Move the dirty OS bridge changes safely from the current `exfat-handler`
-   checkout to the intended bridge branch before committing anything there.
+3. Reconcile pushed checkpoint `589340275f` from its current `exfat-handler`
+   base onto the intended bridge branch; do not disturb the shared dirty
+   checkout while parallel work is active.
 4. Copy/route the external Zune class binaries and extend `genmui` from the
    built-in `Text.mui` lifecycle to at least one separately loaded class.
 5. Build the Aminet breadth corpus and make every remaining failure a named
