@@ -124,7 +124,20 @@ done
   echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
   echo 'Wait 999999'
 } > "$RUN/startup"
-pkill -f Macaros 2>/dev/null; sleep 1
+# A corpus sweep rewrites the boot Startup-Sequence and its `aros-ctl run`
+# call replaces an instance from that boot tree.  It must never do either to a
+# person's live interactive Macaros session by surprise.  CI normally has no
+# instance, while a deliberate replacement remains available to an operator
+# who has saved their work and opts in explicitly.
+if pgrep -x Macaros >/dev/null 2>&1; then
+  if [ "${CORPUS_REPLACE_LIVE:-0}" != 1 ]; then
+    echo "68k-corpus: a live Macaros instance exists; refusing to replace it." >&2
+    echo "68k-corpus: stop it yourself, or set CORPUS_REPLACE_LIVE=1 intentionally." >&2
+    exit 2
+  fi
+  pkill -f Macaros 2>/dev/null
+  sleep 1
+fi
 rm -f "$SHARE/corpus-out.txt"; : > /tmp/aros-window.log
 if [ "$CORPUS_DESKTOP" = 1 ]; then
   cp "$RUN/startup" "$SHARE/corpus-startup"

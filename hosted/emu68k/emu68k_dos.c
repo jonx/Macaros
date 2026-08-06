@@ -22,6 +22,8 @@
 #define NP_STACKSIZE  0x800003f3u
 #define NP_NAME       0x800003f4u
 #define NP_PRIORITY   0x800003f5u
+#define NP_CLI        0x800003fau
+#define NP_ARGUMENTS  0x800003fdu
 #define GSLI_68KHUNK  0x80000fa5u
 
 static int dos_span(j4_sandbox *sb, uint32_t p, uint32_t n)
@@ -480,17 +482,26 @@ static int dos_system(struct emu68k_run *r, j4_sandbox *sb,
 {
     const char *command = emu68k_guest_cstr(sb, st->d[1]);
     const char *p, *start;
+    char quote = 0;
     uint32_t name, args, name_len, args_len, tags = st->d[2], async = 0;
     struct j5d_m68k_state call = *st;
     if (!command) { st->d[0] = 0xffffffffu; return 0; }
     p = command; while (*p == ' ' || *p == '\t') p++;
-    start = p; while (*p && *p != ' ' && *p != '\t') p++;
+    if (*p == '"' || *p == '\'') {
+        quote = *p++;
+        start = p;
+        while (*p && *p != quote) p++;
+    } else {
+        start = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+    }
     name_len = (uint32_t)(p - start);
     if (!name_len || name_len >= 256u || strpbrk(command, "<>|")) {
         st->d[0] = 0xffffffffu; return 0;
     }
     if (name_len > 2u && start[1] == ':' &&
         (start[0] == 'C' || start[0] == 'c')) { start += 2; name_len -= 2; }
+    if (quote && *p == quote) p++;
     name = emu68k_guest_alloc(r, name_len + 1u);
     if (!name) { st->d[0] = 0xffffffffu; return 0; }
     memcpy(j4_sandbox_host(sb, name), start, name_len);
@@ -514,10 +525,10 @@ static int dos_system(struct emu68k_run *r, j4_sandbox *sb,
     }
     call.d[1] = name;
     if (emu68k_dos_loadseg(r, sb, &call, e, el) != 0) return 1;
-    if (!call.d[0]) { st->d[0] = 10; return 0; }
+    if (!call.d[0]) { st->d[0] = 0xffffffffu; return 0; }
     if (async) {
         struct guestseg_live *seg = dos_guest_segment(r, call.d[0]);
-        uint32_t ptags = emu68k_guest_alloc(r, 4u * 8u);
+        uint32_t ptags = emu68k_guest_alloc(r, 6u * 8u);
         if (!seg || !ptags) { st->d[0] = 0xffffffffu; return 0; }
         emu68k_gwrite32(sb, ptags, NP_ENTRY);
         emu68k_gwrite32(sb, ptags + 4, seg->seg.entry);
@@ -525,8 +536,15 @@ static int dos_system(struct emu68k_run *r, j4_sandbox *sb,
         emu68k_gwrite32(sb, ptags + 12, 16384);
         emu68k_gwrite32(sb, ptags + 16, NP_NAME);
         emu68k_gwrite32(sb, ptags + 20, name);
-        emu68k_gwrite32(sb, ptags + 24, 0);
-        emu68k_gwrite32(sb, ptags + 28, 0);
+        /* A loaded executable enters the ordinary C startup, which chooses
+         * Shell versus Workbench from pr_CLI and reads pr_Arguments. Without
+         * these tags it waits forever for a Workbench startup message. */
+        emu68k_gwrite32(sb, ptags + 24, NP_CLI);
+        emu68k_gwrite32(sb, ptags + 28, 1);
+        emu68k_gwrite32(sb, ptags + 32, NP_ARGUMENTS);
+        emu68k_gwrite32(sb, ptags + 36, args);
+        emu68k_gwrite32(sb, ptags + 40, 0);
+        emu68k_gwrite32(sb, ptags + 44, 0);
         call.d[1] = ptags;
         if (emu68k_dos_create_new_proc(r, sb, &call, e, el) != 0) return 1;
         st->d[0] = call.d[0] ? 0 : 0xffffffffu;
@@ -717,7 +735,7 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         struct guestseg_live *seg = dos_guest_segment(r, st->d[1]);
         struct j5d_m68k_state call = *st;
         uint32_t stack_size = st->d[2] < 16384u ? 16384u : st->d[2];
-        uint32_t stack, result;
+        uint32_t stack, result, process, saved_arguments;
         if (!seg || stack_size > 16u * 1024u * 1024u) {
             st->d[0] = 20; return 0;
         }
@@ -727,9 +745,21 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         memset(&call, 0, sizeof call);
         call.a[0] = st->d[3];
         call.d[0] = st->d[4];
+        /* AROS startup receives the command tail in A0/D0, but established
+         * commands such as RX also reread pr_Arguments. RunCommand executes in
+         * the current Process, so expose this invocation's tail there only for
+         * its dynamic extent and restore the caller's tail afterwards. */
+        process = dos_current_process(r);
+        saved_arguments = emu68k_gread32(sb,
+                                         process + CLASSIC_PR_ARGUMENTS);
+        emu68k_gwrite32(sb, process + CLASSIC_PR_ARGUMENTS, st->d[3]);
         if (emu68k_run_guest_command(r, seg->seg.entry, &call,
-                (stack + stack_size) & ~15u, &result, e, el) != 0)
+                (stack + stack_size) & ~15u, &result, e, el) != 0) {
+            emu68k_gwrite32(sb, process + CLASSIC_PR_ARGUMENTS,
+                            saved_arguments);
             return 1;
+        }
+        emu68k_gwrite32(sb, process + CLASSIC_PR_ARGUMENTS, saved_arguments);
         st->d[0] = result;
         return 0;
     }

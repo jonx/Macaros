@@ -383,7 +383,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      sb->sandbox_origin + sb->size);
             return 1;
         }
-        if (getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
             fprintf(stderr, "[68k] OpenLibrary(\"%s\", %u)\n", nm, requested);
         for (int i = 0; i < r->nlib; i++)                 /* already open?       */
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
@@ -400,6 +400,30 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
              * unsatisfied version are ordinary OpenLibrary failure too. */
             st->d[0] = 0;
             return 0;
+        }
+
+        /* A native AROS process enters with stdc/stdcio's task-storage bases
+         * already established.  A new 68k execution domain cannot inherit
+         * those 64-bit pointers, so bootstrap the genuine guest runtimes before
+         * posixc's Init set asks for them.  This is library-order policy; all
+         * three initializers and opens still execute as 68k guest code. */
+        {
+            const char *leaf = strrchr(nm, ':');
+            const char *slash = strrchr(nm, '/');
+            char depwhy[256] = {0};
+            if (!leaf || (slash && slash > leaf)) leaf = slash;
+            leaf = leaf ? leaf + 1 : nm;
+            if (!strcmp(leaf, "posixc.library") &&
+                (open_guestlib_now(r, "stdc.library", 0, NULL,
+                                   depwhy, sizeof depwhy) ||
+                 open_guestlib_now(r, "stdcio.library", 0, NULL,
+                                   depwhy, sizeof depwhy))) {
+                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+                    fprintf(stderr, "[68k] posixc guest dependency failed: %s\n",
+                            depwhy);
+                st->d[0] = 0;
+                return 0;
+            }
         }
 
         {
@@ -426,7 +450,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
                 if (!strcmp(leaf, servable[k])) { known = 1; break; }
             if (known && route_guestside(leaf)) {
-                if (getenv("EMU68K_TRACE_CALLS"))
+                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
                     fprintf(stderr, "[68k] OpenLibrary %s routed guest-side\n",
                             leaf);
                 known = 0;
@@ -458,7 +482,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         {   /* Native-name-wins above; an unknown name is now a disk library. */
             char why[256] = {0};
             if (load_guestlib(r, nm, requested, &gi, why, sizeof why)) {
-                if (getenv("EMU68K_TRACE_CALLS"))
+                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
                     fprintf(stderr, "[68k] OpenLibrary guest %s failed: %s\n", nm, why);
                 st->d[0] = 0;
                 return 0;
@@ -698,7 +722,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             st->d[0] = 0;
             return 0;
         }
-        if (getenv("EMU68K_TRACE_CALLS")) {
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS")) {
             uint32_t target = st->a[5];
             fprintf(stderr, "[68k] Supervisor target=%08x", target);
             if (target >= sb->sandbox_origin &&
@@ -886,13 +910,14 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_NEWALLOCENTRY:      /* the same allocation, with a failure mask    */
         return exec_call(r, sb, LVO_ALLOCENTRY, st, e, el);
     case LVO_ADDPORT: {
-        /* AddPort has observable initialization semantics even when this run
-         * does not expose a global public-port registry: classic Exec marks
-         * the node as a port and resets its message queue before publishing
-         * it.  amiga.lib CreatePort relies on this and deliberately hands
-         * AddPort a cleared, not yet NewList-initialized, allocation. */
+        /* Public ports are run-global, just as they are system-global on a
+         * classic single-address-space machine. All cooperating guest
+         * processes in this run share the arena, so publishing the guest
+         * address preserves both identity and message-list ownership. */
         uint32_t port = st->a[1];
         uint32_t list = port + MP_MSGLIST;
+        uint32_t name;
+        int slot = -1;
         if (!guest_span_ok(sb, port, 34u)) {
             snprintf(e, el, "AddPort received a port outside guest memory");
             return 1;
@@ -903,14 +928,50 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         gwrite32(sb, list + M68K_List_lh_Tail, 0);
         gwrite32(sb, list + M68K_List_lh_TailPred,
                  list + M68K_List_lh_Head);
+        name = gread32(sb, port + M68K_Node_ln_Name);
+        for (int i = 0; i < EMU68K_PUBLIC_PORT_MAX; i++) {
+            if (r->public_port[i].live && r->public_port[i].port == port)
+                return 0;
+            if (!r->public_port[i].live && slot < 0) slot = i;
+        }
+        if (slot < 0) {
+            snprintf(e, el, "capability gap: guest public-port table is full");
+            return 1;
+        }
+        r->public_port[slot].port = port;
+        r->public_port[slot].guest_name = name;
+        r->public_port[slot].live = 1;
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.publish",
+                 "\"port\":\"%s\"", bl_id("port", port));
         return 0;
     }
-    case LVO_REMPORT:                    /* no public port list here          */
+    case LVO_REMPORT: {
+        uint32_t port = st->a[1];
+        for (int i = 0; i < EMU68K_PUBLIC_PORT_MAX; i++)
+            if (r->public_port[i].live && r->public_port[i].port == port) {
+                r->public_port[i].live = 0;
+                bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                         "port.unpublish", "\"port\":\"%s\"",
+                         bl_id("port", port));
+                break;
+            }
         return 0;
-    case LVO_FINDPORT:       /* FindPort(name A1): a guest has no public ports,
-                              * and NULL is the answer callers are written for */
+    }
+    case LVO_FINDPORT: {
+        const char *wanted = guest_cstr(sb, st->a[1]);
         st->d[0] = 0;
+        if (!wanted) return 0;
+        for (int i = 0; i < EMU68K_PUBLIC_PORT_MAX; i++) {
+            const char *published;
+            if (!r->public_port[i].live) continue;
+            published = guest_cstr(sb, r->public_port[i].guest_name);
+            if (published && !strcmp(published, wanted)) {
+                st->d[0] = r->public_port[i].port;
+                break;
+            }
+        }
         return 0;
+    }
 
     /* ---- vectors a guest LIBRARY needs while it initialises -----------------
      * A library above the waterline runs its own init code, and that code does
@@ -969,7 +1030,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     case LVO_OPENRESOURCE: {
         const char *name = guest_cstr(sb, st->a[1]);
-        if (getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
             fprintf(stderr, "[68k] OpenResource(\"%s\")\n",
                     name ? name : "<invalid guest string>");
         /* AROS compiler startup and libc use task.resource for guest-owned
@@ -1352,11 +1413,24 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         return 0;
     }
-    case LVO_SETSIGNAL:
-        /* SetSignal(newSignals D0, signalMask D1) -> old signals. Nothing
-         * signals a guest task yet, so the honest answer is a clean zero. */
-        st->d[0] = 0;
+    case LVO_SETSIGNAL: {
+        /* SetSignal(newSignals D0, signalMask D1) -> old received signals.
+         *
+         * Ports, Signal(), and native IDCMP delivery all now set tc_SigRecvd
+         * in the shared guest Task.  Keeping the old startup-era zero stub
+         * here made users of the normal Exec signal protocol (notably ARexx
+         * worker/reply loops) observe a different state from Wait().  The
+         * hosted executor is cooperative, so this read-modify-write is the
+         * required atomic operation for guest code: replace only the bits in
+         * D1, return the complete old value in D0. */
+        uint32_t task = ctx_task(r);
+        uint32_t old = gread32(sb, task + TASK_SIGRECVD_OFF);
+        uint32_t mask = st->d[1];
+        gwrite32(sb, task + TASK_SIGRECVD_OFF,
+                 (old & ~mask) | (st->d[0] & mask));
+        st->d[0] = old;
         return 0;
+    }
     /* A signal BIT is bookkeeping: a program reserves one for a port it is
      * about to create, long before anything is ever sent to it. Refusing the
      * reservation stopped programs during startup, at their ARexx port, over a
@@ -1378,6 +1452,20 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t port = st->a[0], msg = st->a[1];
         uint32_t list = port + MP_MSGLIST;
         uint32_t tailpred = gread32(sb, list + M68K_List_lh_TailPred);
+        uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
+        uint16_t length = gread16(sb, msg + M68K_Message_mn_Length);
+        uint32_t word20 = 0, word24 = 0, word28 = 0, word32 = 0, word36 = 0;
+        /* The message header is universal Exec ABI.  The words following it
+         * deliberately remain untyped: recording them lets Bridge Lab
+         * correlate protocols such as ARexx without pretending every message
+         * is one.  Read only a fully guest-owned 40-byte prefix. */
+        if (guest_span_ok(sb, msg, 40)) {
+            word20 = gread32(sb, msg + 20);
+            word24 = gread32(sb, msg + 24);
+            word28 = gread32(sb, msg + 28);
+            word32 = gread32(sb, msg + 32);
+            word36 = gread32(sb, msg + 36);
+        }
         gwrite32(sb, msg, list + M68K_List_lh_Tail);
         gwrite32(sb, msg + 4, tailpred);
         gwrite32(sb, tailpred, msg);
@@ -1391,9 +1479,15 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                          gread32(sb, task + TASK_SIGRECVD_OFF) | (1u << bit));
             bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.put",
                      "\"port\":\"%s\",\"message\":\"%s\","
-                     "\"owner\":\"%s\",\"signal_bit\":%u",
+                     "\"reply_port\":\"%s\",\"owner\":\"%s\","
+                     "\"signal_bit\":%u,\"length\":%u,"
+                     "\"word20\":\"0x%08x\",\"word24\":\"0x%08x\","
+                     "\"word28\":\"0x%08x\",\"word32\":\"0x%08x\","
+                     "\"word36\":\"0x%08x\"",
                      bl_id("port", port), bl_id("message", msg),
-                     bl_id("task", task), (unsigned)bit);
+                     reply ? bl_id("port", reply) : "",
+                     bl_id("task", task), (unsigned)bit, (unsigned)length,
+                     word20, word24, word28, word32, word36);
             if (emu68k_trace_tasks())
                 fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x PutMsg "
                         "port=%08x msg=%08x head=%08x tailpred=%08x owner=%08x "
@@ -1421,17 +1515,53 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * command is refused by name at the point it is sent - so a program
          * that opens a device defensively and never uses it runs, and one that
          * really does I/O stops at the exact command it needed. */
-        if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;
         {
             const char *name = guest_cstr(sb, st->a[0]);
+            uint32_t request = st->a[1];
+            if (!name) {
+                snprintf(e, el, "OpenDevice: name pointer A0=%08x is outside "
+                         "guest memory", st->a[0]);
+                return 1;
+            }
+            if (!guest_span_ok(sb, request, M68K_IORequest_SIZEOF)) {
+                snprintf(e, el, "OpenDevice(\"%s\"): IORequest A1=%08x is "
+                         "outside guest memory", name, request);
+                return 1;
+            }
+            if (!strcmp(name, "timer.device")) {
+                uint32_t base = (uint32_t)emu68k_run_device_base(r, name);
+                if (!base) {
+                    gwrite8(sb, request + M68K_IORequest_io_Error, 1);
+                    st->d[0] = UINT32_MAX;
+                    return 0;
+                }
+                gwrite32(sb, request + M68K_IORequest_io_Device, base);
+                gwrite32(sb, request + M68K_IORequest_io_Unit, 0);
+                gwrite8(sb, request + M68K_IORequest_io_Error, 0);
+                st->d[0] = 0;
+                return 0;
+            }
+            if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
+                                     g_oscall_user, e, el) == 0)
+                return 0;
             snprintf(e, el, "capability gap: exec.library OpenDevice(\"%s\") is "
-                     "not available yet", name ? name : "?");
+                     "not available yet", name);
         }
         return 1;
     }
     case LVO_CLOSEDEVICE:
+        if (guest_span_ok(sb, st->a[1], M68K_IORequest_SIZEOF)) {
+            uint32_t base = gread32(sb, st->a[1] + M68K_IORequest_io_Device);
+            for (int i = 0; i < r->nlib; i++)
+                if (r->openlib[i].base == base &&
+                    !strcmp(r->openlib[i].name, "timer.device")) {
+                    gwrite32(sb, st->a[1] + M68K_IORequest_io_Device, 0);
+                    gwrite32(sb, st->a[1] + M68K_IORequest_io_Unit, 0);
+                    gwrite8(sb, st->a[1] + M68K_IORequest_io_Error, 0);
+                    st->d[0] = 0;
+                    return 0;
+                }
+        }
         if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
                                  g_oscall_user, e, el) == 0)
             return 0;
@@ -1521,10 +1651,26 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_REPLYMSG: {
         uint32_t msg = st->a[1];
         if (g_oscall && g_oscall("exec.library", lvo, st, r->reserve,
-                                 g_oscall_user, e, el) == 0)
-            return 0;                     /* it was one of Intuition's       */
+                                 g_oscall_user, e, el) == 0) {
+            /* The OS-side bridge recognised a native Intuition message.  It
+             * has already returned it to its real native owner; recording
+             * this distinction makes a missing ARexx/IPC reply diagnosable
+             * without confusing it with a guest-owned message queue. */
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                     "port.reply.native", "\"message\":\"%s\"",
+                     bl_id("message", msg));
+            return 0;
+        }
         uint32_t reply = gread32(sb, msg + MN_REPLYPORT);
-        if (!reply) return 0;               /* a message with nowhere to go back */
+        if (!reply) {
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                     "port.reply.drop", "\"message\":\"%s\"",
+                     bl_id("message", msg));
+            return 0;                       /* a message with nowhere to go back */
+        }
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.reply",
+                 "\"message\":\"%s\",\"port\":\"%s\"",
+                 bl_id("message", msg), bl_id("port", reply));
         st->a[0] = reply;
         st->a[1] = msg;
         return exec_call(r, sb, LVO_PUTMSG, st, e, el);
@@ -1633,14 +1779,31 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             }
         }
         /* A top-level GUI task can now be waiting only for a native window
-         * event.  That is not a capability gap: sleep through the native AROS
-         * scheduler one frame at a time, pump the bound IDCMP ports, and return
-         * only when the requested guest signal really exists.  WaitTOF is used
-         * as the native scheduling primitive so input/Wanderer tasks continue
-         * to run; a host sleep here would freeze the entire hosted machine. */
+         * event.  That is not a capability gap: yield one host frame at a
+         * time, pump the bound IDCMP ports, and return only when the requested
+         * guest signal really exists.  The hosted AROS core has its own thread,
+         * so this nanosleep yields the translated task without stopping Cocoa's
+         * input loop. */
         {
-            unsigned external = 0;
-            int pumped = event_pump(r, st, 0, want, &external);
+            int interactive = 0;
+            unsigned matched = 0;
+            int pumped = event_pump(r, st, 0, want, &matched);
+            /* The authoritative source table lives on the AROS side, where
+             * native Intuition/device objects are owned.  `matched` is the
+             * typed, cross-boundary fact that at least one of those sources
+             * can wake this guest; do not infer it from host-side bookkeeping. */
+            interactive = matched != 0;
+            if (!interactive) {
+                unsigned global_matched = 0;
+                int global_pumped = event_pump(r, st, 0, UINT32_MAX,
+                                                &global_matched);
+                /* The task awaiting a process reply need not own the UI
+                 * source that lets the worker complete it.  A global pump is
+                 * still safe: the AROS broker admits only already-bound,
+                 * typed destinations, never an ordinary guest mailbox. */
+                interactive = global_matched != 0;
+                if (global_pumped) pumped = global_pumped;
+            }
             /* The window port may belong to a guest worker rather than the
              * context whose Wait brought us here.  Native Intuition has now
              * signalled that port's recorded owner; give that owner a turn
@@ -1661,17 +1824,17 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 st->d[0] = got;
                 return 0;
             }
-            if (external && emu68k_oscall) {
+            if (interactive && emu68k_oscall) {
                 bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
-                         "scheduler.yield", "\"reason\":\"IDCMP\"");
+                         "scheduler.yield", "\"reason\":\"native event wait\"");
                 for (;;) {
-                    struct j5d_m68k_state waitst = *st;
-                    char scratch[128] = {0};
-                    if (emu68k_oscall("graphics.library", GRAPHICS_LVO_WAITTOF,
-                                     &waitst, r->reserve, emu68k_oscall_user,
-                                     scratch, sizeof scratch) != 0)
-                        break;
-                    pumped = event_pump(r, st, 0, want, NULL);
+                    const struct timespec frame = { 0, 16666667L };
+                    /* WaitTOF is deliberately not used here: on a hosted
+                     * display it may be a successful no-op, producing a hot
+                     * scheduler loop.  Yielding the host thread gives the
+                     * native input producer a real scheduling opportunity. */
+                    nanosleep(&frame, NULL);
+                    pumped = event_pump(r, st, 0, UINT32_MAX, NULL);
                     if (emu68k_reschedule_siblings(
                             r, sb,
                             pumped ? "IDCMP delivery" : "runnable continuation",
@@ -1699,6 +1862,15 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                     }
                 }
             }
+        }
+        if (r->kill_req) {
+            bl_event(BL_SUMMARY, r->cur_ctx, ctx_task(r), st->pc,
+                     "event.wait.interrupted",
+                     "\"mask\":\"0x%08x\",\"task\":\"%s\"",
+                     want, bl_id("task", ctx_task(r)));
+            snprintf(e, el, "Wait($%08lx) interrupted by the run deadline or stop request",
+                     (unsigned long)want);
+            return 1;
         }
         bl_event(BL_SUMMARY, r->cur_ctx, ctx_task(r), st->pc,
                  "event.wait.unbound",
@@ -1972,7 +2144,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     }
     default:
-        if (getenv("EMU68K_DEBUG_EXEC"))
+        if (emu68k_host_getenv("EMU68K_DEBUG_EXEC"))
             fprintf(stderr, "[exec_call] unhandled lvo=%d (ADDHEAD=%d)\n",
                     lvo, LVO_ADDHEAD);
         return 1;                                        /* not served here     */

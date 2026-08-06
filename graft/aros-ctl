@@ -440,6 +440,13 @@ deploy_boot_artifacts() {
     # 68k execution service. emu68k.library loads it by bare name through
     # hostlib.resource; DOS routes 68k hunk launches through it.
     copy_if_changed "$ROOT/build/libemu68k.dylib" "$HOME/lib/libemu68k.dylib" "libemu68k.dylib" || true
+    # Macaros itself runs with the hardened runtime.  A fresh dylib build has
+    # only its linker signature, which macOS may reject before AROS can write a
+    # useful log.  Sign the bridge with the same runtime profile at deploy time.
+    if [ -f "$HOME/lib/libemu68k.dylib" ]; then
+        [ -f "$ENT" ] && codesign -s - -f -o runtime --entitlements "$ENT" "$HOME/lib/libemu68k.dylib" 2>/dev/null \
+                      || codesign -s - -f -o runtime "$HOME/lib/libemu68k.dylib" 2>/dev/null
+    fi
     copy_if_changed "$ROOT/hosted/cocoametal/settings.json" "$HOME/lib/settings.json" "settings.json" || true
 
     mkdir -p "$AROS/Devs/Monitors"

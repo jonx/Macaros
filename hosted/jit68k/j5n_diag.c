@@ -792,6 +792,13 @@ void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb)
     g_sig_state = st; g_sig_sb = sb;
 }
 
+void j5n_signal_get_context(const struct j5d_m68k_state **st,
+                            j5d_sandbox **sb)
+{
+    if (st) *st = g_sig_state;
+    if (sb) *sb = g_sig_sb;
+}
+
 const struct j5d_m68k_state *j5n_signal_guest_state(void)
 {
     return g_sig_state;

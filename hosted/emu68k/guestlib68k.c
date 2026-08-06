@@ -106,7 +106,10 @@ int gl68_find_resident(const j4_sandbox *sb, const j4_seglist *seg,
             r.id_ptr = rd32(p + off + 18);
             r.init = rd32(p + off + 22);
             if (r.type != NT_LIBRARY) continue;
-            if (!segment_point_or_end(seg, r.end_skip) || r.end_skip < tag + 26u)
+            /* AROS's ROM scanner only uses rt_EndSkip when it advances the
+             * scan.  A backward in-image value is legal and occurs in AROS's
+             * own aros.library after ELF-to-HUNK section layout. */
+            if (!segment_point_or_end(seg, r.end_skip))
                 continue;
             if (!guest_string(sb, seg, r.name_ptr, r.name, sizeof r.name))
                 continue;

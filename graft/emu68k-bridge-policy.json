@@ -10,7 +10,8 @@
   "Locale": {
    "id": 2,
    "c_type": "struct Locale *",
-   "kind": "opaque",
+   "kind": "facade",
+   "facade_struct": "Locale",
    "destructor": "locale.library.CloseLocale"
   },
   "DiskObject": {
@@ -543,7 +544,8 @@
   "BitMap": {
    "id": 60,
    "c_type": "struct BitMap *",
-   "kind": "opaque",
+   "kind": "facade",
+   "facade_struct": "BitMap",
    "guest_owned": {
     "struct": "BitMap"
    }
@@ -2956,6 +2958,10 @@
    "reason": "retains endian-sensitive chipset pointer words after return; they require a per-window native shadow through ClearPointer",
    "evidence": [ { "source": "rom/intuition/setpointer.c", "line_start": 47, "line_end": 113 } ]
   },
+  "intuition.library.ClearPointer": {
+   "reason": "served by the OS-side pointer-shadow adapter, which releases the endian-converted sprite storage retained by SetPointer",
+   "evidence": [ { "source": "arch/all-darwin/libs/emu68k/emu68k_oscall.c", "line_start": 5396, "line_end": 5412 } ]
+  },
   "intuition.library.GetScreenData": {
    "reason": "writes one of several size-selected screen structure contracts into an untyped buffer and may expose native pointers",
    "evidence": [ { "source": "rom/intuition/getscreendata.c", "line_start": 48, "line_end": 119 } ]
@@ -4378,15 +4384,6 @@
    "origin": "import"
   },
   "intuition.library.ClearMenuStrip": {
-   "objects": {
-    "window": {
-     "type": "Window",
-     "nullable": true
-    }
-   },
-   "origin": "import"
-  },
-  "intuition.library.ClearPointer": {
    "objects": {
     "window": {
      "type": "Window",

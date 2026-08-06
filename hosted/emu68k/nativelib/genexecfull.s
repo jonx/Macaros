@@ -52,6 +52,29 @@ TASKTAG_NAME              equ $80100006
     tst.l   d0
     bne.w   failed
 
+    ; SetSignal returns the prior complete signal word and replaces only the
+    ; selected bits.  Ports use the same tc_SigRecvd word, so this also keeps
+    ; the normal Exec signal API coherent with Wait/PutMsg.
+    move.l  #$00000055,d0
+    move.l  #$000000ff,d1
+    jsr     EXEC_SetSignal(a6)
+    move.l  #$000000a0,d0
+    move.l  #$000000f0,d1
+    jsr     EXEC_SetSignal(a6)
+    and.l   #$000000ff,d0
+    cmp.l   #$00000055,d0
+    bne.w   failed
+    move.l  #0,a0
+    jsr     EXEC_FindTask(a6)
+    move.l  d0,a4
+    move.l  TASK_SIGRECVD(a4),d0
+    and.l   #$000000ff,d0
+    cmp.l   #$000000a5,d0
+    bne.w   failed
+    moveq   #0,d0
+    move.l  #$000000ff,d1
+    jsr     EXEC_SetSignal(a6)
+
     ; Trap allocation is guest Task bookkeeping, including reuse after free.
     moveq   #-1,d0
     jsr     EXEC_AllocTrap(a6)

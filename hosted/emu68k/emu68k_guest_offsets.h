@@ -40,6 +40,43 @@
 #define M68K_Task_tc_MemEntry_l_pad 87
 #define M68K_Task_tc_UserData 88
 
+/* struct ETask: 110 bytes on m68k (ETask) */
+#define M68K_ETask_SIZEOF 110
+#define M68K_ETask_et_Message_mn_Node_ln_Succ 0
+#define M68K_ETask_et_Message_mn_Node_ln_Pred 4
+#define M68K_ETask_et_Message_mn_Node_ln_Type 8
+#define M68K_ETask_et_Message_mn_Node_ln_Pri 9
+#define M68K_ETask_et_Message_mn_Node_ln_Name 10
+#define M68K_ETask_et_Message_mn_ReplyPort 14
+#define M68K_ETask_et_Message_mn_Length 18
+#define M68K_ETask_et_Parent 20
+#define M68K_ETask_et_UniqueID 24
+#define M68K_ETask_et_Children_mlh_Head 28
+#define M68K_ETask_et_Children_mlh_Tail 32
+#define M68K_ETask_et_Children_mlh_TailPred 36
+#define M68K_ETask_et_TrapAlloc 40
+#define M68K_ETask_et_TrapAble 42
+#define M68K_ETask_et_Result1 44
+#define M68K_ETask_et_Result2 48
+#define M68K_ETask_et_TaskMsgPort_mp_Node_ln_Succ 52
+#define M68K_ETask_et_TaskMsgPort_mp_Node_ln_Pred 56
+#define M68K_ETask_et_TaskMsgPort_mp_Node_ln_Type 60
+#define M68K_ETask_et_TaskMsgPort_mp_Node_ln_Pri 61
+#define M68K_ETask_et_TaskMsgPort_mp_Node_ln_Name 62
+#define M68K_ETask_et_TaskMsgPort_mp_Flags 66
+#define M68K_ETask_et_TaskMsgPort_mp_SigBit 67
+#define M68K_ETask_et_TaskMsgPort_mp_SigTask 68
+#define M68K_ETask_et_TaskMsgPort_mp_MsgList_lh_Head 72
+#define M68K_ETask_et_TaskMsgPort_mp_MsgList_lh_Tail 76
+#define M68K_ETask_et_TaskMsgPort_mp_MsgList_lh_TailPred 80
+#define M68K_ETask_et_TaskMsgPort_mp_MsgList_lh_Type 84
+#define M68K_ETask_et_TaskMsgPort_mp_MsgList_l_pad 85
+#define M68K_ETask_et_TaskMsgPort_mp_Pad_slock 86
+#define M68K_ETask_et_TaskMsgPort_mp_Pad_s_Owner 90
+#define M68K_ETask_et_MemPool 94
+#define M68K_ETask_et_Reserved 98
+#define M68K_ETask_et_RegFrame 106
+
 /* struct ExecBase: 640 bytes on m68k (ExecBase) */
 #define M68K_ExecBase_SIZEOF 640
 #define M68K_ExecBase_LibNode_lib_Node_ln_Succ 0

@@ -105,6 +105,16 @@ struct j5d_m68k_state {
     uint32_t fpiar;    /* [J5r] FP instruction-address register (moved by FMOVE/FMOVEM, APPENDED
                           AFTER fpsr at offset 152 — every existing offset, incl. fpcr==144 /
                           fpsr==148, is byte-for-byte UNCHANGED; the static-asserts hold).      */
+    /* Runtime-only host bounds used by every emitted sandbox-memory access. These stay
+     * append-only so the frozen D/A/CCR/PC/FPU offsets above do not move. j5d_run refreshes
+     * them on every entry; callers must neither seed nor consume them. Width-specific last
+     * addresses make the emitted check robust even for an arena smaller than the access. */
+    uint64_t sandbox_host_begin;
+    uint64_t sandbox_host_last1;
+    uint64_t sandbox_host_last2;
+    uint64_t sandbox_host_last4;
+    uint64_t sandbox_host_last8;
+    uint64_t sandbox_saved_nzcv; /* private spill used while bounds checks borrow NZCV */
 };
 
 #define J5D_OFF_D(n)   ((uint16_t)((n) * 4u))

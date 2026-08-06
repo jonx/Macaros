@@ -39,13 +39,14 @@
  * For post-index (+S):  add  w_An, w_An, #S   (after the access; An is a 68k address)
  * For pre-index  (-S):  sub  w_An, w_An, #S   (BEFORE the access)
  *
- * NOTE: we do NOT bounds-check here (the [J5a] spike's OOB path) — the [J5d] engine
- * validates each (An) access stays in the sandbox in C before translating the block
- * (j5d_engine.c pre-decode pass), and the corpus's accesses are all in-range. A
- * production engine would emit the bounds compare here; documented as [J5d] scope.
+ * Every final host pointer is checked against the active sandbox bounds before it is
+ * dereferenced. An invalid address is selected to NULL, so the engine's installed signal
+ * recovery terminates the guest without allowing it to read or corrupt adjacent host memory.
  * ===============================================================================
  */
 #include <stdint.h>
+#include <stddef.h>
+#include "j5d_jit68k.h"
 #include "emu68/A64.h"     /* adopted MPL emitter — encoders only, called not copied */
 
 /* The kind code the darwinize transform passes. Bit layout (authored here, the script
@@ -68,6 +69,78 @@
 /* Fixed registers the engine prologue seeds / reserves (see header comment). */
 #define J5D_BASEADJ  12u    /* x12 = host_mem - origin (sandbox base-adjust)        */
 #define J5D_HOSTPTR   3u    /* x3  = computed host pointer (RA-reserved scratch)    */
+#define J5D_STATE     1u    /* x1  = struct j5d_m68k_state * for the whole block     */
+#define J5D_BNDTMP    0u    /* x0  = bounds scratch (RA-reserved, dead at EA sites)  */
+
+/* A64.h's adopted csel64 encoder in this snapshot shifts Rm by 6 rather than 16. Keep
+ * the quarantine byte-verbatim and author the one correct encoding needed at our boundary. */
+static uint32_t j5d_csel64(uint8_t rd, uint8_t rn, uint8_t rm, uint8_t cond)
+{
+    return 0x9a800000u | (rd & 31u) | ((rn & 31u) << 5) |
+           ((rm & 31u) << 16) | ((cond & 15u) << 12);
+}
+
+static uint32_t *hostptr_fold_offset(uint32_t *ptr, uint8_t hostptr, int offset)
+{
+    if (offset == 0) return ptr;
+    uint32_t mag = (uint32_t)(offset < 0 ? -(int64_t)offset : offset);
+    if (offset > 0) {
+        if (mag & 0xfffu) *ptr++ = add64_immed(hostptr, hostptr, (uint16_t)(mag & 0xfffu));
+        if (mag >> 12)    *ptr++ = add64_immed_lsl12(hostptr, hostptr,
+                                                     (uint16_t)((mag >> 12) & 0xfffu));
+    } else {
+        if (mag & 0xfffu) *ptr++ = sub64_immed(hostptr, hostptr, (uint16_t)(mag & 0xfffu));
+        if (mag >> 12)    *ptr++ = sub64_immed_lsl12(hostptr, hostptr,
+                                                     (uint16_t)((mag >> 12) & 0xfffu));
+    }
+    return ptr;
+}
+
+static uint16_t sandbox_last_offset(unsigned width)
+{
+    switch (width) {
+        case 8: return (uint16_t)offsetof(struct j5d_m68k_state, sandbox_host_last8);
+        case 4: return (uint16_t)offsetof(struct j5d_m68k_state, sandbox_host_last4);
+        case 2: return (uint16_t)offsetof(struct j5d_m68k_state, sandbox_host_last2);
+        default:return (uint16_t)offsetof(struct j5d_m68k_state, sandbox_host_last1);
+    }
+}
+
+/* Public because the darwinized CAS decoder also needs a checked pointer in its own
+ * allocated host register. All other callers use x3. The two unsigned comparisons are:
+ *     begin <= final_host <= last_address_for_width
+ * A failed comparison selects xzr. The following memory instruction faults at NULL and
+ * is recovered by j5d_run's signal boundary; it can never touch a mapped neighbour page. */
+uint32_t *j5d_checked_hostptr(uint32_t *ptr, uint8_t addr68k, uint8_t hostptr,
+                              int offset, unsigned width)
+{
+    /* Decoders commonly establish native NZCV from the instruction result and
+     * materialize the emulated CCR only after the EA store.  The bounds CMPs
+     * are an implementation detail and must be invisible to that sequence. */
+    /* The effective address itself is frequently in x2, so NZCV cannot be kept in
+     * that otherwise-reserved scratch register. Spill it in the append-only runtime
+     * tail of the state while x0 is borrowed for the two bound loads. */
+    *ptr++ = get_nzcv(J5D_BNDTMP);
+    *ptr++ = str64_offset(J5D_STATE, J5D_BNDTMP,
+                           (uint16_t)offsetof(struct j5d_m68k_state,
+                                             sandbox_saved_nzcv));
+    *ptr++ = add64_reg_ext(hostptr, J5D_BASEADJ, addr68k, UXTW, 0);
+    ptr = hostptr_fold_offset(ptr, hostptr, offset);
+
+    *ptr++ = ldr64_offset(J5D_STATE, J5D_BNDTMP,
+                          (uint16_t)offsetof(struct j5d_m68k_state, sandbox_host_begin));
+    *ptr++ = cmp64_reg(hostptr, J5D_BNDTMP, LSL, 0);
+    *ptr++ = j5d_csel64(hostptr, hostptr, 31 /*xzr*/, A64_CC_CS);
+
+    *ptr++ = ldr64_offset(J5D_STATE, J5D_BNDTMP, sandbox_last_offset(width));
+    *ptr++ = cmp64_reg(hostptr, J5D_BNDTMP, LSL, 0);
+    *ptr++ = j5d_csel64(hostptr, hostptr, 31 /*xzr*/, A64_CC_LS);
+    *ptr++ = ldr64_offset(J5D_STATE, J5D_BNDTMP,
+                           (uint16_t)offsetof(struct j5d_m68k_state,
+                                             sandbox_saved_nzcv));
+    *ptr++ = set_nzcv(J5D_BNDTMP);
+    return ptr;
+}
 
 /* Count of (An)-class sandbox accesses the engine emitted — the engine reads this for
  * its stats so the test can assert real memory traffic went through the JIT. */
@@ -90,8 +163,9 @@ uint32_t *j5d_ea_mem(uint32_t *ptr, unsigned kind, uint8_t reg_An, uint8_t val, 
     if (index == 2)
         *ptr++ = sub_immed(reg_An, reg_An, (uint16_t)amt);
 
-    /* host pointer = base_adjust + (uint32_t)An. */
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, reg_An, UXTW, 0);
+    /* checked host pointer = base_adjust + (uint32_t)An. */
+    ptr = j5d_checked_hostptr(ptr, reg_An, J5D_HOSTPTR, 0,
+                              sz == 2 ? 4u : sz == 1 ? 2u : 1u);
 
     if (!is_store) {
         /* ---- LOAD ---- raw host load (little-endian), then byteswap to 68k value. */
@@ -167,8 +241,9 @@ static uint32_t *ea_access(uint32_t *ptr, unsigned sz, unsigned is_store,
                            unsigned is_signed, uint8_t addr68k, uint8_t val)
 {
     g_j5d_ea_emits++;
-    /* host = base_adjust(x12) + (uint32_t)addr68k  -> x3 */
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, addr68k, UXTW, 0);
+    /* checked host = base_adjust(x12) + (uint32_t)addr68k -> x3 */
+    ptr = j5d_checked_hostptr(ptr, addr68k, J5D_HOSTPTR, 0,
+                              sz == 2 ? 4u : sz == 1 ? 2u : 1u);
 
     if (!is_store) {
         switch (sz) {
@@ -302,36 +377,36 @@ uint32_t *j5d_ea_addr_index(uint32_t *ptr, unsigned kind, uint8_t base, uint8_t 
 /* Emit `host = base_adjust(x12) + (uint32_t)base68k` -> x3, with the +offset folded into the
  * subsequent load/store (the A64 ldr/str offset field). For offsets the small immediate
  * fits the scaled offset field; movem offsets are small (<= 15 regs * 4 = 60). */
-static uint32_t *movem_hostptr(uint32_t *ptr, uint8_t base68k)
+static uint32_t *movem_hostptr(uint32_t *ptr, uint8_t base68k, int byte_off,
+                               unsigned width)
 {
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    return ptr;
+    return j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, byte_off, width);
 }
 
 /* One sandbox WORD store: mem68k[base+byte_off] = val (REV to big-endian). */
 static uint32_t *movem_store_w(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
 {
     g_j5d_ea_emits++;
-    ptr = movem_hostptr(ptr, base68k);
+    ptr = movem_hostptr(ptr, base68k, byte_off, 4);
     *ptr++ = rev(2 /*w2*/, val);
-    *ptr++ = str_offset(J5D_HOSTPTR, 2, (uint16_t)byte_off);
+    *ptr++ = str_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
 /* One sandbox HALF store: mem68k[base+byte_off] = (uint16)val (REV16 to big-endian). */
 static uint32_t *movem_store_h(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
 {
     g_j5d_ea_emits++;
-    ptr = movem_hostptr(ptr, base68k);
+    ptr = movem_hostptr(ptr, base68k, byte_off, 2);
     *ptr++ = rev16(2 /*w2*/, val);
-    *ptr++ = strh_offset(J5D_HOSTPTR, 2, (uint16_t)byte_off);
+    *ptr++ = strh_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
 /* One sandbox WORD load: val = mem68k[base+byte_off] (REV from big-endian). */
 static uint32_t *movem_load_w(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
 {
     g_j5d_ea_emits++;
-    ptr = movem_hostptr(ptr, base68k);
-    *ptr++ = ldr_offset(J5D_HOSTPTR, val, (uint16_t)byte_off);
+    ptr = movem_hostptr(ptr, base68k, byte_off, 4);
+    *ptr++ = ldr_offset(J5D_HOSTPTR, val, 0);
     *ptr++ = rev(val, val);
     return ptr;
 }
@@ -340,8 +415,8 @@ static uint32_t *movem_load_w(uint32_t *ptr, uint8_t base68k, uint8_t val, int b
 static uint32_t *movem_load_sh(uint32_t *ptr, uint8_t base68k, uint8_t val, int byte_off)
 {
     g_j5d_ea_emits++;
-    ptr = movem_hostptr(ptr, base68k);
-    *ptr++ = ldrh_offset(J5D_HOSTPTR, val, (uint16_t)byte_off);
+    ptr = movem_hostptr(ptr, base68k, byte_off, 2);
+    *ptr++ = ldrh_offset(J5D_HOSTPTR, val, 0);
     *ptr++ = rev16(val, val);
     *ptr++ = sxth(val, val);
     return ptr;
@@ -475,26 +550,11 @@ uint32_t *j5d_movem_ldrsh(uint32_t *ptr, uint8_t base, uint8_t rt, int offset)
  * add the displacement into x3 here (12-bit + 12-bit<<12 add/sub covers the whole ±32760 range)
  * and store at [x3,#0], so any displacement is exact. (The hand-written FP corpus only ever used
  * small offsets, so this never bit before.) */
-static uint32_t *fpu_fold_offset(uint32_t *ptr, int offset)
-{
-    if (offset == 0) return ptr;
-    if (offset > 0) {
-        if (offset & 0xfff)         *ptr++ = add64_immed(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)(offset & 0xfff));
-        if (offset >> 12)           *ptr++ = add64_immed_lsl12(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)((offset >> 12) & 0xfff));
-    } else {
-        int m = -offset;
-        if (m & 0xfff)              *ptr++ = sub64_immed(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)(m & 0xfff));
-        if (m >> 12)                *ptr++ = sub64_immed_lsl12(J5D_HOSTPTR, J5D_HOSTPTR, (uint16_t)((m >> 12) & 0xfff));
-    }
-    return ptr;
-}
-
 /* Double (.d) load: d[fpreg] = byteswap64(mem68k[base+offset]). */
 static uint32_t *fpu_load_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
 {
     g_j5d_ea_emits++;
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] large d16 -> into x3, not the 9-bit imm */
+    ptr = j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, offset, 8);
     *ptr++ = ldur64_offset(J5D_HOSTPTR, 2 /*x2*/, 0);
     *ptr++ = rev64(2, 2);
     *ptr++ = mov_reg_to_simd(fpreg, TS_D, 0, 2);   /* fmov d[fpreg], x2 */
@@ -506,8 +566,7 @@ static uint32_t *fpu_store_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int 
     g_j5d_ea_emits++;
     *ptr++ = mov_simd_to_reg(2 /*x2*/, fpreg, TS_D, 0);   /* fmov x2, d[fpreg] */
     *ptr++ = rev64(2, 2);
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] large d16 -> into x3, not the 9-bit imm */
+    ptr = j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, offset, 8);
     *ptr++ = stur64_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
@@ -516,8 +575,7 @@ static uint32_t *fpu_store_d(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int 
 static uint32_t *fpu_load_s(uint32_t *ptr, uint8_t fpreg, uint8_t base68k, int offset)
 {
     g_j5d_ea_emits++;
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] any d16 (incl. >16380 / negative) -> x3 */
+    ptr = j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, offset, 4);
     *ptr++ = ldr_offset(J5D_HOSTPTR, 2 /*w2*/, 0);
     *ptr++ = rev(2, 2);
     *ptr++ = fmsr(fpreg, 2);                       /* d[fpreg].s = w2 (single half) */
@@ -530,8 +588,7 @@ static uint32_t *fpu_store_s(uint32_t *ptr, uint8_t vfp_reg, uint8_t base68k, in
     g_j5d_ea_emits++;
     *ptr++ = fmrs(2 /*w2*/, vfp_reg);              /* w2 = vfp_reg.s */
     *ptr++ = rev(2, 2);
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    ptr = fpu_fold_offset(ptr, offset);            /* [J5t] any d16 (incl. >16380 / negative) -> x3 */
+    ptr = j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, offset, 4);
     *ptr++ = str_offset(J5D_HOSTPTR, 2, 0);
     return ptr;
 }
@@ -639,25 +696,24 @@ uint32_t *j5d_fpu_fsts_pimm(uint32_t *ptr, uint8_t reg, uint8_t base, int offset
  * size, as the original *_preindex / *_postindex encoders did. ----------------------------------*/
 
 /* compute x3 = base_adjust + (uint32_t)base68k, with the +offset folded by the access's signed-9. */
-static uint32_t *fpu_int_addr(uint32_t *ptr, uint8_t base68k)
+static uint32_t *fpu_int_addr(uint32_t *ptr, uint8_t base68k, int offset, unsigned width)
 {
-    *ptr++ = add64_reg_ext(J5D_HOSTPTR, J5D_BASEADJ, base68k, UXTW, 0);
-    return ptr;
+    return j5d_checked_hostptr(ptr, base68k, J5D_HOSTPTR, offset, width);
 }
 /* integer LOAD of size sz (4/2/1) at base68k+offset into val_reg (sign-correct for scvtf). */
 static uint32_t *fpu_int_load(uint32_t *ptr, uint8_t val, uint8_t base68k, int offset, int sz)
 {
     g_j5d_ea_emits++;
-    ptr = fpu_int_addr(ptr, base68k);
+    ptr = fpu_int_addr(ptr, base68k, offset, (unsigned)sz);
     if (sz == 4) {
-        *ptr++ = ldur_offset(J5D_HOSTPTR, val, (int16_t)offset);
+        *ptr++ = ldur_offset(J5D_HOSTPTR, val, 0);
         *ptr++ = rev(val, val);
     } else if (sz == 2) {
-        *ptr++ = ldursh_offset(J5D_HOSTPTR, val, (int16_t)offset); /* sign-ext halfword load */
+        *ptr++ = ldursh_offset(J5D_HOSTPTR, val, 0); /* sign-ext halfword load */
         *ptr++ = rev16(val, val);                                  /* byteswap the 2 low bytes */
         *ptr++ = sxth(val, val);                                   /* re-sign-extend post-swap */
     } else { /* sz == 1 */
-        *ptr++ = ldursb_offset(J5D_HOSTPTR, val, (int16_t)offset); /* sign-ext byte; no swap   */
+        *ptr++ = ldursb_offset(J5D_HOSTPTR, val, 0); /* sign-ext byte; no swap   */
     }
     return ptr;
 }
@@ -665,15 +721,15 @@ static uint32_t *fpu_int_load(uint32_t *ptr, uint8_t val, uint8_t base68k, int o
 static uint32_t *fpu_int_store(uint32_t *ptr, uint8_t val, uint8_t base68k, int offset, int sz)
 {
     g_j5d_ea_emits++;
-    ptr = fpu_int_addr(ptr, base68k);
+    ptr = fpu_int_addr(ptr, base68k, offset, (unsigned)sz);
     if (sz == 4) {
         *ptr++ = rev(2 /*w2 scratch*/, val);
-        *ptr++ = stur_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+        *ptr++ = stur_offset(J5D_HOSTPTR, 2, 0);
     } else if (sz == 2) {
         *ptr++ = rev16(2, val);
-        *ptr++ = sturh_offset(J5D_HOSTPTR, 2, (int16_t)offset);
+        *ptr++ = sturh_offset(J5D_HOSTPTR, 2, 0);
     } else { /* sz == 1 */
-        *ptr++ = sturb_offset(J5D_HOSTPTR, val, (int16_t)offset);
+        *ptr++ = sturb_offset(J5D_HOSTPTR, val, 0);
     }
     return ptr;
 }

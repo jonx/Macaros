@@ -17,6 +17,7 @@
  * compared byte-exact against the independent interpreter over the SAME sandbox.
  */
 #include "j5d_jit68k.h"
+#include "j5n_diag.h"
 #include "apps68k/stublib.h"
 #include "j3_jit68k.h"
 
@@ -26,6 +27,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/mman.h>
 
 #define ORG   0x00210000u
 #define SZ    0x00040000u
@@ -47,6 +49,23 @@ static const uint8_t LIB[] = {
     0x20,0x3c,0x00,0x00,0x01,0x00, 0x72,0x01, 0x4e,0xae,0xff,0x3a, 0x24,0x40,
     0x70,0x41, 0x4e,0xae,0xff,0xe2, 0x22,0x4a, 0x20,0x3c,0x00,0x00,0x01,0x00,
     0x4e,0xae,0xff,0x2e, 0x70,0x00, 0x4e,0x75 };
+/* lea ORG+0x100,a2; move.l a1,32(a2); beq taken; d0=1; rts; taken:d0=42;rts.
+ * A1 begins at zero. The checked memory-store helper must not replace MOVE's Z
+ * with the private bounds-comparison flags before the BEQ consumes it. */
+static const uint8_t MOVE_MEM_FLAGS[] = {
+    0x45,0xf9, 0x00,0x21,0x01,0x00, 0x25,0x49,0x00,0x20,
+    0x67,0x04, 0x70,0x01, 0x4e,0x75, 0x70,0x2a, 0x4e,0x75 };
+
+/* The compiler-emitted two-memory displacement form that first exposed the hosted
+ * bounds-check defect while dispatching a real ARexx message to TurboCalc:
+ *
+ *     move.w 12(a0),626(a5)
+ *
+ * It deliberately makes both source and destination use the EA funnel in one
+ * translated instruction.  The source value and the destination bytes are checked
+ * against the independent interpreter below. */
+static const uint8_t MOVEW_D16_TO_D16[] = {
+    0x3b,0x68, 0x00,0x0c, 0x02,0x72, 0x4e,0x75 };
 
 /* arraysum DATA hunk: 5 big-endian longwords at sandbox offset 0x100. */
 static void arr_data(uint8_t *mem)
@@ -106,6 +125,38 @@ static void run_regprog(const char *nm, const uint8_t *code, unsigned clen,
     printf("    -> %s\n", ok ? "PASS" : "FAIL");
     if (!ok) g_fail = 1;
     j5d_run_free();
+    free(mem); free(mem2);
+}
+
+static void run_movew_d16_to_d16(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    const uint32_t src = ORG + 0x1000u, dst = ORG + 0x2000u;
+    memcpy(mem, MOVEW_D16_TO_D16, sizeof MOVEW_D16_TO_D16);
+    memcpy(mem2, MOVEW_D16_TO_D16, sizeof MOVEW_D16_TO_D16);
+    /* 68k memory is big-endian: 0xbeef at 12(a0). */
+    mem[src - ORG + 12] = mem2[src - ORG + 12] = 0xbeu;
+    mem[src - ORG + 13] = mem2[src - ORG + 13] = 0xefu;
+
+    j5d_sandbox sb = { mem, ORG, SZ }, refsb = { mem2, ORG, SZ };
+    struct j5d_m68k_state jit, ref;
+    memset(&jit, 0, sizeof jit); memset(&ref, 0, sizeof ref);
+    jit.a[0] = ref.a[0] = src;
+    jit.a[5] = ref.a[5] = dst;
+    uint32_t d0 = 0, rd0 = 0; char err[200] = {0}, e2[200] = {0};
+    int rc = j5d_run(&sb, ORG, 0, &jit, &d0, NULL, NULL, err, sizeof err);
+    j5d_run_free();
+    int irc = j5d_interp_run(&refsb, ORG, 0, &ref, &rd0, NULL, NULL, e2, sizeof e2);
+    int regs_ok = rc == 0 && irc == 0 && eq_regs(&jit, &ref);
+    int mem_ok = memcmp(mem, mem2, SZ) == 0;
+    int ok = rc == 0 && irc == 0 && regs_ok && mem_ok &&
+             mem[dst - ORG + 626] == 0xbeu && mem[dst - ORG + 627] == 0xefu;
+    printf("  move.w-d16 two funnel EAs in one instruction: regs=%s sandbox-mem=%s -> %s\n",
+           regs_ok ? "byte-exact" : "DIVERGE", mem_ok ? "byte-exact" : "DIVERGE",
+           ok ? "PASS" : "FAIL");
+    if (rc) printf("    JIT error: %s\n", err);
+    if (irc) printf("    ref error: %s\n", e2);
+    if (!ok) g_fail = 1;
     free(mem); free(mem2);
 }
 
@@ -193,6 +244,84 @@ static void neg_control(void)
     j5d_run_free(); free(mem);
 }
 
+/* ================= mapped-neighbour sandbox containment regression ============== */
+static int classify_null_bounds_fault(void *fault_addr, void *user)
+{
+    (void)user;
+    return fault_addr == NULL;
+}
+
+static int bounds_case(uint8_t *mem, size_t size, uint32_t a0, int is_store,
+                       int expect_ok, uint32_t expect_d0)
+{
+    static const uint8_t load_code[]  = { 0x20,0x10, 0x4e,0x75 }; /* move.l (a0),d0;rts */
+    static const uint8_t store_code[] = { 0x20,0x80, 0x4e,0x75 }; /* move.l d0,(a0);rts */
+    memset(mem, 0, size);
+    memcpy(mem, is_store ? store_code : load_code, sizeof load_code);
+    if (expect_ok && !is_store) {
+        size_t off = (size_t)(a0 - ORG);
+        mem[off] = (uint8_t)(expect_d0 >> 24); mem[off + 1] = (uint8_t)(expect_d0 >> 16);
+        mem[off + 2] = (uint8_t)(expect_d0 >> 8); mem[off + 3] = (uint8_t)expect_d0;
+    }
+
+    j5d_sandbox sb = { mem, ORG, (uint32_t)size };
+    struct j5d_m68k_state st; memset(&st, 0, sizeof st);
+    st.a[0] = a0;
+    st.d[0] = is_store ? 0xdeadbeefu : 0;
+    uint32_t d0 = 0; char err[200] = {0};
+    int rc = j5d_run(&sb, ORG, 0, &st, &d0, NULL, NULL, err, sizeof err);
+    int ok = expect_ok ? (rc == 0 && d0 == expect_d0) : (rc != 0);
+    j5d_run_free();
+    return ok;
+}
+
+static void run_bounds_regression(void)
+{
+    size_t ps = (size_t)getpagesize();
+    uint8_t *map = mmap(NULL, ps * 3, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (map == MAP_FAILED) {
+        printf("  bounds    mmap failed -> FAIL\n"); g_fail = 1; return;
+    }
+    uint8_t *mem = map + ps;               /* sandbox is the MIDDLE mapped page */
+    uint8_t *lower = map, *upper = map + ps * 2;
+    memset(lower, 0xa5, ps); memset(upper, 0x5a, ps);
+    uint8_t *lower_before = malloc(ps), *upper_before = malloc(ps);
+    if (!lower_before || !upper_before) {
+        printf("  bounds    allocation failed -> FAIL\n"); g_fail = 1;
+        free(lower_before); free(upper_before); munmap(map, ps * 3); return;
+    }
+    memcpy(lower_before, lower, ps); memcpy(upper_before, upper, ps);
+
+    /* Expected bounds faults are selected to NULL by the emitted checks. Classify that
+     * synthetic fault so the normal recovery boundary unwinds without writing a report. */
+    j5n_signal_set_classifier(classify_null_bounds_fault, NULL);
+    j5n_signal_install(NULL);
+
+    int low_load  = bounds_case(mem, ps, ORG - 4, 0, 0, 0);
+    int high_load = bounds_case(mem, ps, ORG + (uint32_t)ps, 0, 0, 0);
+    int low_store = bounds_case(mem, ps, ORG - 4, 1, 0, 0);
+    int cross     = bounds_case(mem, ps, ORG + (uint32_t)ps - 2, 0, 0, 0);
+    int canary_ok = memcmp(lower, lower_before, ps) == 0 &&
+                    memcmp(upper, upper_before, ps) == 0;
+
+    /* The final aligned longword is legal: prove the width limit is inclusive and that
+     * the engine remains reusable after four contained faults. */
+    int edge_ok = bounds_case(mem, ps, ORG + (uint32_t)ps - 4, 0, 1, 0x12345678u);
+
+    j5n_signal_remove();
+    j5n_signal_set_classifier(NULL, NULL);
+
+    int ok = low_load && high_load && low_store && cross && canary_ok && edge_ok;
+    printf("  bounds    mapped neighbours: low-load=%s high-load=%s low-store=%s "
+           "cross-width=%s canaries=%s edge=%s -> %s\n",
+           low_load?"contained":"X", high_load?"contained":"X",
+           low_store?"contained":"X", cross?"contained":"X",
+           canary_ok?"unchanged":"CORRUPT", edge_ok?"valid":"X", ok?"PASS":"FAIL");
+    if (!ok) g_fail = 1;
+    free(lower_before); free(upper_before); munmap(map, ps * 3);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -209,7 +338,11 @@ int main(void)
                 "5! via nested loops (move.l Dn,Dm + cmp.l + bne -> the [J5c]-coverage opcodes)");
     run_regprog("arraysum", ARR,  sizeof ARR,  150, arr_data,
                 "sum {10..50} via add.l (a0)+,d0 (REAL EA decoder, sandbox-base + REV byteswap)");
+    run_regprog("move-flags", MOVE_MEM_FLAGS, sizeof MOVE_MEM_FLAGS, 42, NULL,
+                "MOVE.L zero to memory keeps Z across the checked store for BEQ");
+    run_movew_d16_to_d16();
     run_libcall();
+    run_bounds_regression();
     neg_control();
 
     if (g_fail) { printf("\n[J5d] FAIL\n"); return 1; }

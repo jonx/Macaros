@@ -52,6 +52,7 @@ HEADERS = [
     "libraries/gadtools.h",
     "gadgets/colorwheel.h",
     "cybergraphx/cybergraphics.h",
+    "libraries/locale.h",
 ]
 
 TYPES = [
@@ -69,12 +70,13 @@ TYPES = [
     "NewMenu", "NewGadget", "Menu", "MenuItem", "Requester", "IntuiMessage", "Remember",
     "Gadget", "ExtGadget", "Border", "Image", "Layer",
     "CyberModeNode", "CDrawMsg",
+    "Locale",
 ]
 
 # Not marshalled, read by OFFSET: the structures the 68k execution service
 # fills in on the guest's behalf. They are probed and self-checked like the
 # rest, but they get no conversion table - nothing converts a Task.
-OFFSET_TYPES = ["Task", "ExecBase", "Library", "CommandLineInterface",
+OFFSET_TYPES = ["Task", "ETask", "ExecBase", "Library", "CommandLineInterface",
                 "MsgPort", "Message", "List", "Node", "Process", "IORequest",
                 "SemaphoreMessage", "MemHeader", "MemChunk", "Interrupt",
                 "Hook", "Window", "IntuiMessage", "ClockData", "NewWindow", "NewScreen", "EasyStruct", "Remember",
@@ -109,8 +111,13 @@ KNOWN_M68K = {
     # A 68k program reads its own stack bounds straight out of its Task, so
     # these three have to be the AmigaOS offsets to the byte.
     "Task":          (92, {"tc_Flags": 14, "tc_State": 15, "tc_SigAlloc": 18,
+                           "tc_UnionETask_tc_ETrap_tc_ETrapAlloc": 34,
                            "tc_SPReg": 54, "tc_SPLower": 58, "tc_SPUpper": 62,
                            "tc_UserData": 88}),
+    "ETask":         (110, {"et_Parent": 20, "et_UniqueID": 24,
+                             "et_Children_mlh_Head": 28,
+                             "et_TrapAlloc": 40, "et_TrapAble": 42,
+                             "et_TaskMsgPort_mp_MsgList_lh_Head": 72}),
     "ExecBase":      (640, {"ThisTask": 276}),
     "Library":       (34, {"lib_Version": 20, "lib_Revision": 22}),
     "CommandLineInterface": (68, {"cli_CommandName": 16}),

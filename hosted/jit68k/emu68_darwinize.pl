@@ -99,9 +99,8 @@ local $/; open my $fh, '<', $src or die "open $src: $!"; my $code = <$fh>; close
 # byteswap — both wrong for the little-endian hosted sandbox (whose memory is 68k
 # big-endian and whose data registers hold architectural values). We:
 #   (1) allocate a byteswap scratch `swp` and a host-pointer reg `eah`;
-#   (2) rebase `ea` (a 68k address, and for mode (An) the LIVE mapped An which must
-#       NOT be clobbered) into `eah = base_adjust(x12) + zext32(ea)` right before the
-#       size dispatch — leaving `ea` intact for the alignment checks;
+#   (2) translate AND bounds-check `ea` (a 68k address, and for mode (An) the LIVE
+#       mapped An which must NOT be clobbered) into `eah` right before the size dispatch;
 #   (3) route the CAS macros' memory accesses through `eah`, and REV the .w/.l
 #       loaded value (after) and stored value (into swp, before). Byte is swap-free.
 # Pure call/operand substitution on the quarantined source; disclosed in emu68/NOTICE.
@@ -110,9 +109,9 @@ if ($cas_sandbox) {
     # (1) declare swp + eah next to tmp (the CAS else-branch alloc)
     $cn += ($code =~ s{(uint8_t tmp = RA_AllocARMRegister\(&ptr\);\n)(\s*/\* Load effective address \*/)}
         {$1        uint8_t swp = RA_AllocARMRegister(&ptr);   /* [STD68K] byteswap scratch */\n        uint8_t eah = RA_AllocARMRegister(&ptr);   /* [STD68K] host pointer (ea rebased) */\n$2}s);
-    # (2) rebase into eah just before the size dispatch
+    # (2) translate + bounds-check into eah just before the size dispatch
     $cn += ($code =~ s{(\n)(        if \(size == 1\)\n        \{\n            CAS_ATOMIC\(\);)}
-        {$1        /* [STD68K] rebase the 68k EA to a host pointer in a SEPARATE reg */\n        *ptr++ = add64_reg_ext(eah, 12, ea, UXTW, 0);\n\n$2}s);
+        {$1        /* [STD68K] translate + bounds-check into a SEPARATE host-pointer reg */\n        ptr = j5d_checked_hostptr(ptr, ea, eah, 0, size);\n\n$2}s);
     # (3a) byteswap the loaded value after the .w/.l exclusive+plain loads
     $code =~ s{(\*ptr\+\+ = ldxrh\(ea, tmp\);\\\n)}{$1                *ptr++ = rev16(tmp, tmp);\\\n}g and $cn++;
     $code =~ s{(\*ptr\+\+ = ldxr\(ea, tmp\);\\\n)}{$1                *ptr++ = rev(tmp, tmp);\\\n}g and $cn++;
@@ -136,6 +135,12 @@ if ($cas_sandbox) {
     $cn += ($code =~ s{(        RA_FreeARMRegister\(&ptr, ea\);\n        RA_FreeARMRegister\(&ptr, status\);\n        RA_FreeARMRegister\(&ptr, tmp\);\n)}
         {$1        RA_FreeARMRegister(&ptr, swp);\n        RA_FreeARMRegister(&ptr, eah);\n}s);
     warn "darwinize: --cas-sandbox applied $cn edits\n";
+
+    my $decl = "\n/* [STD68K] checked CAS guest-EA -> host-pointer emitter (OURS). */\n"
+             . "uint32_t *j5d_checked_hostptr(uint32_t *ptr, uint8_t addr68k, uint8_t hostptr, int offset, unsigned width);\n";
+    if ($code =~ /(\A.*?(?:^\s*#\s*include[^\n]*\n)+)/ms) {
+        my $head = $1; substr($code, length($head), 0) = $decl;
+    } else { $code = $decl . $code; }
 }
 
 # ===================== [J5o] LIBM.H CLANG ASM-CONSTRAINT FIX =====================

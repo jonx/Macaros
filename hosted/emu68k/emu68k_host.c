@@ -29,10 +29,31 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <ctype.h>
+#include <dlfcn.h>
 #include <limits.h>
 #include <unistd.h>
 
 #include "nativelib/rawdofmt_blob.h"
+
+const char *emu68k_host_getenv(const char *name)
+{
+    typedef char *(*native_getenv_fn)(const char *);
+    static native_getenv_fn native_getenv;
+    static int resolved;
+
+    /* AROSBootstrap exports its guest C library globally.  A plain getenv()
+     * reference in a subsequently dlopened host shim can therefore resolve to
+     * that library, which only knows the guest process ENV: list.  Resolve
+     * getenv from libSystem by its concrete image, not the global symbol
+     * scope; runtime observability controls must not silently vanish. */
+    if (!resolved) {
+        void *libsystem = dlopen("/usr/lib/libSystem.B.dylib", RTLD_LAZY);
+        native_getenv = libsystem ?
+            (native_getenv_fn)dlsym(libsystem, "getenv") : NULL;
+        resolved = 1;
+    }
+    return native_getenv ? native_getenv(name) : NULL;
+}
 
 /* The guest memory map (the run68k layout; see run68k.c for the full map).
  *
@@ -129,6 +150,7 @@
  * LhA and PPMore stopped at exactly that call). Offsets are the classic 68k
  * layout: struct Task is 92 bytes, MsgPort 34, and pr_CLI lands at 172. */
 #define GUEST_PROCESS   0x00210000u
+#define GUEST_ETASK     (GUEST_PROCESS + 0x00000100u)
 #define GUEST_CLI       0x00211000u
 #define GUEST_COMMAND   (GUEST_CLI + 64u)
 #define PR_TASK_LN_TYPE 8            /* tc_Node.ln_Type: NT_PROCESS = 13       */
@@ -186,6 +208,8 @@
 #define TASK_SPUPPER_OFF  M68K_Task_tc_SPUpper
 #define TASK_SIGEXCEPT_OFF M68K_Task_tc_SigExcept
 #define TASK_TRAPALLOC_OFF M68K_Task_tc_UnionETask_tc_ETrap_tc_ETrapAlloc
+#define TASK_ETASK_OFF     M68K_Task_tc_UnionETask_tc_ETrap_tc_ETrapAlloc
+#define TASKF_ETASK        (1u << 3)
 #define TASK_EXCEPTDATA_OFF M68K_Task_tc_ExceptData
 #define TASK_EXCEPTCODE_OFF M68K_Task_tc_ExceptCode
 #define TF_EXCEPT_GUEST    (1u << 5)
@@ -299,7 +323,7 @@ static void dump_fault_code(struct emu68k_run *r)
     unsigned long off;
     int i;
 
-    if (!st || !getenv("EMU68K_TRACE_FAULT"))
+    if (!st || !emu68k_host_getenv("EMU68K_TRACE_FAULT"))
         return;
     if (st->pc < r->sb.sandbox_origin ||
         st->pc + 96 >= r->sb.sandbox_origin + r->sb.size)
@@ -347,7 +371,7 @@ static int classify_hardware(void *fault_addr, void *user)
      * verdict about the program when it is a bug in the bridge, and it hides
      * the crash bundle that would say where. */
     if (g_in_bridge) {
-        if (getenv("EMU68K_TRACE_FAULT"))
+        if (emu68k_host_getenv("EMU68K_TRACE_FAULT"))
             fprintf(stderr, "[emu68k] fault at %p inside a bridge call: ours, "
                     "not a guest hardware access\n", fault_addr);
         return 0;
@@ -358,7 +382,7 @@ static int classify_hardware(void *fault_addr, void *user)
     unsigned long long guest;
 
     if (host < base - 0x10000000ull || host > base + 0x10000000ull) {
-        if (getenv("EMU68K_TRACE_FAULT"))
+        if (emu68k_host_getenv("EMU68K_TRACE_FAULT"))
             fprintf(stderr, "[emu68k] fault host=%llx outside the window around "
                     "base=%llx: not decodable to a guest address\n", host, base);
         return 0;
@@ -397,14 +421,14 @@ static int classify_hardware(void *fault_addr, void *user)
         /* Not one of the regions with a meaning. Say WHICH address, because a
          * fault that cannot be named is a fault that gets diagnosed by
          * guesswork - which has been wrong every time on this port. */
-        if (getenv("EMU68K_TRACE_FAULT"))
+        if (emu68k_host_getenv("EMU68K_TRACE_FAULT"))
             fprintf(stderr, "[emu68k] unclassified fault at guest $%06llX%s "
                     "(arena $%06X..$%06llX)\n", guest, g_hw_origin,
                     r->sb.sandbox_origin,
                     (unsigned long long)r->sb.sandbox_origin + r->sb.size);
         return 0;                                  /* a genuine wild access     */
     }
-    if (getenv("EMU68K_TRACE_FAULT"))
+    if (emu68k_host_getenv("EMU68K_TRACE_FAULT"))
         fprintf(stderr, "[emu68k] classified hardware fault: %s\n",
                 g_hw_detail);
     return 1;
@@ -1041,7 +1065,7 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
                               found, foundlen, imagelen);
     }
 
-    paths = getenv("EMU68K_LIBS_PATH");
+    paths = emu68k_host_getenv("EMU68K_LIBS_PATH");
     while (paths && *paths) {
         const char *end = strchr(paths, ':');
         size_t n = end ? (size_t)(end - paths) : strlen(paths);
@@ -1060,6 +1084,31 @@ static uint8_t *resolve_guest_library(struct emu68k_run *r, const char *name,
     }
     if ((p = try_library_at("Libs", 4, leaf, found, foundlen, imagelen))) return p;
     return try_library_at("", 0, leaf, found, foundlen, imagelen);
+}
+
+/* Resolve an unqualified command name through an explicitly supplied guest
+ * command path. Native C: binaries are normally AArch64 ELF and cannot be
+ * entered by this engine; packages and test corpora can put their 68k HUNK
+ * commands in EMU68K_COMMAND_PATH without replacing the native installation.
+ * Qualified names retain normal AROS DOS path semantics and never consult the
+ * host path. */
+static uint8_t *resolve_guest_command(const char *name, char *found,
+                                      size_t foundlen, size_t *imagelen)
+{
+    const char *paths;
+    uint8_t *p;
+    if (!name || !*name || strchr(name, ':') || strchr(name, '/') ||
+        strstr(name, ".."))
+        return NULL;
+    paths = emu68k_host_getenv("EMU68K_COMMAND_PATH");
+    while (paths && *paths) {
+        const char *end = strchr(paths, ':');
+        size_t n = end ? (size_t)(end - paths) : strlen(paths);
+        if ((p = try_library_at(paths, n, name, found, foundlen, imagelen)))
+            return p;
+        paths = end ? end + 1 : NULL;
+    }
+    return NULL;
 }
 
 /* dos.LoadSeg as seen BY a 68k program.  Unlike the outer AROS loader's native
@@ -1093,8 +1142,10 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
 
     image = read_aros_file(r, name, &imagelen);
     image = take_if_hunk(image, imagelen);
+    if (!image)
+        image = resolve_guest_command(name, why, sizeof why, &imagelen);
     if (!image) {
-        if (getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
             fprintf(stderr, "[68k] LoadSeg(\"%s\") -> not found/not a hunk\n", name);
         r->last_ioerr = ERROR_OBJECT_NOT_FOUND_;
         st->d[0] = 0;
@@ -1110,7 +1161,7 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
         r->exec_heap = sb->next_alloc = mark;
         r->last_ioerr = ERROR_BAD_HUNK_;
         st->d[0] = 0;
-        if (getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
             fprintf(stderr, "[68k] LoadSeg(\"%s\") failed: %s\n", name, why);
         return 0;
     }
@@ -1124,10 +1175,11 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
     snprintf(r->guestseg[slot].name, sizeof r->guestseg[slot].name, "%s", name);
     r->last_ioerr = 0;
     st->d[0] = bptr;
-    if (getenv("EMU68K_TRACE_CALLS"))
-        fprintf(stderr, "[68k] LoadSeg(\"%s\") -> %08x entry=%08x hunks=%d\n",
+    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        fprintf(stderr, "[68k] LoadSeg(\"%s\") -> %08x entry=%08x hunks=%d%s%s\n",
                 name, bptr, r->guestseg[slot].seg.entry,
-                r->guestseg[slot].seg.numhunks);
+                r->guestseg[slot].seg.numhunks, why[0] ? " path=" : "",
+                why[0] ? why : "");
     (void)e; (void)el;
     return 0;
 }
@@ -1303,6 +1355,10 @@ int emu68k_guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     int idx = (int)st->d[1];
     if (idx < 0 || idx >= GUESTLIB_MAX) { snprintf(e, el, "bad guest-library continuation"); return 1; }
     struct guestlib_live *g = &r->guestlib[idx];
+    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        fprintf(stderr, "[68k] guestlib init.done idx=%d name=%s state=%d "
+                "d0=%08x base=%08x parent=%d\n",
+                idx, g->name, g->state, st->d[0], g->base, g->parent);
     if (g->state == GL_LOADING) {
         uint32_t base = st->d[0];
         if (!base) {
@@ -1330,6 +1386,10 @@ int emu68k_guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     int idx = (int)st->d[1];
     if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
     struct guestlib_live *g = &r->guestlib[idx];
+    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        fprintf(stderr, "[68k] guestlib open.done idx=%d name=%s state=%d "
+                "d0=%08x root=%08x parent=%d\n",
+                idx, g->name, g->state, st->d[0], g->base, g->parent);
     if (!st->d[0]) {
         if (g->state == GL_OPENING) {
             j5d_unregister_libbase(g->base); g->base = 0; g->state = GL_FAILED;
@@ -1375,6 +1435,56 @@ int emu68k_guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
         r->active_loader = g->parent;
     }
     guestlib_restore_preserved(g, st);
+    return 0;
+}
+
+/* Open a guest library to completion while servicing another bridge call.
+ *
+ * Some AROS shared libraries assume that process-wide C runtime libraries
+ * have already installed their guest task-storage bases.  That is true for a
+ * native AROS process, but a transparently started 68k process begins with an
+ * intentionally separate, empty 32-bit task-storage namespace.  Dependency
+ * bootstrap therefore has to execute the real guest Init/Open code before the
+ * dependent library starts; manufacturing its base or copying host storage
+ * would cross the pointer boundary incorrectly. */
+int emu68k_open_guestlib_now(struct emu68k_run *r, const char *name,
+                             uint32_t version, uint32_t *base_out,
+                             char *e, unsigned el)
+{
+    struct j5d_m68k_state call;
+    struct guestlib_live *g;
+    uint32_t result = 0;
+    int idx = emu68k_find_guestlib_name(r, name);
+
+    if (idx >= 0) {
+        g = &r->guestlib[idx];
+        if (g->state != GL_READY || g->resident.version < version) {
+            snprintf(e, el, "%s dependency is not ready", name);
+            return 1;
+        }
+        if (base_out) *base_out = g->base;
+        return 0;
+    }
+
+    if (emu68k_load_guestlib(r, name, version, &idx, e, el))
+        return 1;
+    g = &r->guestlib[idx];
+    memset(&call, 0, sizeof call);
+    emu68k_guestlib_save_preserved(g, &call);
+    call.d[0] = (g->resident.flags & GL68_RTF_AUTOINIT) ? g->init.base : 0;
+    call.a[0] = g->init.seglist;
+    call.a[6] = EXEC_BASE;
+    if (emu68k_run_guest_subroutine(r, g->init_trampoline, &call, 0,
+                                    &result, e, el) != 0)
+        return 1;
+    if (g->state != GL_READY || !result) {
+        snprintf(e, el, "%s dependency Init/Open returned zero", name);
+        return 1;
+    }
+    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        fprintf(stderr, "[68k] guest dependency %s ready at %08x\n",
+                name, result);
+    if (base_out) *base_out = result;
     return 0;
 }
 
@@ -1460,7 +1570,7 @@ uint32_t emu68k_ctx_task(struct emu68k_run *r);
 int emu68k_trace_tasks(void)
 {
     static int on = -1;
-    if (on < 0) on = getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
+    if (on < 0) on = emu68k_host_getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
     return on;
 }
 
@@ -1589,7 +1699,7 @@ uint32_t emu68k_ctx_task(struct emu68k_run *r)
  * one route or the other for the two to be comparable. */
 int emu68k_route_guestside(const char *leaf)
 {
-    const char *p = getenv("EMU68K_GUESTSIDE_LIBS");
+    const char *p = emu68k_host_getenv("EMU68K_GUESTSIDE_LIBS");
     size_t n = strlen(leaf);
     while (p && *p) {
         const char *end = strchr(p, ',');
@@ -1665,7 +1775,7 @@ static int g_trace = -1;
 static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
                        struct j5d_m68k_state *st)
 {
-    if (g_trace < 0) g_trace = getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
+    if (g_trace < 0) g_trace = emu68k_host_getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
     if (!g_trace) return;
     fprintf(stderr, "[68k] %s LVO %d (%d) pc=%08x  "
             "d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x "
@@ -1708,6 +1818,8 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
         sp -= 4u;
         emu68k_gwrite32(sb, sp, ctx->final_entry); /* RTS enters finalizer or stops */
         ctx->st.a[7] = sp;
+        ctx->st.a[0] = ctx->argstr;
+        ctx->st.d[0] = ctx->argsize;
         ctx->started = 1;
     } else if (ctx->blocked) {
         /* It parked in Wait. Deliver what arrived and let Wait return it. */
@@ -1721,9 +1833,7 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     pc = ctx->st.pc;
     if (!ctx->st.pc) pc = ctx->entry;
 
-    nsb.host_mem = r->sb.host_mem;
-    nsb.origin   = r->sb.sandbox_origin;
-    nsb.size     = r->sb.size;
+    nsb = r->jit_sb;
     c.lib = &r->lib; c.sb = &r->sb; c.run = r;
 
     bl_event(BL_RUNTIME, idx, ctx->task, pc, "scheduler.resume",
@@ -2105,22 +2215,78 @@ fail:
 #define NP_Output    0x800003EDu
 #define NP_CloseIn   0x800003EEu
 #define NP_CloseOut  0x800003EFu
+#define NP_Error     0x800003F0u
+#define NP_CloseErr  0x800003F1u
 #define NP_Cli       0x800003FAu
+#define NP_Arguments 0x800003FDu
+
+/* AROS libc does not call a bridge vector to discover process identity: its
+ * GetETask() macro reads tc_Flags and tc_UnionETask directly.  Every guest
+ * Process therefore needs a real m68k-layout ETask mirror, including children
+ * created by CreateNewProc. */
+static void init_guest_etask(j4_sandbox *sb, uint32_t task, uint32_t etask,
+                             uint32_t unique_id, uint32_t parent)
+{
+    uint32_t children = etask + M68K_ETask_et_Children_mlh_Head;
+    uint32_t messages = etask + M68K_ETask_et_TaskMsgPort_mp_MsgList_lh_Head;
+
+    memset(j4_sandbox_host(sb, etask), 0, M68K_ETask_SIZEOF);
+    emu68k_gwrite8(sb, task + M68K_Task_tc_Flags,
+                   emu68k_gread8(sb, task + M68K_Task_tc_Flags) | TASKF_ETASK);
+    emu68k_gwrite32(sb, task + TASK_ETASK_OFF, etask);
+    emu68k_gwrite32(sb, etask + M68K_ETask_et_Parent, parent);
+    emu68k_gwrite32(sb, etask + M68K_ETask_et_UniqueID, unique_id);
+
+    /* Empty MinList/List sentinels, in the guest address space. */
+    emu68k_gwrite32(sb, children, children + 4u);
+    emu68k_gwrite32(sb, children + 4u, 0);
+    emu68k_gwrite32(sb, children + 8u, children);
+    emu68k_gwrite32(sb, messages, messages + 4u);
+    emu68k_gwrite32(sb, messages + 4u, 0);
+    emu68k_gwrite32(sb, messages + 8u, messages);
+    emu68k_gwrite32(sb,
+                    etask + M68K_ETask_et_TaskMsgPort_mp_SigTask, task);
+}
 
 int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
                                struct j5d_m68k_state *st, char *e, unsigned el)
 {
     uint32_t tags = st->d[1], entry = 0, stacksize = 4096;
-    uint32_t name = 0, input = 0, output = 0, want_cli = 0;
+    uint32_t name = 0, input = 0, output = 0, error = 0, want_cli = 0;
+    uint32_t arguments = 0;
     int32_t priority = 0;
-    uint32_t t, v, at;
+    uint32_t t, v, at, etask, parent_task;
     struct emu68k_ctx *ctx;
     int idx;
 
     for (at = tags; at; at += 8) {
+        if (!guest_span_ok(sb, at, 8u)) {
+            snprintf(e, el, "CreateNewProc taglist leaves guest memory at $%08lx",
+                     (unsigned long)at);
+            return 1;
+        }
         t = emu68k_gread32(sb, at);
         v = emu68k_gread32(sb, at + 4);
+        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+            fprintf(stderr, "[68k] CreateNewProc tag[%08x]=%08x,%08x\n",
+                    at, t, v);
         if (!t) break;                                   /* TAG_DONE          */
+        if (t == 1u) continue;                           /* TAG_IGNORE        */
+        if (t == 2u) {                                   /* TAG_MORE          */
+            if (!v) break;
+            at = v - 8u;
+            continue;
+        }
+        if (t == 3u) {                                   /* TAG_SKIP          */
+            at += v * 8u;
+            continue;
+        }
+        /* AROS's inline stdarg wrappers construct a finite automatic array,
+         * but longstanding callers commonly omit TAG_DONE. Native DOS then
+         * happens to stop after the function-specific TAG_USER values. Make
+         * that de-facto ABI deterministic: a non-control system-space value
+         * terminates this NP_/ADO-only list instead of scanning stack garbage. */
+        if (!(t & 0x80000000u)) break;
         switch (t) {
         case NP_Entry:     entry = v; break;
         case NP_StackSize: stacksize = v; break;
@@ -2128,8 +2294,10 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         case NP_Priority:  priority = (int32_t)v; break;
         case NP_Input:     input = v; break;
         case NP_Output:    output = v; break;
+        case NP_Error:     error = v; break;
         case NP_Cli:       want_cli = v; break;
-        case NP_CloseIn: case NP_CloseOut:
+        case NP_Arguments: arguments = v; break;
+        case NP_CloseIn: case NP_CloseOut: case NP_CloseErr:
             break;                    /* cleanup policy when the child exits */
         default:
             snprintf(e, el, "capability gap: CreateNewProc tag $%08lx is not "
@@ -2160,13 +2328,15 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         return 1;
     }
     idx = r->nctx;
+    parent_task = emu68k_ctx_task(r);
     ctx = &r->ctx[idx];
     memset(ctx, 0, sizeof *ctx);
     if (stacksize < 16384) stacksize = 16384;
     ctx->stack_size = stacksize;
     ctx->stack = emu68k_guest_alloc(r, stacksize);
     ctx->task  = emu68k_guest_alloc(r, CLASSIC_PROCESS_SIZE);
-    if (!ctx->stack || !ctx->task) {
+    etask = emu68k_guest_alloc(r, M68K_ETask_SIZEOF);
+    if (!ctx->stack || !ctx->task || !etask) {
         snprintf(e, el, "guest memory exhausted starting a 68k process");
         return 1;
     }
@@ -2192,8 +2362,11 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_STACKBASE,
                     GUEST_MKBADDR(ctx->stack + stacksize));
     emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_TASKNUM, (uint32_t)idx + 1u);
+    init_guest_etask(sb, ctx->task, etask, (uint32_t)idx + 1u, parent_task);
     emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_CIS, input);
     emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_COS, output);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_CES, error);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_ARGUMENTS, arguments);
     if (want_cli) {
         const char *process_name = name ? emu68k_guest_cstr(sb, name) : NULL;
         uint32_t cli = emu68k_guest_alloc(r, M68K_CommandLineInterface_SIZEOF);
@@ -2226,6 +2399,8 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
                         output);
         emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_StandardOutput,
                         output);
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_StandardError,
+                        error);
         /* The consumer is m68k, where CLI_DEFAULTSTACK_UNIT is four bytes. */
         emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_DefaultStack,
                         (stacksize + 3u) / 4u);
@@ -2247,6 +2422,15 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         emu68k_gwrite32(sb, ctx->task + TASK_SIGALLOC_OFF, 1u << EMU68K_PROC_SIGBIT);
     }
     ctx->entry = entry;
+    if (arguments) {
+        const char *tail = emu68k_guest_cstr(sb, arguments);
+        if (!tail) {
+            snprintf(e, el, "CreateNewProc NP_Arguments is not a guest C string");
+            return 1;
+        }
+        ctx->argstr = arguments;
+        ctx->argsize = (uint32_t)strlen(tail);
+    }
     ctx->live = 1;
     r->nctx++;
     /* Give it its first slice now, so it reaches the port it is about to wait
@@ -2478,9 +2662,7 @@ int emu68k_run_guest_subroutine(struct emu68k_run *r, uint32_t entry,
     }
     st = *initial;
     st.a[7] = stack_top;
-    sb.host_mem = r->sb.host_mem;
-    sb.origin = r->sb.sandbox_origin;
-    sb.size = r->sb.size;
+    sb = r->jit_sb;
     c.lib = &r->lib;
     c.sb = &r->sb;
     c.run = r;
@@ -2520,9 +2702,7 @@ int emu68k_run_guest_command(struct emu68k_run *r, uint32_t entry,
     }
     st = *initial;
     st.a[7] = stack_top;
-    sb.host_mem = r->sb.host_mem;
-    sb.origin = r->sb.sandbox_origin;
-    sb.size = r->sb.size;
+    sb = r->jit_sb;
     c.lib = &r->lib;
     c.sb = &r->sb;
     c.run = r;
@@ -2574,9 +2754,7 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     st.a[1] = (uint32_t)message;
     st.a[2] = (uint32_t)object;
     st.a[7] = stack_top;
-    sb.host_mem = r->sb.host_mem;
-    sb.origin = r->sb.sandbox_origin;
-    sb.size = r->sb.size;
+    sb = r->jit_sb;
     c.lib = &r->lib;
     c.sb = &r->sb;
     c.run = r;
@@ -2672,6 +2850,9 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
         goto fail;
     }
     r->arena = (uint8_t *)r->reserve + SANDBOX_ORIGIN;
+    r->jit_sb.host_mem = (uint8_t *)r->reserve;
+    r->jit_sb.origin = 0;
+    r->jit_sb.size = GUEST_RESERVE;
     {   /* Open the arena, then punch the hardware windows back out. Page
          * alignment matters in BOTH directions here: mprotect rounds a length
          * up, so a hole must be aligned DOWN at its start and UP at its end or
@@ -2772,8 +2953,7 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
 
     j5n_symbols_parse(r->image, imagelen, &r->seg, &r->symtab);
     {
-        j5d_sandbox j5sb = { r->sb.host_mem, r->sb.sandbox_origin, r->sb.size };
-        j5n_diag_init(&r->diag, r->image, imagelen, &j5sb, r->seg.entry, LIBBASE,
+        j5n_diag_init(&r->diag, r->image, imagelen, &r->jit_sb, r->seg.entry, LIBBASE,
                       &r->symtab);
     }
     r->diag.quiet_banner = 1;
@@ -2810,6 +2990,7 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             pr[PR_CLI_OFFSET + 3] = (uint8_t)(cli_b);
         }
         emu68k_gwrite32(&r->sb, GUEST_PROCESS + CLASSIC_PR_TASKNUM, 1);
+        init_guest_etask(&r->sb, GUEST_PROCESS, GUEST_ETASK, 1, 0);
         emu68k_gwrite32(&r->sb, GUEST_PROCESS + CLASSIC_PR_ARGUMENTS,
                         ARGS_BASE);
         {
@@ -2831,7 +3012,7 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
      * stall the batch. Enforced at quantum boundaries, so it lands even inside
      * a chained loop. */
     {
-        const char *lim = getenv("EMU68K_MAX_SECONDS");
+        const char *lim = emu68k_host_getenv("EMU68K_MAX_SECONDS");
         double secs = lim && *lim ? atof(lim) : 0.0;
         if (secs > 0.0) {
             struct timespec ts;
@@ -2901,7 +3082,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     j5n_signal_set_classifier(classify_hardware, r);
 
     struct bctx c = { &r->lib, &r->sb, r };
-    j5d_sandbox j5sb = { r->sb.host_mem, r->sb.sandbox_origin, r->sb.size };
+    j5d_sandbox j5sb = r->jit_sb;
     uint32_t d0 = 0;
     char lerr[256] = {0};
 

@@ -1,6 +1,7 @@
 /* bridge_lab.c - the runtime event recorder. See bridge_lab.h for why. */
 
 #include "bridge_lab.h"
+#include "emu68k_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,8 +30,8 @@ static int g_nkinds;
 int bl_level(void)
 {
     if (g_level < 0) {
-        const char *lv = getenv("EMU68K_BRIDGE_TRACE_LEVEL");
-        const char *to = getenv("EMU68K_BRIDGE_TRACE");
+        const char *lv = emu68k_host_getenv("EMU68K_BRIDGE_TRACE_LEVEL");
+        const char *to = emu68k_host_getenv("EMU68K_BRIDGE_TRACE");
         if (!to || !*to) { g_level = BL_OFF; return g_level; }
         g_level = BL_RUNTIME;                       /* the useful default     */
         if (lv) {
@@ -75,7 +76,7 @@ void bl_open(const char *program)
 {
     const char *to;
     if (bl_level() == BL_OFF) return;
-    to = getenv("EMU68K_BRIDGE_TRACE");
+    to = emu68k_host_getenv("EMU68K_BRIDGE_TRACE");
     /* APPEND. A sweep runs several programs through one loaded runtime, and
      * truncating per program left only the last one's evidence - which looked
      * exactly like a contract that was never exercised. The sequence number is
@@ -95,7 +96,7 @@ void bl_open(const char *program)
      * produced it cannot be trusted later, and neither can a comparison
      * between two of them. */
     {
-        const char *tree = getenv("EMU68K_BRIDGE_TREE");
+        const char *tree = emu68k_host_getenv("EMU68K_BRIDGE_TREE");
         bl_event(BL_SUMMARY, -1, 0, 0, "run.start",
                  "\"program\":\"%s\",\"tree\":\"%s\"",
                  program ? program : "", tree ? tree : "unrecorded");

@@ -26,6 +26,12 @@ extern "C" {
 
 typedef struct emu68k_run emu68k_run;
 
+/* Read the macOS process environment even when this dylib is loaded into
+ * hosted AROS, whose exported guest-libc getenv() would otherwise interpose
+ * the host symbol.  Runtime controls must never silently turn into guest ENV:
+ * lookups. */
+const char *emu68k_host_getenv(const char *name);
+
 /* [T3] The OS-call callback: a library call the host cannot serve itself is
  * handed to the embedder, which performs the real native call. `regs` is the
  * live 68k register file (struct j5d_m68k_state) and `guest0` is the host

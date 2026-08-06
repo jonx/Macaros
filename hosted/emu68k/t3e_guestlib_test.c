@@ -39,6 +39,12 @@ static void put16(uint8_t *p, uint16_t v)
     p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
 }
 
+static void put32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+
 static uint8_t *slurp(const char *path, size_t *len)
 {
     FILE *f = fopen(path, "rb");
@@ -214,6 +220,22 @@ int main(int argc, char **argv)
     memset(&direct, 0, sizeof direct); memset(&autoinit, 0, sizeof autoinit);
     CHECK(load_resident(&sb, argv[1], "test.library", &direct, err, sizeof err) == 0, err);
     CHECK(load_resident(&sb, argv[2], "autoinit.library", &autoinit, err, sizeof err) == 0, err);
+
+    /* AROS's ROM scanner accepts a backward rt_EndSkip and simply continues
+     * scanning from the next word.  Its own aros.library has this layout after
+     * ELF-to-HUNK conversion, so keep that compatibility under regression. */
+    {
+        gl68_resident backward;
+        uint8_t *field = j4_sandbox_host(&sb, direct.resident.tag + 6u);
+        uint32_t saved = be32(field);
+        CHECK(direct.seg.hunk_base[0] < direct.resident.tag,
+              "fixture cannot exercise a backward rt_EndSkip");
+        put32(field, direct.seg.hunk_base[0]);
+        CHECK(gl68_find_resident(&sb, &direct.seg, "test.library", &backward,
+                                 err, sizeof err) == 0,
+              "AROS-compatible backward rt_EndSkip was rejected");
+        put32(field, saved);
+    }
 
     engine = j5d_engine_new();
     CHECK(engine != NULL, "cannot allocate JIT engine instance");

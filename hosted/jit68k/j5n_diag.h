@@ -179,6 +179,8 @@ void j5n_signal_set_classifier(j5n_classify_fn fn, void *user);   /* returns the
 typedef void (*j5n_symbolize_fn)(unsigned long long addr, char *out, unsigned outlen);
 void j5n_set_symbolizer(j5n_symbolize_fn fn);
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb);
+void j5n_signal_get_context(const struct j5d_m68k_state **st,
+                            j5d_sandbox **sb);
 
 /* The 68k state the signal net is currently holding, or NULL outside a run. A
  * classifier uses it to name WHERE the access came from: the PC of the block

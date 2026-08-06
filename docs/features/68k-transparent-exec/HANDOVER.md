@@ -282,33 +282,53 @@ gaps in sequence; none of the fixes is TurboCalc-specific:
   delivered and consumed (for example `0xf800` for New and `0xf9e0` for
   About), rather than merely highlighting a row.
 
-The immediate blocker is now precisely identified.  TurboCalc reuses guest
-`struct Image` at `0x0028600c` with a different planar size, then calls
-Intuition `DrawImage` (LVO 19).  The OS-side mirror currently refuses with:
+That Image-mirror issue is now fixed: the native Image identity remains stable
+while its converted planar data is safely replaceable.  TurboCalc then exposed
+a second generic representation error: it reads public fields of the
+`locale.library` `struct Locale` returned by `OpenLocale`.  `Locale` is now a
+generated guest-readable facade (168-byte 68k layout), instead of an opaque
+token.  It moved the application past the raw-pointer fault at `0x003d9180`.
 
-```
-capability gap: Image 0028600c changed planar data size after its mirror was created
-```
+The current Stage 2 blocker is an ARexx scheduling/protocol stall, not a JIT
+fault or unsafe bridge conversion.  Trace
+`~/AROS/Shared/Regina68k/bridge-stage2-11.trace.jsonl` shows the real guest
+RexxMast/RX/TurboCalc chain exchanging several messages successfully.  The
+last TurboCalc request is taken, after which the application stays alive in a
+normal `Wait($d0000000)` but no ARexx completion reaches the root launcher's
+reply port (`Wait($80000000)`).  `port.put` now records the message's reply
+port, and `ReplyMsg` records whether it was a native IDCMP reply, a guest IPC
+reply, or a deliberate no-reply message.  Those diagnostics must be in the
+deployed dylib before the next trace is interpreted.
 
-That refusal occurs before native `DrawImage`, so it is safe and is likely the
-cause of both the black cell-selection rendering and the subsequent process
-exit.  Fix it generically in
-`~/Source/aros-upstream/arch/all-darwin/libs/emu68k/emu68k_oscall.c`: keep the
-native `struct Image` address stable (menus/gadgets may retain it), but own its
-endian-converted `ImageData` as a separately replaceable allocation.  On each
-crossing validate the new geometry, allocate the new buffer first, then swap
-and free the old buffer, copy the guest words, and retain the existing Image
-object identity.  Update rollback and teardown to free both allocations.  A
-large patch attempting this was **not applied** (`apply_patch` context check
-failed), so the source still contains the original refusal and is a clean
-starting point for this fix.
+One concrete cause of such inconsistent guest IPC state has been fixed and
+regression-tested: `exec.SetSignal` was an old zero-returning startup stub even
+though `PutMsg`, `Signal`, and IDCMP now update `tc_SigRecvd`.  It now performs
+the normal masked update and returns the previous signal word.  The standalone
+`make hosted-emu68k-t3setsignal` fixture proves the exact low-bit behaviour.
 
-The decisive failed-run trace is
-`~/AROS/Shared/turbocalc5-bridge-51.trace.jsonl`; screenshots are under
-`run/darwin-aarch64/turbocalc51-*.png`.  Trace 51 shows the menu result being
-consumed before the Image-size refusal.  At handover time Macaros is running a
-plain AROS shell, not TurboCalc; leave the final application test instance
-alive for the user.  Intermediate restarts are explicitly allowed.
+Host controls are now reliable inside booted AROS too.  `libemu68k.dylib`
+resolves its environment lookups past AROSBootstrap's exported guest-libc
+`getenv`, to macOS's real process environment.  Before that repair the normal
+`EMU68K_*` controls could silently read guest `ENV:` instead, making a supplied
+trace path appear to be ignored.  The same focused fixture verifies the host
+lookup before it exercises the signal contract.
+
+At handover time the user has a live Macaros corpus instance whose
+`Startup-Sequence` was changed externally.  **Do not overwrite or kill it.**
+A second Macaros process exits immediately while that instance owns the host
+session, so wait for an explicitly permitted restart before running Stage 2
+again.  The private copy-on-write test tree is
+`~/aros-stage2-20260806/AROS`; it has its own Stage 2 Startup-Sequence and
+Bootstrap configuration, but it is only useful once the existing Macaros
+session has ended.  When permitted, deploy the rebuilt dylib, launch that
+private tree with the Stage 2 environment below, and retain the resulting
+trace.  Do not infer success from the old trace: it predates reply-port
+recording and the SetSignal repair.
+
+If a boot reaches only a blank Cocoa screen and logs `Could not open version
+36 or higher of library "dos.library"`, it is an independent staged-OS boot
+artifact issue: rebuild only `kernel-dos` through `graft/rebuild-aros.sh`, then
+restart.  Do not misclassify that pre-Startup failure as an emu68k result.
 
 For repeat runs use the tail-set environment shown in method step 7, plus:
 
@@ -384,9 +404,9 @@ changes into the wrong AROS branch.
   gate. The refusal negative control now targets the still-unsafe raw
   `GT_FilterIMsg`, not the now-supported `GT_GetIMsg` path.
 
-Latest verified state: `make emu68k-dylib`, explicit
-`make hostlibs-emu68k`, `make hosted-emu68k-t0p3`, and
-`make hosted-emu68k-t2guard` pass.  The current full
+Latest verified state: `make emu68k-dylib`,
+`make hosted-emu68k-t3setsignal`, `make hosted-emu68k-t3hello`, and
+`make hosted-jit68k-j5d` pass.  The current full
 `hosted-emu68k-t3gen` run has one negative-control mismatch:
 `T3OWNGADBAD` still refuses the unsafe input, but the fixture expects a
 different field/error.  Do not weaken the refusal to make the assertion pass;
@@ -397,9 +417,10 @@ at SHA-256
 
 ## Next steps, in order
 
-1. Implement mutable, stable-address guest Image mirrors as described in the
-   TurboCalc section; rebuild/deploy, reproduce New/menu/cell selection and
-   keyboard entry, and leave the working TurboCalc instance alive.
+1. With an explicitly allowed Macaros restart, deploy the rebuilt dylib and
+   rerun the private Stage 2 tree with reply-port tracing.  Follow the exact
+   request/reply chain from root reply port through RexxMast/RX/TurboCalc; do
+   not add an application-specific workaround.
 2. Restore the full `hosted-emu68k-t3gen` gate without weakening its unsafe
    input negative controls.  Run `git diff --check` in both trees.
 3. Reconcile pushed checkpoint `589340275f` from its current `exfat-handler`

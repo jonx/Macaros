@@ -113,6 +113,9 @@ __attribute__((weak)) const char *j5d_fault(j5n_fault_kind kind, const char *det
 { (void)kind; (void)detail; (void)st; (void)sb; (void)host; return NULL; }
 __attribute__((weak)) void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb)
 { (void)st; (void)sb; }
+__attribute__((weak)) void j5n_signal_get_context(const struct j5d_m68k_state **st,
+                                                  j5d_sandbox **sb)
+{ if (st) *st = NULL; if (sb) *sb = NULL; }
 __attribute__((weak)) void j5n_diag_record_block(j5n_diag *d, j5d_sandbox *sb, uint32_t pc, uint32_t end_pc)
 { (void)d; (void)sb; (void)pc; (void)end_pc; }
 
@@ -135,7 +138,8 @@ typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
  * The block-cache typedefs live here (moved up from the ICache section) because the
  * instance embeds the cache. */
 #define J5D_MAX_LIBBASES 64  /* exec + native facades + per-run disk libraries */
-#define J5D_MAX_BLOCKS 4096   /* std-scale programs translate many distinct blocks */
+#define J5D_INITIAL_BLOCKS 4096u  /* grow on demand for application-scale workloads */
+#define J5D_MAX_BLOCKS   131072u  /* hard ceiling against unbounded hostile code      */
 #define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */
 typedef void (*j5d_block_fn)(struct j5d_m68k_state *st, uint64_t base_adjust);
 
@@ -213,7 +217,8 @@ struct j5d_engine_state {
     int               n_libbase;
     /* the [J5d] per-PC block ICache */
     int               cache_n;
-    j5d_cached_block  cache[J5D_MAX_BLOCKS];
+    unsigned          cache_cap;
+    j5d_cached_block *cache;
 };
 
 static struct j5d_engine_state  g_default_eng;
@@ -265,6 +270,7 @@ void j5d_engine_free(j5d_engine *ep)
     if (e == g_eng) g_eng = &g_default_eng;
     for (int i = 0; i < e->cache_n; i++)
         if (e->cache[i].live) jit_region_free(&e->cache[i].region);
+    free(e->cache);
     free(e);
 }
 /* async-signal-safe: two plain stores. Zeroing the budget makes the NEXT
@@ -482,6 +488,29 @@ static j5d_cached_block *cache_find(uint32_t pc)
     for (int i = 0; i < g_cache_n; i++)
         if (g_cache[i].live && g_cache[i].pc == pc) return &g_cache[i];
     return NULL;
+}
+
+static int cache_reserve_one(char *errbuf, unsigned errlen)
+{
+    if ((unsigned)g_cache_n < g_eng->cache_cap) return 0;
+    unsigned old_cap = g_eng->cache_cap;
+    unsigned new_cap = old_cap ? old_cap * 2u : J5D_INITIAL_BLOCKS;
+    if (new_cap > J5D_MAX_BLOCKS) new_cap = J5D_MAX_BLOCKS;
+    if (old_cap >= J5D_MAX_BLOCKS) {
+        if (errbuf) snprintf(errbuf, errlen, "block cache hard limit (%u)",
+                             J5D_MAX_BLOCKS);
+        return 1;
+    }
+    j5d_cached_block *grown = realloc(g_eng->cache, new_cap * sizeof *grown);
+    if (!grown) {
+        if (errbuf) snprintf(errbuf, errlen, "block cache allocation (%u entries)",
+                             new_cap);
+        return 1;
+    }
+    memset(grown + old_cap, 0, (new_cap - old_cap) * sizeof *grown);
+    g_eng->cache = grown;
+    g_eng->cache_cap = new_cap;
+    return 0;
 }
 
 /* ============================ big-endian stream reads ========================== */
@@ -1927,7 +1956,7 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     j5d_cached_block *b = cache_find(pc);
     if (b) { g_stats.block_cache_hits++; return b; }     /* [J5f] block-cache HIT: no re-translate */
     g_stats.block_cache_misses++;                        /* MISS: translate once, cache by PC      */
-    if (g_cache_n >= J5D_MAX_BLOCKS) { if (errbuf) snprintf(errbuf, errlen, "block cache full"); return NULL; }
+    if (cache_reserve_one(errbuf, errlen)) return NULL;
 
     uint32_t staging[8192];
     uint32_t end_pc = pc;
@@ -2340,6 +2369,19 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
      * SIGSEGV/SIGBUS in translated code recovers THIS context (NULL-safe; only meaningful
      * when the diagnostics signal net is installed). */
     j5n_signal_set_context(st, sb);
+
+    /* Runtime bounds consumed by every emitted guest-memory helper. Store absolute host
+     * addresses so generated code can validate the final address (including a signed
+     * displacement) without consuming another permanent AArch64 register. */
+    {
+        uint64_t begin = (uint64_t)(uintptr_t)sb->host_mem;
+        uint64_t end = begin + (uint64_t)sb->size;
+        st->sandbox_host_begin = begin;
+        st->sandbox_host_last1 = sb->size >= 1 ? end - 1 : 0;
+        st->sandbox_host_last2 = sb->size >= 2 ? end - 2 : 0;
+        st->sandbox_host_last4 = sb->size >= 4 ? end - 4 : 0;
+        st->sandbox_host_last8 = sb->size >= 8 ? end - 8 : 0;
+    }
 
     /* Seed the return stack: a7 = top of sandbox (16-byte aligned), recorded as the
      * initial SP. A top-level RTS returns to here = program exit. A caller may preset
@@ -3302,6 +3344,9 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
      * the recovery registration is a save/restore pair, not a set/clear — the outer run
      * keeps its containment after the inner run returns. */
     sigjmp_buf env;
+    const struct j5d_m68k_state *prev_sig_state = NULL;
+    j5d_sandbox *prev_sig_sb = NULL;
+    j5n_signal_get_context(&prev_sig_state, &prev_sig_sb);
     sigjmp_buf *volatile prev = j5n_signal_set_recover(&env);  /* volatile: read after
                                                                 * a siglongjmp landing */
     int jv = sigsetjmp(env, 1);
@@ -3310,6 +3355,7 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
          * [T2b] hardware window) - no bundle, a distinct result. Otherwise a
          * genuine fault: bundle written, program dead, we live. */
         j5n_signal_set_recover(prev);
+        j5n_signal_set_context(prev_sig_state, prev_sig_sb);
         if (jv == 2) {
             if (errbuf) snprintf(errbuf, errlen,
                 "program touched the Amiga hardware, which translation cannot serve");
@@ -3321,6 +3367,7 @@ int j5d_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
     }
     int rc = j5d_run_inner(sb, entry_pc, a6_libbase, st, exit_d0, lvo, user, errbuf, errlen);
     j5n_signal_set_recover(prev);
+    j5n_signal_set_context(prev_sig_state, prev_sig_sb);
     return rc;
 }
 

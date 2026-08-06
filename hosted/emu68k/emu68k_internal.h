@@ -27,6 +27,7 @@
 #define EMU68K_TASK_HOOKS_MAX 32
 #define EMU68K_TASK_STORAGE_MAX 128
 #define EMU68K_CALLBACK_DEPTH_MAX 16
+#define EMU68K_PUBLIC_PORT_MAX 64
 
 enum emu68k_event_kind {
     EMU68K_EVENT_IDCMP = 1,
@@ -165,6 +166,11 @@ struct emu68k_ctx {
     uint32_t              stack_size;
     uint32_t              initial_sp;
     uint32_t              final_entry;
+    /* AmigaDOS process startup ABI: A0 points at the command tail and D0 is
+     * its byte count (normally including the terminating newline). Tasks
+     * leave both zero; CreateNewProc children preserve NP_Arguments here. */
+    uint32_t              argstr;
+    uint32_t              argsize;
     uint8_t               live;
     uint8_t               started;
     uint8_t               on_stack;
@@ -182,6 +188,11 @@ struct emu68k_run {
     unsigned long         arena_size;
     unsigned long         hole_mask;
     j4_sandbox            sb;
+    /* The loader/bridge sandbox above exposes only the allocatable high arena.
+     * Translated code also legitimately reads the separately mapped low page
+     * (AbsExecBase at address 4), so the JIT sees the whole reserved guest span.
+     * PROT_NONE holes still enforce hardware/unprovided-memory routing. */
+    j5d_sandbox           jit_sb;
     j4_seglist            seg;
     stub_lib              lib;
     struct j5d_m68k_state st;
@@ -206,6 +217,11 @@ struct emu68k_run {
     struct guestseg_live  guestseg[GUESTSEG_MAX];
     struct guestpool_live guestpool[GUESTPOOL_MAX];
     struct { uint32_t base; int lvo; uint32_t guest_fn; } patch[EMU68K_PATCH_MAX];
+    struct {
+        uint32_t port;
+        uint32_t guest_name;
+        uint8_t  live;
+    } public_port[EMU68K_PUBLIC_PORT_MAX];
     uint32_t              int_vector[32];
     struct { uint32_t level, interrupt; } int_server[64];
     int                   nintserver;
@@ -331,6 +347,8 @@ int emu68k_find_guestlib_name(struct emu68k_run *, const char *);
 int emu68k_find_guestlib_base(struct emu68k_run *, uint32_t);
 int emu68k_load_guestlib(struct emu68k_run *, const char *, uint32_t, int *,
                          char *, unsigned);
+int emu68k_open_guestlib_now(struct emu68k_run *, const char *, uint32_t,
+                             uint32_t *, char *, unsigned);
 void emu68k_guestlib_save_preserved(struct guestlib_live *,
                                     const struct j5d_m68k_state *);
 int emu68k_guestlib_init_done(struct emu68k_run *, struct j5d_m68k_state *,
@@ -354,6 +372,7 @@ int emu68k_guestlib_reclaim(struct emu68k_run *, struct j5d_m68k_state *,
 #define find_guestlib_name      emu68k_find_guestlib_name
 #define find_guestlib_base      emu68k_find_guestlib_base
 #define load_guestlib           emu68k_load_guestlib
+#define open_guestlib_now       emu68k_open_guestlib_now
 #define guestlib_save_preserved emu68k_guestlib_save_preserved
 #define guestlib_init_done      emu68k_guestlib_init_done
 #define guestlib_open_done      emu68k_guestlib_open_done
