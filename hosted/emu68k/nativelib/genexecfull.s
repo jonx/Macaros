@@ -36,6 +36,7 @@ TASKTAG_NAME              equ $80100006
     move.l  4.w,a6
 
     ; Scalar/host-absent semantics.
+    move.b  #'A',d7
     moveq   #0,d0
     moveq   #0,d1
     jsr     EXEC_SetSR(a6)
@@ -55,6 +56,7 @@ TASKTAG_NAME              equ $80100006
     ; SetSignal returns the prior complete signal word and replaces only the
     ; selected bits.  Ports use the same tc_SigRecvd word, so this also keeps
     ; the normal Exec signal API coherent with Wait/PutMsg.
+    move.b  #'B',d7
     move.l  #$00000055,d0
     move.l  #$000000ff,d1
     jsr     EXEC_SetSignal(a6)
@@ -76,6 +78,7 @@ TASKTAG_NAME              equ $80100006
     jsr     EXEC_SetSignal(a6)
 
     ; Trap allocation is guest Task bookkeeping, including reuse after free.
+    move.b  #'C',d7
     moveq   #-1,d0
     jsr     EXEC_AllocTrap(a6)
     cmp.l   #0,d0
@@ -92,6 +95,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; Software interrupt callbacks stay in the guest.
+    move.b  #'D',d7
     lea     intmarker(pc),a0
     move.l  a0,intr+14
     lea     intcode(pc),a0
@@ -103,6 +107,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; SetExcept calls the guest exception routine with ExceptData in A1.
+    move.b  #'E',d7
     move.l  #0,a1
     jsr     EXEC_FindTask(a6)
     move.l  d0,a4
@@ -119,6 +124,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; The asynchronous semaphore API completes immediately in one context.
+    move.b  #'F',d7
     lea     sem(pc),a0
     jsr     EXEC_InitSemaphore(a6)
     lea     sem(pc),a0
@@ -135,6 +141,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; NewStackSwap passes eight standard-C stack arguments and returns D0.
+    move.b  #'G',d7
     lea     stackbuf(pc),a0
     move.l  a0,sss
     lea     stacktop(pc),a0
@@ -148,6 +155,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; AVL insertion, callback search, traversal and removal as one family.
+    move.b  #'H',d7
     clr.l   avlroot
     move.l  #1,avlnode1+16
     move.l  #2,avlnode2+16
@@ -190,6 +198,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; NewCreateTaskA creates and runs a second guest Task.
+    move.b  #'I',d7
     lea     childcode(pc),a0
     move.l  a0,tasktags+4
     lea     childname(pc),a0
@@ -203,6 +212,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; Fixed-address allocation succeeds without overlapping later allocations.
+    move.b  #'J',d7
     moveq   #64,d0
     move.l  #$00800000,a1
     jsr     EXEC_AllocAbs(a6)
@@ -210,6 +220,7 @@ TASKTAG_NAME              equ $80100006
     bne.w   failed
 
     ; TaggedOpenLibrary(4) is dos.library; use it to print the verdict.
+    move.b  #'K',d7
     moveq   #4,d0
     jsr     EXEC_TaggedOpenLibrary(a6)
     tst.l   d0
@@ -226,6 +237,7 @@ TASKTAG_NAME              equ $80100006
     rts
 
 failed:
+    move.b  d7,failcode
     move.l  4.w,a6
     moveq   #4,d0
     jsr     EXEC_TaggedOpenLibrary(a6)
@@ -285,5 +297,6 @@ tasktags:
 childmarker:  dc.l 0
 childname:    dc.b "exec-batch-child",0
 passmsg:      dc.b "[T3EXECFULL] PASS",10,0
-failmsg:      dc.b "[T3EXECFULL] FAIL",10,0
+failmsg:      dc.b "[T3EXECFULL] FAIL section "
+failcode:     dc.b "?",10,0
     even

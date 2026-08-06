@@ -1,7 +1,11 @@
 Start the new chat with:
-Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both dirty working trees, then continue from “TurboCalc live breadth probe — resume here.”
+Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both
+working trees, then continue with the Aminet breadth corpus and the single
+fresh-nightly verification command.  Do not restart from the historical
+TurboCalc section: the generic transport result and its application-side
+limitation are already recorded there.
 
-# Handover: 68k transparent execution, 2026-08-06
+# Handover: 68k transparent execution, 2026-08-07
 
 Read this before touching the bridge. It says what we are building, where it
 stands, and — most importantly — **the method**, which is the part that keeps
@@ -51,7 +55,7 @@ maintain is the bottom boundary.
 | path | what it is |
 |---|---|
 | `~/Source/aros-aarch64` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
-| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. **Current checkout is dirty on `exfat-handler`, not the intended bridge branch `aarch64-darwin-graft`; do not commit the bridge changes there without first moving them safely.** |
+| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is clean on `checkpoint/emu68k-progdir-20260807` at `b594c9ba09`. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
 | `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
 | `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
 | `~/Source/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
@@ -202,24 +206,27 @@ Tail set, routed guest-side (one boot, `build/t3libsweep`):
 The MUI lifecycle is a behavioural test, not just an open: guest
 `muimaster.library` creates a built-in `Text.mui` object through the guest
 Text -> Area -> Notify -> native rootclass superclass chain, receives a
-guest-readable facade, and disposes it back through the same chain. Nested
-native-to-guest callbacks use depth-indexed callback stacks, so recursive
-superclass dispatch does not overwrite an outer callback frame.
+guest-readable facade, and disposes it back through the same chain.  The
+separate `hosted-emu68k-t3mui` gate also loads the real 68k `Busy.mcc` from
+PROGDIR, runs its init/query path, creates an object through its guest
+dispatcher and disposes it. Nested native-to-guest callbacks use depth-indexed
+callback stacks, so recursive superclass dispatch does not overwrite an outer
+callback frame.
 
 Fixtures: the complete `hosted-emu68k-t3gen` gate passes, including
 `genexecfull`, `gengadget`, `genmenuitem`, `genowngadget`, and the negative
 controls for stale facades, unsupported fields, invalid callbacks and cyclic
 families. `geniff` PASSes its real write/read round trip and `genmui` PASSes
-create/dispose. The ten-library sweep reports `LOADED` for every listed tail
+built-in and separately loaded class create/dispose. The ten-library sweep reports `LOADED` for every listed tail
 library. `stdc.library`, `posixc.library`, `rexxsyslib.library` and
 `rexxsupport.library` are installed guest-side as dependencies rather than
 counted as separate sweep targets.
 
 The overall goal is **not achieved yet**. The original tail libraries now all
-load and MUI has a real lifecycle proof, but the external Zune class set and
-the Aminet breadth corpus have not completed a clean sweep, and verification
-is not yet a single fresh-nightly command. The waterline inventory itself is
-complete: 738/738 vectors are classified and there are no unknown crossings.
+load and both built-in and external Zune class lifecycles are proven, but the
+Aminet breadth corpus has not completed a clean sweep, and verification is not
+yet a single fresh-nightly command. The waterline inventory itself is complete:
+738/738 vectors are classified and there are no unknown crossings.
 
 ### Interactive event boundary follow-up
 
@@ -808,13 +815,13 @@ ports, files and allocations are native state.  The standalone JIT runner is
 appropriate for CPU/hunk/isolated fixtures; GUI breadth testing still needs a
 scripted Macaros instance.
 
-## Corpus sweep, 2026-08-07 (full tail set, one boot)
+## Regression sweep, 2026-08-07 (current result)
 
-`CORPUS_REPLACE_LIVE=1 graft/68k-corpus build/t3all` with all fifteen tail
-libraries routed guest-side.  Result file `~/AROS/Shared/corpus-final.txt`.
-Every outcome is a NAMED verdict; none is an unexplained hang, and none is a
-frozen instance (which before the idle-starvation fix is what several of
-these would have been):
+Run `make hosted-emu68k-t3gen` for the generated/handwritten boundary suite and
+`make hosted-emu68k-t3mui` for the separately loaded Zune class.  The corpus
+harness refuses to replace a live Macaros instance unless an operator opts in;
+do not set that override for routine verification.  Every outcome below is a
+named verdict, none an unexplained hang:
 
 | fixture | verdict |
 |---|---|
@@ -822,30 +829,26 @@ these would have been):
 | `genmenuitem` | PASS |
 | `genowngadget` | PASS |
 | `gengadgetbad` | refused as designed (unknown object token: memory the program owns, not a token this run issued) |
-| `genowngadgetbad` | refused as designed (Border outside guest memory) |
+| `genowngadgetbad` | refused as designed (Image outside guest memory) |
 | `genowngadgetcycle` | refused as designed (Gadget family exceeds 4096 members or contains a cycle) |
-| `gengadget` | FAIL - `stale or unknown GA_Previous object token 7a2e666f`.  That token is ASCII `z.fo`, i.e. the tail of "topaz.font": a font NAME is being read where a Gadget token belongs.  This is the parked GA_Previous/facade-previous item and it is NOT fixed; the ASCII value names the confusion exactly. |
-| `geniff` | FAIL - known FIXTURE bug, not a bridge gap: `geniff.s` passes PushChunk's arguments in the wrong order (type then id; a plain chunk has type 0). |
-| `genexecfull` | FAIL - `[T3EXECFULL]`, unresolved; next to triage. |
+| `gengadget` | PASS - `GA_Previous`/linked facade identity is adopted correctly |
+| `geniff` | PASS - real write/read round trip |
+| `genexecfull` | PASS - including AllocTrap/FreeTrap through an extended Task's ETask |
+| `genmui` + `Busy.mcc` | PASS - external 68k MCC init, create through guest dispatcher, and dispose |
 
-Three real defects, each named; three negative controls all failing closed;
-three passes.  The two FAILs worth engineering are `gengadget` (GA_Previous)
-and `genexecfull`; `geniff` is a one-line fixture correction.
+The previously recorded `gengadget`, `geniff` and `genexecfull` failures are
+fixed.  The full `hosted-emu68k-t3gen` gate and the separate external-class
+`hosted-emu68k-t3mui` gate are green; unsafe-input controls still fail closed.
+The remaining corpus milestone is application breadth, not these fixtures.
 
 ## Repo state — IMPORTANT
 
-The pre-TurboCalc graft baseline was pushed `1ea5065`; the interactive bridge
-checkpoint is pushed as `5ef3cfb` on `origin/main`.  The current AROS checkout
-HEAD is `026038f40e` on `exfat-handler` and remains dirty so parallel work is
-not disturbed.  Its exact 15-file emu68k diff is safely committed and pushed
-as `589340275f` on `fork/checkpoint/emu68k-interactive-20260806`, based on that
-exFAT HEAD.  Reconcile that checkpoint with the intended
-`aarch64-darwin-graft` history before making it the permanent bridge branch.
-There are unrelated existing changes (notably Moonstone audio in this repo and
-the exFAT branch context in the OS checkout); preserve them.  The user has
-authorized committing and pushing work in their own `jonx` repositories once
-it is stable, but that is not permission to publish elsewhere or to mix bridge
-changes into the wrong AROS branch.
+The host/graft repo is `main` in the user's own `jonx/AROS-AArch64` repository;
+the latest pre-this-update commit is `f7d829c` (per-program PROGDIR, non-starving
+idle and BPTR facade fields).  The AROS checkout is clean at `b594c9ba09` on
+`checkpoint/emu68k-progdir-20260807`.  Do not commit or push that checkout:
+authorization is only for the user's own `jonx` repositories.  Preserve any
+new parallel work discovered in either tree.
 
 - `hosted/jit68k/j4_loader.c` + `j4_hunk.h`: HUNK_RELOC32SHORT/DREL32 support.
   This is what let five tail libraries load at all.
@@ -883,43 +886,41 @@ changes into the wrong AROS branch.
   because both addresses are readable inside the arena.
 - `hosted/emu68k/nativelib/genexecfull.s`, `geniff.s`, `genlibsweep.s`,
   `genmui.s`: new fixtures.
+- Native library/device facades no longer occupy a fixed sixteen-slot address
+  range.  Each gets a private dynamically allocated 4 KiB negative-vector
+  window plus readable base fields; the runtime holds 64 native facades and the
+  JIT recognizes 128 total native/guest bases.  This is what let the external
+  Busy class open its seventeenth native dependency (`layers.library`) without
+  colliding with the arguments or in-guest OS-code regions.
 - `Makefile`: every per-library handler is compiled and all seven waterline
   validators plus the GadTools adapter validator are wired into the generation
   gate. The refusal negative control now targets the still-unsafe raw
   `GT_FilterIMsg`, not the now-supported `GT_GetIMsg` path.
 
 Latest verified state: `make emu68k-dylib`,
-`make hosted-emu68k-t3setsignal`, `make hosted-emu68k-t3hello`, and
-`make hosted-jit68k-j5d` pass.  The current full
-`hosted-emu68k-t3gen` run has one negative-control mismatch:
-`T3OWNGADBAD` still refuses the unsafe input, but the fixture expects a
-different field/error.  Do not weaken the refusal to make the assertion pass;
-update either the focused validation or its expected diagnostic after the
-Image work.  The deployed `~/lib/libemu68k.dylib` matches the build artifact
-at SHA-256
-`bc0fb37074b5b72a38c148e14136ab3b6ed0ae33ae02af4ccc4e0b079396f269`.
+`make hosted-emu68k-t3setsignal`, the complete
+`make hosted-emu68k-t3gen`, focused `geniff`, and
+`make hosted-emu68k-t3mui` pass.  The latter builds only the named
+`workbench-classes-zune-busy` m68k target, converts the ELF to HUNK, packages
+the MCC as a PROGDIR fixture and runs it inside booted AROS.  Deploying ad-hoc
+signs the dylib, so the installed file's hash is expected to differ from the
+unsigned build artifact even when its code is current.
 
 ## Next steps, in order
 
-1. With an explicitly allowed Macaros restart, deploy the rebuilt dylib and
-   rerun the private Stage 2 tree with reply-port tracing.  Follow the exact
-   request/reply chain from root reply port through RexxMast/RX/TurboCalc; do
-   not add an application-specific workaround.
-2. Restore the full `hosted-emu68k-t3gen` gate without weakening its unsafe
-   input negative controls.  Run `git diff --check` in both trees.
-3. Reconcile pushed checkpoint `589340275f` from its current `exfat-handler`
-   base onto the intended bridge branch; do not disturb the shared dirty
-   checkout while parallel work is active.
-4. Copy/route the external Zune class binaries and extend `genmui` from the
-   built-in `Text.mui` lifecycle to at least one separately loaded class.
-5. Build the Aminet breadth corpus and make every remaining failure a named
+1. Build the Aminet breadth corpus and make every remaining failure a named
    routing verdict rather than a bridge capability gap. This is the goal's
    real proof.
-6. Turn the ten-library load sweep, `geniff`, `genmui`, generator checks and
+2. Turn the ten-library load sweep, `geniff`, built-in/external `genmui`,
+   generator checks and
    breadth corpus into one fresh-nightly command.
-7. Add focused behavioural fixtures for the new DOS command/packet paths,
+3. Add focused behavioural fixtures for the new DOS command/packet paths,
    GELS, Intuition retained lists, Layers callback adapters, cybergraphics
    staging locks, task.resource storage and timer.device arithmetic.
+4. Revisit TurboCalc application-side ARexx dispatch only with a replayable
+   application oracle.  Generic ARexx request/reply transport is already
+   proven; the demo binary's main task does not drain `TCALC` while a sheet is
+   open, so do not fake an app-specific completion in the bridge.
 
 Parked, unchanged: the wild jump at 68k PC `0x29F6B2`; DoIO device marshalling.
 `GA_Previous`/facade-previous adoption is no longer parked: PhotoDemo's

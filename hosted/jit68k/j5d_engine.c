@@ -137,7 +137,7 @@ typedef int (*j5d_boundary_cb)(void *user, j5d_sandbox *sb,
  *
  * The block-cache typedefs live here (moved up from the ICache section) because the
  * instance embeds the cache. */
-#define J5D_MAX_LIBBASES 64  /* exec + native facades + per-run disk libraries */
+#define J5D_MAX_LIBBASES 128 /* exec + native facades + per-run disk libraries */
 #define J5D_INITIAL_BLOCKS 4096u  /* grow on demand for application-scale workloads */
 #define J5D_MAX_BLOCKS   131072u  /* hard ceiling against unbounded hostile code      */
 #define J5K_MAX_LINKS  2     /* a block has at most two chainable tail targets (Bcc: 2)   */

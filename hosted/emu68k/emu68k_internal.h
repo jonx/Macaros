@@ -21,7 +21,7 @@
 #define EMU68K_PATCH_MAX 16
 #define GUESTLIB_OPENS_MAX 32
 #define EMU68K_MAX_CTX 8
-#define LIBBASE_MAX 16
+#define LIBBASE_MAX 64
 #define EMU68K_EVENT_MAX 32
 #define EMU68K_TASK_HOOK_TYPES_MAX 16
 #define EMU68K_TASK_HOOKS_MAX 32
@@ -35,8 +35,8 @@ enum emu68k_event_kind {
 };
 
 #define EXEC_BASE       0x00220000u
-#define LIBBASE_FIRST   0x00221000u
-#define LIBBASE_STRIDE  0x00001000u
+#define LIBBASE_VECTOR_RESERVE 0x00001000u
+#define LIBBASE_FIELDS_SIZE    64u
 #define GUEST_PROCESS   0x00210000u
 #define GUEST_CLI       0x00211000u
 #define GUEST_ARGS      0x00238000u
@@ -92,8 +92,11 @@ enum emu68k_event_kind {
 #define TASK_SPUPPER_OFF   M68K_Task_tc_SPUpper
 #define TASK_SIGEXCEPT_OFF M68K_Task_tc_SigExcept
 #define TASK_TRAPALLOC_OFF M68K_Task_tc_UnionETask_tc_ETrap_tc_ETrapAlloc
+#define TASK_ETASK_OFF     M68K_Task_tc_UnionETask_tc_ETrap_tc_ETrapAlloc
+#define ETASK_TRAPALLOC_OFF M68K_ETask_et_TrapAlloc
 #define TASK_EXCEPTDATA_OFF M68K_Task_tc_ExceptData
 #define TASK_EXCEPTCODE_OFF M68K_Task_tc_ExceptCode
+#define TF_ETASK_GUEST     (1u << 3)
 #define TF_EXCEPT_GUEST    (1u << 5)
 #define SSM_LENGTH_OFF     M68K_SemaphoreMessage_ssm_Message_mn_Length
 #define SSM_SEMAPHORE_OFF  M68K_SemaphoreMessage_ssm_Semaphore
@@ -305,6 +308,8 @@ void emu68k_gwrite32(j4_sandbox *sb, uint32_t addr, uint32_t value);
 uint32_t emu68k_guest_alloc(struct emu68k_run *run, uint32_t size);
 uint32_t emu68k_guest_strdup(struct emu68k_run *run, const char *text, size_t size);
 const char *emu68k_guest_cstr(j4_sandbox *sb, uint32_t addr);
+uint32_t emu68k_native_facade_base(struct emu68k_run *run, const char *name,
+                                   char *err, unsigned errlen);
 
 #define gread8       emu68k_gread8
 #define gwrite8      emu68k_gwrite8

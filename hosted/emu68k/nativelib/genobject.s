@@ -1,9 +1,10 @@
-; genobject.s - production proof for policy-compiled opaque OS objects.
+; genobject.s - production proof for policy-compiled native OS objects.
 ;
-; Locale and Catalog are native 64-bit pointers. The guest receives typed
-; 32-bit tokens, hands them back through generated calls, and closes them.
-; Opening the same catalog twice must preserve identity while retaining two
-; close references. No vector below has a hand-written oscall case.
+; Locale and Catalog are native 64-bit pointers. Locale crosses as a readable
+; guest facade while Catalog remains opaque; both preserve typed identity when
+; handed back through generated calls. Repeated opens must preserve identity
+; while retaining two close references. No vector below has a hand-written
+; oscall case.
 
 EXEC_OpenLibrary  equ -552
 EXEC_CloseLibrary equ -414
@@ -38,15 +39,25 @@ SCREEN_RASTPORT     equ 84
     beq     failed
     move.l  d0,a4
 
-    ; OpenLocale(NULL) -> typed Locale token.
+    ; OpenLocale(NULL) -> readable typed Locale facade. Opening it twice must
+    ; return the same guest identity and refresh without changing a public
+    ; scalar field already copied into the facade.
     move.l  a4,a6
     suba.l  a0,a0
     jsr     LOC_OpenLocale(a6)
     tst.l   d0
     beq     failed
     move.l  d0,d6
-    and.l   #$ffff0000,d0
-    cmp.l   #$e6800000,d0
+    cmp.l   #$01000000,d0          ; facades are addresses in guest memory
+    bhs     failed
+    move.l  d6,a0
+    move.l  52(a0),d3              ; Locale.loc_CodeSet, public 68k layout
+    suba.l  a0,a0
+    jsr     LOC_OpenLocale(a6)
+    cmp.l   d6,d0
+    bne     failed
+    move.l  d6,a0
+    cmp.l   52(a0),d3
     bne     failed
 
     ; The same token must recover the native Locale for another generated LVO.
@@ -68,6 +79,8 @@ SCREEN_RASTPORT     equ 84
     tst.b   (a0)
     beq     failed
 
+    move.l  d6,a0
+    jsr     LOC_CloseLocale(a6)
     move.l  d6,a0
     jsr     LOC_CloseLocale(a6)
 

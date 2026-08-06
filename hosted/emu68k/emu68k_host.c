@@ -139,9 +139,6 @@ const char *emu68k_host_getenv(const char *name)
  * a library's version...). A base outside the mapped arena faults on the first
  * such read, which is how this first failed on real software. */
 #define EXEC_BASE       0x00220000u     /* guest exec.library base (in-arena)   */
-#define LIBBASE_FIRST   0x00221000u     /* opened libraries get bases from here */
-#define LIBBASE_STRIDE  0x00001000u
-#define LIBBASE_MAX     16   /* real programs open more than a handful */
 
 /* A minimal guest `struct Process`. Startup code universally does
  * FindTask(NULL) and then reads pr_CLI to decide whether it was launched from
@@ -604,25 +601,53 @@ uint32_t emu68k_guest_alloc(struct emu68k_run *r, uint32_t size)
     return a;
 }
 
-/* A base the guest calls a DEVICE through. Devices reach their vectors exactly
- * as libraries do, so this is the same facade table: one base per device name,
- * reused on a second open the way a native base is. */
-unsigned long emu68k_run_device_base(emu68k_run *r, const char *name)
+/* Allocate a private guest region for one native library/device facade.  The
+ * base sits after a full vector window, so every negative LVO address remains
+ * mapped without reserving a fixed global address range.  That matters for
+ * large applications: a fixed table both imposed an arbitrary library count
+ * and eventually collided with the argument/OS-code/program regions. */
+uint32_t emu68k_native_facade_base(struct emu68k_run *r, const char *name,
+                                   char *err, unsigned errlen)
 {
-    uint32_t base;
+    uint32_t region, base;
     int i;
     if (!r || !name) return 0;
     for (i = 0; i < r->nlib; i++)
         if (!strcmp(r->openlib[i].name, name)) return r->openlib[i].base;
-    if (r->nlib >= LIBBASE_MAX) return 0;
-    base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
+    if (strlen(name) >= sizeof r->openlib[0].name) {
+        if (err && errlen)
+            snprintf(err, errlen, "native facade name is too long: %s", name);
+        return 0;
+    }
+    if (r->nlib >= LIBBASE_MAX) {
+        if (err && errlen)
+            snprintf(err, errlen, "more than %u native library/device facades",
+                     (unsigned)LIBBASE_MAX);
+        return 0;
+    }
+    region = emu68k_guest_alloc(r,
+                                LIBBASE_VECTOR_RESERVE + LIBBASE_FIELDS_SIZE);
+    if (!region) {
+        if (err && errlen)
+            snprintf(err, errlen, "guest memory exhausted allocating the %s facade",
+                     name);
+        return 0;
+    }
+    base = region + LIBBASE_VECTOR_RESERVE;
     snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
              "%s", name);
     r->openlib[r->nlib].base = base;
     r->nlib++;
     j5d_register_libbase(base);
-    memset(j4_sandbox_host(&r->sb, base), 0, 64);
     return base;
+}
+
+/* A base the guest calls a DEVICE through. Devices reach their vectors exactly
+ * as libraries do, so this is the same facade table: one base per device name,
+ * reused on a second open the way a native base is. */
+unsigned long emu68k_run_device_base(emu68k_run *r, const char *name)
+{
+    return (unsigned long)emu68k_native_facade_base(r, name, NULL, 0);
 }
 
 /* The program directory of the context that is running RIGHT NOW. The OS side

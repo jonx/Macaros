@@ -2,8 +2,10 @@
 ;
 ; Opening the library alone proves only its resident/init path.  Creating a
 ; built-in Text.mui object crosses the guest MUI class registry into native
-; Intuition/BOOPSI and returns a guest-addressable facade; disposing it proves
-; the reverse lifetime edge as well.
+; Intuition/BOOPSI and returns a guest-addressable facade. Busy.mcc then proves
+; the external-class path: guest muimaster opens a separately shipped 68k MCC,
+; runs its Query/init code and creates an object through its guest dispatcher.
+; Disposing both objects proves the reverse lifetime edges as well.
 
 EXEC_OpenLibrary    equ -552
 EXEC_CloseLibrary   equ -414
@@ -29,6 +31,16 @@ MUI_DisposeObject   equ -36
 
     move.l  d6,a6
     lea     textclass(pc),a0
+    lea     tags(pc),a1
+    jsr     MUI_NewObjectA(a6)
+    tst.l   d0
+    beq.b   fail_close_mui
+    move.l  d0,a0
+    move.l  d6,a6
+    jsr     MUI_DisposeObject(a6)
+
+    move.l  d6,a6
+    lea     busyclass(pc),a0
     lea     tags(pc),a1
     jsr     MUI_NewObjectA(a6)
     tst.l   d0
@@ -66,6 +78,7 @@ done:
 dosname:    dc.b "dos.library",0
 muiname:    dc.b "muimaster.library",0
 textclass:  dc.b "Text.mui",0
+busyclass:  dc.b "Busy.mcc",0
 passmsg:    dc.b "[T3MUI] PASS",10,0
 failmsg:    dc.b "[T3MUI] FAIL",10,0
     even

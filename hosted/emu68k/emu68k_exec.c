@@ -17,6 +17,27 @@ static int guest_span_ok(j4_sandbox *sb, uint32_t addr, uint32_t size)
            (uint64_t)addr + size <= (uint64_t)sb->sandbox_origin + sb->size;
 }
 
+/* tc_TrapAlloc shares a union with tc_ETask.  Processes and other extended
+ * tasks carry TF_ETASK and keep the allocation word in the pointed-to ETask;
+ * plain Tasks keep the legacy inline word.  Treating the union bytes as the
+ * inline mask corrupts the ETask pointer and makes AllocTrap depend on its
+ * address. */
+static uint32_t guest_trapalloc_addr(j4_sandbox *sb, uint32_t task,
+                                     char *e, unsigned el)
+{
+    uint32_t addr = task + TASK_TRAPALLOC_OFF;
+    if (gread8(sb, task + M68K_Task_tc_Flags) & TF_ETASK_GUEST) {
+        uint32_t etask = gread32(sb, task + TASK_ETASK_OFF);
+        if (!guest_span_ok(sb, etask, M68K_ETask_SIZEOF)) {
+            snprintf(e, el, "Task %08x has an invalid ETask %08x",
+                     task, etask);
+            return 0;
+        }
+        addr = etask + ETASK_TRAPALLOC_OFF;
+    }
+    return addr;
+}
+
 static int port_has_event_kind(const struct emu68k_run *r, uint32_t port,
                                unsigned kind)
 {
@@ -456,19 +477,10 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 known = 0;
             }
             if (known && g_oscall) {
-                uint32_t base;
-                if (r->nlib >= LIBBASE_MAX) {
-                    snprintf(e, el, "too many native library facades"); return 1;
-                }
-                base = LIBBASE_FIRST + (uint32_t)r->nlib * LIBBASE_STRIDE;
-                snprintf(r->openlib[r->nlib].name, sizeof r->openlib[r->nlib].name,
-                         "%s", leaf);
-                r->openlib[r->nlib].base = base;
-                r->nlib++;
-                j5d_register_libbase(base);
+                uint32_t base = emu68k_native_facade_base(r, leaf, e, el);
+                if (!base) return 1;
                 {   /* give the handed-out base a version, for the same reason */
                     uint8_t *lb = j4_sandbox_host(sb, base);
-                    memset(lb, 0, 64);
                     lb[LIB_VERSION_OFF]      = (uint8_t)(GUEST_LIB_VERSION >> 8);
                     lb[LIB_VERSION_OFF + 1]  = (uint8_t)GUEST_LIB_VERSION;
                     lb[LIB_REVISION_OFF]     = (uint8_t)(GUEST_LIB_REV >> 8);
@@ -1993,8 +2005,11 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_ALLOCTRAP: {
         uint32_t task = ctx_task(r);
-        uint32_t alloc = gread16(sb, task + TASK_TRAPALLOC_OFF);
+        uint32_t trapalloc = guest_trapalloc_addr(sb, task, e, el);
+        uint32_t alloc;
         int want = (int32_t)st->d[0], trap = -1;
+        if (!trapalloc) return 1;
+        alloc = gread16(sb, trapalloc);
         if (want >= 0 && want < 16) {
             if (!(alloc & (1u << want))) trap = want;
         } else if (want < 0) {
@@ -2003,7 +2018,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (trap == 16) trap = -1;
         }
         if (trap >= 0)
-            gwrite16(sb, task + TASK_TRAPALLOC_OFF, alloc | (1u << trap));
+            gwrite16(sb, trapalloc, alloc | (1u << trap));
         st->d[0] = (uint32_t)(int32_t)trap;
         return 0;
     }
@@ -2011,8 +2026,11 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         int trap = (int32_t)st->d[0];
         if (trap >= 0 && trap < 16) {
             uint32_t task = ctx_task(r);
-            uint32_t alloc = gread16(sb, task + TASK_TRAPALLOC_OFF);
-            gwrite16(sb, task + TASK_TRAPALLOC_OFF, alloc & ~(1u << trap));
+            uint32_t trapalloc = guest_trapalloc_addr(sb, task, e, el);
+            uint32_t alloc;
+            if (!trapalloc) return 1;
+            alloc = gread16(sb, trapalloc);
+            gwrite16(sb, trapalloc, alloc & ~(1u << trap));
         }
         return 0;
     }

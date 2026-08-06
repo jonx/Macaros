@@ -131,6 +131,7 @@ SA_Type          equ $8000002d
     ; A classic program may allocate the retained Menu/MenuItem/IntuiText tree
     ; itself instead of receiving one from GadTools.  Set and clear that tree
     ; to prove nested guest-owned menu mirrors and their lifetime.
+    move.l  a4,a6
     move.l  d6,a0
     lea     testmenu(pc),a1
     jsr     INT_SetMenuStrip(a6)
