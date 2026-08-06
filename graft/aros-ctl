@@ -255,6 +255,7 @@ fsw_roots_value() {
 
 write_startup_sequence() {
     local startup="$AROS/S/Startup-Sequence"
+    local payload="" startup_mode
 
     # Stage the PIPE: mount description (L:pipe-handler is a build artifact; the
     # startup Mount below is guarded by If EXISTS).
@@ -264,10 +265,27 @@ write_startup_sequence() {
         cp -f "$_up/workbench/devs/DOSDrivers/PIPE" "$AROS/Devs/DOSDrivers/PIPE"
     fi
 
-    if [ -n "${AROS_CTL_STARTUP_FILE:-}" ]; then
+    if [ -n "${AROS_CTL_STARTUP_FILE:-}" ] &&
+       [ "${AROS_CTL_STARTUP_FILE_MODE:-payload}" = replace ]; then
+        # Isolated harnesses can retain the historical replacement semantics,
+        # but it must be explicit: replacing Startup-Sequence means the caller
+        # owns the guest lifecycle and may intentionally shut AROS down.
         cp -f "$AROS_CTL_STARTUP_FILE" "$startup"
     else
-        case "${AROS_CTL_STARTUP_MODE:-console}" in
+        if [ -n "${AROS_CTL_STARTUP_FILE:-}" ]; then
+            payload="$AROS/S/.aros-ctl-startup"
+            cp -f "$AROS_CTL_STARTUP_FILE" "$payload"
+        fi
+        # A payload belongs in a live desktop unless the caller explicitly
+        # selects another boot mode. This keeps one-shot app scripts from
+        # becoming the system's entire lifecycle.
+        if [ -n "${AROS_CTL_STARTUP_FILE:-}" ] &&
+           [ -z "${AROS_CTL_STARTUP_MODE+x}" ]; then
+            startup_mode=desktop
+        else
+            startup_mode="${AROS_CTL_STARTUP_MODE:-console}"
+        fi
+        case "$startup_mode" in
         desktop|wanderer)
             # A compact desktop boot path. The stock Startup-Sequence does much
             # more, but these are the pieces Wanderer expects before it starts.
@@ -353,7 +371,12 @@ write_startup_sequence() {
                 if [ -n "${AROS_CTL_DESKTOP_EXTRA:-}" ]; then
                     printf '%s\n' "$AROS_CTL_DESKTOP_EXTRA"
                 fi
-                printf '%s\n' 'EndCLI'
+                if [ -n "$payload" ]; then
+                    printf 'Execute "S:.aros-ctl-startup"\n'
+                fi
+                # Do not terminate the boot CLI here. Wanderer and the host
+                # control session own the lifetime; explicit `aros-ctl stop`,
+                # `kill`, or a guest power request is what ends the instance.
             } > "$startup"
             ;;
         minimal|test)
@@ -414,6 +437,10 @@ write_startup_sequence() {
             exit 1
             ;;
         esac
+        if [ -n "$payload" ] && [ "$startup_mode" != desktop ] &&
+           [ "$startup_mode" != wanderer ]; then
+            printf 'Execute "S:.aros-ctl-startup"\n' >> "$startup"
+        fi
     fi
 
     [ -n "${AROS_CTL_STARTUP_EXTRA:-}" ] && printf '%s\n' "$AROS_CTL_STARTUP_EXTRA" \
