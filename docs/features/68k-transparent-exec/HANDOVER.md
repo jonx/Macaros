@@ -135,7 +135,7 @@ The unit of work is **a library**, never a function.
    ```
    EMU68K_GUESTSIDE_LIBS="gadtools.library,iffparse.library,locale.library,\
    icon.library,datatypes.library,coolimages.library,asl.library,diskfont.library,\
-   commodities.library,muimaster.library,stdc.library,posixc.library,\
+   commodities.library,muimaster.library,stdc.library,posixc.library,fd.library,\
    rexxsyslib.library,rexxsupport.library" \
    EMU68K_LIBS_PATH=/Users/jkn/Source/references/aros-m68k-20260804/libs \
    EMU68K_MAX_SECONDS=40 CORPUS_TIMEOUT=300 \
@@ -289,8 +289,8 @@ a second generic representation error: it reads public fields of the
 generated guest-readable facade (168-byte 68k layout), instead of an opaque
 token.  It moved the application past the raw-pointer fault at `0x003d9180`.
 
-The current Stage 2 blocker is an ARexx scheduling/protocol stall, not a JIT
-fault or unsafe bridge conversion.  The latest traces show the real guest
+The current Stage 2 blocker is an ARexx scheduling/protocol stall.  The latest
+traces show the real guest
 RexxMast/RX/TurboCalc chain publishing `REXX` and `TCALC`, finding both ports,
 and putting requests on TurboCalc's public `TCALC` port with the expected
 `RXCOMM|RXFF_RESULT` RexxMsg layout.  TurboCalc's main task observes the public
@@ -326,6 +326,437 @@ volume, not the outcome.  The generic bridge is delivering the request; the
 remaining work is to identify why this binary's ARexx dispatch path never
 dequeues it (likely its application-side handoff, not a queue or signal
 corruption).
+
+This evidence does not yet exclude a JIT control-flow or continuation error
+after `Wait`; a differential interpreter run or instruction-level trace is still
+required before assigning the fault to TurboCalc.
+
+A full-disassembly pass over the binary then narrowed all of this.  The
+`0x3f034c` "callback" is a continuation-capture trampoline and it executed
+CORRECTLY in the callback-4 trace (captured no-op continuation `0x3f02e6`,
+resumed at `0x3f02c8` exactly as the code says: the `movel sp@+,sp@` stack
+rewrite, the moveml pairs and the deferral PutMsg all behaved).  Not polling
+TCALC there is by design: `GetMsg(TCALC)` (routine raw `0x3505c`) is called
+only from the main task's two top-level idle loops (raw `0x34ea2` and
+`0x34fbe`), which poll internal queue -> TCALC -> parent port -> Wait, so the
+already-consumed signal edge is harmless once the task reaches an idle loop.
+It never does, because startup's synchronous parent-port exchanges stop right
+after the second window opens: the window task processes a worker msg, opens
+window:2 (`port.bind` seq 15072), replies msg:13; main takes it and waits
+forever for a further reply.  From that point the trace shows window:1 get
+IDCMP_INACTIVEWINDOW and then every `event.pump` reads
+`matched_sources:2, delivered:0` to the end of the run: native Intuition
+delivered the LOSING half of the focus pair and never anything for window:2 -
+no ACTIVEWINDOW, ever.  The window task has an explicit IDCMP_ACTIVEWINDOW
+(0x40000) dispatch branch at raw `0xdee` (`cmpl #262144`), so the missing
+activation edge is the prime suspect for the unsent startup reply.
+
+Root cause (generic, not TurboCalc-specific): the classic pattern opens a
+window with IDCMP flags 0, stores its shared port in UserPort, then calls
+ModifyIDCMP to enable delivery.  On hardware the program wins the race against
+input.device's asynchronous activation; under emu68k the native activation
+completes whole quanta before the guest can run ModifyIDCMP, so the
+IDCMP_ACTIVEWINDOW edge is lost with flags still 0.
+
+Fix, deployed in both trees (2026-08-06 evening):
+
+- `emu68k_oscall.c`: when ModifyIDCMP newly enables IDCMP_ACTIVEWINDOW
+  (old native flags lacked it) on the window that IS
+  `IntuitionBase->ActiveWindow` and that activation epoch delivered no
+  ACTIVEWINDOW yet, the pump replays exactly one synthesized ACTIVEWINDOW
+  (AllocIntuiMessage-backed, `allocated=TRUE` pairing; the guest's ReplyMsg
+  now frees an allocated pairing via FreeIntuiMessage instead of replying it
+  to a port Intuition never used).  Epoch tracking: `active_seen` set on any
+  delivered ACTIVEWINDOW, cleared on delivered INACTIVEWINDOW.  The pump's
+  guest AddTail+signal block is factored into `idcmp_queue_guest()`.
+- Host side: `emu68k_event_bind()` now takes and logs the IDCMP class mask
+  (`"classes"` in `event.source.bind`), so the next trace shows what a window
+  actually requested.  Both call sites pass it (OpenWindow: facade
+  IDCMPFlags; ModifyIDCMP: D0).
+
+Both sides built clean (`make hostlibs-emu68k` in `~/aros-build`,
+`make emu68k-dylib` here); dylib deployed to `~/lib` and re-signed;
+`hosted-emu68k-t3setsignal` and `t3hello` PASS.  The first rerun attempt
+proves nothing: a staged macOS update consumed the container's free space
+mid-run and writes were failing; its artifacts were removed.  Rerun recipe:
+remove `Regina68k/stage2.result`, boot with
+`AROS_CTL_STARTUP_FILE=~/AROS/Shared/regina-stage2-startup` and a FRESH
+`EMU68K_BRIDGE_TRACE` (runtime level is enough; avoid `EMU68K_TRACE_CALLS=1`
+on a full boot - it floods `/private/tmp/aros-sidecar.log`, 800 MB last
+time), and judge only `STAGE2-PASS`/`FAIL` plus the trace: expect a
+synthesized ACTIVEWINDOW delivery for window:2 right after its ModifyIDCMP,
+then the parent-port reply chain resuming, the main task reaching its idle
+loop, and a guest `port.get` on TCALC.  If the stall persists with the
+ACTIVEWINDOW delivered, fall back to the differential JIT fixture - scoped to
+the reply-match loop raw `0x34f20`-`0x34f5a` (`cmpal a0@(20),a1` identity
+check), since the Wait/trampoline path is now trace-verified; a memory
+snapshot of the deferred-list head at `a5+2088` distinguishes "msg:13
+mismatched" from "msg:13 matched, next reply never owed" without any fixture.
+
+IDLE-GUEST STARVATION: FIXED (2026-08-06 night).  Symptom: once a 68k GUI
+program went fully idle waiting for input, the WHOLE instance froze - no
+input, no screen updates, no menus, nothing, and it never recovered.  Not a
+deadlock: the host process sat at 0.6% CPU, sleeping.
+
+Diagnosis, and the tool that gave it: `aros-ctl tasks` on the frozen
+instance.
+
+```
+-- current --
+task '(unnamed)' state=RUN   pc=__semwait_signal   <- emu68k.library
+-- ready --
+task 'cocoa.hidd input'  state=READY pri=50
+task 'input.device'      state=READY pri=20
+task 'WANDERER:Wanderer' state=READY
+```
+
+The emu68k task was RUN inside `nanosleep` while the tasks that PRODUCE input
+sat READY and starved.  AROS schedules cooperatively: a task keeps the CPU
+until it makes an OS wait.  A host sleep parks the thread while AROS still
+counts the task as running, so `cocoa.hidd input` and `input.device` never
+ran, no IDCMP was ever produced, and the interactive wait loop in
+`emu68k_exec.c` waited forever for an event it was itself preventing.  A
+livelock that sustains itself: once entered, nothing can break it.  (A host
+`sample` alone was misleading - `nanosleep` shows as `__semwait_signal`, which
+looks like a deadlock on a semaphore.)
+
+Fix: idle through the OS, never through the host thread.  The loop now calls
+native `dos.Delay(1)` through the oscall, which blocks the task on
+timer.device exactly as every other hosted idle task does (the same dump
+shows `cocoa.hidd input`, the clipboard task and KeymapWatch all parked in
+`Dos_33_Delay`).  `nanosleep` remains only for standalone host fixtures where
+there is no OS behind us and the thread is the only thing to yield.  WaitTOF
+is still avoided: on a hosted display it can be a successful no-op and spin.
+
+Verified live: screen order changes on a depth-gadget click, the AROS shell
+receives and echoes typed characters, guest clicks produce ~26 KB of guest
+activity, and the task dump now shows the emu68k task in state WAIT with the
+ready list EMPTY.  Any host-side sleep added to a path that runs on the AROS
+task is this bug; check `aros-ctl tasks` for a READY list behind a RUN task.
+
+REGRESSION: `make hosted-emu68k-idle` (booted, RESTARTS the instance).
+`idle_window.c` opens a window, announces `IDLE-READY`, and goes idle in
+`Wait`; the harness then waits TEN SECONDS before clicking, because racing
+the idle would prove nothing.  Negative control actually run: with the native
+idle swapped back for a host sleep, the dump shows
+`state=RUN` with `cocoa.hidd input` (pri 50) and `input.device` (pri 20)
+READY behind it, and the click never arrives - the result file stays at
+`IDLE-READY`.  With the fix: `IDLE-PASS click delivered after idling`.
+
+DEVPROC / DISKFONT: CLOSED (2026-08-06 night).  `DevProc` is now
+`kind: "facade"` with a generated layout, and the generator learned the one
+capability it was missing: `EMU_F_BPTR`, a facade field kind that maps a
+native BPTR through the SAME handle table BPTR arguments and results already
+use (`emu68k_handle_token` / `emu68k_handle_bptr` in `emu68k_marshal.c`'s two
+walkers).  Which fields are BPTRs is DECLARED, never guessed, in
+`BPTR_FIELDS` in `graft/gen-struct-layouts` - a pointer-shaped field is only a
+BPTR when the header says so.  Generated result:
+`{ 4, 8, 1, 4, 8, EMU_F_BPTR } /* dvp_Lock BPTR */`, exactly the offset
+diskfont reads; `dvp_Port` and `dvp_DevNode` remain honest refusals.
+
+Verified live: `diskfont.library` now loads, inits AND opens guest-side
+(`state=2`), `GetDeviceProc` returns a facade instead of faulting, the guest
+reads it and passes it straight back into a second `GetDeviceProc` (the
+multi-assign walk that used to fault at `move.l 4(a5),d1`), zero faults, and
+TurboCalc renders its full sheet - toolbar, grid, headers - with diskfont as
+real m68k guest code.  All four static checks stayed green
+(`--check` on both generators, `--validate-handwritten` on all eight
+handlers).  The tail set routed guest-side is now: gadtools, iffparse,
+locale, icon, datatypes, coolimages, asl, commodities, muimaster, stdc,
+posixc, fd, rexxsyslib, rexxsupport, diskfont.
+
+The original report, kept for the reasoning: `dos.library.GetDeviceProc`
+returned `DevProc` as an OPAQUE token, but real callers read its fields - diskfont.library's guest
+init resolves FONTS: and walks the multi-assign by reading `dvp_Lock` at
+offset 4, so routing diskfont guest-side faults deterministically
+(`move.l 4(a5),d1` with A5 = the token; crash bundle
+`jit68k-crash-20260806T192641Z`).  The generic fix is the Locale pattern:
+`kind: "facade"` with a generated layout - but `dvp_Lock` is a BPTR, and
+facade fields currently support only SCALAR/BYTES/ARRAY/GUESTPTR, so this
+needs one new generator capability: a facade field kind that maps a native
+BPTR through the existing handle table (the same table BPTR arguments and
+results already use).  Until then stage 2 must NOT route diskfont.library
+guest-side; TurboCalc's GUI opens it during startup.
+
+RERUN VERDICT (trace `Regina68k/bridge-stage2-synth-5.trace.jsonl`,
+2026-08-06 late): the ACTIVEWINDOW fix WORKS - `event.source.bind` now
+records both windows requesting classes `0x024da77e` (ACTIVEWINDOW
+included); the synthesized ACTIVEWINDOW was delivered to and consumed by
+BOTH windows (seq 10502 window:1 - its handler even forwards it to the main
+task; seq 13425 window:2 - its per-window context has the forward-flag bits
+at ctx+53 clear, so it legitimately just marks ctx+54 active).  No fault,
+`run.end ok`.  But the result file still stops at `STEP getcursorpos`:
+ACTIVEWINDOW was a real generic gap, not the startup-completing trigger.
+
+The stall is now decoded to one precise app mechanism.  TurboCalc's two
+tasks use a continuation-post protocol (all guest addresses OLD-run base
+0x3bb33a; the synth-5 run is the same code at +0x26BD8):
+
+- `0x3f034c` posts "run function F with these regs" to the WINDOW task;
+  `0x3bbe46` is the mirror posting to the MAIN task's Parent Port.  The
+  window dispatch (`0x3bc600`) runs F and frees the message; replies are
+  separate posts.
+- The main task's synchronous call is: post F, then `lea <base+0x3500>,a0;
+  bsr 0x3f0274` - block reading Parent Port, comparing each arriving
+  message pointer against the RENDEZVOUS SLOT at `base+0x3514` (struct
+  base+0x3500, offset 20; both `lea 0x3500` operands are relocated, checked
+  against the HUNK reloc table).  Non-matching messages (event forwards)
+  are deferred to the internal list at `a5+2088` - by design; they are
+  consumed by the top-level idle loops (`0x3f01dc`/`0x3f02f8`), the ONLY
+  places that also poll `GetMsg(TCALC)`.
+- In synth-5 the request/reply ledger is: msg:1->2 matched, msg:5->7
+  matched, msg:6 = deferral no-op, msg:11 = ACTIVEWINDOW forward
+  (deferred, correct), msg:12 (F=`0x3c0814`, opens window:2) -> msg:14
+  (w44=0x30 event post, MISMATCHED and deferred).  The main task then
+  waits forever at `0x3f02a8` for the rendezvous message; the window task
+  idles normally.  Identical shape in callback-4 (msg:13 there).
+
+DECISIVE ISOLATION TEST (`ECHO`, new, 2026-08-06 night): rather than keep
+reading TurboCalc's internals, split the question with the smallest program
+that speaks the same protocol.  `hosted/emu68k/regina/echo_host.c` is a
+minimal ARexx host (CreatePort("ECHO"), GetMsg, CreateArgstring,
+ReplyMsg); `echo_launcher.c` starts RexxMast + ECHO + RX in one arena and
+`Regina68k/echo.rexx` sends `'ping'` and checks `result == 'PONG:ping'`.
+Startup file `~/AROS/Shared/regina-echo-startup`; both fixtures build from
+`make hosted-emu68k-regina-fixtures` and are copied to
+`Regina68k/commands/`.
+
+Result: **ECHO-PASS answer=PONG:ping**.  The whole guest ARexx transport is
+therefore PROVEN inside emu68k: RexxMast, RX, rexxsyslib guest-side, public
+port publish/find, the RXCOMM|RXFF_RESULT RexxMsg layout, GetMsg, the result
+argstring, ReplyMsg routing back through RX into a Rexx variable, and the
+DOS write of the result file.  Nothing in stage 2's transport is unproven.
+Keep this fixture as the permanent ARexx regression: it costs one boot and
+fails loudly if any of that regresses.
+
+The remaining TurboCalc stall is therefore in TurboCalc's own dispatch
+STATE, not in the transport - and the interactive run pins it exactly.
+Running TurboCalc alone (startup file `~/AROS/Shared/turbocalc5-startup`,
+no ARexx at all) produces a small, complete trace and a screenshot showing
+the application fully up and healthy: title bar `TurboCalcDemo V5.0
+(c)1993-98 M.Friedrich - AREXX-Port: TCALC`, sheet window `Folder1` with
+toolbar, column/row headers and the `Sheet1` tab.  No requester, nothing
+modal on screen.  In that healthy state the main task STILL never polls
+TCALC: its only `GetMsg` sites are the parent port (pcs `0x3f02ba` and
+`0x3f02d4`, both inside the nested loop), and it waits at `0x3f02a8` on
+`0xc0000000`.
+
+The blocking call is now identified exactly, at `0x3f13e4`:
+
+```
+3f13e4  moveml d2-d7/a2-fp,-(sp)
+3f13e8  lea  (pc,0x3f1416),a3      ; completion callback for the window task
+3f13ec  pea  0x54aa                ; F = 0x3c0814, the sheet-window opener
+3f13f2  jsr  a5@(142)              ; post it to the WINDOW task
+3f13f6  lea  (pc,0x3ed602),a0
+3f13fa  bsr  0x3f0274              ; WAIT for the ack (F == 0x3ed602)
+3f13fe  tstl d0                    ; d0 = ack message's saved d0
+3f1400  beq  0x3f1412              ; ack d0 == 0 -> return -1 IMMEDIATELY
+3f1402  lea  (pc,0x3f1410),a0
+3f1406  bsr  0x3f0274              ; else WAIT for completion (F == 0x3f1410)
+```
+
+The rendezvous test in `0x3f0274` is `cmpal a0@(20),a1`: "does this message's
+continuation word (msg+20) equal the address I passed in A0"; unmatched
+messages are deferred to `a5+2088` by design.  Both `0x3ed602`, `0x3f1410`
+and `0x3f02e6` are bare `rts` instructions used purely as rendezvous tokens.
+The window task's ack comes from `0x3c0ad2`: it creates the sheet, sets
+`d0 = a4` (the new object) and posts token `0x3ed602`; the completion token
+`0x3f1410` is only posted by `0x3f1416`, the callback the window task stores
+at `obj+990` and calls when that window is finished.
+
+So the trace reads: ack received (msg:12/msg:14, `word24` nonzero = the sheet
+object), main takes the `0x3f1402` branch and waits for the sheet window's
+COMPLETION - which never comes while the sheet is open.  Every later message
+(ACTIVEWINDOW forwards, event posts) correctly mismatches and is deferred.
+Meanwhile the deferred queue and TCALC are only drained by the idle loops
+`0x3f01dc`/`0x3f02f8`, which main cannot reach while blocked here.  When the
+ARexx signal does arrive in this state, `0x3f02c0` posts the no-op
+continuation `0x3f02e6` to the window task, which runs it and frees it: the
+ARexx message stays queued.  That is consistent in all three traces.
+
+HARNESS DEFECT FOUND BY COMPARING THE TWO RUNS (the reason stage 2 differs
+from the healthy interactive run at all): the interactive startup file does
+`CD MacRW:TurboCalc5/TurboCalc` before running the program, while the stage 2
+launcher called `SystemTags("MacRW:TurboCalc5/TurboCalc/TurboCalc", ...)`
+from `MacRW:Regina68k`.  A classic application reads its settings, catalogs
+and startup assets relative to the CURRENT DIRECTORY, so started from
+elsewhere it silently takes a different startup path.  The traces show it
+exactly: the interactive run's MAIN task opens an extra window at seq 13/14
+requesting IDCMP classes `0x00000008` (MOUSEBUTTONS only - a click-to-dismiss
+splash) and closes it again at seq 650; the stage 2 run never opens that
+window at all, and its screen renders EMPTY (screen title bar present, no
+window drawn) while the interactive run draws the full `Folder1` sheet.
+`stage2_launcher.c` now Locks the application's directory and CurrentDir()s
+into it just for that launch, restoring the Regina directory before RX
+starts.  Launch a corpus application the way a user does; do not assume
+PROGDIR: is enough.
+
+SECOND REAL BRIDGE GAP, FOUND BY THE CALL-LEVEL DIFF AND FIXED (2026-08-06
+night).  Running the healthy and stalled startups with call tracing and
+diffing TurboCalc's OWN call sequence (filter by pc inside the program image,
+normalise both to the disassembly base) gives a single first divergence at
+call #31: both runs reach the same `dos.Open`, which returns a handle
+interactively and ZERO under stage 2.  Both passed the same name pointer
+(identical image-relative offset 0x37b1c); reading the binary there gives
+`PROGDIR:TurboCalc.data`.
+
+Root cause, generic: every guest context of a run shares ONE native AROS
+process, so `PROGDIR:` was resolved against whatever program that process was
+created for.  Any 68k program started BY another 68k program therefore
+inherited the launcher's PROGDIR: - TurboCalc looked for its data file in
+`Regina68k/commands/`.  This affects every classic application launched from
+a guest program, not only this one.
+
+Fix: `struct emu68k_ctx` now carries `progdir` (the directory its program was
+loaded from; a context that is not a loaded program inherits its creator's,
+which is what a child of that program should see).  The host exports
+`emu68k_run_progdir()` (symbol 13 in `emu68k_init.c`'s table, and a new
+`run_progdir` member of `struct Emu68kHostIf` / `Emu68kOSCallCtx`), and
+`Emu68k_OSCall`'s prelude applies it to the native process with
+`SetProgramDir()` when it changes, caching the lock; `Emu68k_OSCallEndRun`
+restores the process's own directory and frees ours.
+
+Verified: `PROGDIR:TurboCalc.data` now opens (`d0=00084860` at the exact site
+that returned 0); the stage 2 startup now matches the healthy interactive run
+bind-for-bind - splash window opens (main task, IDCMP classes `0x00000008`),
+the application dismisses it itself, then the sheet window opens; and the
+screen title finally carries the free-memory counter
+(`... AREXX-Port: TCALC  6716444 free`), the healthy-state marker that was
+absent from every stalled run.
+
+REGRESSION, proven in both directions: `make hosted-emu68k-progdir` (needs a
+booted instance and RESTARTS it, so it is not in the default gate).
+`progdir_parent.c` starts `progdir_child.c`, which lives in a DIFFERENT drawer
+(`Regina68k/progdir/`) and opens `PROGDIR:progdirchild.data` next to itself.
+With the fix: `PROGDIR-PASS`.  With the OS-side apply reverted and the module
+rebuilt: `PROGDIR-FAIL could not open PROGDIR:progdirchild.data`.  A test that
+cannot fail proves nothing, so that negative control was actually run, not
+assumed.
+
+The stage 2 launcher's `Delay(1000)` readiness pause is GONE.  An ARexx
+message queues on the public port and is served whenever the application next
+polls it, so sleeping before sending buys nothing and hides whether the
+application serves the port at all.  Waiting for the port to EXIST is a real
+precondition and stays; waiting on a stopwatch is not.
+
+That also REFUTES the "the command was sent too early" theory, which the
+timing invited (RX puts the message at seq 22548, the sheet opens at 29498):
+the message stayed queued for roughly 295,000 further events, long after the
+application reached its healthy state, and TCALC was never polled once
+(`GetMsg(TCALC)` count 0 for the whole run).  So this build genuinely does
+not serve its public port while the main task sits in the sheet rendezvous.
+
+VERDICT (settled 2026-08-07, and it CORRECTS the `obj+990` lead below).  That
+lead was wrong and is retracted: `obj+990` is a PER-OBJECT handler slot, not
+the rendezvous callback.  The sibling path at `0x3c2484` shows what a real
+one is - `lea (pc,0x3c2492),a3` then `movel a3,a4@(990)`: a PC-RELATIVE LOCAL
+handler belonging to the creating code, never the main task's `0x3f1416`.  So
+the `subal a3,a3` at `0x3c0ad2` is DELIBERATE ("this creation path has no
+per-object handler"), not a register the bridge lost, and the two `jsr (a3)`
+sites in the binary (`0x3c0f4e`, `0x3d51a0`) are local render/format
+callbacks, unrelated to the rendezvous protocol.
+
+So the named routing verdict for TurboCalc 5 Demo is:
+
+  APPLICATION BEHAVIOUR, NOT A BRIDGE GAP.  Its main task blocks in the
+  rendezvous wait at `0x3f0274` for the sheet window's completion token
+  (`0x3f1410`), which is only posted when that window finishes.  Its public
+  ARexx port is drained ONLY by `GetMsg(TCALC)` at `0x3f0396`, called from the
+  two top-level idle loops (`0x3f01dc`, `0x3f02f8`) that the main task cannot
+  reach while it is blocked there.  A request therefore stays queued - it is
+  never lost, and never served while a sheet is open.  Evidence: identical in
+  three independent traces, including a run with NO ARexx involved at all, and
+  the message stayed queued for ~295,000 scheduler events after the
+  application was fully healthy with `GetMsg(TCALC)` count 0.
+
+Everything the bridge owes this application is delivered and proven: the
+ARexx transport passes end-to-end (ECHO fixture), the message is correctly
+laid out and queued on the right port with the right signal, the application
+starts up identically to a hand-launched run, and it renders and responds.
+Do NOT synthesize a completion message, route the request to a private port,
+or add an application-specific shim to force a STAGE2-PASS: all three would
+be lying about a program that is behaving as written.  If a scripted
+spreadsheet proof is wanted, drive a DIFFERENT application whose idle loop
+serves its port, or drive this one through its GUI (menus and keys already
+work).  Stage 2 as written cannot pass against this binary, and that is a
+result, not a defect.
+
+The CurrentDir fix is right on its own merits but did NOT change the
+outcome: the corrected run still opens only the two window-task windows,
+still renders an empty screen, still stops at `STEP getcursorpos`.  So the
+startup paths diverge for another reason, and the remaining structural
+difference between the two runs is the interesting one: interactively
+TurboCalc is the only program in its OWN emu68k arena, while stage 2 starts
+it via SystemTags as a CHILD CONTEXT inside the launcher's arena (shared on
+purpose, so the public ports are mutually visible).  The next concrete step
+is a call-level diff of the two startups: run each with
+`EMU68K_TRACE_CALLS=1` and compare the OS-call sequence up to the point
+where the interactive run opens the splash window (main task, IDCMP classes
+`0x8`) and the stage 2 run does not.  The screen title is a free progress
+indicator: the healthy run shows `... AREXX-Port: TCALC  9196796 free`
+(the app updates the free-memory counter once it is running), the stalled
+run shows the same line WITHOUT the counter.
+
+Second named gap found from the same log, unrelated to the stall but real,
+and now CLOSED: our guest-side `posixc.library` calls
+`OpenLibrary("fd.library")` and it failed 1028 times in one run.
+
+`fd.library` is ABOVE the waterline.  It is not one of the bottom seven; it
+is an AROS-specific library that exists only to back posixc's file-descriptor
+table, and no classic Amiga program opens it - only our guest-side
+posixc/stdc do.  So it belongs to the tail set and ships as real m68k guest
+code, exactly like the libraries that depend on it: no bridge policy, no
+crossings, nothing to declare.  Built with `make workbench-libs-fd` in
+`~/aros-m68k-build` (its source is `workbench/libs/fd/`), then converted with
+`elf2hunk` - a module built for m68k is ELF and the guest loader needs HUNK,
+which is why dropping the build output straight into the library directory
+still failed to load.  Verified: failures 1028 -> 0, `guestlib init.done` /
+`open.done` for `fd.library`, ECHO still PASS.
+
+That conversion step is the general rule for extending the tail set: build
+the m68k module, run it through `elf2hunk`, and only then put it in
+`EMU68K_LIBS_PATH`.
+
+With those corrected, the open question is sharp and app-shaped, not
+transport-shaped: why does this build take the "wait for completion" branch -
+i.e. why is the ack's `d0` nonzero here?  Two candidates, both cheap to test next:
+(1) the ack legitimately carries the object and a REAL Amiga also blocks,
+    with ARexx served because the completion arrives promptly (something in
+    the window task's `0x3bc9d8` chain finishing the sheet's "run" phase);
+(2) the ack's `d0` should have been zero for this startup path, which would
+    make the main task return immediately to its idle loop.
+The discriminator: watch whether the window task's `0x3c0aee` chain ever
+calls `obj+990` (the completion callback); a temporary Bridge Lab event on
+the poster at `0x3bbe46` recording the token value would show it directly.
+Do NOT synthesize a completion message: that would be an app-specific shim.
+
+An older framing of the same stall follows (kept because the addresses are
+still useful): the rendezvous slot `TurboCalc_base+0x3514` at stall time.  Zero -> F=`0x3c0814`'s
+continuation chain never registered a reply (find what that chain still
+waits for - one such F waits at `0x3be81a` on a mask built from another
+port's sigbit before closing windows and posting the rendezvous reply from
+`0x3be860` `pea 0x3500`); nonzero -> the reply was registered but its
+message never arrived or the identity compare failed, which points back at
+delivery or the JIT (`cmpal a0@(20),a1` loop `0x3f025a-0x3f0294`).  Next
+run: snapshot or peek that slot when the result file stalls, before any
+differential fixture work.
+
+The follow-up disassembly/trace pass makes that distinction concrete.  In the
+fresh `bridge-stage2-callback-4.trace.jsonl` run, the public signal is returned
+at TurboCalc's `Wait` site (`0x003f02a8`, guest raw `0x34f72`), after which the
+binary's callback posts an internal message to `TurboCalc WINDOW-Port` and waits
+on the private parent-port bit.  The callback target is a normal guest routine
+(`0x003f034c`, first opcode `48e7fffa`); it is not a missing native bridge
+vector.  Static disassembly of the same binary shows the only public-port
+`GetMsg` routine at raw `0x3505c`, while the active callback/private loop never
+calls it.  No trace contains a `GetMsg(TCALC)` or an RX reply.  This rules out a
+malformed signal/queue/message crossing, but not a JIT control-flow error after
+the crossing.  Do not route
+the message to the private port: that diagnostic experiment produced empty
+replies and would be an application-specific shim.  The remaining question is
+whether TurboCalc expects an additional application-side event/host handoff;
+the bridge should stay generic until that contract is evidenced.
 
 For a long-lived diagnostic boot, make the launcher the synchronous startup
 command rather than `Run`ning it asynchronously.  An asynchronous one-shot
@@ -376,6 +807,30 @@ launch/input script.  Rewinding CPU state alone is unsafe because AROS windows,
 ports, files and allocations are native state.  The standalone JIT runner is
 appropriate for CPU/hunk/isolated fixtures; GUI breadth testing still needs a
 scripted Macaros instance.
+
+## Corpus sweep, 2026-08-07 (full tail set, one boot)
+
+`CORPUS_REPLACE_LIVE=1 graft/68k-corpus build/t3all` with all fifteen tail
+libraries routed guest-side.  Result file `~/AROS/Shared/corpus-final.txt`.
+Every outcome is a NAMED verdict; none is an unexplained hang, and none is a
+frozen instance (which before the idle-starvation fix is what several of
+these would have been):
+
+| fixture | verdict |
+|---|---|
+| `genlibsweep` | PASS - gadtools, iffparse, locale, icon, datatypes, asl, diskfont, commodities all LOADED guest-side |
+| `genmenuitem` | PASS |
+| `genowngadget` | PASS |
+| `gengadgetbad` | refused as designed (unknown object token: memory the program owns, not a token this run issued) |
+| `genowngadgetbad` | refused as designed (Border outside guest memory) |
+| `genowngadgetcycle` | refused as designed (Gadget family exceeds 4096 members or contains a cycle) |
+| `gengadget` | FAIL - `stale or unknown GA_Previous object token 7a2e666f`.  That token is ASCII `z.fo`, i.e. the tail of "topaz.font": a font NAME is being read where a Gadget token belongs.  This is the parked GA_Previous/facade-previous item and it is NOT fixed; the ASCII value names the confusion exactly. |
+| `geniff` | FAIL - known FIXTURE bug, not a bridge gap: `geniff.s` passes PushChunk's arguments in the wrong order (type then id; a plain chunk has type 0). |
+| `genexecfull` | FAIL - `[T3EXECFULL]`, unresolved; next to triage. |
+
+Three real defects, each named; three negative controls all failing closed;
+three passes.  The two FAILs worth engineering are `gengadget` (GA_Previous)
+and `genexecfull`; `geniff` is a one-line fixture correction.
 
 ## Repo state — IMPORTANT
 

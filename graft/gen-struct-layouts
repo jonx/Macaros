@@ -57,7 +57,7 @@ HEADERS = [
 
 TYPES = [
     "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "DateTime", "CSource", "InfoData",
-    "DosPacket", "LocalVar", "ExAllControl",
+    "DosPacket", "LocalVar", "ExAllControl", "DevProc",
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
@@ -381,6 +381,15 @@ GUEST_BYTE_POINTER_FIELDS = {
     ("EasyStruct", "es_GadgetFormat"),
 }
 
+# A BPTR field. A native BPTR is 64-bit and means nothing inside the arena, so
+# it crosses as the same 32-bit token the handle table hands out for a BPTR
+# argument or result - which is what lets a program pass a lock it read out of
+# a structure straight back to another DOS call. Declared, never guessed: a
+# pointer-shaped field is only a BPTR when the header says so.
+BPTR_FIELDS = {
+    ("DevProc", "dvp_Lock"),
+}
+
 ARRAY_RE = re.compile(r"^(.*?)\[(\d+)\]$")
 
 
@@ -440,6 +449,8 @@ def field_kind(struct_name, field_name, guest_type, native_type):
     gt, nt = guest_type.strip(), native_type.strip()
     if (struct_name, field_name) in OPAQUE_VALUE_FIELDS:
         return ("SCALAR", 4, 8, 1)
+    if (struct_name, field_name) in BPTR_FIELDS:
+        return ("BPTR", 4, 8, 1)
     if (struct_name, field_name) in GUEST_BYTE_POINTER_FIELDS:
         m = ARRAY_RE.match(gt)
         return ("GPTR", 4, 8, int(m.group(2)) if m else 1)
@@ -588,6 +599,10 @@ def emit(m68k, native, out):
     L.append("#define EMU_F_GUESTPTR 3 /* guest addresses of raw bytes, rebased;")
     L.append("                          * guest -> native only, since a native")
     L.append("                          * address has no guest form to write back  */")
+    L.append("#define EMU_F_BPTR   4   /* a BPTR field: mapped through the same handle")
+    L.append("                          * table BPTR arguments and results use, so a")
+    L.append("                          * structure a program reads (DevProc's dvp_Lock)")
+    L.append("                          * carries a lock it can pass straight back      */")
     L.append("")
     for t in TYPES:
         an, a = resolve(m68k, t)
@@ -610,7 +625,8 @@ def emit(m68k, native, out):
                                % (f, FIELD_LIMITS[t]))
                 continue
             kind = {"BYTES": "EMU_F_BYTES", "ARRAY": "EMU_F_ARRAY",
-                    "GPTR": "EMU_F_GUESTPTR"}.get(k[0], "EMU_F_SCALAR")
+                    "GPTR": "EMU_F_GUESTPTR",
+                    "BPTR": "EMU_F_BPTR"}.get(k[0], "EMU_F_SCALAR")
             rows.append("    { %4d, %4d, %4d, %d, %d, %s },   /* %-24s %s */"
                         % (o, no, k[3], k[1], k[2], kind, f, ty))
         if not rows:

@@ -23,7 +23,7 @@ rustc nightly (-Zbuild-std=core,alloc, pinned profile)      # LLVM M68k backend,
 ```
 
 - `-gc-all` prunes the unused compiler_builtins roots a staticlib keeps (273 KiB ->
-  a few KiB; run68k's sandbox is 256 KiB); `-mtype` merges rustc's one-section-per-
+  a few KiB); `-mtype` merges rustc's one-section-per-
   function output into one hunk per type; `.comment` must be stripped because its
   odd-sized payload trips run68k's strict hunk-size check.
 - The Rust m68k ABI passes arguments on the stack; the entry stubs push constants

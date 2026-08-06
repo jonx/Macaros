@@ -1834,11 +1834,10 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             }
         }
         /* A top-level GUI task can now be waiting only for a native window
-         * event.  That is not a capability gap: yield one host frame at a
-         * time, pump the bound IDCMP ports, and return only when the requested
-         * guest signal really exists.  The hosted AROS core has its own thread,
-         * so this nanosleep yields the translated task without stopping Cocoa's
-         * input loop. */
+         * event.  That is not a capability gap: idle one tick at a time
+         * THROUGH THE OS, pump the bound IDCMP ports, and return only when the
+         * requested guest signal really exists.  The idle has to be an AROS
+         * wait: the tasks that produce that event share this task's CPU. */
         {
             int interactive = 0;
             unsigned matched = 0;
@@ -1883,12 +1882,34 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                 bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
                          "scheduler.yield", "\"reason\":\"native event wait\"");
                 for (;;) {
-                    const struct timespec frame = { 0, 16666667L };
-                    /* WaitTOF is deliberately not used here: on a hosted
-                     * display it may be a successful no-op, producing a hot
-                     * scheduler loop.  Yielding the host thread gives the
-                     * native input producer a real scheduling opportunity. */
-                    nanosleep(&frame, NULL);
+                    /* Idle through the OS, never through the host thread.
+                     *
+                     * AROS schedules cooperatively: a task keeps the CPU until
+                     * it makes an OS wait. A host sleep parks the thread while
+                     * AROS still counts this task as RUNNING, so `cocoa.hidd
+                     * input` (pri 50) and `input.device` stay READY and never
+                     * run - and the very input this loop is waiting for can
+                     * never be produced. That livelock is self-sustaining:
+                     * once entered, nothing can wake it. A native Delay blocks
+                     * the task on timer.device the way every other hosted idle
+                     * task does, so the scheduler runs them.
+                     *
+                     * WaitTOF is deliberately not used: on a hosted display it
+                     * may be a successful no-op, producing a hot loop. */
+                    if (emu68k_oscall) {
+                        struct j5d_m68k_state idle = *st;
+                        char scratch[128] = {0};
+                        idle.d[1] = 1;            /* one tick: 1/50 s */
+                        (void)emu68k_oscall("dos.library", DOS_LVO_DELAY,
+                                            &idle, r->reserve,
+                                            emu68k_oscall_user,
+                                            scratch, sizeof scratch);
+                    } else {
+                        /* No OS behind us (standalone host fixtures): the
+                         * thread is the only thing there is to yield. */
+                        const struct timespec frame = { 0, 16666667L };
+                        nanosleep(&frame, NULL);
+                    }
                     pumped = event_pump(r, st, 0, UINT32_MAX, NULL);
                     if (emu68k_reschedule_siblings(
                             r, sb,

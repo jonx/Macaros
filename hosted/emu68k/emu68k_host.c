@@ -625,6 +625,17 @@ unsigned long emu68k_run_device_base(emu68k_run *r, const char *name)
     return base;
 }
 
+/* The program directory of the context that is running RIGHT NOW. The OS side
+ * applies it to the native process before each crossing so PROGDIR: means what
+ * the running program means by it. Empty string when the run's own program
+ * directory (which the native process already has) is correct. */
+const char *emu68k_run_progdir(emu68k_run *r)
+{
+    if (r && r->nctx && r->ctx[r->cur_ctx].live)
+        return r->ctx[r->cur_ctx].progdir;
+    return "";
+}
+
 unsigned long emu68k_run_guest_alloc(emu68k_run *r, unsigned long size)
 {
     if (!r || size > UINT32_MAX) return 0;
@@ -1592,8 +1603,8 @@ static const char *event_kind_name(unsigned kind)
 }
 
 int emu68k_event_bind(struct emu68k_run *r, unsigned kind, uint32_t identity,
-                      uint32_t port, uint32_t mask, const char *reason,
-                      uint32_t pc)
+                      uint32_t port, uint32_t mask, uint32_t classes,
+                      const char *reason, uint32_t pc)
 {
     int free_slot = -1;
     for (int i = 0; i < EMU68K_EVENT_MAX; i++) {
@@ -1623,9 +1634,9 @@ int emu68k_event_bind(struct emu68k_run *r, unsigned kind, uint32_t identity,
              "event.source.bind",
              "\"kind\":\"%s\",\"source\":\"%s\","
              "\"destination\":\"%s\",\"mask\":\"0x%08x\","
-             "\"reason\":\"%s\"",
+             "\"classes\":\"0x%08x\",\"reason\":\"%s\"",
              event_kind_name(kind), bl_id("source", identity),
-             bl_id("port", port), mask, reason ? reason : "bind");
+             bl_id("port", port), mask, classes, reason ? reason : "bind");
     return 0;
 }
 
@@ -2356,6 +2367,27 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     if (name)
         emu68k_gwrite32(sb, ctx->task + M68K_Process_pr_Task_tc_Node_ln_Name,
                         name);
+    /* PROGDIR: belongs to the PROGRAM, and every context of a run shares one
+     * native process. A context started from a loaded executable therefore
+     * carries its own program directory; anything else (a plain task, a
+     * bare command name resolved through the path) inherits its creator's,
+     * which is what a child of that program should see. */
+    {
+        const char *path = name ? emu68k_guest_cstr(sb, name) : NULL;
+        const char *cut = NULL;
+        if (path)
+            for (const char *q = path; *q; q++)
+                if (*q == '/' || *q == ':') cut = q;
+        if (cut) {
+            size_t n = (size_t)(cut - path) + (*cut == ':' ? 1u : 0u);
+            if (n >= sizeof ctx->progdir) n = sizeof ctx->progdir - 1u;
+            memcpy(ctx->progdir, path, n);
+            ctx->progdir[n] = '\0';
+        } else if (r->nctx > 0) {
+            snprintf(ctx->progdir, sizeof ctx->progdir, "%s",
+                     r->ctx[r->cur_ctx].progdir);
+        }
+    }
     emu68k_gwrite32(sb, ctx->task + TASK_SPLOWER_OFF, ctx->stack);
     emu68k_gwrite32(sb, ctx->task + TASK_SPUPPER_OFF, ctx->stack + stacksize);
     emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_STACKSIZE, stacksize);

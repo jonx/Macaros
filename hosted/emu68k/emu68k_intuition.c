@@ -35,6 +35,7 @@ static void bind_window_idcmp(struct emu68k_run *r, j4_sandbox *sb,
     task = emu68k_ctx_task(r);
     emu68k_gwrite32(sb, port + MP_SIGTASK, task);
     emu68k_event_bind(r, EMU68K_EVENT_IDCMP, window, port, 1u << bit,
+                      emu68k_gread32(sb, window + M68K_Window_IDCMPFlags),
                       reason, pc);
     bl_event(BL_RUNTIME, r->cur_ctx, task, pc, "port.bind",
              "\"source\":\"native:idcmp:%s\",\"destination\":\"%s\","
@@ -149,7 +150,7 @@ int emu68k_intuition_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             uint32_t bit = emu68k_gread8(sb, port + MP_SIGBIT);
             if (bit < 32)
                 emu68k_event_bind(r, EMU68K_EVENT_IDCMP, win, port,
-                                  1u << bit, "ModifyIDCMP", st->pc);
+                                  1u << bit, st->d[0], "ModifyIDCMP", st->pc);
             bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
                      "port.bind",
                      "\"source\":\"native:idcmp:%s\",\"destination\":\"%s\","

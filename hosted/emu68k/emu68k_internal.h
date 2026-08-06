@@ -171,6 +171,10 @@ struct emu68k_ctx {
      * leave both zero; CreateNewProc children preserve NP_Arguments here. */
     uint32_t              argstr;
     uint32_t              argsize;
+    /* Directory this context's program was loaded from, so PROGDIR: resolves
+     * per program and not per native process (all contexts share one). Empty
+     * for a context that is not a loaded program, such as a plain task. */
+    char                  progdir[256];
     uint8_t               live;
     uint8_t               started;
     uint8_t               on_stack;
@@ -335,7 +339,7 @@ uint32_t emu68k_callback_stack_acquire(struct emu68k_run *, char *, unsigned);
 void emu68k_callback_stack_release(struct emu68k_run *);
 int emu68k_route_guestside(const char *);
 int emu68k_event_bind(struct emu68k_run *, unsigned, uint32_t, uint32_t,
-                      uint32_t, const char *, uint32_t);
+                      uint32_t, uint32_t, const char *, uint32_t);
 void emu68k_event_unbind_port(struct emu68k_run *, uint32_t, const char *);
 int emu68k_event_pump(struct emu68k_run *, struct j5d_m68k_state *,
                       uint32_t, uint32_t, unsigned *);

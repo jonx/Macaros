@@ -50,10 +50,26 @@ int main(void)
         return 20;
     }
 
-    if (SystemTags("MacRW:TurboCalc5/TurboCalc/TurboCalc", SYS_Asynch, TRUE, TAG_DONE) == -1 ||
-        !wait_for_port("TCALC")) {
-        PutStr("STAGE2-FAIL TCALC port did not appear\n");
-        return 21;
+    /* Launch the application from its OWN directory, the way a user does.
+     * A classic application reads its settings, catalogs and startup assets
+     * relative to the current directory; started from elsewhere it silently
+     * takes a different startup path. */
+    {
+        BPTR dir = Lock("MacRW:TurboCalc5/TurboCalc", SHARED_LOCK);
+        BPTR previous = dir ? CurrentDir(dir) : (BPTR)0;
+        LONG started = SystemTags("MacRW:TurboCalc5/TurboCalc/TurboCalc",
+                                  SYS_Asynch, TRUE, TAG_DONE);
+        if (dir) {
+            CurrentDir(previous);
+            UnLock(dir);
+        } else {
+            PutStr("STAGE2-FAIL TurboCalc directory could not be locked\n");
+            return 21;
+        }
+        if (started == -1 || !wait_for_port("TCALC")) {
+            PutStr("STAGE2-FAIL TCALC port did not appear\n");
+            return 21;
+        }
     }
 
     /* TCALC publishes its public port before the GUI task has finished
@@ -62,11 +78,13 @@ int main(void)
      * application a bounded startup quantum before RX sends the first request.
      * Otherwise the request can arrive during initialization and leave the
      * Rexx process waiting forever for a reply. */
-    if (!wait_for_port("TurboCalc WINDOW-Port")) {
-        PutStr("STAGE2-FAIL TurboCalc window port did not appear\n");
-        return 21;
-    }
-    Delay(1000);
+    /* No readiness delay.  An ARexx message QUEUES on the public port and is
+     * served whenever the application next polls it, so sleeping before
+     * sending buys nothing; it only hides whether the application serves the
+     * port at all.  Measured: a request sent during startup stayed queued for
+     * ~295,000 further scheduler events after the application had fully
+     * started, and was never polled.  The one real precondition is that the
+     * port exists, which is waited for above. */
 
     /* RX is a real guest process.  Do not make the launcher sit in a
      * synchronous RunCommand() while the script is driving TCALC: that leaves
