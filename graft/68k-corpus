@@ -147,7 +147,11 @@ if [ "$CORPUS_DESKTOP" = 1 ]; then
     EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" \
     "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
 else
-  AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
+  # The non-desktop corpus mode is intentionally isolated: its startup file is
+  # the test harness itself, so retain replacement semantics explicitly. Normal
+  # app/test launches use the persistent payload default in aros-ctl.
+  AROS_CTL_STARTUP_FILE="$RUN/startup" AROS_CTL_STARTUP_FILE_MODE=replace \
+    AROS_HOST_VOLUME="MacRW:$SHARE;WRITE" \
     EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-8}" "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
 fi
 i=0; LIMIT="${CORPUS_TIMEOUT:-900}"
