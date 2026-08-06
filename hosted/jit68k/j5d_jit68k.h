@@ -314,6 +314,13 @@ typedef int (*j5d_lvo_fn)(int lvo, struct j5d_m68k_state *st, void *user,
  * the engine's business and the return address is only known here. */
 #define J5D_LVO_REDIRECT_RTE 3
 
+/* A bridge call that cooperatively blocks a guest context.  The dispatcher
+ * converts this into J5D_RC_YIELD only after recording the instruction's real
+ * continuation PC (and, for a tail call, consuming its caller frame).  A host
+ * adapter cannot derive that continuation from A7: direct library calls are
+ * intentionally not pushed on the emulated return stack. */
+#define J5D_LVO_BLOCK 4
+
 /* ----- The engine (j5d_engine.c) --------------------------------------------------
  * Run the 68k program from `entry_pc` through the JIT: translate each basic block via
  * the REAL Emu68 decoders into a MAP_JIT region, run it under W^X, then decode the
@@ -363,6 +370,11 @@ void j5d_set_poll(j5d_poll_fn fn, void *user, uint32_t interval_roundtrips);
  * long fully-chained code (a self-chained loop reaches C never) can run without
  * a safe point, so a kill or quantum always lands. 0 = the engine default. */
 void j5d_set_chain_quantum(uint32_t blocks);
+
+/* CIA-A port A input presented to the very small hosted hardware-input shim.
+ * Only explicitly decoded, read-only probes use this value; the CIA pages stay
+ * unmapped, so every other hardware access retains the loud routing failure. */
+void j5d_set_ciaa_pra(uint8_t value);
 
 /* [T3] Register a guest address as a BRIDGED native-library facade, so
  * `jsr d16(A6)` through it reaches the LVO bridge. A program that opens

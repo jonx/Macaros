@@ -44,6 +44,37 @@ enum emu68k_event_kind {
 #define OSCODE_RAWDOFMT OSCODE_BASE
 #define OSCODE_RETURN   (OSCODE_END - 2u)
 
+/* Classic AmigaOS has a 34-byte MsgPort.  AROS-m68k's public Process layout
+ * includes an eight-byte semaphore pad in MsgPort, so every Process field
+ * after pr_MsgPort has a different generated offset.  The structures in this
+ * arena are consumed by classic binaries and must therefore use the classic
+ * offsets; using M68K_Process_pr_* here makes direct field reads disagree with
+ * dos.library calls in particularly quiet and destructive ways. */
+#define CLASSIC_PROCESS_SIZE       228u
+#define CLASSIC_PR_SEGLIST         128u
+#define CLASSIC_PR_STACKSIZE       132u
+#define CLASSIC_PR_GLOBVEC         136u
+#define CLASSIC_PR_TASKNUM         140u
+#define CLASSIC_PR_STACKBASE       144u
+#define CLASSIC_PR_RESULT2         148u
+#define CLASSIC_PR_CURRENTDIR      152u
+#define CLASSIC_PR_CIS             156u
+#define CLASSIC_PR_COS             160u
+#define CLASSIC_PR_CONSOLETASK     164u
+#define CLASSIC_PR_FILESYSTEMTASK  168u
+#define CLASSIC_PR_CLI             172u
+#define CLASSIC_PR_RETURNADDR      176u
+#define CLASSIC_PR_PKTWAIT         180u
+#define CLASSIC_PR_WINDOWPTR       184u
+#define CLASSIC_PR_HOMEDIR         188u
+#define CLASSIC_PR_FLAGS           192u
+#define CLASSIC_PR_EXITCODE        196u
+#define CLASSIC_PR_EXITDATA        200u
+#define CLASSIC_PR_ARGUMENTS       204u
+#define CLASSIC_PR_LOCALVARS       208u
+#define CLASSIC_PR_SHELLPRIVATE    220u
+#define CLASSIC_PR_CES             224u
+
 #define MP_SIGTASK         M68K_MsgPort_mp_SigTask
 #define MP_SIGBIT          M68K_MsgPort_mp_SigBit
 #define MP_MSGLIST         M68K_MsgPort_mp_MsgList_lh_Head
@@ -139,6 +170,7 @@ struct emu68k_ctx {
     uint8_t               on_stack;
     uint8_t               finished;
     uint8_t               blocked;
+    uint16_t              forbid_depth;
     uint32_t              wait_mask;
     jmp_buf               unwind;
     uint8_t               can_unwind;
@@ -355,6 +387,8 @@ int emu68k_guest_format(j4_sandbox *, uint32_t, uint32_t, uint32_t, uint32_t,
                         uint32_t *, char *, unsigned);
 int emu68k_intuition_call(struct emu68k_run *, j4_sandbox *, int,
                           struct j5d_m68k_state *, char *, unsigned);
+void emu68k_intuition_post_call(struct emu68k_run *, j4_sandbox *, int,
+                                struct j5d_m68k_state *);
 int emu68k_trace_tasks(void);
 int emu68k_graphics_call(struct emu68k_run *, j4_sandbox *, int,
                          struct j5d_m68k_state *, char *, unsigned);

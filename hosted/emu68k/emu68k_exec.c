@@ -17,6 +17,17 @@ static int guest_span_ok(j4_sandbox *sb, uint32_t addr, uint32_t size)
            (uint64_t)addr + size <= (uint64_t)sb->sandbox_origin + sb->size;
 }
 
+static int port_has_event_kind(const struct emu68k_run *r, uint32_t port,
+                               unsigned kind)
+{
+    int i;
+    for (i = 0; i < EMU68K_EVENT_MAX; i++)
+        if (r->event_source[i].live && r->event_source[i].port == port &&
+            r->event_source[i].kind == kind)
+            return 1;
+    return 0;
+}
+
 static uint32_t avl_extreme(j4_sandbox *sb, uint32_t node, unsigned direction,
                             char *e, unsigned el)
 {
@@ -570,9 +581,23 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->d[0] = 0;                                    /* bump heap: no free  */
         return 0;
 
-    /* Bookkeeping calls a single-threaded guest can be told the truth about:
-     * there is no other task in its arena to arbitrate against. */
-    case LVO_FORBID: case LVO_PERMIT:
+    /* Forbid/Permit control switching between the guest contexts kept by the
+     * bridge.  Native AROS cannot see those contexts, so its scheduler cannot
+     * enforce this for us.  In particular, yielding halfway through a child
+     * publishing a MsgPort lets its parent queue work that the child then
+     * erases when it finishes NewList(). */
+    case LVO_FORBID:
+        if (r->nctx && r->cur_ctx >= 0 && r->cur_ctx < r->nctx &&
+            r->ctx[r->cur_ctx].forbid_depth != UINT16_MAX)
+            r->ctx[r->cur_ctx].forbid_depth++;
+        return 0;
+    case LVO_PERMIT:
+        if (r->nctx && r->cur_ctx >= 0 && r->cur_ctx < r->nctx &&
+            r->ctx[r->cur_ctx].forbid_depth)
+            r->ctx[r->cur_ctx].forbid_depth--;
+        return 0;
+    /* Interrupt exclusion remains bookkeeping: guest code does not run from
+     * a native interrupt and every arena access stays on this host thread. */
     case LVO_DISABLE: case LVO_ENABLE:
         return 0;
     case LVO_FINDTASK:
@@ -590,6 +615,8 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return create_guest_task(r, sb, st->a[0], st, e, el);
     case LVO_REMTASK: {
         uint32_t task = st->a[1] ? st->a[1] : ctx_task(r);
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                 "task.remove", "\"target\":\"%s\"", bl_id("task", task));
         for (int i = 0; i < r->nctx; i++) {
             struct emu68k_ctx *ctx = &r->ctx[i];
             if (!ctx->live || ctx->task != task) continue;
@@ -858,7 +885,27 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     }
     case LVO_NEWALLOCENTRY:      /* the same allocation, with a failure mask    */
         return exec_call(r, sb, LVO_ALLOCENTRY, st, e, el);
-    case LVO_ADDPORT: case LVO_REMPORT:  /* no public port list here          */
+    case LVO_ADDPORT: {
+        /* AddPort has observable initialization semantics even when this run
+         * does not expose a global public-port registry: classic Exec marks
+         * the node as a port and resets its message queue before publishing
+         * it.  amiga.lib CreatePort relies on this and deliberately hands
+         * AddPort a cleared, not yet NewList-initialized, allocation. */
+        uint32_t port = st->a[1];
+        uint32_t list = port + MP_MSGLIST;
+        if (!guest_span_ok(sb, port, 34u)) {
+            snprintf(e, el, "AddPort received a port outside guest memory");
+            return 1;
+        }
+        gwrite8(sb, port + M68K_MsgPort_mp_Node_ln_Type, 4); /* NT_MSGPORT */
+        gwrite32(sb, list + M68K_List_lh_Head,
+                 list + M68K_List_lh_Tail);
+        gwrite32(sb, list + M68K_List_lh_Tail, 0);
+        gwrite32(sb, list + M68K_List_lh_TailPred,
+                 list + M68K_List_lh_Head);
+        return 0;
+    }
+    case LVO_REMPORT:                    /* no public port list here          */
         return 0;
     case LVO_FINDPORT:       /* FindPort(name A1): a guest has no public ports,
                               * and NULL is the answer callers are written for */
@@ -1342,6 +1389,20 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             if (task && bit < 32)
                 gwrite32(sb, task + TASK_SIGRECVD_OFF,
                          gread32(sb, task + TASK_SIGRECVD_OFF) | (1u << bit));
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.put",
+                     "\"port\":\"%s\",\"message\":\"%s\","
+                     "\"owner\":\"%s\",\"signal_bit\":%u",
+                     bl_id("port", port), bl_id("message", msg),
+                     bl_id("task", task), (unsigned)bit);
+            if (emu68k_trace_tasks())
+                fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x PutMsg "
+                        "port=%08x msg=%08x head=%08x tailpred=%08x owner=%08x "
+                        "bit=%u received=%08x\n",
+                        r->cur_ctx, ctx_task(r), st->pc, port, msg,
+                        gread32(sb, list + M68K_List_lh_Head),
+                        gread32(sb, list + M68K_List_lh_TailPred), task,
+                        (unsigned)bit,
+                        task ? gread32(sb, task + TASK_SIGRECVD_OFF) : 0);
         }
         return 0;
     }
@@ -1425,10 +1486,36 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
         uint32_t succ = head ? gread32(sb, head) : 0;
+        if (emu68k_trace_tasks())
+            fprintf(stderr, "[68k/task] ctx=%d task=%08x pc=%08x GetMsg queue "
+                    "port=%08x head=%08x succ=%08x tailpred=%08x\n",
+                    r->cur_ctx, ctx_task(r), st->pc, port, head, succ,
+                    gread32(sb, list + M68K_List_lh_TailPred));
         if (!head || !succ) { st->d[0] = 0; return 0; }   /* empty */
         gwrite32(sb, list + M68K_List_lh_Head, succ);
         gwrite32(sb, succ + 4, list);
         st->d[0] = head;
+        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.take",
+                 "\"port\":\"%s\",\"message\":\"%s\"",
+                 bl_id("port", port), bl_id("message", head));
+        if (port_has_event_kind(r, port, EMU68K_EVENT_IDCMP) &&
+            guest_span_ok(sb, head, M68K_IntuiMessage_SIZEOF))
+            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+                     "idcmp.take",
+                     "\"port\":\"%s\",\"message\":\"%s\","
+                     "\"class\":\"0x%08x\",\"code\":\"0x%04x\","
+                     "\"qualifier\":\"0x%04x\",\"window\":\"%s\","
+                     "\"iaddress\":\"0x%08x\",\"mouse_x\":%d,"
+                     "\"mouse_y\":%d",
+                     bl_id("port", port), bl_id("message", head),
+                     gread32(sb, head + M68K_IntuiMessage_Class),
+                     gread16(sb, head + M68K_IntuiMessage_Code),
+                     gread16(sb, head + M68K_IntuiMessage_Qualifier),
+                     bl_id("window", gread32(sb,
+                         head + M68K_IntuiMessage_IDCMPWindow)),
+                     gread32(sb, head + M68K_IntuiMessage_IAddress),
+                     (int16_t)gread16(sb, head + M68K_IntuiMessage_MouseX),
+                     (int16_t)gread16(sb, head + M68K_IntuiMessage_MouseY));
         return 0;
     }
     case LVO_REPLYMSG: {
@@ -1482,15 +1569,14 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             struct emu68k_ctx *me = &r->ctx[r->cur_ctx];
             me->blocked = 1;
             me->wait_mask = want;
-            /* Resume AFTER the call: the return address the jsr pushed is what
-             * makes Wait look like it returned. */
-            me->st = *st;
-            me->st.pc = gread32(sb, st->a[7]);
-            me->st.a[7] = st->a[7] + 4;
             bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
                      "scheduler.yield", "\"reason\":\"Wait\",\"mask\":\"0x%08x\"",
                      want);
-            longjmp(me->unwind, 1);
+            /* The JIT knows whether this vector was reached by jsr, jmp, or an
+             * rts trampoline.  Let it save the exact continuation before the
+             * context yields; guessing a return address here restarted every
+             * child at its entry point after its first Wait. */
+            return J5D_LVO_BLOCK;
         }
         /* Nothing for us yet. Give the other contexts a turn; one of them is
          * why we are waiting. Each runs until it blocks back or finishes, and
@@ -1554,7 +1640,27 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * to run; a host sleep here would freeze the entire hosted machine. */
         {
             unsigned external = 0;
-            event_pump(r, st, 0, want, &external);
+            int pumped = event_pump(r, st, 0, want, &external);
+            /* The window port may belong to a guest worker rather than the
+             * context whose Wait brought us here.  Native Intuition has now
+             * signalled that port's recorded owner; give that owner a turn
+             * before looking only at the current task's signal word. */
+            /* A sibling that consumed the previous event may still be in the
+             * middle of its handler after one bounded JIT quantum.  Keep
+             * scheduling every runnable sibling even when this particular
+             * pump found no NEW message; otherwise a long repaint/menu
+             * handler is stranded forever waiting for unrelated input. */
+            if (emu68k_reschedule_siblings(
+                    r, sb, pumped ? "IDCMP delivery" : "runnable continuation",
+                    st->pc, e, el) != 0)
+                return 1;
+            got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
+            if (got) {
+                gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,
+                         gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & ~got);
+                st->d[0] = got;
+                return 0;
+            }
             if (external && emu68k_oscall) {
                 bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
                          "scheduler.yield", "\"reason\":\"IDCMP\"");
@@ -1565,7 +1671,12 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                                      &waitst, r->reserve, emu68k_oscall_user,
                                      scratch, sizeof scratch) != 0)
                         break;
-                    event_pump(r, st, 0, want, NULL);
+                    pumped = event_pump(r, st, 0, want, NULL);
+                    if (emu68k_reschedule_siblings(
+                            r, sb,
+                            pumped ? "IDCMP delivery" : "runnable continuation",
+                            st->pc, e, el) != 0)
+                        return 1;
                     got = gread32(sb, ctx_task(r) + TASK_SIGRECVD_OFF) & want;
                     if (got) {
                         gwrite32(sb, ctx_task(r) + TASK_SIGRECVD_OFF,

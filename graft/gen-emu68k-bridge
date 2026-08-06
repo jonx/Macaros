@@ -3875,8 +3875,25 @@ def validate_policy(targets):
         guest_values = p.get("guest_values", [])
         strings = p.get("strings", [])
         null_args = p.get("null_args", [])
+        narrow_args = p.get("narrow_args", {})
         boopsi = p.get("boopsi")
         args = {n: t for t, n in f.args}
+        if not isinstance(narrow_args, dict):
+            errors.append("function policy %s narrow_args must be an object" % key)
+            narrow_args = {}
+        for arg, narrow_type in narrow_args.items():
+            if arg not in args:
+                errors.append("function policy %s narrows missing argument %s"
+                              % (key, arg))
+            elif norm(args[arg]) not in SIZE_WIDTHS:
+                errors.append("function policy %s narrow argument %s is not a scalar"
+                              % (key, arg))
+            if narrow_type not in ("UBYTE", "BYTE", "UWORD", "WORD"):
+                errors.append("function policy %s narrow argument %s has invalid type %r"
+                              % (key, arg, narrow_type))
+            elif arg in args and SIZE_WIDTHS.get(norm(args[arg]), 0) < SIZE_WIDTHS[narrow_type]:
+                errors.append("function policy %s narrow argument %s widens %s to %s"
+                              % (key, arg, norm(args[arg]), narrow_type))
         for arg, domain in taglists.items():
             if arg not in args:
                 errors.append("function policy %s names missing argument %s" % (key, arg))
@@ -3973,6 +3990,15 @@ def validate_policy(targets):
                         errors.append("function policy %s struct %s field %s nested field %s "
                                       "nullable must be boolean" %
                                       (key, arg, field, nested_field))
+                null_parent_field = fp.get("null_parent_if_field_null")
+                if null_parent_field is not None:
+                    if (kind != "struct" or
+                            null_parent_field not in nested_fields or
+                            nested_fields.get(null_parent_field, {}).get("kind") not in
+                            ("cstr", "object")):
+                        errors.append("function policy %s struct %s field %s "
+                                      "null_parent_if_field_null must name a nested "
+                                      "cstr or object field" % (key, arg, field))
                 if kind == "object" and fp.get("type") not in object_types:
                     errors.append("function policy %s struct %s field %s uses missing object %r"
                                   % (key, arg, field, fp.get("type")))
@@ -4503,6 +4529,13 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
     used_headers = []
     for f in funcs:
         p = function_policy(lib, f)
+        # Source-derived object crossings are policy too.  Include their
+        # object types during the declaration pass, otherwise adding a
+        # guest-owned representation works in an explicitly described vector
+        # but generated inferred vectors call a mirror this file never emits.
+        if (not p and not refusal_policy(lib, f) and
+                f.tier(lib)[0] not in (1, 2)):
+            p = inferred_object_policy(lib, f, object_types)
         if not p:
             continue
         for d in p.get("taglists", {}).values():
@@ -4772,6 +4805,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
         guest_values = policy.get("guest_values", []) if policy else []
         strings = policy.get("strings", []) if policy else []
         null_args = policy.get("null_args", []) if policy else []
+        narrow_args = policy.get("narrow_args", {}) if policy else {}
         boopsi = policy.get("boopsi") if policy else None
         boopsi_class_src = None
         if boopsi:
@@ -4951,9 +4985,12 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                     ospec = object_types[oname]
                     stype = ospec.get("facade_struct")
                     for nested in ospec.get("nested_fields", []):
+                        nested_action = ("consume" if op.get("consume", False)
+                                         and nested.get("consume_with_parent", False)
+                                         else "release")
                         if nested["kind"] == "object":
                             post.append(([
-                                "emu68k_object_release(guest0,",
+                                "emu68k_object_%s(guest0," % nested_action,
                                 "    (ULONG)emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s, 4),"
                                 % (src, stype, nested["field"]),
                                 "    EMU_OBJ_%s);" % c_ident(nested["type"]),
@@ -4965,15 +5002,18 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                 for sn in nested_spec.get("nested_fields", []):
                                     if sn["kind"] != "object":
                                         continue
+                                    sub_action = ("consume" if op.get("consume", False)
+                                                  and sn.get("consume_with_parent", False)
+                                                  else "release")
                                     post.append(([
-                                        "emu68k_object_release(guest0,",
+                                        "emu68k_object_%s(guest0," % sub_action,
                                         "    (ULONG)emu68k_scalar_from_guest(guest0, %s + M68K_%s_%s + M68K_%s_%s, 4),"
                                         % (src, stype, nested["field"],
                                            nested_struct, sn["field"]),
                                         "    EMU_OBJ_%s);" % c_ident(sn["type"]),
                                     ], "always"))
                             post.append(([
-                                "emu68k_object_release(guest0,",
+                                "emu68k_object_%s(guest0," % nested_action,
                                 "    %s + M68K_%s_%s," % (src, stype, nested["field"]),
                                 "    EMU_OBJ_%s);" % c_ident(nested["type"]),
                             ], "always"))
@@ -5233,8 +5273,17 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                                       "emu_struct_nested_object_%d_%d_%d;"
                                       % (ai, fi, nested_field, ai, fi, nested_field,
                                          ai, fi, nfi))
-                            w("            emu_struct_%d.%s = &emu_struct_nested_%d_%d;"
-                              % (ai, field, ai, fi))
+                            null_parent_field = fp.get("null_parent_if_field_null")
+                            if null_parent_field is not None:
+                                null_parent_index = list(fp.get("fields", {})).index(
+                                    null_parent_field)
+                                w("            if (emu_struct_nested_field_%d_%d_%d)"
+                                  % (ai, fi, null_parent_index))
+                                w("                emu_struct_%d.%s = &emu_struct_nested_%d_%d;"
+                                  % (ai, field, ai, fi))
+                            else:
+                                w("            emu_struct_%d.%s = &emu_struct_nested_%d_%d;"
+                                  % (ai, field, ai, fi))
                             w("        }")
                             if not fp.get("nullable", True):
                                 w("        else")
@@ -5342,12 +5391,19 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         factor_expr = str(factor)
                     elif isinstance(factor, str):
                         factor_reg = f.regs[[n for _t, n in f.args].index(factor)]
-                        factor_expr = "(ULONG)%s" % reg_expr(factor_reg)
+                        factor_value = reg_expr(factor_reg)
+                        if factor in narrow_args:
+                            factor_value = "(%s)%s" % (narrow_args[factor], factor_value)
+                        factor_expr = "(ULONG)%s" % factor_value
                     elif "sum" in factor:
                         pieces = []
                         for factor_arg in factor["sum"]:
                             factor_reg = f.regs[[n for _t, n in f.args].index(factor_arg)]
-                            pieces.append("(UQUAD)(ULONG)%s" % reg_expr(factor_reg))
+                            factor_value = reg_expr(factor_reg)
+                            if factor_arg in narrow_args:
+                                factor_value = "(%s)%s" % (narrow_args[factor_arg],
+                                                           factor_value)
+                            pieces.append("(UQUAD)(ULONG)%s" % factor_value)
                         factor_expr = " + ".join(pieces)
                     else:
                         first, last = factor["span"]
@@ -5504,6 +5560,10 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w("            return 1;")
                 w("        }")
                 call_args.append("(%s)NULL" % norm(atype))
+                continue
+            if aname in narrow_args:
+                call_args.append("(%s)(%s)%s" %
+                                 (norm(atype), narrow_args[aname], src))
                 continue
             if aname not in taglists:
                 if classify(atype) == "bptr":
@@ -6078,6 +6138,52 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                         if nested_spec.get("kind") == "facade":
                             sub_off = "M68K_%s_SIZEOF" % nested_spec["facade_struct"]
                             for si, sn in enumerate(nested_spec.get("nested_fields", [])):
+                                if sn["kind"] == "object":
+                                    # A facade reached through another facade
+                                    # is not complete until its own pointer
+                                    # fields have guest identities too.  The
+                                    # scalar walker deliberately cannot copy a
+                                    # native pointer, so publish the same typed
+                                    # token that a top-level result would get.
+                                    sn_type = sn["type"]
+                                    sn_spec = object_types[sn_type]
+                                    sub_native = nested.get("native_field", nested["field"])
+                                    sn_native = sn.get("native_field", sn["field"])
+                                    w("            ULONG emu_sub_object_token_%d_%d = 0;" %
+                                      (ni, si))
+                                    w("            if (emu_facade_native->%s)" % sub_native)
+                                    w("            {")
+                                    if sn_spec.get("kind") == "facade":
+                                        sn_struct = sn_spec["facade_struct"]
+                                        sn_size = "M68K_%s_SIZEOF" % sn_struct
+                                        for snf in sn_spec.get("nested_fields", []):
+                                            if snf["kind"] == "u16_array":
+                                                sn_size += " + sizeof(UWORD) * %d" % snf["max_count"]
+                                            elif snf["kind"] == "cstr":
+                                                sn_size += " + %d" % snf["max_count"]
+                                        w("                if (emu68k_object_to_guest_facade(guest0,")
+                                        w("                        emu_facade_native->%s->%s, EMU_OBJ_%s," %
+                                          (sub_native, sn_native, c_ident(sn_type)))
+                                        w("                        NULL, NULL, \"%s\", %s," %
+                                          (sn_type, sn_size))
+                                        w("                        emu_fields_%s, EMU_NFIELDS(emu_fields_%s)," %
+                                          (sn_struct, sn_struct))
+                                        w("                        &emu_sub_object_token_%d_%d, err, errlen) < 0)" %
+                                          (ni, si))
+                                    else:
+                                        w("                if (emu68k_object_to_guest(guest0,")
+                                        w("                        emu_facade_native->%s->%s, EMU_OBJ_%s," %
+                                          (sub_native, sn_native, c_ident(sn_type)))
+                                        w("                        NULL, NULL, \"%s\"," % sn_type)
+                                        w("                        &emu_sub_object_token_%d_%d, err, errlen) < 0)" %
+                                          (ni, si))
+                                    w("                    return 1;")
+                                    w("                emu68k_scalar_to_guest(guest0,")
+                                    w("                    emu_nested_token_%d + M68K_%s_%s, 4," %
+                                      (ni, nested_struct, sn["field"]))
+                                    w("                    emu_sub_object_token_%d_%d);" % (ni, si))
+                                    w("            }")
+                                    continue
                                 if sn["kind"] != "cstr":
                                     continue
                                 sub_native = nested.get("native_field", nested["field"])

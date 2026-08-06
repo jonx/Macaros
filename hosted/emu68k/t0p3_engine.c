@@ -45,6 +45,7 @@ struct bctx {
     j4_sandbox *sb;
     uint32_t preserve_base;
     unsigned preserve_calls;
+    unsigned block_calls;
 };
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsigned el)
 {
@@ -53,6 +54,10 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e, unsig
         (lvo == 1 || lvo == 2)) {
         c->preserve_calls++;
         return 0;
+    }
+    if (c->preserve_base && st->a[6] == c->preserve_base && lvo == 3) {
+        c->block_calls++;
+        return J5D_LVO_BLOCK;
     }
     return stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
 }
@@ -215,6 +220,34 @@ int main(void)
             P->st.a[6]);
     j5d_clear_libbases();
     prog_free(P);
+
+    /* A bridge-level block can occur inside a nested 68k subroutine.  Resume
+     * must retain the stack/depth baseline from the original top-level run;
+     * otherwise the subroutine's first RTS is mistaken for program exit and
+     * the caller after BSR is silently skipped. */
+    static const uint32_t block_code[] = {
+        0x2C7C0024u, 0x00006100u, 0x0006702Au,
+        0x4E754EAEu, 0xFFEE4E75u
+    };
+    uint8_t qb[256]; size_t qlen = mk_hunk(qb, block_code, 5);
+    prog *Q = prog_new(qb, qlen);
+    Q->c.preserve_base = 0x00240000u;
+    j5d_engine_activate(Q->eng);
+    j5d_register_libbase(Q->c.preserve_base);
+    int qrc = prog_run(Q, err, sizeof err);
+    fprintf(stderr, "[T0P3] BLOCK first rc=%d calls=%u pc=%08x d0=%08x err=%s\n",
+            qrc, Q->c.block_calls, Q->st.pc, Q->d0, err);
+    CHECK(qrc == J5D_RC_YIELD, "nested bridge block yielded the engine");
+    CHECK(Q->c.block_calls == 1, "blocking library vector was called once");
+    qrc = prog_run(Q, err, sizeof err);
+    CHECK(qrc == 0, err);
+    CHECK(Q->d0 == 42,
+          "resume returned through the blocked subroutine into its caller");
+    CHECK(Q->c.block_calls == 1,
+          "resume continued after the blocked vector without calling it again");
+    fprintf(stderr, "[T0P3] BLOCK ok: nested blocked call resumed through its caller\n");
+    j5d_clear_libbases();
+    prog_free(Q);
 
     /* ================= D. two sequential runs, one process, two instances ========= */
     /* The exact sequence that crashed the global single-run engine ([T0-P1] NOTES.md

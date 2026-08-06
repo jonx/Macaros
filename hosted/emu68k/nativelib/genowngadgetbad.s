@@ -24,6 +24,7 @@ INT_AddGList        equ -438
 MEMF_CLEAR          equ $00010000
 GADGET_SIZE         equ 56
 GFLG_EXTENDED       equ $8000
+GFLG_GADGIMAGE      equ $0004
 GTYP_BOOLGADGET     equ 1
 
 WA_Width            equ $80000066
@@ -84,6 +85,7 @@ TAG_DONE            equ 0
     ; NOW set a field the mirror cannot carry. Nothing was rebuilt in between,
     ; so only a per-crossing check can catch this.
     move.l  gadget1(pc),a0
+    or.w    #GFLG_GADGIMAGE,12(a0)      ; render pointer is an Image, not Border
     move.l  #$00042000,18(a0)            ; GadgetRender: a guest pointer
 
     move.l  a4,a6

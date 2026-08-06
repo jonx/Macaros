@@ -431,6 +431,26 @@
 #define M68K_Window_nextchild 148
 #define M68K_Window_parent 152
 
+/* struct IntuiMessage: 52 bytes on m68k (IntuiMessage) */
+#define M68K_IntuiMessage_SIZEOF 52
+#define M68K_IntuiMessage_ExecMessage_mn_Node_ln_Succ 0
+#define M68K_IntuiMessage_ExecMessage_mn_Node_ln_Pred 4
+#define M68K_IntuiMessage_ExecMessage_mn_Node_ln_Type 8
+#define M68K_IntuiMessage_ExecMessage_mn_Node_ln_Pri 9
+#define M68K_IntuiMessage_ExecMessage_mn_Node_ln_Name 10
+#define M68K_IntuiMessage_ExecMessage_mn_ReplyPort 14
+#define M68K_IntuiMessage_ExecMessage_mn_Length 18
+#define M68K_IntuiMessage_Class 20
+#define M68K_IntuiMessage_Code 24
+#define M68K_IntuiMessage_Qualifier 26
+#define M68K_IntuiMessage_IAddress 28
+#define M68K_IntuiMessage_MouseX 32
+#define M68K_IntuiMessage_MouseY 34
+#define M68K_IntuiMessage_Seconds 36
+#define M68K_IntuiMessage_Micros 40
+#define M68K_IntuiMessage_IDCMPWindow 44
+#define M68K_IntuiMessage_SpecialLink 48
+
 /* struct ClockData: 14 bytes on m68k (ClockData) */
 #define M68K_ClockData_SIZEOF 14
 #define M68K_ClockData_sec 0

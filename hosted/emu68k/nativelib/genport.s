@@ -21,6 +21,8 @@ EXEC_ReplyMsg    equ -378
 EXEC_FindTask    equ -294
 EXEC_Wait        equ -318
 EXEC_Signal      equ -324
+EXEC_AddPort     equ -354
+EXEC_RemPort     equ -360
 EXEC_CreateMsgPort equ -666
 EXEC_DeleteMsgPort equ -672
 DOS_PutStr       equ -948
@@ -40,8 +42,6 @@ TC_SIGRECVD  equ 26
     move.l  d0,a5
 
     ; ---- NewList on both ports, by hand: lh_Head = &lh_Tail, lh_TailPred = &lh_Head
-    lea     port(pc),a0
-    bsr.w   initport
     lea     reply(pc),a0
     bsr.w   initport
 
@@ -53,6 +53,19 @@ TC_SIGRECVD  equ 26
     lea     port(pc),a0
     move.l  d0,MP_SIGTASK(a0)
     move.b  #12,MP_SIGBIT(a0)
+
+    ; AddPort itself must initialize the queue. CreatePort allocates cleared
+    ; memory and relies on exactly this Exec contract.
+    move.l  4.w,a6
+    lea     port(pc),a1
+    jsr     EXEC_AddPort(a6)
+    lea     port+MP_MSGLIST(pc),a0
+    move.l  a0,d0
+    addq.l  #4,d0
+    cmp.l   (a0),d0
+    bne.w   badadd
+    cmpa.l  8(a0),a0
+    bne.w   badadd
 
     ; clear the signal we are about to watch for
     move.l  a3,a0
@@ -153,6 +166,9 @@ badwait
 badmade
     lea     mademsg(pc),a0
     bra.w   say
+badadd
+    lea     addmsg(pc),a0
+    bra.w   say
 badsig
     lea     sigmsg(pc),a0
     bra.w   say
@@ -194,5 +210,6 @@ emptymsg dc.b "[T3PORT] FAIL: the port was not empty after both were taken",10,0
 replymsg dc.b "[T3PORT] FAIL: ReplyMsg did not reach the reply port",10,0
 waitmsg  dc.b "[T3PORT] FAIL: a signal sent to our own task was not waitable",10,0
 mademsg  dc.b "[T3PORT] FAIL: CreateMsgPort gave no signal bit or owner",10,0
+addmsg   dc.b "[T3PORT] FAIL: AddPort did not initialize its message queue",10,0
 dosname  dc.b "dos.library",0
     even

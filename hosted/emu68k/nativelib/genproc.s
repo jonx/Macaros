@@ -11,12 +11,15 @@
 
 EXEC_OpenLibrary equ -552
 EXEC_FindTask    equ -294
+EXEC_Forbid      equ -132
+EXEC_Permit      equ -138
 EXEC_PutMsg      equ -366
 EXEC_GetMsg      equ -372
 EXEC_ReplyMsg    equ -378
 EXEC_Wait        equ -318
 DOS_PutStr       equ -948
 DOS_CreateNewProc equ -498
+DOS_Cli          equ -492
 
 MP_SIGBIT    equ 15
 MP_SIGTASK   equ 16
@@ -24,10 +27,14 @@ MP_MSGLIST   equ 20
 MN_REPLYPORT equ 14
 MN_LENGTH    equ 18
 TC_SIGRECVD  equ 26
+EB_THISTASK  equ 276
 
 NP_Entry     equ $800003EB
 NP_StackSize equ $800003F3
+NP_Name      equ $800003F4
+NP_Cli       equ $800003FA
 TAG_DONE     equ 0
+PR_CLI       equ 172
 
 ;--------------------------------------------------------------- parent
     move.l  4.w,a6
@@ -40,8 +47,6 @@ TAG_DONE     equ 0
     move.l  d0,dosbase
 
     lea     parentport(pc),a0
-    bsr.w   initport
-    lea     childport(pc),a0
     bsr.w   initport
 
     ; our own port, on signal bit 13
@@ -60,6 +65,9 @@ TAG_DONE     equ 0
     jsr     DOS_CreateNewProc(a6)
     tst.l   d0
     beq.w   badstart
+    move.l  d0,a0
+    tst.l   PR_CLI(a0)                    ; classic Process field must exist
+    beq.w   badcli
 
     ; send it a message that names our port as the reply port
     lea     work(pc),a0
@@ -93,6 +101,9 @@ TAG_DONE     equ 0
 badstart
     lea     startmsg(pc),a0
     bra.w   say
+badcli
+    lea     climsg(pc),a0
+    bra.w   say
 badreply
     lea     replymsg(pc),a0
     bra.w   say
@@ -109,13 +120,32 @@ done
 ;--------------------------------------------------------------- child
 ; find itself, adopt the port, then wait / take / answer.
 childentry
+    move.l  dosbase(pc),a6
+    jsr     DOS_Cli(a6)                   ; DOS must see the same child CLI
+    tst.l   d0
+    beq.s   childbadcli
     move.l  4.w,a6
     suba.l  a1,a1
     jsr     EXEC_FindTask(a6)
     move.l  d0,a3                        ; OUR task, not the parent's
+    cmp.l   EB_THISTASK(a6),a3           ; direct SysBase readers agree too
+    bne.s   childbadcli
+
+    ; Publishing and initializing this port is one atomic scheduling region.
+    ; The deliberately long gap crosses many bridge scheduler polls. If a
+    ; guest Forbid is treated as a no-op, CreateNewProc returns here, the
+    ; parent queues work, and the NewList below silently erases that work.
+    move.l  4.w,a6
+    jsr     EXEC_Forbid(a6)
     lea     childport(pc),a0
-    move.l  d0,MP_SIGTASK(a0)
+    move.l  a3,MP_SIGTASK(a0)
     move.b  #14,MP_SIGBIT(a0)
+    move.w  #4095,d7
+childpublish
+    dbra    d7,childpublish
+    bsr.w   initport
+    move.l  4.w,a6
+    jsr     EXEC_Permit(a6)
 
 childloop
     move.l  4.w,a6
@@ -138,6 +168,9 @@ childgot
     jsr     EXEC_ReplyMsg(a6)
     rts                                  ; one message is enough: exit
 
+childbadcli
+    rts                                  ; no reply makes the parent fail loudly
+
 ; NewList(a0): an empty exec list points its head at its own tail
 initport
     lea     MP_MSGLIST(a0),a1
@@ -152,6 +185,8 @@ proctags
     dc.l    NP_Entry
     dc.l    childentry
     dc.l    NP_StackSize,16384
+    dc.l    NP_Name,procname
+    dc.l    NP_Cli,-1
     dc.l    TAG_DONE,0
 
 dosbase     dc.l 0
@@ -162,7 +197,9 @@ work        ds.b 32
 
 passmsg   dc.b "[T3PROC] PASS",10,0
 startmsg  dc.b "[T3PROC] FAIL: the 68k process did not start",10,0
+climsg    dc.b "[T3PROC] FAIL: NP_Cli did not create a classic CLI",10,0
 replymsg  dc.b "[T3PROC] FAIL: no reply came back from the child",10,0
 workmsg   dc.b "[T3PROC] FAIL: the child did not do the work",10,0
+procname  dc.b "t3proc-child",0
 dosname   dc.b "dos.library",0
     even

@@ -56,19 +56,21 @@
    "c_type": "struct Screen *",
    "kind": "facade",
    "facade_struct": "Screen",
-   "facade_size": 184,
+   "facade_size": 354,
    "nested_fields": [
     {
      "field": "ViewPort_Next",
      "native_field": "ViewPort",
      "kind": "embedded_object",
-     "type": "ViewPort"
+     "type": "ViewPort",
+     "consume_with_parent": true
     },
     {
      "field": "ViewPort_ColorMap",
      "native_field": "ViewPort.ColorMap",
      "kind": "object",
-     "type": "ColorMap"
+     "type": "ColorMap",
+     "consume_with_parent": true
     },
     {
      "field": "Font",
@@ -79,7 +81,15 @@
      "field": "RastPort_Layer",
      "native_field": "RastPort",
      "kind": "embedded_facade",
-     "type": "RastPort"
+     "type": "RastPort",
+     "consume_with_parent": true
+    },
+    {
+     "field": "LayerInfo_top_layer",
+     "native_field": "LayerInfo",
+     "kind": "embedded_object",
+     "type": "Layer_Info",
+     "consume_with_parent": true
     }
    ],
    "destructor": "intuition.library.CloseScreen"
@@ -95,6 +105,7 @@
    "c_type": "struct TextFont *",
    "kind": "facade",
    "facade_struct": "TextFont",
+   "facade_size": 116,
    "destructor": "graphics.library.CloseFont",
    "nested_fields": [
     {
@@ -152,7 +163,8 @@
   "Layer": {
    "id": 22,
    "c_type": "struct Layer *",
-   "kind": "opaque",
+   "kind": "facade",
+   "facade_struct": "Layer",
    "destructor": "layers.library.DeleteLayer",
    "destructor_dummy_first": true
   },
@@ -193,7 +205,20 @@
    "c_type": "struct Menu *",
    "kind": "facade",
    "facade_struct": "Menu",
+   "linked_field": "NextMenu",
+   "linked_limit": 1024,
+   "guest_owned": {
+    "export": true,
+    "struct": "Menu",
+    "linked_field": "NextMenu",
+    "linked_limit": 1024
+   },
    "nested_fields": [
+    {
+     "field": "NextMenu",
+     "kind": "object",
+     "type": "Menu"
+    },
     {
      "field": "FirstItem",
      "kind": "object",
@@ -202,12 +227,15 @@
    ],
    "destructor": "gadtools.library.FreeMenus"
   },
-  "RastPort": {
-   "id": 18,
-   "c_type": "struct RastPort *",
-   "kind": "facade",
-   "facade_struct": "RastPort",
-   "nested_fields": [
+    "RastPort": {
+      "id": 18,
+      "c_type": "struct RastPort *",
+      "kind": "facade",
+      "facade_struct": "RastPort",
+      "guest_owned": {
+        "struct": "RastPort"
+      },
+      "nested_fields": [
     {
      "field": "Layer",
      "kind": "object",
@@ -240,12 +268,14 @@
     {
      "field": "RPort",
      "kind": "object",
-     "type": "RastPort"
+     "type": "RastPort",
+     "consume_with_parent": true
     },
     {
      "field": "BorderRPort",
      "kind": "object",
-     "type": "RastPort"
+     "type": "RastPort",
+     "consume_with_parent": true
     },
     {
      "field": "UserPort",
@@ -261,6 +291,11 @@
      "field": "IFont",
      "kind": "object",
      "type": "TextFont"
+    },
+    {
+     "field": "WLayer",
+     "kind": "object",
+     "type": "Layer"
     }
    ],
    "destructor": "intuition.library.CloseWindow"
@@ -300,7 +335,27 @@
    "id": 21,
    "c_type": "struct MenuItem *",
    "kind": "facade",
-   "facade_struct": "MenuItem"
+   "facade_struct": "MenuItem",
+   "linked_field": "NextItem",
+   "linked_limit": 1024,
+   "guest_owned": {
+    "export": true,
+    "struct": "MenuItem",
+    "linked_field": "NextItem",
+    "linked_limit": 1024
+   },
+   "nested_fields": [
+    {
+     "field": "NextItem",
+     "kind": "object",
+     "type": "MenuItem"
+    },
+    {
+     "field": "SubItem",
+     "kind": "object",
+     "type": "MenuItem"
+    }
+   ]
   },
   "AnimOb": {
    "id": 27,
@@ -326,7 +381,13 @@
   "Border": {
    "id": 31,
    "c_type": "struct Border *",
-   "kind": "opaque"
+   "kind": "opaque",
+   "guest_owned": {
+    "export": true,
+    "struct": "Border",
+    "linked_field": "NextBorder",
+    "linked_limit": 1024
+   }
   },
   "CopList": {
    "id": 32,
@@ -365,11 +426,17 @@
    "c_type": "struct ICData *",
    "kind": "opaque"
   },
-  "Image": {
-   "id": 39,
-   "c_type": "struct Image *",
-   "kind": "opaque"
-  },
+    "Image": {
+      "id": 39,
+      "c_type": "struct Image *",
+      "kind": "opaque",
+      "guest_owned": {
+        "export": true,
+        "struct": "Image",
+        "linked_field": "NextImage",
+        "linked_limit": 1024
+      }
+    },
   "LocalVar": {
    "id": 40,
    "c_type": "struct LocalVar *",
@@ -1451,6 +1518,10 @@
      "kind": "u32"
     },
     {
+     "name": "SA_Type",
+     "kind": "u32"
+    },
+    {
      "name": "SA_Overscan",
      "kind": "u32"
     },
@@ -1478,6 +1549,10 @@
     },
     {
      "name": "SA_SharePens",
+     "kind": "u32"
+    },
+    {
+     "name": "SA_FullPalette",
      "kind": "u32"
     },
     {
@@ -3452,9 +3527,20 @@
    }
   },
   "intuition.library.OpenScreenTagList": {
-   "null_args": [
-    "newScreen"
-   ],
+   "structs": {
+    "newScreen": {
+     "type": "NewScreen", "direction": "in", "nullable": true,
+     "fields": {
+      "Font": { "kind": "struct", "type": "TextAttr",
+       "null_parent_if_field_null": "ta_Name", "fields": {
+       "ta_Name": { "kind": "cstr", "nullable": true }
+      } },
+      "DefaultTitle": { "kind": "cstr" },
+      "Gadgets": { "kind": "object", "type": "Gadget" },
+      "CustomBitMap": { "kind": "object", "type": "BitMap" }
+     }
+    }
+   },
    "taglists": {
     "tagList": "intuition.open_screen"
    },
@@ -3473,6 +3559,7 @@
    }
   },
   "intuition.library.OpenWindowTagList": {
+   "handwritten_overlay": true,
    "null_args": [
     "newWindow"
    ],
@@ -3485,6 +3572,7 @@
    }
   },
   "intuition.library.CloseWindow": {
+   "handwritten_overlay": true,
    "objects": {
     "window": {
      "type": "Window",
@@ -3724,6 +3812,7 @@
    }
   },
   "graphics.library.CloseFont": {
+   "handwritten_overlay": true,
    "objects": {
     "textFont": {
      "type": "TextFont",
@@ -4119,6 +4208,30 @@
      "type": "Locale",
      "nullable": false
     }
+   }
+  },
+  "locale.library.GetLocaleStr": {
+   "objects": {
+    "locale": {
+     "type": "Locale",
+     "nullable": false
+    }
+   },
+   "result": {
+    "kind": "cstr",
+    "max_count": 4096
+   }
+  },
+  "locale.library.GetCatalogStr": {
+   "objects": {
+    "catalog": {
+     "type": "Catalog",
+     "nullable": true
+    }
+   },
+   "result": {
+    "kind": "cstr",
+    "max_count": 4096
    }
   },
   "locale.library.OpenCatalogA": {
@@ -4835,6 +4948,7 @@
    "origin": "import"
   },
   "graphics.library.RemFont": {
+   "handwritten_overlay": true,
    "objects": {
     "textFont": {
      "type": "TextFont",
@@ -4898,6 +5012,7 @@
    "origin": "import"
   },
   "graphics.library.StripFont": {
+   "handwritten_overlay": true,
    "objects": {
     "font": {
      "type": "TextFont",
@@ -4907,6 +5022,18 @@
    "origin": "import"
   },
   "graphics.library.Text": {
+   "buffers": {
+    "string": {
+     "direction": "in",
+     "extent": [
+      "count"
+     ],
+     "nullable": false
+    }
+   },
+   "narrow_args": {
+    "count": "UWORD"
+   },
    "objects": {
     "rp": {
      "type": "RastPort",
@@ -5724,8 +5851,9 @@
     "newScreen": {
      "type": "NewScreen", "direction": "in",
      "fields": {
-      "Font": { "kind": "struct", "type": "TextAttr", "fields": {
-       "ta_Name": { "kind": "cstr", "nullable": false }
+      "Font": { "kind": "struct", "type": "TextAttr",
+       "null_parent_if_field_null": "ta_Name", "fields": {
+       "ta_Name": { "kind": "cstr", "nullable": true }
       } },
       "DefaultTitle": { "kind": "cstr" },
       "Gadgets": { "kind": "object", "type": "Gadget" },
@@ -5736,6 +5864,7 @@
    "result": { "kind": "object", "type": "Screen" }
   },
   "intuition.library.OpenWindow": {
+   "handwritten_overlay": true,
    "structs": {
     "newWindow": {
      "type": "NewWindow", "direction": "in",
@@ -5765,6 +5894,12 @@
   },
   "intuition.library.IntuiTextLength": {
    "deep_structs": { "iText": { "type": "IntuiText", "nullable": false } }
+  },
+  "intuition.library.DrawBorder": {
+   "objects": {
+    "rp": { "type": "RastPort", "nullable": false },
+    "border": { "type": "Border", "nullable": true }
+   }
   },
   "intuition.library.GetDefaultPubScreen": {
    "buffers": {
@@ -5883,6 +6018,7 @@
    "taglists": { "targetTags": "graphics.ignored_tags" }
   },
   "graphics.library.ExtendFont": {
+   "handwritten_overlay": true,
    "objects": {
     "font": { "type": "TextFont", "nullable": false }
    },

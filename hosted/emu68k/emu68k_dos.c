@@ -2,6 +2,7 @@
 #include "emu68k_internal.h"
 #include "emu68k_genlibs.h"
 #include "emu68k_guest_offsets.h"
+#include "bridge_lab.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -225,8 +226,8 @@ static uint32_t dos_current_cli(struct emu68k_run *r, j4_sandbox *sb)
 {
     uint32_t process = dos_current_process(r);
     uint32_t bptr;
-    if (!dos_span(sb, process + M68K_Process_pr_CLI, 4)) return 0;
-    bptr = emu68k_gread32(sb, process + M68K_Process_pr_CLI);
+    if (!dos_span(sb, process + CLASSIC_PR_CLI, 4)) return 0;
+    bptr = emu68k_gread32(sb, process + CLASSIC_PR_CLI);
     return bptr << 2;
 }
 
@@ -575,6 +576,8 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     }
     case DOS_LVO_EXIT:
+        bl_event(BL_RUNTIME, r->cur_ctx, dos_current_process(r), st->pc,
+                 "process.exit", "\"status\":%d", (int32_t)st->d[1]);
         if (r->command_can_unwind) {
             r->command_return = st->d[1];
             longjmp(r->command_unwind, 1);
@@ -639,13 +642,13 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     case DOS_LVO_GETARGSTR:
         st->d[0] = emu68k_gread32(sb, dos_current_process(r) +
-                                      M68K_Process_pr_Arguments);
+                                      CLASSIC_PR_ARGUMENTS);
         return 0;
     case DOS_LVO_SETARGSTR: {
         uint32_t p = dos_current_process(r);
-        uint32_t old = emu68k_gread32(sb, p + M68K_Process_pr_Arguments);
+        uint32_t old = emu68k_gread32(sb, p + CLASSIC_PR_ARGUMENTS);
         if (st->d[1] && !emu68k_guest_cstr(sb, st->d[1])) goto bad;
-        emu68k_gwrite32(sb, p + M68K_Process_pr_Arguments, st->d[1]);
+        emu68k_gwrite32(sb, p + CLASSIC_PR_ARGUMENTS, st->d[1]);
         st->d[0] = old;
         return 0;
     }
@@ -653,7 +656,7 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         st->d[0] = 0;
         for (int i = 0; i < r->nctx; i++)
             if (r->ctx[i].live && !r->ctx[i].finished &&
-                emu68k_gread32(sb, r->ctx[i].task + M68K_Process_pr_TaskNum) ==
+                emu68k_gread32(sb, r->ctx[i].task + CLASSIC_PR_TASKNUM) ==
                     st->d[1]) {
                 st->d[0] = r->ctx[i].task;
                 break;

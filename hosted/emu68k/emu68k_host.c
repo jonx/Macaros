@@ -132,7 +132,7 @@
 #define GUEST_CLI       0x00211000u
 #define GUEST_COMMAND   (GUEST_CLI + 64u)
 #define PR_TASK_LN_TYPE 8            /* tc_Node.ln_Type: NT_PROCESS = 13       */
-#define PR_CLI_OFFSET   172
+#define PR_CLI_OFFSET   CLASSIC_PR_CLI
 #define CLI_COMMAND_OFF M68K_CommandLineInterface_cli_CommandName
 #define NT_PROCESS      13
 
@@ -404,6 +404,9 @@ static int classify_hardware(void *fault_addr, void *user)
                     (unsigned long long)r->sb.sandbox_origin + r->sb.size);
         return 0;                                  /* a genuine wild access     */
     }
+    if (getenv("EMU68K_TRACE_FAULT"))
+        fprintf(stderr, "[emu68k] classified hardware fault: %s\n",
+                g_hw_detail);
     return 1;
 }
 
@@ -1559,9 +1562,12 @@ int emu68k_event_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
         bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
                  "event.pump",
                  "\"destination\":\"%s\",\"mask\":\"0x%08x\","
-                 "\"matched_sources\":%u,\"delivered\":%d",
+                 "\"matched_sources\":%u,\"delivered\":%d,"
+                 "\"classes\":\"0x%08x\",\"last_class\":\"0x%08x\","
+                 "\"last_code\":\"0x%04x\"",
                  port ? bl_id("port", port) : "*", mask,
-                 local_matches, delivered);
+                 local_matches, delivered, probe.d[2], probe.d[3],
+                 probe.d[4] & 0xffffu);
     if (delivered && port)
         bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
                  "port.pump", "\"port\":\"%s\",\"messages\":%d",
@@ -1661,10 +1667,13 @@ static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
 {
     if (g_trace < 0) g_trace = getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
     if (!g_trace) return;
-    fprintf(stderr, "[68k] %s LVO %d (%d) pc=%08x  d0=%08x d1=%08x "
+    fprintf(stderr, "[68k] %s LVO %d (%d) pc=%08x  "
+            "d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x "
+            "d6=%08x d7=%08x "
             "a0=%08x a1=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
             lib, lvo, -6 * lvo, st->pc,
-            st->d[0], st->d[1], st->a[0], st->a[1], st->a[3],
+            st->d[0], st->d[1], st->d[2], st->d[3], st->d[4], st->d[5],
+            st->d[6], st->d[7], st->a[0], st->a[1], st->a[3],
             st->a[4], st->a[5], st->a[6], st->a[7]);
     (void)r;
 }
@@ -1721,6 +1730,11 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
              "\"from\":%d", outer);
     ctx->on_stack = 1;
     r->cur_ctx = idx;
+    /* ExecBase is guest memory shared by every translated context.  Classic
+     * code commonly reads SysBase->ThisTask directly (including Exec's own
+     * CreateMsgPort implementation), so changing only ctx_task() leaves ports
+     * owned by whichever task happened to run first. */
+    emu68k_gwrite32(sb, EXEC_BASE + EXECBASE_THISTASK, ctx->task);
     j5d_engine_activate(ctx->eng);
     /* The bases a program has opened are recorded IN the engine instance, and
      * this context has its own. Without replaying them its engine does not know
@@ -1750,19 +1764,27 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
         ctx->can_unwind = 0;
         domain_leave_guest(dom);
         if (rc == 0) {
+            bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                     "scheduler.finish", "\"reason\":\"return\"");
             ctx->finished = 1;            /* it returned: the process exited  */
         } else if (rc == J5D_RC_YIELD) {
-            bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
-                     "scheduler.yield", "\"reason\":\"quantum\"");
+            if (!ctx->blocked)
+                bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                         "scheduler.yield", "\"reason\":\"quantum\"");
             rc = 0;                       /* parked safely; parent continues  */
         }
     } else {
         ctx->can_unwind = 0;              /* it blocked back; state is parked */
+        if (ctx->finished)
+            bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                     "scheduler.finish", "\"reason\":\"guest-exit\"");
         rc = 0;
     }
     j5d_engine_activate(outer_eng);
     j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     r->cur_ctx = outer;
+    emu68k_gwrite32(sb, EXEC_BASE + EXECBASE_THISTASK,
+                    r->ctx[outer].task);
     ctx->on_stack = 0;
 
     return rc != 0;
@@ -2083,11 +2105,14 @@ fail:
 #define NP_Output    0x800003EDu
 #define NP_CloseIn   0x800003EEu
 #define NP_CloseOut  0x800003EFu
+#define NP_Cli       0x800003FAu
 
 int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
                                struct j5d_m68k_state *st, char *e, unsigned el)
 {
     uint32_t tags = st->d[1], entry = 0, stacksize = 4096;
+    uint32_t name = 0, input = 0, output = 0, want_cli = 0;
+    int32_t priority = 0;
     uint32_t t, v, at;
     struct emu68k_ctx *ctx;
     int idx;
@@ -2099,10 +2124,13 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         switch (t) {
         case NP_Entry:     entry = v; break;
         case NP_StackSize: stacksize = v; break;
-        case NP_Name: case NP_Priority:
-        case NP_Input: case NP_Output:
+        case NP_Name:      name = v; break;
+        case NP_Priority:  priority = (int32_t)v; break;
+        case NP_Input:     input = v; break;
+        case NP_Output:    output = v; break;
+        case NP_Cli:       want_cli = v; break;
         case NP_CloseIn: case NP_CloseOut:
-            break;                    /* recorded by the caller, not needed here */
+            break;                    /* cleanup policy when the child exits */
         default:
             snprintf(e, el, "capability gap: CreateNewProc tag $%08lx is not "
                      "served, and starting the process without it would be a "
@@ -2113,6 +2141,10 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     if (!entry) {
         snprintf(e, el, "capability gap: CreateNewProc without NP_Entry needs a "
                         "segment to load, which is a different mechanism");
+        return 1;
+    }
+    if (name && !emu68k_guest_cstr(sb, name)) {
+        snprintf(e, el, "CreateNewProc NP_Name is not a guest C string");
         return 1;
     }
     if (r->nctx == 0) {                       /* first call: adopt the program */
@@ -2133,7 +2165,7 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     if (stacksize < 16384) stacksize = 16384;
     ctx->stack_size = stacksize;
     ctx->stack = emu68k_guest_alloc(r, stacksize);
-    ctx->task  = emu68k_guest_alloc(r, M68K_Process_SIZEOF);
+    ctx->task  = emu68k_guest_alloc(r, CLASSIC_PROCESS_SIZE);
     if (!ctx->stack || !ctx->task) {
         snprintf(e, el, "guest memory exhausted starting a 68k process");
         return 1;
@@ -2145,15 +2177,61 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     }
     /* Its Task has to look like one: a program finds itself with FindTask and
      * then reads its own port and stack bounds out of it. */
-    memset(j4_sandbox_host(sb, ctx->task), 0, M68K_Process_SIZEOF);
+    memset(j4_sandbox_host(sb, ctx->task), 0, CLASSIC_PROCESS_SIZE);
     {
         uint8_t *tk = j4_sandbox_host(sb, ctx->task);
         tk[M68K_Process_pr_Task_tc_Node_ln_Type] = NT_PROCESS;
+        tk[M68K_Process_pr_Task_tc_Node_ln_Pri] = (uint8_t)priority;
     }
+    if (name)
+        emu68k_gwrite32(sb, ctx->task + M68K_Process_pr_Task_tc_Node_ln_Name,
+                        name);
     emu68k_gwrite32(sb, ctx->task + TASK_SPLOWER_OFF, ctx->stack);
     emu68k_gwrite32(sb, ctx->task + TASK_SPUPPER_OFF, ctx->stack + stacksize);
-    emu68k_gwrite32(sb, ctx->task + M68K_Process_pr_TaskNum,
-                    (uint32_t)idx + 1u);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_STACKSIZE, stacksize);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_STACKBASE,
+                    GUEST_MKBADDR(ctx->stack + stacksize));
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_TASKNUM, (uint32_t)idx + 1u);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_CIS, input);
+    emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_COS, output);
+    if (want_cli) {
+        const char *process_name = name ? emu68k_guest_cstr(sb, name) : NULL;
+        uint32_t cli = emu68k_guest_alloc(r, M68K_CommandLineInterface_SIZEOF);
+        uint32_t command = 0;
+        size_t command_len = process_name ? strlen(process_name) : 0;
+        if (!cli) {
+            snprintf(e, el, "guest memory exhausted creating a 68k CLI");
+            return 1;
+        }
+        memset(j4_sandbox_host(sb, cli), 0, M68K_CommandLineInterface_SIZEOF);
+        if (command_len > 255u) command_len = 255u;
+        if (command_len) {
+            command = emu68k_guest_alloc(r, 256u);
+            if (!command) {
+                snprintf(e, el, "guest memory exhausted naming a 68k CLI");
+                return 1;
+            }
+            emu68k_gwrite8(sb, command, (uint8_t)command_len);
+            memcpy(j4_sandbox_host(sb, command + 1u), process_name, command_len);
+            emu68k_gwrite32(sb,
+                cli + M68K_CommandLineInterface_cli_CommandName,
+                GUEST_MKBADDR(command));
+        }
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_FailLevel, 10u);
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_StandardInput,
+                        input);
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_CurrentInput,
+                        input);
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_CurrentOutput,
+                        output);
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_StandardOutput,
+                        output);
+        /* The consumer is m68k, where CLI_DEFAULTSTACK_UNIT is four bytes. */
+        emu68k_gwrite32(sb, cli + M68K_CommandLineInterface_cli_DefaultStack,
+                        (stacksize + 3u) / 4u);
+        emu68k_gwrite32(sb, ctx->task + CLASSIC_PR_CLI,
+                        GUEST_MKBADDR(cli));
+    }
     /* Its pr_MsgPort, ready to be waited on. A process finds itself and waits
      * on this port without ever creating it - it is part of being a Process -
      * so an uninitialised one is a wait on a list that never ends and a signal
@@ -2236,7 +2314,7 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
              * to run 68k code for this vector, so pass it straight through. */
             int rc = emu68k_exec_call(r, c->sb, lvo, st, e, el);
             if (rc == 0 || rc == J5D_LVO_REDIRECT ||
-                rc == J5D_LVO_REDIRECT_RTE) return rc;
+                rc == J5D_LVO_REDIRECT_RTE || rc == J5D_LVO_BLOCK) return rc;
         }
         if (e[0]) {          /* exec_call said something specific: do not bury it
                               * under a generic "capability gap" message */
@@ -2333,8 +2411,11 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
             }
             if (emu68k_oscall &&
                 emu68k_oscall(r->openlib[i].name, lvo, st, r->reserve, emu68k_oscall_user,
-                         e, el) == 0)
+                         e, el) == 0) {
+                if (!strcmp(r->openlib[i].name, "intuition.library"))
+                    emu68k_intuition_post_call(r, c->sb, lvo, st);
                 return 0;
+            }
             /* OpenCatalogA is deliberately allowed to fail: locale clients
              * are required to keep their built-in strings and use those when
              * no catalog can be opened.  The native bridge cannot safely hand
@@ -2558,7 +2639,9 @@ static j5d_poll_action context_poll(void *user)
     j5d_poll_action action = nested_poll(user);
     if (action != J5D_POLL_CONTINUE)
         return action;
-    (void)r;
+    if (r->nctx && r->cur_ctx >= 0 && r->cur_ctx < r->nctx &&
+        r->ctx[r->cur_ctx].forbid_depth)
+        return J5D_POLL_CONTINUE;
     return J5D_POLL_YIELD;
 }
 
@@ -2681,6 +2764,7 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     {   /* the exec base must be recognised on THIS run's engine instance */
         j5d_engine *prev = j5d_engine_active();
         j5d_engine_activate(r->eng);
+        j5d_set_ciaa_pra(0xff);          /* active-low buttons: released */
         j5d_clear_libbases();
         j5d_register_libbase(EXEC_BASE);
         j5d_engine_activate(prev);
@@ -2725,8 +2809,8 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             pr[PR_CLI_OFFSET + 2] = (uint8_t)(cli_b >> 8);
             pr[PR_CLI_OFFSET + 3] = (uint8_t)(cli_b);
         }
-        emu68k_gwrite32(&r->sb, GUEST_PROCESS + M68K_Process_pr_TaskNum, 1);
-        emu68k_gwrite32(&r->sb, GUEST_PROCESS + M68K_Process_pr_Arguments,
+        emu68k_gwrite32(&r->sb, GUEST_PROCESS + CLASSIC_PR_TASKNUM, 1);
+        emu68k_gwrite32(&r->sb, GUEST_PROCESS + CLASSIC_PR_ARGUMENTS,
                         ARGS_BASE);
         {
             uint8_t *cli = j4_sandbox_host(&r->sb, GUEST_CLI);
@@ -2780,6 +2864,19 @@ fail:
     if (r->reserve) munmap(r->reserve, GUEST_RESERVE);
     free(r->image); free(r);
     return NULL;
+}
+
+void emu68k_run_set_mouse_buttons(emu68k_run *r, unsigned int buttons)
+{
+    j5d_engine *previous;
+    uint8_t pra = 0xff;
+
+    if (!r || !r->eng) return;
+    if (buttons & 1u) pra &= (uint8_t)~0x40u;
+    previous = j5d_engine_active();
+    j5d_engine_activate(r->eng);
+    j5d_set_ciaa_pra(pra);
+    j5d_engine_activate(previous);
 }
 
 int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,

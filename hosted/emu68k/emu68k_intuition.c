@@ -12,6 +12,48 @@ static int intuition_span(j4_sandbox *sb, uint32_t p, uint32_t n)
            (uint64_t)p + n <= (uint64_t)sb->sandbox_origin + sb->size;
 }
 
+static void bind_window_idcmp(struct emu68k_run *r, j4_sandbox *sb,
+                              uint32_t window, const char *reason,
+                              uint32_t pc)
+{
+    uint32_t port, list, bit, task;
+    if (!intuition_span(sb, window, M68K_Window_SIZEOF)) return;
+    port = emu68k_gread32(sb, window + M68K_Window_UserPort);
+    if (!port || !intuition_span(sb, port, M68K_MsgPort_SIZEOF)) return;
+    bit = emu68k_gread8(sb, port + MP_SIGBIT);
+    if (bit >= 32u) return;
+
+    /* The returned MsgPort is a facade over a native port. Native list links
+     * are meaningless in the big-endian guest arena, so start its guest queue
+     * empty and make its signal target the context that opened the window. */
+    list = port + MP_MSGLIST;
+    emu68k_gwrite32(sb, list + M68K_List_lh_Head,
+                    list + M68K_List_lh_Tail);
+    emu68k_gwrite32(sb, list + M68K_List_lh_Tail, 0);
+    emu68k_gwrite32(sb, list + M68K_List_lh_TailPred,
+                    list + M68K_List_lh_Head);
+    task = emu68k_ctx_task(r);
+    emu68k_gwrite32(sb, port + MP_SIGTASK, task);
+    emu68k_event_bind(r, EMU68K_EVENT_IDCMP, window, port, 1u << bit,
+                      reason, pc);
+    bl_event(BL_RUNTIME, r->cur_ctx, task, pc, "port.bind",
+             "\"source\":\"native:idcmp:%s\",\"destination\":\"%s\","
+             "\"owner\":\"%s\",\"signal_bit\":%u,\"reason\":\"%s\"",
+             bl_id("window", window), bl_id("port", port),
+             bl_id("task", task), (unsigned)bit, reason);
+}
+
+void emu68k_intuition_post_call(struct emu68k_run *r, j4_sandbox *sb,
+                                int lvo, struct j5d_m68k_state *st)
+{
+    if ((lvo == INTUITION_LVO_OPENWINDOW ||
+         lvo == INTUITION_LVO_OPENWINDOWTAGLIST) && st->d[0])
+        bind_window_idcmp(r, sb, st->d[0],
+                          lvo == INTUITION_LVO_OPENWINDOW
+                            ? "OpenWindow" : "OpenWindowTagList",
+                          st->pc);
+}
+
 int emu68k_intuition_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                           struct j5d_m68k_state *st, char *e, unsigned el)
 {
@@ -124,6 +166,14 @@ int emu68k_intuition_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         }
         /* The binding is bookkeeping before the native crossing, not the
          * implementation of ModifyIDCMP itself. */
+        return 1;
+    }
+    if (lvo == INTUITION_LVO_CLOSEWINDOW) {
+        uint32_t win = st->a[0];
+        if (intuition_span(sb, win, M68K_Window_SIZEOF)) {
+            uint32_t port = emu68k_gread32(sb, win + M68K_Window_UserPort);
+            if (port) emu68k_event_unbind_port(r, port, "CloseWindow");
+        }
         return 1;
     }
     (void)e; (void)el;

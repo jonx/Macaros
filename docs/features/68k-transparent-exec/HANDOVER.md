@@ -1,4 +1,7 @@
-# Handover: 68k transparent execution, 2026-08-05
+Start the new chat with:
+Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both dirty working trees, then continue from “TurboCalc live breadth probe — resume here.”
+
+# Handover: 68k transparent execution, 2026-08-06
 
 Read this before touching the bridge. It says what we are building, where it
 stands, and — most importantly — **the method**, which is the part that keeps
@@ -48,7 +51,7 @@ maintain is the bottom boundary.
 | path | what it is |
 |---|---|
 | `~/Source/aros-aarch64` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
-| `~/Source/aros-upstream` | the AROS OS source (branch `aarch64-darwin-graft`); OS-side code lives here, incl. `emu68k.library` |
+| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. **Current checkout is dirty on `exfat-handler`, not the intended bridge branch `aarch64-darwin-graft`; do not commit the bridge changes there without first moving them safely.** |
 | `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
 | `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
 | `~/Source/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
@@ -253,11 +256,89 @@ that the intended guest-side `asl.library` itself initializes. The retained diag
 `~/AROS/Shared/photodemo-identity-20260805.trace.jsonl` and
 `~/AROS/Shared/photodemo-waterline-events-20260805.trace.jsonl`.
 
+### TurboCalc live breadth probe — resume here
+
+TurboCalc 5 from Aminet is installed at
+`~/AROS/Shared/TurboCalc5/TurboCalc/TurboCalc`; the startup script is
+`~/AROS/Shared/turbocalc5-startup`.  It has exposed several generic bridge
+gaps in sequence; none of the fixes is TurboCalc-specific:
+
+- A blocking 68k continuation regression was fixed in
+  `hosted/emu68k/t0p3_engine.c` (BSR displacement is 6, not 4).  The focused
+  `hosted-emu68k-t0p3` gate passes.
+- TurboCalc probes the classic left mouse button with the exact instruction
+  `BTST #6,$BFE001`.  `hosted/jit68k/j5d_engine.c` now recognizes only that
+  read-only CIA-A probe and answers it from per-engine button state supplied
+  by the normal IDCMP broker.  The rest of the hardware page stays protected
+  and still fails loudly.  `hosted-emu68k-t2guard` proves that generic
+  `$BFE001` reads and address-register accesses remain classified as hardware.
+- `SetPointer`/`ClearPointer` now retain an endian-converted per-window sprite
+  shadow until replacement, clear, or run teardown.  This fixed the first
+  crash after selecting a cell.
+- Native Intuition produced `IDCMP_MENUPICK`, but the guest task handling it
+  received only one 64-block quantum and was stranded.  Both external Wait
+  pumps in `hosted/emu68k/emu68k_exec.c` now continue already-runnable sibling
+  tasks across frames.  The trace proves Project menu choices are both
+  delivered and consumed (for example `0xf800` for New and `0xf9e0` for
+  About), rather than merely highlighting a row.
+
+The immediate blocker is now precisely identified.  TurboCalc reuses guest
+`struct Image` at `0x0028600c` with a different planar size, then calls
+Intuition `DrawImage` (LVO 19).  The OS-side mirror currently refuses with:
+
+```
+capability gap: Image 0028600c changed planar data size after its mirror was created
+```
+
+That refusal occurs before native `DrawImage`, so it is safe and is likely the
+cause of both the black cell-selection rendering and the subsequent process
+exit.  Fix it generically in
+`~/Source/aros-upstream/arch/all-darwin/libs/emu68k/emu68k_oscall.c`: keep the
+native `struct Image` address stable (menus/gadgets may retain it), but own its
+endian-converted `ImageData` as a separately replaceable allocation.  On each
+crossing validate the new geometry, allocate the new buffer first, then swap
+and free the old buffer, copy the guest words, and retain the existing Image
+object identity.  Update rollback and teardown to free both allocations.  A
+large patch attempting this was **not applied** (`apply_patch` context check
+failed), so the source still contains the original refusal and is a clean
+starting point for this fix.
+
+The decisive failed-run trace is
+`~/AROS/Shared/turbocalc5-bridge-51.trace.jsonl`; screenshots are under
+`run/darwin-aarch64/turbocalc51-*.png`.  Trace 51 shows the menu result being
+consumed before the Image-size refusal.  At handover time Macaros is running a
+plain AROS shell, not TurboCalc; leave the final application test instance
+alive for the user.  Intermediate restarts are explicitly allowed.
+
+For repeat runs use the tail-set environment shown in method step 7, plus:
+
+```
+AROS_CTL_STARTUP_FILE=/Users/jkn/AROS/Shared/turbocalc5-startup
+EMU68K_TRACE_FAULT=1 EMU68K_TRACE_CALLS=1
+EMU68K_BRIDGE_TRACE=/Users/jkn/AROS/Shared/turbocalc5-bridge-N.trace.jsonl
+EMU68K_BRIDGE_TRACE_LEVEL=debug
+```
+
+The proposed faster debugging loop is not implemented yet.  The useful design
+is: pause on a pre-call refusal, capture registers/arguments/relevant guest
+memory and recent events, load a versioned late-bound override and retry only
+when no native side effect occurred.  Otherwise restart and replay a recorded
+launch/input script.  Rewinding CPU state alone is unsafe because AROS windows,
+ports, files and allocations are native state.  The standalone JIT runner is
+appropriate for CPU/hunk/isolated fixtures; GUI breadth testing still needs a
+scripted Macaros instance.
+
 ## Repo state — IMPORTANT
 
-Last pushed: graft `40fd924`, fork-graft `bd524a0924`. The waterline work below
-is **uncommitted** in the working trees. There are also unrelated existing
-changes in both trees; preserve them.
+Current graft HEAD is pushed `1ea5065` (`origin/main`).  The AROS checkout HEAD
+is `026038f40e` on `exfat-handler`; the bridge work belongs on
+`aarch64-darwin-graft`, so reconcile the dirty OS tree before committing.  The
+runtime work below is **uncommitted** in both working trees.  There are also
+unrelated existing changes (notably Moonstone audio in this repo and the exFAT
+branch context in the OS checkout); preserve them.  The user has authorized
+committing and pushing work in their own `jonx` repositories once it is stable,
+but that is not permission to publish elsewhere or to mix bridge changes into
+the wrong AROS branch.
 
 - `hosted/jit68k/j4_loader.c` + `j4_hunk.h`: HUNK_RELOC32SHORT/DREL32 support.
   This is what let five tail libraries load at all.
@@ -270,7 +351,8 @@ changes in both trees; preserve them.
   fallback that names the vector.
 - `hosted/emu68k/emu68k_{dos,graphics,intuition,layers,utility,cybergraphics}.c`
   plus `emu68k_internal.h`: library-local handwritten semantics extracted from
-  the host core. `emu68k_host.c` is now 2,912 lines, not the old roughly 4,700.
+  the host core. `emu68k_host.c` is now about 3,000 lines, not the old roughly
+  4,700.
 - `hosted/emu68k/emu68k_taskresource.c` and `emu68k_timerdevice.c`: task
   storage/hooks and timer arithmetic/time queries are separate generic modules;
   task-list inspection still fails explicitly because native task identities
@@ -299,22 +381,34 @@ changes in both trees; preserve them.
   gate. The refusal negative control now targets the still-unsafe raw
   `GT_FilterIMsg`, not the now-supported `GT_GetIMsg` path.
 
-All generator/layout checks, all eight handwritten validators, and the full
-`hosted-emu68k-t3gen` runtime gate pass. Both
-`make emu68k-dylib` and the explicit `make hostlibs-emu68k` target pass. The
-deployed `~/lib/libemu68k.dylib` matches the build artifact at SHA-256
-`cada9cc0e2e612a1b0c9700ac810518c22cb2b80a4a13dfb93616f7f9874b804`.
+Latest verified state: `make emu68k-dylib`, explicit
+`make hostlibs-emu68k`, `make hosted-emu68k-t0p3`, and
+`make hosted-emu68k-t2guard` pass.  The current full
+`hosted-emu68k-t3gen` run has one negative-control mismatch:
+`T3OWNGADBAD` still refuses the unsafe input, but the fixture expects a
+different field/error.  Do not weaken the refusal to make the assertion pass;
+update either the focused validation or its expected diagnostic after the
+Image work.  The deployed `~/lib/libemu68k.dylib` matches the build artifact
+at SHA-256
+`bc0fb37074b5b72a38c148e14136ab3b6ed0ae33ae02af4ccc4e0b079396f269`.
 
 ## Next steps, in order
 
-1. Copy/route the external Zune class binaries and extend `genmui` from the
+1. Implement mutable, stable-address guest Image mirrors as described in the
+   TurboCalc section; rebuild/deploy, reproduce New/menu/cell selection and
+   keyboard entry, and leave the working TurboCalc instance alive.
+2. Restore the full `hosted-emu68k-t3gen` gate without weakening its unsafe
+   input negative controls.  Run `git diff --check` in both trees.
+3. Move the dirty OS bridge changes safely from the current `exfat-handler`
+   checkout to the intended bridge branch before committing anything there.
+4. Copy/route the external Zune class binaries and extend `genmui` from the
    built-in `Text.mui` lifecycle to at least one separately loaded class.
-2. Build the Aminet breadth corpus and make every remaining failure a named
+5. Build the Aminet breadth corpus and make every remaining failure a named
    routing verdict rather than a bridge capability gap. This is the goal's
    real proof.
-3. Turn the ten-library load sweep, `geniff`, `genmui`, generator checks and
+6. Turn the ten-library load sweep, `geniff`, `genmui`, generator checks and
    breadth corpus into one fresh-nightly command.
-4. Add focused behavioural fixtures for the new DOS command/packet paths,
+7. Add focused behavioural fixtures for the new DOS command/packet paths,
    GELS, Intuition retained lists, Layers callback adapters, cybergraphics
    staging locks, task.resource storage and timer.device arithmetic.
 

@@ -6,6 +6,7 @@
 ;
 ; Checks, in order:
 ;   - a TWO-node chain crosses, so the family walk and the native relinking run
+;   - a classic Border render chain and its XY arrays cross with the first gadget
 ;;   - RefreshGList crosses the SAME addresses again, proving identity survives
 ;     rather than a fresh mirror being made per call
 ;   - the guest structures still read back as the program wrote them, and the
@@ -73,6 +74,10 @@ TAG_DONE            equ 0
     move.w  #12,10(a0)
     move.w  #GFLG_EXTENDED,12(a0)
     move.w  #GTYP_BOOLGADGET,16(a0)
+    lea     border1(pc),a1
+    move.l  a1,18(a0)                   ; GadgetRender: classic Border chain
+    lea     gadgettext1(pc),a1
+    move.l  a1,26(a0)                   ; GadgetText: retained IntuiText chain
     move.w  #101,38(a0)
     move.l  #7,40(a0)
 
@@ -123,6 +128,12 @@ TAG_DONE            equ 0
     cmp.w   #101,38(a0)
     bne.w   badsync
     cmp.l   #7,40(a0)
+    bne.w   badsync
+    lea     border1(pc),a1
+    cmp.l   18(a0),a1                   ; render stays a GUEST Border address
+    bne.w   badsync
+    lea     gadgettext1(pc),a1
+    cmp.l   26(a0),a1                   ; label stays a GUEST IntuiText address
     bne.w   badsync
     move.l  gadget2(pc),d0
     cmp.l   (a0),d0                      ; the link is still a GUEST address
@@ -187,6 +198,38 @@ wintags
     dc.l    WA_Width,200
     dc.l    WA_Height,100
     dc.l    TAG_DONE,0
+
+; Two guest-owned classic Border nodes. The first is a closed rectangle, the
+; second a short accent line, exercising both the nested chain and XY tail.
+border1
+    dc.w    0,0
+    dc.b    1,0,0,5
+    dc.l    borderxy1,border2
+border2
+    dc.w    1,1
+    dc.b    2,0,0,2
+    dc.l    borderxy2,0
+borderxy1
+    dc.w    0,0, 39,0, 39,11, 0,11, 0,0
+borderxy2
+    dc.w    1,1, 38,1
+
+gadgettext1
+    dc.b    1,0,0,0
+    dc.w    2,2
+    dc.l    gadgetfont,gadgetlabel1,gadgettext2
+gadgettext2
+    dc.b    2,0,0,0
+    dc.w    2,10
+    dc.l    0,gadgetlabel2,0
+gadgetfont
+    dc.l    gadgetfontname
+    dc.w    8
+    dc.b    0,0
+gadgetfontname dc.b "topaz.font",0
+gadgetlabel1   dc.b "Guest label",0
+gadgetlabel2   dc.b "Second line",0
+    even
 
 window      dc.l 0
 gadget1     dc.l 0

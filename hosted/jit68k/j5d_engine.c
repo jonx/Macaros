@@ -200,6 +200,9 @@ struct j5d_engine_state {
     uint32_t          resume_initial_sp;
     uint32_t          resume_depth;
     uint8_t           resume_valid;
+    /* Read-only CIA-A PRA input.  The page itself remains PROT_NONE; the
+     * dispatcher serves only named, decoded input probes. */
+    uint8_t           ciaa_pra;
     /* [T3]/[T3e] registered library bases. BRIDGED bases are native-library
      * facades and vector calls through them enter the LVO callback. GUEST bases
      * belong to disk-loaded 68k libraries and their vector code executes like
@@ -246,7 +249,9 @@ _Static_assert(offsetof(struct j5d_engine_state, yield_word)
 /* ---- the instance API ([T0P3], declared in j5d_jit68k.h) ---- */
 j5d_engine *j5d_engine_new(void)
 {
-    return (j5d_engine *)calloc(1, sizeof(struct j5d_engine_state));
+    struct j5d_engine_state *e = calloc(1, sizeof *e);
+    if (e) e->ciaa_pra = 0xff;       /* active-low buttons: released */
+    return (j5d_engine *)e;
 }
 void j5d_engine_activate(j5d_engine *e)
 {
@@ -343,6 +348,8 @@ void j5d_set_chain_quantum(uint32_t blocks)
 {
     g_eng->chain_quantum = blocks ? (int64_t)blocks : J5D_CHAIN_QUANTUM_DEFAULT;
 }
+
+void j5d_set_ciaa_pra(uint8_t value) { g_eng->ciaa_pra = value; }
 
 uint64_t j5d_diag_insn_number(void) { return g_insn_number; }
 
@@ -751,6 +758,28 @@ static int has_pcrel_src(uint16_t op)
     default:
         return 0;
     }
+}
+
+/* A few well-behaved desktop programs use the OS for events but inspect the
+ * live left-button bit in CIA-A PRA while handling one.  That is an input
+ * probe, not ownership of the chipset.  Decode the exact read-only spelling
+ * TurboCalc uses and stop the block before it, so C can supply the hosted
+ * input value without mapping (and thereby silently enabling) the CIA page.
+ *
+ *   btst #6,$00bfe001   -- CIA-A PRA / game-port-0 fire / left mouse
+ *
+ * Writes, other CIA registers, and even other bits of PRA continue into the
+ * PROT_NONE guard and are reported as hardware requirements. */
+static int is_cia_input_probe(j5d_sandbox *sb, uint32_t pc)
+{
+    const uint8_t *p;
+
+    if (pc < sb->origin ||
+        (uint64_t)pc + 8 > (uint64_t)sb->origin + sb->size)
+        return 0;
+    p = sb->host_mem + (pc - sb->origin);
+    return be16(p) == 0x0839u && be16(p + 2) == 0x0006u &&
+           be32(p + 4) == 0x00bfe001u;
 }
 
 /* `jsr/jmp (d16,An)` is the library-call spelling where An holds a COPY of the
@@ -1578,7 +1607,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         const uint8_t *ophost = sb->host_mem + (cur_pc - sb->origin);
         uint16_t op = be16(ophost);
 
-        if (is_terminator(op) || has_pcrel_src(op)) { *end_pc = cur_pc; break; }
+        if (is_terminator(op) || has_pcrel_src(op) ||
+            is_cia_input_probe(sb, cur_pc)) { *end_pc = cur_pc; break; }
         /* [J5r] FMOVEM / FP system-register moves are opcode2-distinguished; end the block so
          * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist).
          * [J5t] An immediate-source FP arithmetic op (fadd.d #imm,fp etc.) likewise ends the
@@ -2094,7 +2124,8 @@ static int call_vector_by_target(uint32_t target, uint32_t base,
                                                   * so restore the caller's A6. */
         st->a[6] = saved_a6;
 
-    if (brc == J5D_LVO_REDIRECT || brc == J5D_LVO_REDIRECT_RTE) return brc;
+    if (brc == J5D_LVO_REDIRECT || brc == J5D_LVO_REDIRECT_RTE ||
+        brc == J5D_LVO_BLOCK) return brc;
     if (brc) {
         if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
         return 1;
@@ -2294,6 +2325,14 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
  * 1) is preserved exactly; the funnel is additive. */
 #define RFAIL(msg) do { if (errbuf) snprintf(errbuf, errlen, "%s", (msg));               \
                         J5N_FUNNEL(J5N_FAULT_ENGINE, (msg), st, sb); return 1; } while (0)
+#define BLOCK_YIELD_AT(next_pc) do {                                      \
+        st->pc = (next_pc);                                               \
+        g_eng->resume_initial_sp = initial_sp;                            \
+        g_eng->resume_depth = depth;                                      \
+        g_eng->resume_valid = 1;                                          \
+        finalize_stats();                                                 \
+        return J5D_RC_YIELD;                                              \
+    } while (0)
     memset(&g_stats, 0, sizeof(g_stats));
     g_block_exec_count = 0;                         /* [J5k] reset the JIT-side exec counter */
     g_insn_number = 0;                              /* [J5n] reset the deterministic insn #N */
@@ -2534,6 +2573,15 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
                 pc = tpc + 2;
             }
         }
+        else if (is_cia_input_probe(sb, tpc)) {
+            /* BTST changes only Z: Z=1 when the tested bit is clear. CIA
+             * button inputs are active-low, so a released button clears Z. */
+            if (g_eng->ciaa_pra & 0x40u)
+                st->ccr &= ~J5D_CCR_Z;
+            else
+                st->ccr |= J5D_CCR_Z;
+            pc = tpc + 8;
+        }
         else if (has_pcrel_src(top)) {               /* a PC-relative source operand */
             uint32_t nxt = 0;
             char e2[160] = {0};
@@ -2563,9 +2611,17 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
                                                 libbase_of_target(ret, a6_libbase),
                                                 st, lvo, user, "rts-vector",
                                                 errbuf, errlen);
-                if (brc && brc != J5D_LVO_REDIRECT) return 1;
+                if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_BLOCK)
+                    return 1;
                 g_stats.lib_calls++;
-                if (brc == J5D_LVO_REDIRECT) {
+                if (brc == J5D_LVO_BLOCK) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("rts-vector: blocked tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    BLOCK_YIELD_AT(ret);
+                } else if (brc == J5D_LVO_REDIRECT) {
                     /* The redirect body's own rts must come back to the
                      * caller's return address, which is now the stack top -
                      * exactly where a tail call wants it. */
@@ -2702,7 +2758,8 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
              * returns immediately — NO return-stack push (the 68k program never sees a
              * pushed frame for a library vector). */
             int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
-            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) {
+            if (brc && brc != J5D_LVO_REDIRECT &&
+                brc != J5D_LVO_REDIRECT_RTE && brc != J5D_LVO_BLOCK) {
                 /* The PC is worth the space: a bridge failure names the vector,
                  * but which of the program's hundred call sites reached it is
                  * what says whether the call was the one it meant to make. */
@@ -2711,7 +2768,9 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
                 return 1;
             }
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT_RTE) {       /* ...and it returns with rte  */
+            if (brc == J5D_LVO_BLOCK) {
+                BLOCK_YIELD_AT(tpc + 4);
+            } else if (brc == J5D_LVO_REDIRECT_RTE) { /* ...and it returns with rte */
                 if (push_rte_frame(sb, st, tpc + 4, errbuf, errlen)) return 1;
                 pc = st->pc;
             } else if (brc == J5D_LVO_REDIRECT) {    /* run 68k code for it instead */
@@ -2738,12 +2797,15 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             char e2[160] = {0};
             int brc = lvo(n, (struct j5d_m68k_state *)st, user, e2, sizeof e2);
             if (brc != J5D_LVO_REDIRECT) st->a[6] = saved_a6;
-            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) {
+            if (brc && brc != J5D_LVO_REDIRECT &&
+                brc != J5D_LVO_REDIRECT_RTE && brc != J5D_LVO_BLOCK) {
                 if (errbuf) snprintf(errbuf, errlen, "lib bridge: %s", e2);
                 return 1;
             }
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT_RTE) {
+            if (brc == J5D_LVO_BLOCK) {
+                BLOCK_YIELD_AT(tpc + 4);
+            } else if (brc == J5D_LVO_REDIRECT_RTE) {
                 if (push_rte_frame(sb, st, tpc + 4, errbuf, errlen)) return 1;
                 pc = st->pc;
             } else if (brc == J5D_LVO_REDIRECT) {
@@ -2766,9 +2828,17 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int brc;
             if ((brc = call_vector_by_target(target, st->a[top & 7u],
                                       st, lvo, user, "jmp(d16,An)", errbuf, errlen)) != 0) {
-                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
+                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE &&
+                    brc != J5D_LVO_BLOCK) return 1;
                 g_stats.lib_calls++;
-                if (brc == J5D_LVO_REDIRECT_RTE) {
+                if (brc == J5D_LVO_BLOCK) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(d16,An): blocked tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    BLOCK_YIELD_AT(ret);
+                } else if (brc == J5D_LVO_REDIRECT_RTE) {
                     if (st->a[7] >= initial_sp)
                         RFAIL("jmp(d16,An): Supervisor tail call has no caller frame");
                     if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
@@ -2841,9 +2911,12 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int brc = call_vector_by_target(target,
                                             libbase_of_target(target, a6_libbase),
                                             st, lvo, user, "jsr(An)", errbuf, errlen);
-            if (brc && brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
+            if (brc && brc != J5D_LVO_REDIRECT &&
+                brc != J5D_LVO_REDIRECT_RTE && brc != J5D_LVO_BLOCK) return 1;
             g_stats.lib_calls++;
-            if (brc == J5D_LVO_REDIRECT_RTE) {
+            if (brc == J5D_LVO_BLOCK) {
+                BLOCK_YIELD_AT(tpc + 2);
+            } else if (brc == J5D_LVO_REDIRECT_RTE) {
                 if (push_rte_frame(sb, st, tpc + 2, errbuf, errlen)) return 1;
                 pc = st->pc;
             } else if (brc == J5D_LVO_REDIRECT) {
@@ -2864,9 +2937,17 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             int brc;
             if ((brc = call_vector_by_target(target, libbase_of_target(target, a6_libbase),
                                       st, lvo, user, "jmp(An)", errbuf, errlen)) != 0) {
-                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE) return 1;
+                if (brc != J5D_LVO_REDIRECT && brc != J5D_LVO_REDIRECT_RTE &&
+                    brc != J5D_LVO_BLOCK) return 1;
                 g_stats.lib_calls++;
-                if (brc == J5D_LVO_REDIRECT_RTE) {
+                if (brc == J5D_LVO_BLOCK) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(An): blocked tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    BLOCK_YIELD_AT(ret);
+                } else if (brc == J5D_LVO_REDIRECT_RTE) {
                     if (st->a[7] >= initial_sp)
                         RFAIL("jmp(An): Supervisor tail call has no caller frame");
                     if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
