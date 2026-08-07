@@ -983,6 +983,27 @@ The launcher SHA-256 is
 `WwProg` is
 `7aac6b826c0af9f70de474fdbd6e3349cd530337fbae5daa339906cbde71af35`.
 
+The compatibility run also inspected the four-disk FTH specimen advertised by
+Amiga City as "Abandonware".  That site label is not a licence grant.  The
+four public records are 1693 (disk 1), 1677 (disk 2), 1691 (disk 3), and 1684
+(disk 4); their ZIP SHA-256 values are, in disk order,
+`9b65ff3ed481743384d9efa9a5d5cbf54f4163a89de6a4836951946ab1e7a042`,
+`b5ce8f54d5140c2882d2e8858bf61cf1b3e5b46120944a68d4805fd1ced4b6e1`,
+`e38ac46612b1c44d61b2901cd7630b6fd44beea92bd2026eca3df5a806aa347b`,
+and `5359244f23d09f714d5fb789e325c1f4d4dac5d758aa5b4400246fcfce3f7e62`.
+They and their extracted ADFs remain outside the repositories under
+`/Users/jkn/AROS/Shared/Wordworth7-FTH-private`.
+
+The FTH Workbench launcher is byte-identical to the retail launcher.  Its
+`WwProg` is 28 bytes shorter and has SHA-256
+`444efdeedca1289355d817327497904c20cf7518ba06cc7125f2d1b618e18d1e`.
+It is not actually an already-unlocked executable: it presents the same Name,
+Organisation, and Licence gate, and a blank licence is not accepted.  The disk
+also contains a separate `FAITH` utility and its NFO calls the release "pseudo
+registration".  Do not execute that utility, derive a serial, copy a serial
+into this document, or change the bridge to bypass the gate.  It is neither
+needed nor appropriate for compatibility work.
+
 This run found and fixed two generic contracts:
 
 - A native Workbench process receives `WBStartup` on `pr_MsgPort`, the same
@@ -1008,19 +1029,24 @@ It now matches `RefreshGList` as a nullable `Requester` mirror, and regenerated
 sources/build checks pass.  With these repairs the real `Wordworth` launcher
 consumes its Workbench message and renders the retail Wordworth 7 registration
 screen; Name, Organisation and Licence gadgets accept focus and text.  The
-current test instance is intentionally parked there.  The disc requires the
-owner's licence number (the included Read_Me explicitly refers to existing
-licence numbers), so compatibility work must not invent, extract, or bypass
-one.
+same result is proven with the FTH `WwProg`; neither run produces a bridge
+refusal or Macaros crash before the gate.  The current test instance is
+intentionally parked at the FTH specimen's Licence field.  Its bounded trace is
+`/Users/jkn/AROS/Shared/wordworth7-unlocked-bridge.trace.jsonl` and its private
+payload is `/Users/jkn/AROS/Shared/wordworth7-unlocked-startup`.  Keep that
+instance running for the user.  The disc requires the owner's licence number
+(the included Read_Me explicitly refers to existing licence numbers), so
+compatibility work must not invent, extract, or bypass one.
 
-Once the user supplies a legitimate licence number, finish the normal path
-first and then the ARexx path.  The disc already supplies 21 scripts in
+To continue the executable path, obtain runtime evidence from a licence owner
+or a copy that the owner has already registered; do not ask the bridge to
+manufacture registration state.  Finish the normal path first and then the
+ARexx path.  The disc already supplies 21 scripts in
 `Wordworth7-private/WwRexx`, while `Help/Editing.guide` documents 142 commands
 and the application ports `WORDWORTH.1`, `WORDWORTH.2`, and so on.  Use a small
 safe documented command as a deterministic request/reply/result oracle, retain
-the Bridge Lab trace, and only then try one bundled script.  The launch payload
-is `/Users/jkn/AROS/Shared/wordworth7-startup`; keep the instance running for
-the user after a successful launch.
+the Bridge Lab trace, and only then try one bundled script.  The untouched
+retail launch payload remains `/Users/jkn/AROS/Shared/wordworth7-startup`.
 
 ## Regression sweep, 2026-08-07 (current result)
 
