@@ -53,7 +53,7 @@ int main(int argc, char **argv)
 
     char err[256];
     struct { const char *prog, *want; } hw[] = {
-        { "chipbang",   "custom chip register $DFF180" },
+        { "chipbang",   "custom chip register $DFF182" },
         { "ciapeek",    "CIA register $BFE001"         },  /* absolute address    */
         { "ciapeek_an", "CIA register $BFE001"         },  /* through a register  */
         { "computedhw", "custom chip register $DFF180" },  /* computed at runtime */
@@ -70,8 +70,8 @@ int main(int argc, char **argv)
     }
 
     /* the negative controls must run to completion, untouched by the guard */
-    const char *ok[] = { "datadecoy", "opdecoy" };
-    for (unsigned i = 0; i < 2; i++) {
+    const char *ok[] = { "datadecoy", "opdecoy", "color00" };
+    for (unsigned i = 0; i < sizeof ok / sizeof ok[0]; i++) {
         int rc = run_prog(ok[i], err, sizeof err);
         if (rc != EMU68K_RC_DONE) {
             fprintf(stderr, "[T2B] FAIL: %s -> rc=%d err=\"%s\" (wanted a clean run)\n",
@@ -81,9 +81,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "  ok   %-11s ran clean\n", ok[i]);
     }
 
-    printf("[T2B] PASS: every hardware touch comes back as a classified routing event "
+    printf("[T2B] PASS: every unsupported hardware touch comes back as a classified routing event "
            "naming the exact register - custom chips and CIAs, reached absolutely or "
            "through an address register, INCLUDING an address computed at run time that "
-           "no static scan can predict - while the negative controls run untouched.\n");
+           "no static scan can predict - while the negative controls and the exact "
+           "COLOR00 calibration write run untouched.\n");
     return 0;
 }

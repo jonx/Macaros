@@ -155,6 +155,22 @@ const char *emu68k_host_getenv(const char *name)
 #define CLI_COMMAND_OFF M68K_CommandLineInterface_cli_CommandName
 #define NT_PROCESS      13
 
+/* Classic workbench/startup.h layouts.  They deliberately are not the native
+ * host layouts: native pointers are 64-bit while every guest field is a
+ * big-endian 32-bit value. */
+#define CLASSIC_WBSTARTUP_SIZE       40u
+#define CLASSIC_WBS_PROCESS          20u
+#define CLASSIC_WBS_SEGMENT          24u
+#define CLASSIC_WBS_NUMARGS          28u
+#define CLASSIC_WBS_TOOLWINDOW       32u
+#define CLASSIC_WBS_ARGLIST          36u
+#define CLASSIC_WBARG_SIZE            8u
+#define CLASSIC_WBARG_LOCK            0u
+#define CLASSIC_WBARG_NAME            4u
+#define CLASSIC_PROCESS_MSGPORT      92u
+#define CLASSIC_PROCESS_PORT_SIZE    34u
+#define EMU68K_PROCESS_SIGBIT         8u
+
 /* A 68k program is a CLASSIC AmigaOS program, and there a BPTR is the address
  * DIVIDED BY FOUR: BADDR(x) is x<<2. Native AROS on this target is built with
  * AROS_FAST_BPTR, where a BPTR is just a pointer, so it is easy to plant a raw
@@ -3380,6 +3396,96 @@ fail:
     if (r->reserve) munmap(r->reserve, GUEST_RESERVE);
     free(r->image); free(r);
     return NULL;
+}
+
+int emu68k_run_set_workbench(emu68k_run *r, unsigned long argc,
+                             const unsigned int *locks,
+                             const char *const *names,
+                             char *err, unsigned errlen)
+{
+    j4_sandbox *sb;
+    uint32_t startup, arglist = 0, port, list;
+    unsigned long i;
+
+    if (!r) {
+        snprintf(err, errlen, "Workbench startup has no run");
+        return 1;
+    }
+    if (argc > 4096u || (argc && (!locks || !names))) {
+        snprintf(err, errlen, "invalid Workbench argument list (%lu entries)",
+                 argc);
+        return 1;
+    }
+    sb = &r->sb;
+    startup = emu68k_guest_alloc(r, CLASSIC_WBSTARTUP_SIZE);
+    if (argc)
+        arglist = emu68k_guest_alloc(r, (uint32_t)argc * CLASSIC_WBARG_SIZE);
+    if (!startup || (argc && !arglist)) {
+        snprintf(err, errlen, "guest memory exhausted creating WBStartup");
+        return 1;
+    }
+    memset(j4_sandbox_host(sb, startup), 0, CLASSIC_WBSTARTUP_SIZE);
+    if (arglist)
+        memset(j4_sandbox_host(sb, arglist), 0,
+               (size_t)argc * CLASSIC_WBARG_SIZE);
+    for (i = 0; i < argc; i++) {
+        uint32_t name = 0;
+        if (names[i]) {
+            size_t len = strnlen(names[i], 65536u);
+            if (len == 65536u || !(name = emu68k_guest_strdup(r, names[i], len))) {
+                snprintf(err, errlen, "guest memory exhausted copying WBArg %lu",
+                         i);
+                return 1;
+            }
+        }
+        emu68k_gwrite32(sb, arglist + (uint32_t)i * CLASSIC_WBARG_SIZE +
+                        CLASSIC_WBARG_LOCK, locks[i]);
+        emu68k_gwrite32(sb, arglist + (uint32_t)i * CLASSIC_WBARG_SIZE +
+                        CLASSIC_WBARG_NAME, name);
+    }
+
+    /* pr_MsgPort is embedded in the classic Process.  Only its classic
+     * 34-byte extent may be cleared: AROS-m68k's generated MsgPort is larger,
+     * but using that size here would overwrite the following Process fields. */
+    port = GUEST_PROCESS + CLASSIC_PROCESS_MSGPORT;
+    list = port + MP_MSGLIST;
+    memset(j4_sandbox_host(sb, port), 0, CLASSIC_PROCESS_PORT_SIZE);
+    emu68k_gwrite8(sb, port + M68K_MsgPort_mp_Node_ln_Type, 4); /* NT_MSGPORT */
+    emu68k_gwrite8(sb, port + MP_SIGBIT, EMU68K_PROCESS_SIGBIT);
+    emu68k_gwrite32(sb, port + MP_SIGTASK, GUEST_PROCESS);
+    emu68k_gwrite32(sb, list + M68K_List_lh_Head, startup);
+    emu68k_gwrite32(sb, list + M68K_List_lh_Tail, 0);
+    emu68k_gwrite32(sb, list + M68K_List_lh_TailPred, startup);
+
+    /* One already-queued message. Its reply is represented by the native
+     * message retained by emu68k.library, so the guest copy has no reply port
+     * and ReplyMsg drops it after the program is finished with it. */
+    emu68k_gwrite32(sb, startup + M68K_Message_mn_Node_ln_Succ,
+                    list + M68K_List_lh_Tail);
+    emu68k_gwrite32(sb, startup + M68K_Message_mn_Node_ln_Pred,
+                    list + M68K_List_lh_Head);
+    emu68k_gwrite8(sb, startup + M68K_Message_mn_Node_ln_Type, 5); /* NT_MESSAGE */
+    emu68k_gwrite32(sb, startup + M68K_Message_mn_ReplyPort, 0);
+    emu68k_gwrite16(sb, startup + M68K_Message_mn_Length,
+                    CLASSIC_WBSTARTUP_SIZE);
+    emu68k_gwrite32(sb, startup + CLASSIC_WBS_PROCESS, port);
+    emu68k_gwrite32(sb, startup + CLASSIC_WBS_SEGMENT, 0);
+    emu68k_gwrite32(sb, startup + CLASSIC_WBS_NUMARGS, (uint32_t)argc);
+    emu68k_gwrite32(sb, startup + CLASSIC_WBS_TOOLWINDOW, 0);
+    emu68k_gwrite32(sb, startup + CLASSIC_WBS_ARGLIST, arglist);
+
+    emu68k_gwrite32(sb, GUEST_PROCESS + PR_CLI_OFFSET, 0);
+    emu68k_gwrite32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF,
+                    emu68k_gread32(sb, GUEST_PROCESS + TASK_SIGALLOC_OFF) |
+                    (1u << EMU68K_PROCESS_SIGBIT));
+    emu68k_gwrite32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF,
+                    emu68k_gread32(sb, GUEST_PROCESS + TASK_SIGRECVD_OFF) |
+                    (1u << EMU68K_PROCESS_SIGBIT));
+    bl_event(BL_RUNTIME, 0, GUEST_PROCESS, r->seg.entry,
+             "workbench.startup",
+             "\"message\":\"%s\",\"port\":\"%s\",\"arguments\":%lu",
+             bl_id("message", startup), bl_id("port", port), argc);
+    return 0;
 }
 
 void emu68k_run_set_mouse_buttons(emu68k_run *r, unsigned int buttons)

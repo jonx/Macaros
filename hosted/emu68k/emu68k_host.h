@@ -61,6 +61,16 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
                            emu68k_sink_fn sink, void *sink_user,
                            char *err, unsigned errlen);
 
+/* Change a newly-created run from CLI startup to classic Workbench startup.
+ * `locks` contains guest BPTR tokens already issued by the OS-side bridge;
+ * names are copied into the guest arena.  This constructs a big-endian
+ * WBStartup/WBArg tree, queues it on the guest Process port, and sets pr_CLI
+ * to zero before the first instruction executes. */
+int emu68k_run_set_workbench(emu68k_run *r, unsigned long argc,
+                             const unsigned int *locks,
+                             const char *const *names,
+                             char *err, unsigned errlen);
+
 /* Run up to max_roundtrips dispatcher roundtrips. Flushes new output to the
  * sink before returning. Returns an EMU68K_RC_* code. */
 int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,

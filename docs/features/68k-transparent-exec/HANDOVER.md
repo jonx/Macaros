@@ -1,8 +1,11 @@
 Start the new chat with:
 Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both
 working trees, then continue with the Aminet breadth corpus, beginning with the
-official WordWorth 2 demo.  Do not restart from the historical TurboCalc ARexx
-section: its end-to-end result and superseded investigation are recorded below.
+privately installed Wordworth 7 retail disc described below.  Ask the user for
+their legitimate Wordworth licence number before advancing its registration
+screen; do not bypass that check.  Do not restart from the historical TurboCalc
+ARexx section: its end-to-end result and superseded investigation are recorded
+below.
 
 # Handover: 68k transparent execution, 2026-08-07
 
@@ -967,6 +970,58 @@ ports, files and allocations are native state.  The standalone JIT runner is
 appropriate for CPU/hunk/isolated fixtures; GUI breadth testing still needs a
 scripted Macaros instance.
 
+### Wordworth 7 breadth run — current result (2026-08-07)
+
+The user supplied a private retail ISO from the Internet Archive item
+`wordworth-7`.  It is mounted read-only from
+`/Users/jkn/Downloads/Wordworth 7.iso` and extracted only under
+`/Users/jkn/AROS/Shared/Wordworth7-private`; no product binary, registration
+material, or extracted data belongs in either repository.  The ISO SHA-256 is
+`9b3459983ab87ad71ab9bf78faf9c7f0d404e7b0584b2daefcc4a9f9648761bf`.
+The launcher SHA-256 is
+`f659a805fc9307ec77053648a45cc23069a78a7899829069430e6c17dfe7a8d6` and
+`WwProg` is
+`7aac6b826c0af9f70de474fdbd6e3349cd530337fbae5daa339906cbde71af35`.
+
+This run found and fixed two generic contracts:
+
+- A native Workbench process receives `WBStartup` on `pr_MsgPort`, the same
+  port native DOS uses for packet replies.  The bridge now removes and retains
+  that native message before its first DOS call, creates a big-endian 68k
+  `WBStartup`/`WBArg` tree with issued BPTR lock tokens, sets guest `pr_CLI` to
+  zero, and queues the mirror on the classic embedded Process port.  The native
+  message is replied exactly once after guest/bridge teardown.  The standalone
+  `make hosted-emu68k-t3workbench` fixture proves `pr_CLI`, queueing, both locks
+  and both names before instruction zero.  This removes the former misleading
+  `dopacket.c` "unexpected DOS Packet Received" alert for every Workbench-
+  launched 68k program.
+- `WwProg` contains one exact `move.w Dn,$dff180` calibration loop.  That
+  COLOR00 write form is now a flag-correct dispatcher sink and is excluded
+  from the static hardware-banger verdict.  Every other custom register, plus
+  computed access to `$dff180`, remains behind the `PROT_NONE` runtime guard.
+  `color00.s`, the shifted `$dff182` positive control, and the computed-address
+  negative control pass in `make hosted-emu68k-t2guard`.
+
+The first live Workbench run then exposed a policy typo:
+`RefreshGadgets.requester` was non-null even though the Amiga API permits NULL.
+It now matches `RefreshGList` as a nullable `Requester` mirror, and regenerated
+sources/build checks pass.  With these repairs the real `Wordworth` launcher
+consumes its Workbench message and renders the retail Wordworth 7 registration
+screen; Name, Organisation and Licence gadgets accept focus and text.  The
+current test instance is intentionally parked there.  The disc requires the
+owner's licence number (the included Read_Me explicitly refers to existing
+licence numbers), so compatibility work must not invent, extract, or bypass
+one.
+
+Once the user supplies a legitimate licence number, finish the normal path
+first and then the ARexx path.  The disc already supplies 21 scripts in
+`Wordworth7-private/WwRexx`, while `Help/Editing.guide` documents 142 commands
+and the application ports `WORDWORTH.1`, `WORDWORTH.2`, and so on.  Use a small
+safe documented command as a deterministic request/reply/result oracle, retain
+the Bridge Lab trace, and only then try one bundled script.  The launch payload
+is `/Users/jkn/AROS/Shared/wordworth7-startup`; keep the instance running for
+the user after a successful launch.
+
 ## Regression sweep, 2026-08-07 (current result)
 
 Run `make hosted-emu68k-t3gen` for the generated/handwritten boundary suite and
@@ -1051,7 +1106,7 @@ Do not commit or push that checkout: authorization is only for the user's own
   `GT_FilterIMsg`, not the now-supported `GT_GetIMsg` path.
 
 Latest verified state: `make emu68k-dylib`,
-`make hosted-emu68k-t3setsignal`, the complete
+`make hosted-emu68k-t3setsignal`, `make hosted-emu68k-t3workbench`, the complete
 `make hosted-emu68k-t3gen`, focused `geniff`, and
 `make hosted-emu68k-t3mui` pass.  The latter builds only the named
 `workbench-classes-zune-busy` m68k target, converts the ELF to HUNK, packages

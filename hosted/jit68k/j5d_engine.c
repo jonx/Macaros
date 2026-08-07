@@ -811,6 +811,27 @@ static int is_cia_input_probe(j5d_sandbox *sb, uint32_t pc)
            be32(p + 4) == 0x00bfe001u;
 }
 
+/* Some classic desktop applications retain a CPU calibration loop which
+ * writes a data register directly to COLOR00. Serve only this completely
+ * decoded spelling as a write sink:
+ *
+ *   move.w Dn,$00dff180
+ *
+ * MOVE's CCR result remains observable. Every other custom-register access,
+ * including COLOR00 through an address register, stays behind the PROT_NONE
+ * runtime guard. */
+static int is_color00_write(j5d_sandbox *sb, uint32_t pc)
+{
+    const uint8_t *p;
+
+    if (pc < sb->origin ||
+        (uint64_t)pc + 6 > (uint64_t)sb->origin + sb->size)
+        return 0;
+    p = sb->host_mem + (pc - sb->origin);
+    return (be16(p) & 0xfff8u) == 0x33c0u &&
+           be32(p + 2) == 0x00dff180u;
+}
+
 /* `jsr/jmp (d16,An)` is the library-call spelling where An holds a COPY of the
  * base: `move.l a6,a0 ; jsr -294(a0)`, which LhA is full of. That makes the
  * recognition exact - the register either holds a registered library base or it
@@ -1637,7 +1658,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         uint16_t op = be16(ophost);
 
         if (is_terminator(op) || has_pcrel_src(op) ||
-            is_cia_input_probe(sb, cur_pc)) { *end_pc = cur_pc; break; }
+            is_cia_input_probe(sb, cur_pc) ||
+            is_color00_write(sb, cur_pc)) { *end_pc = cur_pc; break; }
         /* [J5r] FMOVEM / FP system-register moves are opcode2-distinguished; end the block so
          * the dispatcher decodes them in C (the .x conversion + sandbox memory + reglist).
          * [J5t] An immediate-source FP arithmetic op (fadd.d #imm,fp etc.) likewise ends the
@@ -2623,6 +2645,15 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
             else
                 st->ccr |= J5D_CCR_Z;
             pc = tpc + 8;
+        }
+        else if (is_color00_write(sb, tpc)) {
+            uint16_t value = (uint16_t)st->d[top & 7u];
+            uint32_t cc = st->ccr & J5D_CCR_X;
+
+            if (value == 0) cc |= J5D_CCR_Z;
+            if (value & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;                 /* MOVE clears V/C and keeps X */
+            pc = tpc + 6;
         }
         else if (has_pcrel_src(top)) {               /* a PC-relative source operand */
             uint32_t nxt = 0;

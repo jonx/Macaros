@@ -321,7 +321,11 @@ static void scan_code(const uint8_t *code, unsigned long len, int hunk,
         if (priv) {
             snprintf(buf, sizeof buf, "%s (privileged)", priv);
             add_ev(r, SCAN68K_EV_PRIVILEGED, hunk, i, w, 1, buf);
-        } else {
+        } else if (!((w & 0xfff8u) == 0x33c0u && i + 6 <= len &&
+                     be32at(code + i + 2) == 0x00dff180u)) {
+            /* The runtime serves the exact `move.w Dn,$DFF180` desktop
+             * calibration spelling as a flag-correct write sink. It is not a
+             * reason to route the whole application away from the JIT. */
             check_abs_operand(code, len, i, w, hunk, rs, r);
         }
 

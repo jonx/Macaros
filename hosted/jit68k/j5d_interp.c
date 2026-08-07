@@ -3193,6 +3193,19 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
             pc = after_pc; continue;
         }
 
+        /* The exact COLOR00 calibration write hosted by the JIT. Mirror its
+         * MOVE flags; computed and other custom-register accesses remain
+         * ordinary out-of-sandbox failures. */
+        if ((op & 0xfff8u) == 0x33c0u && be32(ip + 2) == 0x00dff180u) {
+            uint16_t value = (uint16_t)st->d[op & 7u];
+            uint32_t cc = st->ccr & J5D_CCR_X;
+            if (value == 0) cc |= J5D_CCR_Z;
+            if (value & 0x8000u) cc |= J5D_CCR_N;
+            st->ccr = cc;
+            pc += 6;
+            continue;
+        }
+
         /* ============================ [STD68K] general MOVE fallback =================
          * MOVE is `00 ss DDD ddd sss rrr` (ss: 01=.b 11=.w 10=.l; ddd/DDD = dest
          * mode/reg; sss/rrr = source mode/reg). The specific fast-path blocks above
