@@ -311,6 +311,20 @@ without a capability gap. `genwindow` exercises the generic contract by
 drawing the same guest Image address, growing its planar payload, and drawing
 it again; the focused corpus reports `[T3WINDOW] PASS`.
 
+Requester and sheet clicks are also verified on the real application.  The
+remaining failure was not native input delivery: Bridge Lab showed both
+`SELECTDOWN` and `SELECTUP` reaching the correct guest window, port and Gadget.
+The OS-side event pump had applied both edges while draining the native queue,
+however, so TurboCalc's handler observed the final released state when it
+polled classic CIA-A `$BFE001`; child Tasks also had separate JIT engines whose
+CIA view was never updated.  Mouse state now changes when guest `GetMsg`
+consumes each IDCMP edge and is synchronized across every engine in the run.
+A fresh run dismisses Continue, executes the complete ARexx proof, dismisses
+the fully drawn Print Sheet requester with Cancel, and selects an ordinary
+cell without a black fill or crash.  The retained live diagnostic is
+`/tmp/bridge-click-cia.trace.jsonl`; its three DOWN/UP pairs identify the demo
+requester, Print requester and sheet window respectively.
+
 The Stage 2 launcher deletes its previous result before starting RX, and the
 script writes the result stream sequentially. An old PASS can therefore no
 longer make a new launch return early or leave stale trailing diagnostic lines.
@@ -453,7 +467,11 @@ remove `Regina68k/stage2.result`, boot with
 on a full boot - it floods `/private/tmp/aros-sidecar.log`, 800 MB last
 time). Bridge Lab itself defaults to a 32 MiB cap; set
 `EMU68K_BRIDGE_TRACE_MAX_BYTES` only when a smaller diagnostic budget is
-needed. Judge only `STAGE2-PASS`/`FAIL` plus the trace: expect a
+needed. Also export
+`EMU68K_LIBS_PATH=~/AROS/Shared/Regina68k/libs`: now that child `PROGDIR:` is
+correctly the executable's own `commands` drawer, relying on the old inherited
+parent drawer no longer finds the launcher's guest C runtime by accident.
+Judge only a freshly written `STAGE2-PASS`/`FAIL` plus the trace: expect a
 synthesized ACTIVEWINDOW delivery for window:2 right after its ModifyIDCMP,
 then the parent-port reply chain resuming, the main task reaching its idle
 loop, and a guest `port.get` on TCALC.  If the stall persists with the
@@ -918,7 +936,7 @@ The remaining corpus milestone is application breadth, not these fixtures.
 ## Repo state — IMPORTANT
 
 The host/graft repo is `main` in the user's own `jonx/AROS-AArch64` repository;
-the pre-this-update commit is `0e59b1a`. The AROS checkout remains based at
+the pre-this-update commit is `599036e`. The AROS checkout remains based at
 `b594c9ba09` on `checkpoint/emu68k-progdir-20260807`, but has the uncommitted
 OS-side generated files and runtime changes paired with this host update.
 Do not commit or push that checkout: authorization is only for the user's own

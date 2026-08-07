@@ -258,6 +258,10 @@ struct emu68k_run {
     uint32_t              command_return;
     uint8_t               command_can_unwind;
     uint32_t              poll_quantum;
+    /* Live classic input state.  Native Intuition can queue several edges in
+     * one host-side pump, but a 68k task observes the corresponding CIA state
+     * when it consumes each IDCMP message. */
+    unsigned int          mouse_buttons;
     int                   scheduler_ran;
     int                   failed;
     struct {

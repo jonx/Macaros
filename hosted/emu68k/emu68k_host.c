@@ -2269,6 +2269,7 @@ int emu68k_add_guest_task_context(struct emu68k_run *r, j4_sandbox *sb,
     ctx->initial_sp = sp;
     ctx->live = 1;
     r->nctx++;
+    emu68k_run_set_mouse_buttons(r, r->mouse_buttons);
 
     if (prelaunch) {
         uint32_t hook_entry;
@@ -2662,6 +2663,7 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
     }
     ctx->live = 1;
     r->nctx++;
+    emu68k_run_set_mouse_buttons(r, r->mouse_buttons);
     /* Give it its first slice now, so it reaches the port it is about to wait
      * on before the parent sends to it. */
     if (emu68k_run_context_nested(r, sb, idx, e, el) != 0)
@@ -3364,12 +3366,22 @@ void emu68k_run_set_mouse_buttons(emu68k_run *r, unsigned int buttons)
 {
     j5d_engine *previous;
     uint8_t pra = 0xff;
+    int i;
 
     if (!r || !r->eng) return;
+    r->mouse_buttons = buttons;
     if (buttons & 1u) pra &= (uint8_t)~0x40u;
     previous = j5d_engine_active();
     j5d_engine_activate(r->eng);
     j5d_set_ciaa_pra(pra);
+    /* Every emulated Task/Process owns a JIT engine instance.  CIA-A is
+     * machine-wide input, so all of those instances must expose the same
+     * button state, including whichever task receives the IDCMP message. */
+    for (i = 0; i < r->nctx; i++) {
+        if (!r->ctx[i].eng || r->ctx[i].eng == r->eng) continue;
+        j5d_engine_activate(r->ctx[i].eng);
+        j5d_set_ciaa_pra(pra);
+    }
     j5d_engine_activate(previous);
 }
 

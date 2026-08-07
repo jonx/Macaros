@@ -11,6 +11,32 @@
 
 #define exec_call emu68k_exec_call
 
+#define EMU68K_IDCMP_MOUSEBUTTONS 0x00000008u
+#define EMU68K_SELECTDOWN         0x0068u
+#define EMU68K_MENUDOWN           0x0069u
+#define EMU68K_SELECTUP           0x00e8u
+#define EMU68K_MENUUP             0x00e9u
+
+static void note_mouse_button_message(struct emu68k_run *r, uint32_t cls,
+                                      uint16_t code)
+{
+    unsigned int buttons;
+
+    if (cls != EMU68K_IDCMP_MOUSEBUTTONS) return;
+    buttons = r->mouse_buttons;
+    if (code == EMU68K_SELECTDOWN)
+        buttons |= 1u;
+    else if (code == EMU68K_SELECTUP)
+        buttons &= ~1u;
+    else if (code == EMU68K_MENUDOWN)
+        buttons |= 2u;
+    else if (code == EMU68K_MENUUP)
+        buttons &= ~2u;
+    else
+        return;
+    emu68k_run_set_mouse_buttons(r, buttons);
+}
+
 static int guest_span_ok(j4_sandbox *sb, uint32_t addr, uint32_t size)
 {
     return addr >= sb->sandbox_origin &&
@@ -1703,8 +1729,15 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                         guest_span_ok(sb, head, M68K_IntuiMessage_SIZEOF);
             uint32_t cls = idcmp
                          ? gread32(sb, head + M68K_IntuiMessage_Class) : 0;
+            uint16_t code = idcmp
+                          ? gread16(sb, head + M68K_IntuiMessage_Code) : 0;
             int level = (idcmp && cls == 0x00400000u)
                       ? BL_DEBUG : BL_RUNTIME;
+            /* Match classic hardware timing: the task handling a mouse edge
+             * sees that edge's active-low CIA state.  Updating while the
+             * native queue is drained loses SELECTDOWN whenever SELECTUP was
+             * already queued behind it. */
+            if (idcmp) note_mouse_button_message(r, cls, code);
             bl_event(level, r->cur_ctx, ctx_task(r), st->pc, "port.take",
                  "\"port\":\"%s\",\"message\":\"%s\"",
                  bl_id("port", port), bl_id("message", head));
@@ -1718,7 +1751,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      "\"mouse_y\":%d",
                      bl_id("port", port), bl_id("message", head),
                      gread32(sb, head + M68K_IntuiMessage_Class),
-                     gread16(sb, head + M68K_IntuiMessage_Code),
+                     code,
                      gread16(sb, head + M68K_IntuiMessage_Qualifier),
                      bl_id("window", gread32(sb,
                          head + M68K_IntuiMessage_IDCMPWindow)),
