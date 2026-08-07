@@ -1104,6 +1104,57 @@ static scan calls a hardware banger, loudly, so a real refusal can be told
 from a linear-decode artefact on a data payload.  Diagnostic only; the runtime
 guard remains the authority.
 
+SECOND HALF OF THE FRAME (2026-08-07 evening): the link word alone was NOT
+the full contract.  Real LoadSeg allocates each segment as
+`[length][link BPTR][payload]` - the length longword at `BADDR(seg)-4` is how
+UnLoadSeg frees a segment, and programs READ it: this same decrunch stub does
+`move.l -8(payload),d3; add.l a0,d3` to find the END of its own crunched
+hunk.  With only the 4-byte link framed, that read returned garbage, `d3`
+came out as ~stub-end instead of ~stream-end, and the per-hunk compaction
+count `(d3-a0)>>2` underflowed to a billion longwords; the runaway copy
+marched into the arena guard page (the crash dump's `x13=0xBFC000` names it).
+`j4_load_hunks_bptr` now frames EIGHT bytes and writes `hunk_size+8` at
+`link-4`, for the top-level program and guest LoadSeg alike.  Corpus verified
+identical before/after the widening (genexecfull still PASS, all three
+negative controls still fail closed).
+
+ENV FORWARDING TRAP (cost one wrong conclusion, now fixed): `aros-ctl run`
+launches through launchd, which STRIPS the environment; only the variables
+listed in the plist block around line 698 of `graft/aros-ctl` reach the
+instance.  `EMU68K_SCAN_OVERRIDE` and `EMU68K_DEAD_CHIPS` are now in that
+list.  Any new `EMU68K_*` control MUST be added there or it silently does
+nothing under `aros-ctl run` while working fine in standalone harnesses -
+check the banner line in the log, not the shell environment, when a control
+seems ignored.
+
+`EMU68K_DEAD_CHIPS=1` (new, diagnostic): leaves the hardware windows as
+inert zeroed RAM instead of PROT_NONE fault holes.  A program that only POKES
+the chips then runs; reads see zeroes.  For finding out what a hardware
+program IS, not for pretending the hardware exists - a busy-wait on a
+changing register (VPOSR, CIA timers) spins forever and that too is an
+answer.  It prints a banner and suppresses all chip-access reporting for the
+run.
+
+FINAL VERDICT ON THE TOOL (`~/Downloads/Test`): it is a HARDWARE-LEVEL
+music/demo program, exactly as suspected.  Fully decrunched and running, its
+entire OS footprint is: AllocMem/FreeMem (its own re-loader), `Forbid`,
+`OpenLibrary("graphics.library")`, `LoadView` (display takeover), two
+`WaitTOF` calls to settle the frame - and then NOTHING: its main loop lives
+entirely in the custom chips through `A5=$DFF000`, at 96% CPU against dead
+registers.  Under `EMU68K_DEAD_CHIPS` it runs but can produce no sound (Paula
+is inert) and can never be exited by input (the CIAs are dead too).  This is
+the genuine "needs a full Amiga emulator" class - the WATERLINE boundary, not
+a bridge gap - now demonstrated at runtime instead of asserted by a scan that
+was, on this file, wrong about WHERE (it flagged the crunched payload, not
+the real chip code).  Do not grow Paula/CIA emulation into the bridge for it;
+that is the standing waterline decision.
+
+Loose end, recorded not chased: one earlier run with the FULL fifteen-library
+tail set ended in a clean instance EXIT (launchd status 0, no crash bundle,
+no diagnostic report) after the tool ran under dead chips.  Not reproduced
+with the minimal set.  If it recurs, suspect the payload's exit path (a
+classic tool may jump through a reset vector) interacting with layout.
+
 ## Regression sweep, 2026-08-07 (current result)
 
 Run `make hosted-emu68k-t3gen` for the generated/handwritten boundary suite and

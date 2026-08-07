@@ -3250,7 +3250,19 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
             { HW_CIA_LO, HW_CIA_HI }, { HW_CUSTOM_LO, HW_CUSTOM_HI },
         };
         int i;
-        for (i = 0; i < 2; i++) {
+        /* Dead-chip mode: leave the hardware windows as plain zeroed RAM
+         * instead of fault holes. A program that only POKES the chips - a
+         * tracker banging Paula, a demo setting BEAMCON0 - then runs, its
+         * writes landing in inert memory and its reads seeing zeroes. This is
+         * for finding out what such a program IS, not for pretending the
+         * hardware exists: anything that busy-waits on a changing register
+         * (VPOSR, joystick counters) will spin and be killed by the runtime
+         * ceiling, and that too is an answer. Off unless asked for. */
+        if (emu68k_host_getenv("EMU68K_DEAD_CHIPS")) {
+            fprintf(stderr, "[emu68k] EMU68K_DEAD_CHIPS: hardware windows are "
+                    "inert RAM, not fault holes; chip access will not be "
+                    "reported this run\n");
+        } else for (i = 0; i < 2; i++) {
             unsigned long lo = hole[i].lo & ~mask;
             unsigned long hi = (hole[i].hi + psz) & ~mask;
             mprotect((uint8_t *)r->reserve + lo, hi - lo, PROT_NONE);

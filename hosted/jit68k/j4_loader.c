@@ -342,7 +342,13 @@ int j4_load_hunks_bptr(j4_sandbox *sb, const uint8_t *buf, size_t len,
     }
     mark = sb->next_alloc;
     *seglist_bptr = 0;
-    if (load_hunks(sb, buf, len, 0, 4u, seglist, errbuf, errlen)) {
+    /* The full AmigaDOS segment frame is EIGHT bytes: [length][link][payload].
+     * The length longword at BADDR(seg)-4 is written by the real LoadSeg (it
+     * is how UnLoadSeg frees a segment), and programs use it: a decrunch stub
+     * reads it to find the end of its own crunched hunk. Framing only the
+     * link left that longword as garbage, and the stub computed a wildly
+     * negative remaining-stream count from it. */
+    if (load_hunks(sb, buf, len, 0, 8u, seglist, errbuf, errlen)) {
         if (sb->next_alloc > mark)
             memset(j4_sandbox_host(sb, mark), 0, sb->next_alloc - mark);
         sb->next_alloc = mark;
@@ -353,6 +359,8 @@ int j4_load_hunks_bptr(j4_sandbox *sb, const uint8_t *buf, size_t len,
         uint32_t node = seglist->hunk_base[i] - 4u;
         uint32_t next = (i + 1 < seglist->numhunks)
                       ? (seglist->hunk_base[i + 1] - 4u) >> 2 : 0;
+        sb_write_be32(j4_sandbox_host(sb, node - 4u),
+                      seglist->hunk_size[i] + 8u);
         sb_write_be32(j4_sandbox_host(sb, node), next);
     }
     *seglist_bptr = (seglist->hunk_base[0] - 4u) >> 2;
