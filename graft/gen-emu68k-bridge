@@ -3534,6 +3534,8 @@ TAG_KINDS = {"u32": "EMU_TAG_U32", "cstr": "EMU_TAG_CSTR",
              "object_or_ffff": "EMU_TAG_OBJECT_OR_FFFF",
              "node_list": "EMU_TAG_NODELIST",
              "cstr_array": "EMU_TAG_CSTR_ARRAY",
+             "tag_map": "EMU_TAG_TAGMAP",
+             "null_or_one": "EMU_TAG_NULL_OR_ONE",
              "out_u32": "EMU_TAG_OUT_U32"}
 
 
@@ -3776,6 +3778,11 @@ def validate_policy(targets):
             elif kind == "cstr_array" and (not isinstance(t.get("max_count"), int) or
                                              t["max_count"] < 1 or
                                              t["max_count"] > 1024):
+                errors.append("tag domain %s tag %s needs max_count 1..1024"
+                              % (name, macro))
+            elif kind == "tag_map" and (not isinstance(t.get("max_count"), int) or
+                                          t["max_count"] < 1 or
+                                          t["max_count"] > 1024):
                 errors.append("tag domain %s tag %s needs max_count 1..1024"
                               % (name, macro))
             elif kind in ("object", "object_or_ffff"):
@@ -4687,7 +4694,7 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
                    tag["max_count"]))
-            elif tag["kind"] == "cstr_array":
+            elif tag["kind"] in ("cstr_array", "tag_map"):
                 w('    { %s, %s, "%s", NULL, 0, %d, 0, 0, 0 },' %
                   (tag["name"], TAG_KINDS[tag["kind"]], tag["name"],
                    tag["max_count"]))
@@ -5457,8 +5464,16 @@ def emit_lib(lib, rel, base, btype, hdr, funcs):
                 count_arg = ap.get("count_arg")
                 if count_arg:
                     count_reg = f.regs[[n for _t, n in f.args].index(count_arg)]
+                    # A 68k caller only defines the low byte/word for a narrow
+                    # scalar argument.  The upper register bits are caller
+                    # scratch and must not participate in an array bound.
+                    # Cast through the declared interface type (or an explicit
+                    # policy override) before widening for the overflow check.
+                    count_type = narrow_args.get(count_arg,
+                                                 norm({n: t for t, n in f.args}[count_arg]))
+                    count_value = "(%s)%s" % (count_type, reg_expr(count_reg))
                     w("        UQUAD emu_array_wide_count_%d = (UQUAD)(ULONG)%s * %d;"
-                      % (ai, reg_expr(count_reg), ap.get("count_scale", 1)))
+                      % (ai, count_value, ap.get("count_scale", 1)))
                     w("        if (emu_array_wide_count_%d > %d)" % (ai, cap))
                     w("        {")
                     w("            if (err && errlen)")
@@ -6371,10 +6386,9 @@ struct Emu68kBoopsiBridge
     APTR state;
     ULONG guest_class;
     ULONG entry;
-    /* The caller's ORIGINAL guest taglist. OM_NEW's message carries it as
-     * ops_AttrList, because the guest dispatcher parses guest tags itself -
-     * handing it the method ID alone made every dispatcher see no
-     * attributes and fail its OM_NEW cleanly, which read as NULL results. */
+    /* The caller's ORIGINAL guest taglist. OM_NEW and explicit OM_SET carry
+     * it as ops_AttrList, because a guest dispatcher parses guest tags itself.
+     * The native superclass receives a separately converted public subset. */
     ULONG guest_tags;
     LONG failed;
     char error[160];
@@ -6514,6 +6528,8 @@ LONG emu68k_boopsi_finish(struct Emu68kBoopsiBridge *bridge,
 #define EMU_TAG_NODELIST 10 /* retained guest Exec List rebuilt with Node names */
 #define EMU_TAG_CSTR_ARRAY 11 /* retained NULL-terminated guest string-pointer array */
 #define EMU_TAG_STRUCT_INOUT 12 /* flat structure accepted as tag input and GetAttr output */
+#define EMU_TAG_TAGMAP 13 /* retained TagItem mapping table (tag -> replacement tag) */
+#define EMU_TAG_NULL_OR_ONE 14 /* NULL or the documented pointer sentinel (APTR)1 */
 struct EmuTagOutSlot
 {
     IPTR value;             /* first: native ti_Data can point at the whole slot */

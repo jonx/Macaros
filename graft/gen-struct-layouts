@@ -50,6 +50,7 @@ HEADERS = [
     "graphics/gels.h", "graphics/copper.h", "graphics/sprite.h",
     "intuition/preferences.h", "intuition/screens.h",
     "libraries/gadtools.h",
+    "libraries/asl.h",
     "gadgets/colorwheel.h",
     "cybergraphx/cybergraphics.h",
     "libraries/locale.h",
@@ -72,6 +73,7 @@ TYPES = [
     "Gadget", "ExtGadget", "Border", "Image", "Layer",
     "CyberModeNode", "CDrawMsg",
     "Locale",
+    "FileRequester", "FontRequester", "ScreenModeRequester",
 ]
 
 # Not marshalled, read by OFFSET: the structures the 68k execution service
@@ -161,6 +163,10 @@ KNOWN_M68K = {
                             "Width": 4, "Height": 6, "Depth": 8,
                             "ImageData": 10, "PlanePick": 14,
                             "PlaneOnOff": 15, "NextImage": 16}),
+    "FileRequester": (56, {"fr_File": 4, "fr_Drawer": 8,
+                            "fr_LeftEdge": 22, "fr_NumArgs": 32,
+                            "fr_ArgList": 36, "fr_UserData": 40,
+                            "fr_Pattern": 52}),
     "DimensionInfo": (88, {"Header_StructID": 0, "Header_DisplayID": 4,
                             "MaxDepth": 16, "Nominal_MinX": 26,
                             "MaxOScan_MinX": 34, "VideoOScan_MinX": 42,

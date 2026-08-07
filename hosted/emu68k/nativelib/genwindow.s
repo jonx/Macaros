@@ -26,6 +26,7 @@ GFX_ExtendFont      equ -816
 GFX_TextFit         equ -696
 GFX_NewRegion       equ -516
 GFX_DisposeRegion   equ -534
+GFX_LoadRGB4        equ -192
 LAY_InstallClipRegion equ -174
 LAY_LockLayerInfo   equ -120
 LAY_UnlockLayerInfo equ -138
@@ -93,6 +94,18 @@ SA_Type          equ $8000002d
     tst.l   d0
     beq.w   failed
     move.l  d0,d5
+
+    ; WORD arguments only define the low half of a 68k data register.  Keep
+    ; deliberate scratch bits in D0 while asking for two colours: the generated
+    ; array bound must cast through the graphics.conf WORD declaration before
+    ; it widens the count.  TurboCalc exposed this exact ABI rule after Open.
+    move.l  a2,a6
+    move.l  d5,a0
+    lea     44(a0),a0             ; embedded classic Screen.ViewPort facade
+    lea     testcolors(pc),a1
+    move.l  #$7abc0002,d0
+    jsr     GFX_LoadRGB4(a6)
+    move.l  a4,a6                  ; restore intuition.library
 
     lea     windowtags(pc),a1
     move.l  d5,4(a1)              ; WA_CustomScreen typed object
@@ -415,6 +428,8 @@ imagebitmap:
     dc.l imageplane,0,0,0,0,0,0,0
 imageplane:
     dc.w 0
+testcolors:
+    dc.w $000,$fff
 imagerp:
     ds.b 100
 scratchrp:

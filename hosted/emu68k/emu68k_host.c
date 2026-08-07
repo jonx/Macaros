@@ -1840,7 +1840,21 @@ uint32_t emu68k_callback_stack_acquire(struct emu68k_run *r, char *err,
 
 void emu68k_callback_stack_release(struct emu68k_run *r)
 {
-    if (r && r->callback_depth) r->callback_depth--;
+    if (!r) return;
+    if (r->callback_depth) r->callback_depth--;
+
+    /* j5d_set_poll applies to the active engine, including recursively
+     * entered guest callbacks.  An inner callback must leave the no-yield
+     * poll installed for its still-active outer callback; only the outermost
+     * return may restore ordinary quantum scheduling. */
+    j5d_set_poll(r->callback_depth ? nested_poll : quantum_poll, r,
+                 r->poll_quantum ? r->poll_quantum : 4096u);
+}
+
+static void restore_guest_poll(struct emu68k_run *r)
+{
+    j5d_set_poll(r->callback_depth ? nested_poll : quantum_poll, r,
+                 r->poll_quantum ? r->poll_quantum : 4096u);
 }
 int emu68k_run_guest_subroutine(struct emu68k_run *r, uint32_t entry,
                                 struct j5d_m68k_state *initial,
@@ -2987,8 +3001,10 @@ int emu68k_run_guest_subroutine(struct emu68k_run *r, uint32_t entry,
     dom = domain_enter_guest();
     rc = j5d_run(&sb, entry, RUN_LIBBASE, &st, &d0, bridge, &c, err, errlen);
     domain_leave_guest(dom);
-    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
-    if (owns_stack) emu68k_callback_stack_release(r);
+    if (owns_stack)
+        emu68k_callback_stack_release(r);
+    else
+        restore_guest_poll(r);
     if (rc != 0) return 1;
     if (result) *result = d0;
     return 0;
@@ -3039,7 +3055,7 @@ int emu68k_run_guest_command(struct emu68k_run *r, uint32_t entry,
         rc = 0;
     }
     r->command_can_unwind = 0;
-    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
+    restore_guest_poll(r);
     if (rc != 0) return 1;
     if (result) *result = d0;
     return 0;
@@ -3081,10 +3097,14 @@ int emu68k_run_call_hook(emu68k_run *r, unsigned long entry,
     int rc = j5d_run(&sb, (uint32_t)entry, RUN_LIBBASE, &st, &d0,
                      bridge, &c, err, errlen);
     domain_leave_guest(dom);
-    j5d_set_poll(quantum_poll, r, r->poll_quantum ? r->poll_quantum : 4096u);
     emu68k_callback_stack_release(r);
-    if (rc != 0)
+    if (rc != 0) {
+        if (err && errlen && !err[0])
+            snprintf(err, errlen,
+                     "68k callback engine rc=%d entry=%08lx stopped_pc=%08x",
+                     rc, entry, st.pc);
         return 1;
+    }
     if (result) *result = d0;
     return 0;
 }

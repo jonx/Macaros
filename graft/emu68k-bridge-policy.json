@@ -711,6 +711,7 @@
       ]
     },
     "asl.request": {
+      "export": true,
       "headers": [
         "libraries/asl.h"
       ],
@@ -1230,6 +1231,15 @@
           "kind": "object_or_ffff",
           "type": "Object",
           "nullable": true
+        },
+        {
+          "name": "ICA_MAP",
+          "kind": "tag_map",
+          "max_count": 256
+        },
+        {
+          "name": "STRINGA_TextVal",
+          "kind": "cstr"
         },
         {
           "name": "PGA_Freedom",
@@ -1844,7 +1854,7 @@
         },
         {
           "name": "WA_BackFill",
-          "kind": "refuse"
+          "kind": "null_or_one"
         },
         {
           "name": "WA_ShapeHook",
@@ -4859,9 +4869,34 @@
     },
     "intuition.library.OpenWindowTagList": {
       "handwritten_overlay": true,
-      "null_args": [
-        "newWindow"
-      ],
+      "structs": {
+        "newWindow": {
+          "type": "NewWindow",
+          "direction": "in",
+          "nullable": true,
+          "fields": {
+            "FirstGadget": {
+              "kind": "object",
+              "type": "Gadget"
+            },
+            "CheckMark": {
+              "kind": "object",
+              "type": "Image"
+            },
+            "Title": {
+              "kind": "cstr"
+            },
+            "Screen": {
+              "kind": "object",
+              "type": "Screen"
+            },
+            "BitMap": {
+              "kind": "object",
+              "type": "BitMap"
+            }
+          }
+        }
+      },
       "taglists": {
         "tagList": "intuition.open_window"
       },
@@ -4959,6 +4994,7 @@
       }
     },
     "intuition.library.SetAttrsA": {
+      "handwritten_overlay": true,
       "objects": {
         "object": {
           "type": "Object"
@@ -7034,6 +7070,7 @@
       "origin": "import"
     },
     "intuition.library.GetAttr": {
+      "handwritten_overlay": true,
       "objects": {
         "object": {
           "type": "Object"
@@ -7413,6 +7450,7 @@
       }
     },
     "intuition.library.SetGadgetAttrsA": {
+      "handwritten_overlay": true,
       "objects": {
         "gadget": {
           "type": "Gadget",

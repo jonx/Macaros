@@ -1,9 +1,8 @@
 Start the new chat with:
 Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both
-working trees, then continue with the Aminet breadth corpus and the single
-fresh-nightly verification command.  Do not restart from the historical
-TurboCalc section: the generic transport result and its application-side
-limitation are already recorded there.
+working trees, then continue from the current Open/Save requester result and
+the Aminet breadth corpus.  Do not restart from the historical TurboCalc ARexx
+section: its end-to-end result and superseded investigation are recorded below.
 
 # Handover: 68k transparent execution, 2026-08-07
 
@@ -348,6 +347,39 @@ selects unlimited output. The cap never changes guest execution.
 
 The investigation log below is retained for provenance. It is superseded by
 the result above; do not resume its intermediate “remaining blocker” steps.
+
+### Native ASL Open/Save crossing — current result (2026-08-07)
+
+Classic file requesters are public result structures, not opaque handles.
+Bridging `AllocAslRequest()` as a plain object token opened a native requester,
+but TurboCalc crashed on return when it read `fr_File` and `fr_Drawer`.  The
+bridge now gives file requesters a generated 56-byte classic
+`struct FileRequester` facade.  `AslRequest()` synchronizes its public scalar
+fields and copies File, Drawer and Pattern into guest strings before returning;
+the native request remains owned by the facade until `FreeAslRequest()`.
+
+The real TurboCalc Open command has been exercised both ways: Cancel returns
+to a responsive sheet, and selecting
+`MacRW:TurboCalc5/TurboCalc/Tutorial/Tutorial1.TCD` closes the requester and
+loads the tutorial successfully.  That load also found and fixed a generic
+generator bug: array bounds derived from a BYTE/WORD argument must discard the
+undefined upper bits of the 68k data register before widening.  `LoadRGB4` now
+sees its declared `WORD count`, rather than caller scratch bits, and the same
+rule applies to every generated array crossing.
+
+TurboCalc Demo disables saving, so `hosted/emu68k/nativelib/genaslsave.s` is
+the focused proof for save mode.  It requests `ASLFR_DoSaveMode`, displays the
+native Save requester with initial drawer/file values, and on acceptance reads
+the returned guest `fr_File` and `fr_Drawer`.  The live result was
+`[T3ASL] SAVE ACCEPTED`, with Macaros still running.  Multi-select remains an
+intentional named gap because its retained `WBArg` array and BPTR locks need a
+reviewed guest representation; no native pointer is leaked for that case.
+
+To reproduce the interactive save proof, assemble `genaslsave.s` with the
+repository's `vasmm68k_mot` using `-Fhunkexe -nosym -kick1hunks`, place the
+result on `MacRW:`, and launch it through `aros-ctl` with native ASL routing
+(no `EMU68K_GUESTSIDE_LIBS=asl.library`). Accept prints the acceptance token above;
+Cancel prints `[T3ASL] SAVE CANCELLED` and is also a clean return.
 
 ### TurboCalc investigation log (historical, superseded)
 
@@ -988,7 +1020,8 @@ Do not commit or push that checkout: authorization is only for the user's own
   released facade can no longer be mistaken for a guest-owned structure merely
   because both addresses are readable inside the arena.
 - `hosted/emu68k/nativelib/genexecfull.s`, `geniff.s`, `genlibsweep.s`,
-  `genmui.s`: new fixtures.
+  `genmui.s`, `genaslsave.s`: new fixtures. `genaslsave` is interactive and
+  validates both ASL save mode and the returned FileRequester facade strings.
 - Native library/device facades no longer occupy a fixed sixteen-slot address
   range.  Each gets a private dynamically allocated 4 KiB negative-vector
   window plus readable base fields; the runtime holds 64 native facades and the
