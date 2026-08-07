@@ -6926,7 +6926,7 @@ def exec_lvo_defines():
     # their constants with the library name so common API names (Close, Move,
     # Open...) cannot collide, while retaining Exec's historical LVO_* names.
     for short in ("dos", "graphics", "intuition", "layers", "utility",
-                  "cybergraphics", "gadtools"):
+                  "cybergraphics", "gadtools", "diskfont"):
         lib = short + ".library"
         match = [t for t in all_targets() if t[0] == lib]
         if not match:

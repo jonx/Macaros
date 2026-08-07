@@ -1,7 +1,7 @@
 Start the new chat with:
 Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both
-working trees, then continue from the current Open/Save requester result and
-the Aminet breadth corpus.  Do not restart from the historical TurboCalc ARexx
+working trees, then continue with the Aminet breadth corpus, beginning with the
+official WordWorth 2 demo.  Do not restart from the historical TurboCalc ARexx
 section: its end-to-end result and superseded investigation are recorded below.
 
 # Handover: 68k transparent execution, 2026-08-07
@@ -608,6 +608,23 @@ needs one new generator capability: a facade field kind that maps a native
 BPTR through the existing handle table (the same table BPTR arguments and
 results already use).  Until then stage 2 must NOT route diskfont.library
 guest-side; TurboCalc's GUI opens it during startup.
+
+AVAILFONTS OUTPUT ABI: FIXED, STATIC/BUILD PROOF (2026-08-07).  TurboCalc's
+About path exposed that `diskfont.library.AvailFonts` is not a byte-buffer API
+despite its `STRPTR buffer` declaration.  Native AROS writes native-layout
+`AvailFontsHeader` + `AvailFonts[]` records containing native pointers to
+trailing names; the old generated crossing handed those records directly to
+the big-endian 32-bit guest, which eventually dereferenced a byte-swapped host
+pointer.  The policy now excludes this vector from automatic generation, the
+layout generator owns `TTextAttr`, `AvailFontsHeader`, `AvailFonts` and
+`TAvailFonts`, and the OS-side handwritten crossing calls native `AvailFonts`
+into private memory then repacks classic 10-byte records, big-endian scalar
+fields, guest pointers and trailing strings.  Tagged results remain a named
+gap until their indirect `TagItem` payloads have a typed copy policy.  The
+targeted emu68k host-library rebuild and both generator `--check` gates pass;
+TurboCalc consumes the About command without the former host SIGSEGV.  The
+popup itself was not made visible before the deliberate breadth pivot, so do
+not promote this to a behavioural proof yet.
 
 RERUN VERDICT (trace `Regina68k/bridge-stage2-synth-5.trace.jsonl`,
 2026-08-06 late): the ACTIVEWINDOW fix WORKS - `event.source.bind` now

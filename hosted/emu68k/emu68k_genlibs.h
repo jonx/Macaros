@@ -1584,4 +1584,18 @@
     X(29, "GT_GetGadgetAttrsA") \
     /* end */
 
+/* diskfont.library vector numbers from workbench/libs/diskfont/diskfont.conf. */
+#define DISKFONT_LVO_OPENDISKFONT            5   /* -30 */
+#define DISKFONT_LVO_AVAILFONTS              6   /* -36 */
+#define DISKFONT_LVO_NEWFONTCONTENTS         7   /* -42 */
+#define DISKFONT_LVO_DISPOSEFONTCONTENTS     8   /* -48 */
+#define DISKFONT_LVO_NEWSCALEDDISKFONT       9   /* -54 */
+#define EMU68K_DISKFONT_LVO_NAMES(X) \
+    X(5, "OpenDiskFont") \
+    X(6, "AvailFonts") \
+    X(7, "NewFontContents") \
+    X(8, "DisposeFontContents") \
+    X(9, "NewScaledDiskFont") \
+    /* end */
+
 #endif /* EMU68K_GENLIBS_H */

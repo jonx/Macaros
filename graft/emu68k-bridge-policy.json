@@ -3418,6 +3418,16 @@
         }
       ]
     },
+    "diskfont.library.AvailFonts": {
+      "reason": "served by the handwritten OS-side bridge because the output buffer contains an ABI-sized array of records with embedded pointers and trailing strings",
+      "evidence": [
+        {
+          "source": "workbench/libs/diskfont/availfonts.c",
+          "line_start": 49,
+          "line_end": 50
+        }
+      ]
+    },
     "cybergraphics.library.AllocCModeListTagList": {
       "reason": "returns a guest-traversed List whose dynamically allocated CyberModeNode chain and embedded mode names require linked facades",
       "evidence": [
