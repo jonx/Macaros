@@ -203,6 +203,10 @@ struct emu68k_run {
      * PROT_NONE holes still enforce hardware/unprovided-memory routing. */
     j5d_sandbox           jit_sb;
     j4_seglist            seg;
+    /* BPTR of the program's own seglist. A program with no relocations finds
+     * its later hunks by walking this chain from the link word before its
+     * first hunk, so the framing has to exist even when nobody asked for it. */
+    uint32_t              seg_bptr;
     stub_lib              lib;
     struct j5d_m68k_state st;
     j5d_engine           *eng;

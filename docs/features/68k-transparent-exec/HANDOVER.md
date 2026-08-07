@@ -1048,6 +1048,62 @@ safe documented command as a deterministic request/reply/result oracle, retain
 the Bridge Lab trace, and only then try one bundled script.  The untouched
 retail launch payload remains `/Users/jkn/AROS/Shared/wordworth7-startup`.
 
+## Seglist framing for the top-level program (2026-08-07) - FIXED
+
+Found by running an arbitrary Aminet-style tool (`~/Downloads/Test`, a
+self-decrunching executable).  It was refused with "needs the Amiga hardware
+(machine address $025EDC)", which READS like a routing verdict and is not
+one.  That message came from the RUNTIME guard, not the static scan - the two
+texts differ only by an "it ", so check which one you are reading.
+
+The program is crunched: the header declares hunk 1 as 0x1DAA4 bytes while
+only 0x12508 are in the file (the rest is the decrunch target), and there are
+ZERO RELOC32 blocks.  A program with no relocations can find its later hunks
+only one way, by walking its own DOS seglist:
+
+```
+250008  lea (pc,0x24fffc),a4   ; own hunk start MINUS 4 = the link word
+25000c  move.l (a4),a0         ; the next-hunk BPTR
+25000e  add.l a0,a0
+250010  add.l a0,a0            ; BPTR<<2
+250012  addq.w #4,a0           ; skip the link -> next hunk's payload
+```
+
+`emu68k_dos_loadseg` (a guest's own LoadSeg) builds exactly that chain through
+`j4_load_hunks_bptr`, which reserves a 4-byte link word before each hunk and
+chains them.  The TOP-LEVEL program was loaded with plain `j4_load_hunks`,
+zero headroom, so no link words existed: the program read whatever preceded
+its hunk (`0x4E77`) as the BPTR, computed a wild address, and the guard
+stopped it.  Fixed by loading the top-level program through the framed loader
+as well, keeping `seg_bptr` on the run.
+
+Measured effect: the program now finds hunk 1 at its real address and
+decrunches, and in the corpus `genexecfull` went FAIL -> PASS.  So the gap was
+never specific to crunched programs.  Self-extracting archives, most Aminet
+game and demo releases, and anything overlaid all depend on this.
+
+CAVEAT, measured not assumed: the same corpus run shows `gengadget` changing
+from a NAMED gap (`stale or unknown GA_Previous object token 7a2e666f`) to a
+bare "host fault in translated code".  It failed before and fails now, but the
+diagnosis got WORSE, and the framing shifted every address (library base
+`0x222000` -> `0x262040`).  Check that first when picking up GA_Previous.
+
+The tool still does not finish.  It now dies later, in the decruncher's
+copy-back loop at `0x2500f4` (`move.l (a0)+,(a2)+ ; subq.l #1,d1 ; bne`),
+whose count is computed at `0x2500e0` as `d1 = (d3 - a0) >> 2`.  At the fault
+`D3 = 0x25027C` (the end of its own stub hunk) and `A0 = 0x00BF187C` (near the
+arena TOP, an allocation), so the subtraction underflows to `0x3FD97A80` - a
+billion longwords - and the copy runs off the arena.  `a0` therefore holds a
+HIGH allocation where the code expects a pointer inside its own loaded image.
+Establish where `a0` gets that value, and whether the program relies on
+allocations landing adjacent to its hunks the way a single-pool Amiga gives
+them, BEFORE moving the heap to suit it.
+
+`EMU68K_SCAN_OVERRIDE=1` was added while chasing this: it runs a program the
+static scan calls a hardware banger, loudly, so a real refusal can be told
+from a linear-decode artefact on a data payload.  Diagnostic only; the runtime
+guard remains the authority.
+
 ## Regression sweep, 2026-08-07 (current result)
 
 Run `make hosted-emu68k-t3gen` for the generated/handwritten boundary suite and

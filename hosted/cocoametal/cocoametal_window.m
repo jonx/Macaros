@@ -209,6 +209,15 @@ static CMContentView *cm__metal_view(NSWindow *win) {
     (void)note;
     if (self.cx) cm__set_resize_pending(self.cx);
 }
+/* Buttons currently held by the GUEST, i.e. downs we emitted (bit N = button
+ * code N). Window chrome stays the host's: a press on the titlebar or footer
+ * must not reach AROS (a titlebar right-click would pop the guest's menus),
+ * so downs emit only when they land inside the Metal content view. Moves and
+ * ups keep emitting while a guest-held button is down (clamped by
+ * cm__fill_mouse_xy), so a drag that started in the view survives crossing
+ * the chrome and the guest never sees a stuck button. */
+static unsigned s_guestButtons;
+
 /* A resize grab can deliver its LeftMouseDown to the guest while AppKit's
  * tracking session consumes the matching LeftMouseUp, leaving the guest with
  * a stuck button (a drag rectangle after every resize). Synthesize the
@@ -230,6 +239,7 @@ static void cm__synth_lmb_release(CMContext *cx, NSWindow *win) {
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
         e.x = x; e.y = y;
     }
+    s_guestButtons &= ~1u;                   /* guest now holds no left button */
     cm__evring_put(cx, &e);
 }
 - (void)windowWillStartLiveResize:(NSNotification *)note {
@@ -707,6 +717,18 @@ static void cm__sync_mods(CMContext *cx, NSEventModifierFlags f) {
     last = cur;
 }
 
+/* Whether an NSEvent's location is inside the AROS window's Metal content
+ * view (i.e. over the framebuffer, not over titlebar/footer chrome or a
+ * different window). */
+static int cm__ev_in_metal_view(CMContext *cx, NSEvent *ev) {
+    void *win = cm__get_window(cx);
+    if (!win || ev.window != (__bridge NSWindow *)win) return 0;
+    CMContentView *mv = cm__metal_view((__bridge NSWindow *)win);
+    if (!mv) return 1;                       /* no view yet: nothing to separate */
+    NSPoint p = [mv convertPoint:ev.locationInWindow fromView:nil];
+    return NSMouseInRect(p, mv.bounds, mv.isFlipped);
+}
+
 /* Drain pending NSEvents into the host event ring, translating each to a
  * CMEvent. Called from the guest pump below AND from the host timer
  * (cm__host_tick), so the NSEvent queue is serviced even while the guest is
@@ -750,35 +772,44 @@ void cm__drain_nsevents(CMContext *cx) {
                 e->type = CM_EV_MOUSEMOVE;
                 cm__fill_mouse_xy(cx, ev, e);
                 e->mods = cm__map_mods(ev.modifierFlags);
-                emit = 1; forward = 1;   /* also forward so AppKit tracking works */
+                emit = (s_guestButtons || cm__ev_in_metal_view(cx, ev));
+                forward = 1;             /* also forward so AppKit tracking works */
                 break;
 
             case NSEventTypeLeftMouseDown:
             case NSEventTypeLeftMouseUp:
-                e->type = CM_EV_MOUSEBTN; e->code = 0;
-                e->pressed = (ev.type == NSEventTypeLeftMouseDown) ? 1 : 0;
-                cm__fill_mouse_xy(cx, ev, e);
-                e->mods = cm__map_mods(ev.modifierFlags);
-                emit = 1; forward = 1;
-                break;
             case NSEventTypeRightMouseDown:
             case NSEventTypeRightMouseUp:
-                e->type = CM_EV_MOUSEBTN; e->code = 1;
-                e->pressed = (ev.type == NSEventTypeRightMouseDown) ? 1 : 0;
-                cm__fill_mouse_xy(cx, ev, e);
-                e->mods = cm__map_mods(ev.modifierFlags);
-                emit = 1; forward = 1;
-                break;
             case NSEventTypeOtherMouseDown:
-            case NSEventTypeOtherMouseUp:
-                e->type = CM_EV_MOUSEBTN; e->code = 2;
-                e->pressed = (ev.type == NSEventTypeOtherMouseDown) ? 1 : 0;
-                cm__fill_mouse_xy(cx, ev, e);
-                e->mods = cm__map_mods(ev.modifierFlags);
-                emit = 1; forward = 1;
+            case NSEventTypeOtherMouseUp: {
+                int btn = (ev.type == NSEventTypeLeftMouseDown ||
+                           ev.type == NSEventTypeLeftMouseUp)  ? 0 :
+                          (ev.type == NSEventTypeRightMouseDown ||
+                           ev.type == NSEventTypeRightMouseUp) ? 1 : 2;
+                int down = (ev.type == NSEventTypeLeftMouseDown ||
+                            ev.type == NSEventTypeRightMouseDown ||
+                            ev.type == NSEventTypeOtherMouseDown);
+                if (down)
+                    emit = cm__ev_in_metal_view(cx, ev);       /* chrome press: host's */
+                else
+                    emit = (s_guestButtons >> btn) & 1u;       /* release every guest down */
+                if (emit) {
+                    if (down) s_guestButtons |= 1u << btn;
+                    else      s_guestButtons &= ~(1u << btn);
+                    e->type = CM_EV_MOUSEBTN; e->code = btn;
+                    e->pressed = down;
+                    cm__fill_mouse_xy(cx, ev, e);
+                    e->mods = cm__map_mods(ev.modifierFlags);
+                }
+                forward = 1;
                 break;
+            }
 
             case NSEventTypeScrollWheel: {
+                if (!cm__ev_in_metal_view(cx, ev)) {           /* over chrome: host's */
+                    forward = 1;
+                    break;
+                }
                 /* Line-step quantization: accumulate the host deltas and emit one
                  * CM_EV_WHEEL step per whole line. Precise deltas (trackpad,
                  * momentum) are in PIXELS — ~10 px per line; classic wheel deltas

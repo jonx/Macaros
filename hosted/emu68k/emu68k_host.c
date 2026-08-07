@@ -3268,7 +3268,16 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     put_be16(&r->sb, OSCODE_RETURN, 0x4e75u);
 
     r->sb.next_alloc = PROG_ORIGIN;
-    if (j4_load_hunks(&r->sb, r->image, imagelen, 0, &r->seg, err, errlen))
+    /* Load the top-level program with its AmigaDOS seglist framing, exactly as
+     * a guest LoadSeg does.  A program with no relocations can only find its
+     * later hunks by walking that chain: the link word sits immediately BEFORE
+     * each hunk, and `lea (pc,-4),a4; move.l (a4),a0; add.l a0,a0; add.l a0,a0`
+     * is how every self-decrunching executable reaches its payload.  Loading it
+     * unframed left whatever happened to precede the hunk being read as that
+     * link, so the program computed a wild address and the runtime guard
+     * stopped it - which reads as "needs the hardware" but is a loader gap. */
+    if (j4_load_hunks_bptr(&r->sb, r->image, imagelen, &r->seg, &r->seg_bptr,
+                           err, errlen))
         goto fail;
 
     if (stublib_init(&r->lib, &r->sb, LIBBASE, HEAP_BASE, HEAP_END)) {
@@ -3693,6 +3702,19 @@ int emu68k_scan_image(const void *image, unsigned long imagelen,
     if (rep.confidence == SCAN68K_BANGER) {
         snprintf(detail, detaillen, "%s",
                  rep.n_evidence ? rep.evidence[0].what : "hits the Amiga hardware");
+        /* The scan decodes the image linearly, so a program whose payload is
+         * DATA - a self-decrunching executable, an overlay, an embedded
+         * resource - has its data read as instructions, and any longword that
+         * happens to look like an absolute reference reads as a hardware
+         * banger.  This override exists to tell a real refusal from that
+         * artefact by running the program and watching what it actually does;
+         * the runtime guard is still the authority, so a genuine banger faults
+         * safely.  Diagnostic only: it is off unless asked for, and says so. */
+        if (emu68k_host_getenv("EMU68K_SCAN_OVERRIDE")) {
+            fprintf(stderr, "[emu68k] scan says FULL (%s) - overridden by "
+                    "EMU68K_SCAN_OVERRIDE, running it anyway\n", detail);
+            return 0;
+        }
         return 1;                       /* FULL                                  */
     }
     snprintf(detail, detaillen, "%s", scan68k_confidence_text(rep.confidence));
