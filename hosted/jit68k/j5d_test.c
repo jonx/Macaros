@@ -77,6 +77,19 @@ static const uint8_t MOVE_MEM_FLAGS[] = {
 static const uint8_t MOVEW_D16_TO_D16[] = {
     0x3b,0x68, 0x00,0x0c, 0x02,0x72, 0x4e,0x75 };
 
+/* Exec's canonical NewList tail uses this aliasing form after A0 has been
+ * advanced to &list->lh_Tail:
+ *
+ *     move.l a0,-(a0)
+ *
+ * 68k evaluates the source before the destination predecrement.  The stored
+ * value is therefore the OLD A0 while architectural A0 ends one longword
+ * lower.  Reading the source after the predecrement creates a self-linked list. */
+static const uint8_t MOVEA_TO_SAME_PREDEC[] = {
+    0x21,0x08, 0x4e,0x75 };
+static const uint8_t MOVEA_TO_SAME_POSTINC[] = {
+    0x20,0xc8, 0x4e,0x75 };
+
 /* arraysum DATA hunk: 5 big-endian longwords at sandbox offset 0x100. */
 static void arr_data(uint8_t *mem)
 {
@@ -162,6 +175,71 @@ static void run_movew_d16_to_d16(void)
     int ok = rc == 0 && irc == 0 && regs_ok && mem_ok &&
              mem[dst - ORG + 626] == 0xbeu && mem[dst - ORG + 627] == 0xefu;
     printf("  move.w-d16 two funnel EAs in one instruction: regs=%s sandbox-mem=%s -> %s\n",
+           regs_ok ? "byte-exact" : "DIVERGE", mem_ok ? "byte-exact" : "DIVERGE",
+           ok ? "PASS" : "FAIL");
+    if (rc) printf("    JIT error: %s\n", err);
+    if (irc) printf("    ref error: %s\n", e2);
+    if (!ok) g_fail = 1;
+    free(mem); free(mem2);
+}
+
+static void run_movea_to_same_predec(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    const uint32_t initial = ORG + 0x104u;
+    const uint32_t dest = initial - 4u;
+    memcpy(mem, MOVEA_TO_SAME_PREDEC, sizeof MOVEA_TO_SAME_PREDEC);
+    memcpy(mem2, MOVEA_TO_SAME_PREDEC, sizeof MOVEA_TO_SAME_PREDEC);
+
+    j5d_sandbox sb = { mem, ORG, SZ }, refsb = { mem2, ORG, SZ };
+    struct j5d_m68k_state jit, ref;
+    memset(&jit, 0, sizeof jit); memset(&ref, 0, sizeof ref);
+    jit.a[0] = ref.a[0] = initial;
+    uint32_t d0 = 0, rd0 = 0; char err[200] = {0}, e2[200] = {0};
+    int rc = j5d_run(&sb, ORG, 0, &jit, &d0, NULL, NULL, err, sizeof err);
+    j5d_run_free();
+    int irc = j5d_interp_run(&refsb, ORG, 0, &ref, &rd0, NULL, NULL, e2, sizeof e2);
+    uint32_t stored = ((uint32_t)mem[dest - ORG] << 24) |
+                      ((uint32_t)mem[dest - ORG + 1] << 16) |
+                      ((uint32_t)mem[dest - ORG + 2] << 8) |
+                      mem[dest - ORG + 3];
+    int regs_ok = rc == 0 && irc == 0 && eq_regs(&jit, &ref);
+    int mem_ok = memcmp(mem, mem2, SZ) == 0;
+    int ok = regs_ok && mem_ok && jit.a[0] == dest && stored == initial;
+    printf("  move-alias MOVE.L A0,-(A0): stored=%08x A0=%08x "
+           "regs=%s sandbox-mem=%s -> %s\n", stored, jit.a[0],
+           regs_ok ? "byte-exact" : "DIVERGE", mem_ok ? "byte-exact" : "DIVERGE",
+           ok ? "PASS" : "FAIL");
+    if (rc) printf("    JIT error: %s\n", err);
+    if (irc) printf("    ref error: %s\n", e2);
+    if (!ok) g_fail = 1;
+    free(mem); free(mem2);
+}
+
+static void run_movea_to_same_postinc(void)
+{
+    uint8_t *mem = calloc(1, SZ), *mem2 = calloc(1, SZ);
+    const uint32_t initial = ORG + 0x100u;
+    memcpy(mem, MOVEA_TO_SAME_POSTINC, sizeof MOVEA_TO_SAME_POSTINC);
+    memcpy(mem2, MOVEA_TO_SAME_POSTINC, sizeof MOVEA_TO_SAME_POSTINC);
+
+    j5d_sandbox sb = { mem, ORG, SZ }, refsb = { mem2, ORG, SZ };
+    struct j5d_m68k_state jit, ref;
+    memset(&jit, 0, sizeof jit); memset(&ref, 0, sizeof ref);
+    jit.a[0] = ref.a[0] = initial;
+    uint32_t d0 = 0, rd0 = 0; char err[200] = {0}, e2[200] = {0};
+    int rc = j5d_run(&sb, ORG, 0, &jit, &d0, NULL, NULL, err, sizeof err);
+    j5d_run_free();
+    int irc = j5d_interp_run(&refsb, ORG, 0, &ref, &rd0, NULL, NULL, e2, sizeof e2);
+    uint32_t stored = ((uint32_t)mem[initial - ORG] << 24) |
+                      ((uint32_t)mem[initial - ORG + 1] << 16) |
+                      ((uint32_t)mem[initial - ORG + 2] << 8) |
+                      mem[initial - ORG + 3];
+    int regs_ok = rc == 0 && irc == 0 && eq_regs(&jit, &ref);
+    int mem_ok = memcmp(mem, mem2, SZ) == 0;
+    int ok = regs_ok && mem_ok && jit.a[0] == initial + 4u && stored == initial;
+    printf("  move-alias MOVE.L A0,(A0)+: stored=%08x A0=%08x "
+           "regs=%s sandbox-mem=%s -> %s\n", stored, jit.a[0],
            regs_ok ? "byte-exact" : "DIVERGE", mem_ok ? "byte-exact" : "DIVERGE",
            ok ? "PASS" : "FAIL");
     if (rc) printf("    JIT error: %s\n", err);
@@ -389,6 +467,8 @@ int main(void)
     run_regprog("move-flags", MOVE_MEM_FLAGS, sizeof MOVE_MEM_FLAGS, 42, NULL,
                 "MOVE.L zero to memory keeps Z across the checked store for BEQ");
     run_movew_d16_to_d16();
+    run_movea_to_same_predec();
+    run_movea_to_same_postinc();
     run_libcall();
     run_indexed_libcall();
     run_bounds_regression();

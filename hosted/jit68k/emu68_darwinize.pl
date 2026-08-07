@@ -399,6 +399,22 @@ if ($move_no_merge) {
     die "!! --move-no-merge: expected exactly 1 merge guard, matched $n\n" unless $n == 1;
 }
 
+# MOVE evaluates its complete source before applying destination address
+# register side effects.  The general decoder normally borrows a direct Dn/An
+# source register (read_only=1).  That is not safe for the aliasing forms MOVE
+# An,(An)+ and MOVE An,-(An): the destination helper updates An before the
+# store consumes the borrowed value.  Ask the EA loader for a scratch copy only
+# in those two same-register cases.  Exec's NewList uses MOVE.L A0,-(A0), so
+# getting this wrong creates a self-linked List.  This is a correctness rewrite
+# for every hosted M68k_MOVE build, independent of the optional pair-merge fix.
+if ($src =~ m{(?:^|/)M68k_MOVE\.c$}) {
+    my $old = 'ptr = EMIT_LoadFromEffectiveAddress(ptr, size, &tmp_reg, opcode & 0x3f, *m68k_ptr, &ext_count, 1, NULL);';
+    my $new = 'ptr = EMIT_LoadFromEffectiveAddress(ptr, size, &tmp_reg, opcode & 0x3f, *m68k_ptr, &ext_count, !((opcode & 0x38) == 0x08 && ((tmp & 0x38) == 0x18 || (tmp & 0x38) == 0x20) && (opcode & 7) == (tmp & 7)), NULL); /* hosted: snapshot aliased An source before destination update */';
+    my $alias_n = ($code =~ s!\Q$old\E!$new!g);
+    die "!! M68k_MOVE evaluation order: expected exactly 1 source-load site, matched $alias_n\n"
+        unless $alias_n == 1;
+}
+
 # ===================== [J5l] EMIT_MOVEM SANDBOX REWRITE =====================
 # Applied to M68k_LINE4.c only (--movem-sandbox). Each rewrite is a pure call-substitution
 # on a `*ptr++ = <encoder>(base, ...);` site whose base operand is the literal `base`

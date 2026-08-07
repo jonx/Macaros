@@ -1190,6 +1190,24 @@ static int j5d_fmove_sysreg(j5d_sandbox *sb, struct j5d_m68k_state *st, uint32_t
         return 0;
     }
 
+    /* Immediate long -> one control register. Real 68881 startup code commonly
+     * uses `fmove.l #0,fpcr` before any arithmetic; vbcc happened to materialize
+     * the value in a Dn, so the compiler capstone did not cover this EA form. */
+    if (mode == 7 && reg == 4 && to_special) {
+        uint32_t *creg = want_fpcr ? &st->fpcr : want_fpsr ? &st->fpsr : &st->fpiar;
+        if (count != 1) {
+            if (e) snprintf(e, el, "FMOVE #imm,<ctrl>: expected one ctrl reg");
+            return 1;
+        }
+        if ((uint64_t)tpc + 8 > (uint64_t)sb->origin + sb->size) {
+            if (e) snprintf(e, el, "FMOVE #imm,<ctrl>: immediate out of sandbox");
+            return 1;
+        }
+        *creg = be32(sb->host_mem + (tpc + 4 - sb->origin));
+        *after = tpc + 8;
+        return 0;
+    }
+
     /* memory forms: resolve the EA base + ext words; control regs are 4 bytes each, big-endian. */
     uint32_t total = (uint32_t)(4 * count);
     int predec, postinc; unsigned ext_bytes; uint32_t base;
@@ -2436,6 +2454,46 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
     uint64_t base_adjust = (uint64_t)(uintptr_t)sb->host_mem - (uint64_t)sb->origin;
     uint32_t pc = entry_pc;
     uint64_t steps = 0;
+    j5n_diag *diag = j5d_get_diag();
+
+    /* A narrow diagnostic watchpoint for tracking cross-boundary corruption.
+     * Chaining is already disabled whenever diag is registered, so checking
+     * one longword after each translated block identifies the writer block
+     * without touching the normal execution path. */
+#define CHECK_WATCH(where, first_pc, last_pc) do {                             \
+        if (diag && diag->watch_enabled) {                                    \
+            uint32_t _wa = diag->watch_addr;                                  \
+            if (_wa < sb->origin ||                                           \
+                (uint64_t)_wa + 4 > (uint64_t)sb->origin + sb->size) {        \
+                RFAIL("diagnostic watch address is outside the guest arena"); \
+            }                                                                 \
+            uint32_t _wv = be32(sb->host_mem + (_wa - sb->origin));           \
+            if (!diag->watch_initialized) {                                   \
+                diag->watch_initialized = 1;                                  \
+                diag->watch_last = _wv;                                       \
+                fprintf(stderr, "[jit68k-watch] %08x initial=%08x at pc=%08x\n",\
+                        _wa, _wv, (uint32_t)(first_pc));                       \
+            } else if (_wv != diag->watch_last) {                             \
+                uint32_t _old = diag->watch_last;                             \
+                diag->watch_last = _wv;                                       \
+                fprintf(stderr, "[jit68k-watch] %08x %08x -> %08x in %s "    \
+                        "pc=%08x..%08x\n", _wa, _old, _wv, (where),          \
+                        (uint32_t)(first_pc), (uint32_t)(last_pc));            \
+            }                                                                 \
+            if (diag->watch_value_enabled && _wv == diag->watch_value) {      \
+                char _why[192];                                               \
+                snprintf(_why, sizeof _why,                                   \
+                         "guest watchpoint %08x reached %08x in %s "          \
+                         "pc=%08x..%08x", _wa, _wv, (where),                \
+                         (uint32_t)(first_pc), (uint32_t)(last_pc));           \
+                if (errbuf) snprintf(errbuf, errlen, "%s", _why);           \
+                J5N_FUNNEL(J5N_FAULT_ENGINE, _why, st, sb);                   \
+                return 1;                                                     \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
+
+    CHECK_WATCH("run entry", pc, pc);
 
     /* Runaway guard: bound dispatcher steps so a corrupt/looping program can't hang the
      * unattended harness. Default 2,000,000 (≈9M instructions). A legitimate long run — a
@@ -2446,6 +2504,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
 
     for (;;) {
         if (++steps > step_cap) RFAIL("dispatcher step cap (runaway)");
+        CHECK_WATCH("dispatcher boundary", pc, pc);
 
         /* ---- [T0P3] C-SIDE SAFE POINT: every dispatcher roundtrip sees the stop flag
          * (the emitted chain-entry check covers chained runs that never come back here).
@@ -2528,14 +2587,17 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         if (getenv("J5G_TRACE"))      /* opt-in per-block PC trace (debug aid, off by default) */
             fprintf(stderr, "[blk] pc=%08x end=%08x\n", pc, b->end_pc);
 
-        /* [J5n] DIAGNOSTICS: when a diag config is registered, keep the signal net's view of
-         * the live state current, record this block's instructions into the flight recorder
-         * BEFORE running (so a fault inside has the trail), and advance the deterministic
+        /* Keep the signal net's PC snapshot current even on the normal chained path. The
+         * state struct is live output from translated code and can be corrupted by the very
+         * fault being diagnosed; the signal net's separate snapshot remains trustworthy.
+         * This call happens once per C dispatch, not once per chained block. */
+        j5n_signal_set_context(st, sb);
+
+        /* [J5n] DIAGNOSTICS: when a diag config is registered, record this block's
+         * instructions into the flight recorder BEFORE running and advance the deterministic
          * global instruction number. Chaining is gated OFF in this mode (below) so each block
-         * returns to C and the per-block accounting is exact. NULL = the zero-overhead path. */
-        j5n_diag *diag = j5d_get_diag();
+         * returns to C and the per-block accounting is exact. NULL = the fast path. */
         if (diag) {
-            j5n_signal_set_context(st, sb);
             j5n_diag_record_block(diag, sb, pc, b->end_pc);
         }
 
@@ -2564,6 +2626,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
 
         ((j5d_block_fn)(void *)b->region.base)(st, base_adjust);
         g_stats.dispatcher_roundtrips++;             /* [J5k] one C-dispatcher round-trip      */
+        CHECK_WATCH("translated block", b->pc, b->end_pc);
 
         /* ---- [T0P3] a chained (or just-called) block PARKED at its chain-entry safe point:
          * nothing of its body ran; the epilogue spilled the unchanged register file. Restore
@@ -3418,6 +3481,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         link_if_resolved(sb, b, pc);
     }
 #undef RFAIL
+#undef CHECK_WATCH
 }
 
 /* [T0P3] weak fallback so diagnostics-less builds link (same pattern as the j5n hooks

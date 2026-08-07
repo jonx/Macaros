@@ -266,6 +266,15 @@ struct emu68k_run {
      * one host-side pump, but a 68k task observes the corresponding CIA state
      * when it consumes each IDCMP message. */
     unsigned int          mouse_buttons;
+    /* The raw all-library-call trace goes to Macaros's stderr capture rather
+     * than Bridge Lab, so it needs its own per-run bound.  Otherwise a guest
+     * tight loop can grow /tmp/aros-window.log without limit. */
+    unsigned long         trace_calls_count;
+    unsigned long         trace_calls_max;
+    uint8_t               trace_calls_initialized;
+    uint8_t               trace_calls_on;
+    uint8_t               trace_calls_pending;
+    uint8_t               trace_calls_truncated;
     int                   scheduler_ran;
     int                   failed;
     struct {
@@ -374,6 +383,7 @@ int emu68k_event_pump(struct emu68k_run *, struct j5d_m68k_state *,
 void emu68k_trace_port_call(struct emu68k_run *, const char *,
                             struct j5d_m68k_state *, uint32_t);
 void emu68k_ledger_record(int, const char *);
+int emu68k_trace_calls_active(struct emu68k_run *);
 
 int emu68k_find_guestlib_name(struct emu68k_run *, const char *);
 int emu68k_find_guestlib_base(struct emu68k_run *, uint32_t);

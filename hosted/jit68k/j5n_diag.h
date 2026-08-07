@@ -110,6 +110,16 @@ typedef struct j5n_diag {
     int            runto_hit;
     uint32_t       runto_pc;          /* the PC the run was at when it hit #N           */
 
+    /* ----- opt-in guest-memory watchpoint (compatibility diagnosis) -----
+     * Checked at JIT block boundaries while diagnostics are active.  It is
+     * deliberately outside the frozen CPU state and has no normal-run cost. */
+    int            watch_enabled;
+    uint32_t       watch_addr;
+    int            watch_value_enabled;
+    uint32_t       watch_value;
+    int            watch_initialized;
+    uint32_t       watch_last;
+
     /* test bookkeeping: where the last bundle landed + how many bundles written. */
     char           last_bundle[1024];
     int            bundles_written;
@@ -186,6 +196,9 @@ void j5n_signal_get_context(const struct j5d_m68k_state **st,
  * classifier uses it to name WHERE the access came from: the PC of the block
  * chain being executed, and which 68k register was carrying the address. */
 const struct j5d_m68k_state *j5n_signal_guest_state(void);
+/* Snapshot of st->pc from the last context update. Unlike the state field it
+ * cannot be overwritten by faulty translated code before the handler runs. */
+uint32_t j5n_signal_guest_pc(void);
 
 /* ----- the per-instruction diagnostics hook (the interp oracle calls it at its loop top).
  * It owns the deterministic instruction counter, the flight recorder, replay-to-N break,

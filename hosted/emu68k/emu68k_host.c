@@ -304,6 +304,7 @@ static char g_hw_origin[96];
 static void describe_origin(unsigned long long guest)
 {
     const struct j5d_m68k_state *st = j5n_signal_guest_state();
+    uint32_t fault_pc = j5n_signal_guest_pc();
     char reg[16] = "";
     int i;
 
@@ -322,7 +323,7 @@ static void describe_origin(unsigned long long guest)
         if (st->d[i] == guest) snprintf(reg, sizeof reg, "D%d", i);
 
     snprintf(g_hw_origin, sizeof g_hw_origin, ", from PC $%06X%s%s",
-             st->pc, reg[0] ? " via " : "", reg);
+             fault_pc, reg[0] ? " via " : "", reg);
 }
 
 /* The guest code at the fault PC, as raw bytes. A verdict tells you an address
@@ -332,19 +333,20 @@ static void describe_origin(unsigned long long guest)
 static void dump_fault_code(struct emu68k_run *r)
 {
     const struct j5d_m68k_state *st = j5n_signal_guest_state();
+    uint32_t fault_pc = j5n_signal_guest_pc();
     const unsigned char *mem;
     unsigned long off;
     int i;
 
     if (!st || !emu68k_host_getenv("EMU68K_TRACE_FAULT"))
         return;
-    if (st->pc < r->sb.sandbox_origin ||
-        st->pc + 96 >= r->sb.sandbox_origin + r->sb.size)
+    if (fault_pc < r->sb.sandbox_origin ||
+        fault_pc + 96 >= r->sb.sandbox_origin + r->sb.size)
         return;
     mem = (const unsigned char *)r->sb.host_mem;
-    off = st->pc - r->sb.sandbox_origin;
+    off = fault_pc - r->sb.sandbox_origin;
 
-    fprintf(stderr, "[emu68k] code at PC $%06X:", st->pc);
+    fprintf(stderr, "[emu68k] code at PC $%06X:", fault_pc);
     for (i = 0; i < 96; i++)
         fprintf(stderr, "%s%02X", (i % 16) ? "" : "\n  ", mem[off + i]);
     fprintf(stderr, "\n[emu68k] D0-D7");
@@ -1197,7 +1199,7 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
     if (!image)
         image = resolve_guest_command(name, why, sizeof why, &imagelen);
     if (!image) {
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_trace_calls_active(r))
             fprintf(stderr, "[68k] LoadSeg(\"%s\") -> not found/not a hunk\n", name);
         r->last_ioerr = ERROR_OBJECT_NOT_FOUND_;
         st->d[0] = 0;
@@ -1213,7 +1215,7 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
         r->exec_heap = sb->next_alloc = mark;
         r->last_ioerr = ERROR_BAD_HUNK_;
         st->d[0] = 0;
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_trace_calls_active(r))
             fprintf(stderr, "[68k] LoadSeg(\"%s\") failed: %s\n", name, why);
         return 0;
     }
@@ -1227,7 +1229,7 @@ int emu68k_dos_loadseg(struct emu68k_run *r, j4_sandbox *sb,
     snprintf(r->guestseg[slot].name, sizeof r->guestseg[slot].name, "%s", name);
     r->last_ioerr = 0;
     st->d[0] = bptr;
-    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+    if (emu68k_trace_calls_active(r))
         fprintf(stderr, "[68k] LoadSeg(\"%s\") -> %08x entry=%08x hunks=%d%s%s\n",
                 name, bptr, r->guestseg[slot].seg.entry,
                 r->guestseg[slot].seg.numhunks, why[0] ? " path=" : "",
@@ -1456,7 +1458,7 @@ int emu68k_guestlib_init_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     int idx = (int)st->d[1];
     if (idx < 0 || idx >= GUESTLIB_MAX) { snprintf(e, el, "bad guest-library continuation"); return 1; }
     struct guestlib_live *g = &r->guestlib[idx];
-    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+    if (emu68k_trace_calls_active(r))
         fprintf(stderr, "[68k] guestlib init.done idx=%d name=%s state=%d "
                 "d0=%08x base=%08x parent=%d\n",
                 idx, g->name, g->state, st->d[0], g->base, g->parent);
@@ -1487,7 +1489,7 @@ int emu68k_guestlib_open_done(struct emu68k_run *r, struct j5d_m68k_state *st,
     int idx = (int)st->d[1];
     if (idx < 0 || idx >= GUESTLIB_MAX) return 1;
     struct guestlib_live *g = &r->guestlib[idx];
-    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+    if (emu68k_trace_calls_active(r))
         fprintf(stderr, "[68k] guestlib open.done idx=%d name=%s state=%d "
                 "d0=%08x root=%08x parent=%d\n",
                 idx, g->name, g->state, st->d[0], g->base, g->parent);
@@ -1582,7 +1584,7 @@ int emu68k_open_guestlib_now(struct emu68k_run *r, const char *name,
         snprintf(e, el, "%s dependency Init/Open returned zero", name);
         return 1;
     }
-    if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+    if (emu68k_trace_calls_active(r))
         fprintf(stderr, "[68k] guest dependency %s ready at %08x\n",
                 name, result);
     if (base_out) *base_out = result;
@@ -1894,14 +1896,49 @@ static int guest_span_ok(j4_sandbox *sb, uint32_t addr, uint32_t size)
            (uint64_t)addr + size <= (uint64_t)sb->sandbox_origin + sb->size;
 }
 
-/* EMU68K_TRACE_CALLS: log every library call a program makes. */
-static int g_trace = -1;
+/* EMU68K_TRACE_CALLS: log library calls, bounded independently from the
+ * structured Bridge Lab trace because these records go to raw stderr. */
+#define TRACE_CALLS_DEFAULT_MAX 10000ul
+
+static void trace_calls_init(struct emu68k_run *r)
+{
+    const char *limit;
+    char *end;
+    unsigned long parsed;
+
+    if (r->trace_calls_initialized) return;
+    r->trace_calls_initialized = 1;
+    r->trace_calls_on = emu68k_host_getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
+    r->trace_calls_max = TRACE_CALLS_DEFAULT_MAX;
+    limit = emu68k_host_getenv("EMU68K_TRACE_CALLS_MAX");
+    if (!limit || !*limit) return;
+    parsed = strtoul(limit, &end, 10);
+    if (*end == '\0') r->trace_calls_max = parsed; /* zero explicitly means unlimited */
+}
+
+int emu68k_trace_calls_active(struct emu68k_run *r)
+{
+    if (!r) return 0;
+    trace_calls_init(r);
+    return r->trace_calls_on;
+}
 
 static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
                        struct j5d_m68k_state *st)
 {
-    if (g_trace < 0) g_trace = emu68k_host_getenv("EMU68K_TRACE_CALLS") ? 1 : 0;
-    if (!g_trace) return;
+    trace_calls_init(r);
+    r->trace_calls_pending = 0;
+    if (!r->trace_calls_on) return;
+    if (r->trace_calls_max && r->trace_calls_count >= r->trace_calls_max) {
+        if (!r->trace_calls_truncated) {
+            fprintf(stderr, "[68k] call trace truncated after %lu calls "
+                    "(EMU68K_TRACE_CALLS_MAX; 0 means unlimited)\n",
+                    r->trace_calls_max);
+            r->trace_calls_truncated = 1;
+        }
+        r->trace_calls_on = 0;
+        return;
+    }
     fprintf(stderr, "[68k] %s LVO %d (%d) pc=%08x  "
             "d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x "
             "d6=%08x d7=%08x "
@@ -1910,7 +1947,8 @@ static void trace_call(struct emu68k_run *r, const char *lib, int lvo,
             st->d[0], st->d[1], st->d[2], st->d[3], st->d[4], st->d[5],
             st->d[6], st->d[7], st->a[0], st->a[1], st->a[3],
             st->a[4], st->a[5], st->a[6], st->a[7]);
-    (void)r;
+    r->trace_calls_count++;
+    r->trace_calls_pending = 1;
 }
 
 /* Run one context until it blocks back, finishes, or faults.
@@ -2506,7 +2544,7 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
         }
         t = emu68k_gread32(sb, at);
         v = emu68k_gread32(sb, at + 4);
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_trace_calls_active(r))
             fprintf(stderr, "[68k] CreateNewProc tag[%08x]=%08x,%08x\n",
                     at, t, v);
         if (!t) break;                                   /* TAG_DONE          */
@@ -2755,7 +2793,10 @@ static void restore_mathieee_ccr(const char *lib, int lvo,
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e,
                   unsigned el)
 {
+    struct bctx *c = user;
+    struct emu68k_run *r = c->run;
     int rc;
+    r->trace_calls_pending = 0;
     g_in_bridge++;
     rc = bridge_inner(lvo, st, user, e, el);
     g_in_bridge--;
@@ -2764,11 +2805,12 @@ static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e,
      * host adapter and generated OS crossing is covered uniformly.  Redirects
      * are identified explicitly: their register values are only the setup for
      * the guest routine, not that routine's eventual result. */
-    if (g_trace > 0)
+    if (r->trace_calls_pending)
         fprintf(stderr, "[68k] -> rc=%d d0=%08x d1=%08x a0=%08x a1=%08x"
                 " pc=%08x%s\n", rc, st->d[0], st->d[1], st->a[0], st->a[1],
                 st->pc, (rc == J5D_LVO_REDIRECT ||
                          rc == J5D_LVO_REDIRECT_RTE) ? " redirect" : "");
+    r->trace_calls_pending = 0;
     return rc;
 }
 
@@ -3327,6 +3369,24 @@ emu68k_run *emu68k_run_new(const void *image, unsigned long imagelen,
     {
         j5n_diag_init(&r->diag, r->image, imagelen, &r->jit_sb, r->seg.entry, LIBBASE,
                       &r->symtab);
+        const char *watch = emu68k_host_getenv("JIT68K_WATCH_GUEST");
+        const char *value = emu68k_host_getenv("JIT68K_WATCH_VALUE");
+        char *end;
+        unsigned long parsed;
+        if (watch && *watch) {
+            parsed = strtoul(watch, &end, 0);
+            if (*end == '\0' && parsed <= UINT32_MAX) {
+                r->diag.watch_enabled = 1;
+                r->diag.watch_addr = (uint32_t)parsed;
+            }
+        }
+        if (value && *value) {
+            parsed = strtoul(value, &end, 0);
+            if (*end == '\0' && parsed <= UINT32_MAX) {
+                r->diag.watch_value_enabled = 1;
+                r->diag.watch_value = (uint32_t)parsed;
+            }
+        }
     }
     r->diag.quiet_banner = 1;
     if (g_crash_dir) r->diag.crash_dir = g_crash_dir;
@@ -3558,11 +3618,16 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
         r->poll_quantum = q;
         j5d_set_poll(quantum_poll, r, q);
     }
-    /* The [J5n] signal net WITHOUT the engine-side diag registration: faults are
-     * contained + bundled, while block CHAINING stays ON (the hot path — the
-     * per-block flight recorder is the price; the bundle still carries state). */
+    /* The [J5n] signal net normally runs WITHOUT engine-side diag registration:
+     * faults are contained + bundled while block CHAINING stays ON.  For a
+     * compatibility investigation, EMU68K_JIT_DIAG=1 deliberately takes the
+     * slower every-block path.  That disables chaining and gives the signal
+     * handler an exact guest PC plus the flight recorder, instead of the last C
+     * dispatcher PC before a possibly long native block chain. */
     j5n_signal_install(&r->diag);
     j5n_signal_set_classifier(classify_hardware, r);
+    if (emu68k_host_getenv("EMU68K_JIT_DIAG"))
+        j5d_set_diag(&r->diag);
 
     struct bctx c = { &r->lib, &r->sb, r };
     j5d_sandbox j5sb = r->jit_sb;
@@ -3583,6 +3648,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
                                                    lerr, sizeof lerr);
         int children = emu68k_live_child_count(r);
 
+        j5d_set_diag(NULL);
         j5n_signal_remove();
         j5n_signal_set_classifier(NULL, NULL);
         j5d_engine_activate(NULL);
@@ -3619,6 +3685,7 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
         r->ctx[r->cur_ctx].on_stack = 0;
     r->resume_pc = r->st.pc;
 
+    j5d_set_diag(NULL);
     j5n_signal_remove();
     j5n_signal_set_classifier(NULL, NULL);
     j5d_engine_activate(NULL);

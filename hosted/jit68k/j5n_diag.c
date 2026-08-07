@@ -784,12 +784,14 @@ const char *j5d_fault(j5n_fault_kind kind, const char *detail,
 static j5n_diag *g_sig_diag = NULL;
 static const struct j5d_m68k_state *g_sig_state = NULL;
 static j5d_sandbox *g_sig_sb = NULL;
+static volatile sig_atomic_t g_sig_guest_pc = 0;
 static stack_t g_altstack;
 static int g_alt_installed = 0;
 
 void j5n_signal_set_context(const struct j5d_m68k_state *st, j5d_sandbox *sb)
 {
     g_sig_state = st; g_sig_sb = sb;
+    g_sig_guest_pc = st ? (sig_atomic_t)st->pc : 0;
 }
 
 void j5n_signal_get_context(const struct j5d_m68k_state **st,
@@ -802,6 +804,11 @@ void j5n_signal_get_context(const struct j5d_m68k_state **st,
 const struct j5d_m68k_state *j5n_signal_guest_state(void)
 {
     return g_sig_state;
+}
+
+uint32_t j5n_signal_guest_pc(void)
+{
+    return (uint32_t)g_sig_guest_pc;
 }
 
 #if defined(__APPLE__)

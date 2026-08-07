@@ -37,7 +37,10 @@
     ; ---- assert survival by storing fp0-fp7 to the scratch frame as .x (the test reads them) -
     fmovem.x fp0-fp7,(a0)      ; control-mode store: 8 * 12 = 96 bytes at scratch[0..95]
 
-    ; ---- FPCR / FPSR / FPIAR round-trip via Dn ---------------------------------------------
+    ; ---- Immediate -> FPCR, then FPCR / FPSR / FPIAR round-trip via Dn ----------------------
+    ; Real FPU programs use this direct form during startup. Keep it before the
+    ; existing nonzero round-trip so the final asserted FPCR remains unchanged.
+    fmove.l #0,fpcr
     move.l  #$00000030,d1      ; a test FPCR pattern (rounding/precision bits)
     fmove.l d1,fpcr            ; FPCR <- d1
     fmove.l fpcr,d2            ; d2 <- FPCR (must == d1)

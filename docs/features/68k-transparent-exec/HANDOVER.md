@@ -1,8 +1,7 @@
 Start the new chat with:
 Read docs/features/68k-transparent-exec/HANDOVER.md completely, inspect both
-working trees, then continue with the Aminet breadth corpus, beginning with the
-privately installed Wordworth 7 retail disc described below.  Ask the user for
-their legitimate Wordworth licence number before advancing its registration
+working trees, then continue with the Aminet breadth corpus from the live
+Imagine 4 run described below.  Wordworth 7 remains parked at its registration
 screen; do not bypass that check.  Do not restart from the historical TurboCalc
 ARexx section: its end-to-end result and superseded investigation are recorded
 below.
@@ -347,6 +346,15 @@ Runtime detail stops at 32 MiB by default, one `trace.truncated` record names
 the limit, and 64 KiB remains reserved for summary/failure and `run.end`
 records. `EMU68K_BRIDGE_TRACE_MAX_BYTES` overrides the limit; `0` explicitly
 selects unlimited output. The cap never changes guest execution.
+
+The raw `EMU68K_TRACE_CALLS` stream is separate from Bridge Lab and is captured
+in `/tmp/aros-window.log`.  It is now bounded per run to 10,000 calls by
+default, including its detailed sub-messages; it emits one
+`call trace truncated` marker and stops. `EMU68K_TRACE_CALLS_MAX` overrides the
+count and `0` explicitly means unlimited.  Both controls are forwarded through
+`aros-ctl run`.  This second cap matters: a corrupt-list loop once grew the raw
+Imagine diagnostic to roughly 49 GiB even though the structured trace remained
+small.
 
 The investigation log below is retained for provenance. It is superseded by
 the result above; do not resume its intermediate “remaining blocker” steps.
@@ -1030,7 +1038,7 @@ sources/build checks pass.  With these repairs the real `Wordworth` launcher
 consumes its Workbench message and renders the retail Wordworth 7 registration
 screen; Name, Organisation and Licence gadgets accept focus and text.  The
 same result is proven with the FTH `WwProg`; neither run produces a bridge
-refusal or Macaros crash before the gate.  The current test instance is
+refusal or Macaros crash before the gate.  A prior test instance was
 intentionally parked at the FTH specimen's Licence field.  Its bounded trace is
 `/Users/jkn/AROS/Shared/wordworth7-unlocked-bridge.trace.jsonl` and its private
 payload is `/Users/jkn/AROS/Shared/wordworth7-unlocked-startup`.  Keep that
@@ -1047,6 +1055,44 @@ and the application ports `WORDWORTH.1`, `WORDWORTH.2`, and so on.  Use a small
 safe documented command as a deterministic request/reply/result oracle, retain
 the Bridge Lab trace, and only then try one bundled script.  The untouched
 retail launch payload remains `/Users/jkn/AROS/Shared/wordworth7-startup`.
+
+### Imagine 4 breadth run — current result (2026-08-07)
+
+CU Amiga's January 1997 cover CD supplied the complete Imagine 4.0 integer and
+FPU builds.  The ISO and extracted application remain private under
+`/Users/jkn/AROS/Shared/Imagine4-private`; no product bytes belong in the
+repositories.  Use `/Users/jkn/AROS/Shared/imagine4-startup`, which selects the
+NTSC `Imagine.fp` build.  The integer build deliberately rejects the current
+NTSC graphics facade and then divides by zero; that is the application's own
+PAL/NTSC check, not the compatibility target.
+
+The FPU build first exposed the missing `fmove.l #0,fpcr` form.  Immediate
+longword moves to FPCR/FPSR/FPIAR are now implemented in both the JIT dispatcher
+and the independent interpreter and covered by `j5r.exe` (11 system-register
+operations).  It then appeared to hang during startup.  A bounded call trace
+showed `RemHead`/`ReplyMsg` repeating on a list whose `lh_Head` pointed to the
+list header itself.  `RemHead` now refuses that corrupt shape rather than
+allowing an unbounded loop.
+
+The generic diagnostic memory watchpoint (`JIT68K_WATCH_GUEST=<addr>`, optional
+`JIT68K_WATCH_VALUE=<value>`, with `EMU68K_JIT_DIAG=1`) located the first bad
+write at guest block `00331868..00331878`.  This is the canonical `NewList`
+tail, ending in `move.l a0,-(a0)`.  The 68k evaluates the source before the
+destination predecrement; the hosted decoder borrowed the live A0 register, so
+the AArch64 pre-index store consumed the decremented value and created a
+self-linked list.  The build-dir MOVE rewrite now snapshots a direct An source
+when the same An is a postincrement/predecrement destination.  Focused tests
+prove both `MOVE.L A0,-(A0)` and `MOVE.L A0,(A0)+` byte-exact against the
+independent interpreter.
+
+After that fix, the real `Imagine.fp` reaches its complete 800x600 project/
+render screen and waits normally on its IDCMP port.  Mouse DOWN and UP events
+are pumped, taken and replied; toggling `Auto Dither` visibly changes the
+control.  There is no bridge refusal, JIT fault or Macaros crash in the current
+run.  Its bounded trace is
+`/Users/jkn/AROS/Shared/imagine4-after-move.trace.jsonl`.  The live instance was
+left running for interactive testing.  Continue breadth testing from this
+working screen; do not return to the already-fixed list symptom.
 
 ## Seglist framing for the top-level program (2026-08-07) - FIXED
 
@@ -1238,7 +1284,8 @@ Do not commit or push that checkout: authorization is only for the user's own
   gate. The refusal negative control now targets the still-unsafe raw
   `GT_FilterIMsg`, not the now-supported `GT_GetIMsg` path.
 
-Latest verified state: `make emu68k-dylib`,
+Latest verified state: `make emu68k-dylib`, `make hosted-jit68k-j5d`,
+`make hosted-jit68k-j5m`, `make hosted-jit68k-j5r`,
 `make hosted-emu68k-t3setsignal`, `make hosted-emu68k-t3workbench`, the complete
 `make hosted-emu68k-t3gen`, focused `geniff`, and
 `make hosted-emu68k-t3mui` pass.  The latter builds only the named

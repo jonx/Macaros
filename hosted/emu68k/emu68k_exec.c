@@ -430,7 +430,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      sb->sandbox_origin + sb->size);
             return 1;
         }
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_trace_calls_active(r))
             fprintf(stderr, "[68k] OpenLibrary(\"%s\", %u)\n", nm, requested);
         for (int i = 0; i < r->nlib; i++)                 /* already open?       */
             if (!strcmp(r->openlib[i].name, nm)) { st->d[0] = r->openlib[i].base; return 0; }
@@ -465,7 +465,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                                    depwhy, sizeof depwhy) ||
                  open_guestlib_now(r, "stdcio.library", 0, NULL,
                                    depwhy, sizeof depwhy))) {
-                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+                if (emu68k_trace_calls_active(r))
                     fprintf(stderr, "[68k] posixc guest dependency failed: %s\n",
                             depwhy);
                 st->d[0] = 0;
@@ -497,7 +497,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             for (k = 0; k < sizeof servable / sizeof servable[0]; k++)
                 if (!strcmp(leaf, servable[k])) { known = 1; break; }
             if (known && route_guestside(leaf)) {
-                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+                if (emu68k_trace_calls_active(r))
                     fprintf(stderr, "[68k] OpenLibrary %s routed guest-side\n",
                             leaf);
                 known = 0;
@@ -520,7 +520,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         {   /* Native-name-wins above; an unknown name is now a disk library. */
             char why[256] = {0};
             if (load_guestlib(r, nm, requested, &gi, why, sizeof why)) {
-                if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+                if (emu68k_trace_calls_active(r))
                     fprintf(stderr, "[68k] OpenLibrary guest %s failed: %s\n", nm, why);
                 st->d[0] = 0;
                 return 0;
@@ -760,7 +760,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             st->d[0] = 0;
             return 0;
         }
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS")) {
+        if (emu68k_trace_calls_active(r)) {
             uint32_t target = st->a[5];
             fprintf(stderr, "[68k] Supervisor target=%08x", target);
             if (target >= sb->sandbox_origin &&
@@ -807,6 +807,18 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_REMHEAD: {
         uint32_t list = st->a[0];
         uint32_t node = gread32(sb, list);           /* lh_Head                */
+        /* A proper Exec List is either headed by a node or by its tail
+         * sentinel at list+4.  A head pointing at the List header itself can
+         * never drain: RemHead would return the header, ReplyMsg would not
+         * repair it, and the guest spins forever.  Contain and name corrupted
+         * crossings instead of turning one bad facade into an unbounded host
+         * log and an apparently frozen desktop. */
+        if (node == list) {
+            snprintf(e, el,
+                     "corrupt Exec List %08x: lh_Head points at the list header",
+                     list);
+            return 1;
+        }
         uint32_t succ = gread32(sb, node);           /* node->ln_Succ          */
         if (!succ) { st->d[0] = 0; return 0; }       /* the list was empty     */
         gwrite32(sb, list, succ);                    /* lh_Head = succ         */
@@ -1076,7 +1088,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         return 0;
     case LVO_OPENRESOURCE: {
         const char *name = guest_cstr(sb, st->a[1]);
-        if (emu68k_host_getenv("EMU68K_TRACE_CALLS"))
+        if (emu68k_trace_calls_active(r))
             fprintf(stderr, "[68k] OpenResource(\"%s\")\n",
                     name ? name : "<invalid guest string>");
         /* AROS compiler startup and libc use task.resource for guest-owned

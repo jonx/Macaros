@@ -2899,6 +2899,14 @@ int j5d_interp_run(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase,
                         if (to_special) *creg = *slot; else *slot = *creg;
                         pc = pc + 4; continue;
                     }
+                    if (mode == 7 && areg == 4 && to_special) {
+                        uint32_t *creg = wc ? &st->fpcr : ws ? &st->fpsr : &st->fpiar;
+                        if (count != 1) IFAIL("FMOVE #imm,<ctrl>: expected one ctrl reg");
+                        if ((uint64_t)pc + 8 > (uint64_t)sb->origin + sb->size)
+                            IFAIL("FMOVE #imm,<ctrl>: immediate out of sandbox");
+                        *creg = be32(ip + 4);
+                        pc = pc + 8; continue;
+                    }
                     uint32_t total = (uint32_t)(4 * count);
                     if (mode == 2)      { base = st->a[areg]; }
                     else if (mode == 3) { base = st->a[areg]; postinc = 1; }
