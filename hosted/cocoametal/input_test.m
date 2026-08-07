@@ -223,6 +223,63 @@ static int run_d4(NSWindow *win, CMContext *cx) {
     return ok;
 }
 
+/* ---- [D4C] window chrome vs content --------------------------------------
+ * A button press on the window chrome (titlebar/footer) must NOT reach the
+ * guest — only presses inside the Metal content view do. But a drag that
+ * STARTED in the view keeps translating across the chrome, and its release
+ * always arrives (no stuck guest button). Uses the MIDDLE button: same gate
+ * as left/right in the shim, and its sendEvent forward is a no-op on the
+ * titlebar (no AppKit drag/menu tracking session to wedge the test).
+ * Presence/absence asserts only — no calibration dependency. */
+static NSEvent *chrome_mouse(NSEventType t, NSPoint pt, NSInteger wn, int en) {
+    return [NSEvent mouseEventWithType:t location:pt modifierFlags:0 timestamp:0
+                          windowNumber:wn context:nil eventNumber:en
+                            clickCount:(t == NSEventTypeOtherMouseDragged ? 0 : 1)
+                              pressure:0];
+}
+static int find_btn(const CMEvent *ev, int n, int code, int pressed) {
+    for (int i = 0; i < n; i++)
+        if (ev[i].type == CM_EV_MOUSEBTN && ev[i].code == code && ev[i].pressed == pressed)
+            return i;
+    return -1;
+}
+static int run_d4c(NSWindow *win, CMContext *cx) {
+    int ok = 1;
+    NSInteger wn = win.windowNumber;
+    extern int cm__content_origin_y(CMContext *cx);
+    /* Titlebar band: above the Metal view's top (footer + H); the postEvent
+     * affine only pushes this point deeper into the chrome. */
+    NSPoint chromePt = NSMakePoint(50, (double)(cm__content_origin_y(cx) + H + 5));
+    NSPoint viewPt   = NSMakePoint(100, (double)(cm__content_origin_y(cx) + H - 40));
+    CMEvent ev[32];
+
+    /* 1. Chrome press+release: nothing may reach the guest. */
+    [NSApp postEvent:chrome_mouse(NSEventTypeOtherMouseDown, chromePt, wn, 10) atStart:NO];
+    [NSApp postEvent:chrome_mouse(NSEventTypeOtherMouseUp,   chromePt, wn, 11) atStart:NO];
+    int n = cm_pump_events(cx, ev, 32);
+    int leaked = find_btn(ev, n, 2, 1) >= 0 || find_btn(ev, n, 2, 0) >= 0;
+    printf("[D4C]   assert chrome MMB press+release suppressed (drained %d ev)  %s\n",
+           n, leaked ? "LEAKED" : "ok");
+    if (leaked) ok = 0;
+
+    /* 2. Press in the view, drag onto the chrome, release there: down, move
+     *    and up ALL reach the guest (grab survives chrome; button never sticks). */
+    [NSApp postEvent:chrome_mouse(NSEventTypeOtherMouseDown,    viewPt,   wn, 12) atStart:NO];
+    [NSApp postEvent:chrome_mouse(NSEventTypeOtherMouseDragged, chromePt, wn, 13) atStart:NO];
+    [NSApp postEvent:chrome_mouse(NSEventTypeOtherMouseUp,      chromePt, wn, 14) atStart:NO];
+    n = cm_pump_events(cx, ev, 32);
+    int idn = find_btn(ev, n, 2, 1);
+    int imv = find_ev(ev, n, CM_EV_MOUSEMOVE, 0);
+    int iup = find_btn(ev, n, 2, 0);
+    printf("[D4C]   assert in-view MMB down=%s, drag-on-chrome move=%s, chrome release=%s "
+           "(drained %d ev)  %s\n",
+           idn >= 0 ? "yes" : "NO", imv >= 0 ? "yes" : "NO", iup >= 0 ? "yes" : "NO",
+           n, (idn >= 0 && imv >= 0 && iup >= 0) ? "ok" : "MISMATCH");
+    if (idn < 0 || imv < 0 || iup < 0) ok = 0;
+
+    return ok;
+}
+
 /* ---- [D5] keyboard -------------------------------------------------------
  * Post a keyDown + keyUp with a known keyCode and Shift held. Assert KEY
  * code==keyCode, pressed 1 then 0, and mods & CM_MOD_SHIFT on both. */
@@ -442,17 +499,20 @@ int main(void) {
 
     int d4 = run_d4(win, cx);
     hand_pump(4);
+    int d4c = run_d4c(win, cx);
+    hand_pump(4);
     int d5 = run_d5(win, cx);
     hand_pump(4);
     int d5r = run_d5_repeat(win, cx);
 
     printf("[D4] %s\n", d4 ? "PASS" : "FAIL");
+    printf("[D4C] %s\n", d4c ? "PASS" : "FAIL");
     printf("[D5] %s\n", d5 ? "PASS" : "FAIL");
     printf("[D5R] %s\n", d5r ? "PASS" : "FAIL");
     /* Combined gate marker — printed ONLY when BOTH value-asserting checks passed,
      * so the harness can gate on a single marker that requires D4 AND D5. */
-    if (d4 && d5 && d5r) printf("[D4D5] PASS\n");
+    if (d4 && d4c && d5 && d5r) printf("[D4D5] PASS\n");
 
     cm_close(cx);
-    return (d4 && d5 && d5r) ? 0 : 1;
+    return (d4 && d4c && d5 && d5r) ? 0 : 1;
 }

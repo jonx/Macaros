@@ -348,6 +348,14 @@ This is the design.md "main-thread crux", pinned so D2 proves the *real* model.
 > - `MouseMoved`/`{Left,Right,Other}MouseDragged` → `CM_EV_MOUSEMOVE`.
 > - `{Left,Right,Other}MouseDown/Up` → `CM_EV_MOUSEBTN`, `code` 0=left/1=right/2=middle,
 >   `pressed` 1/0.
+> - **Chrome vs content (2026-08-07):** a press only translates when it lands **inside the
+>   Metal content view**; presses on window chrome (titlebar, footer) stay the host's — they
+>   are forwarded to AppKit only, so a titlebar right-click gets the macOS titlebar menu
+>   instead of popping the guest's menus. The shim tracks guest-held buttons: while one is
+>   held, moves keep translating (clamped) and the release always reaches the guest even
+>   over chrome — an in-view drag survives crossing the chrome and no button ever sticks.
+>   Wheel events over chrome are likewise host-only. Verified by `[D4C]` in
+>   `input_test.m`.
 > - **Coords (all logical, top-left, §2):** `locationInWindow` is points (= logical) with a
 >   **bottom-left** origin ⇒ `x = locationInWindow.x`, `y = contentHeightPoints −
 >   locationInWindow.y` (content height in points == logical H — the `contentsScale` lives
