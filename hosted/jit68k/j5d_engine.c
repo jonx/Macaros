@@ -3033,21 +3033,86 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
          * second word of a 4-byte instruction. For the PC-relative modes the
          * base is the address OF that extension word (tpc + 2), per the PRM. */
         else if ((top & 0xFFF8u) == 0x4EB0u) {       /* jsr (d8,An,Xn) -> push + jump */
-            uint32_t target, after;
+            uint32_t target, after, base;
             if (control_indexed_ea(sb, st, tpc, st->a[top & 7u],
                                    &target, &after, errbuf, errlen)) return 1;
-            if (sp_push(sb, st, after, errbuf, errlen)) return 1;
-            g_stats.calls_pushed++;
-            g_stats.computed_jumps++;
-            if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
-            pc = target;
+            base = libbase_of_target(target, a6_libbase);
+            if (base) {
+                int brc = call_vector_by_target(target, base, st, lvo, user,
+                                                 "jsr(d8,An,Xn)",
+                                                 errbuf, errlen);
+                if (brc && brc != J5D_LVO_REDIRECT &&
+                    brc != J5D_LVO_REDIRECT_RTE && brc != J5D_LVO_BLOCK)
+                    return 1;
+                g_stats.lib_calls++;
+                if (brc == J5D_LVO_BLOCK) {
+                    BLOCK_YIELD_AT(after);
+                } else if (brc == J5D_LVO_REDIRECT_RTE) {
+                    if (push_rte_frame(sb, st, after, errbuf, errlen)) return 1;
+                    pc = st->pc;
+                } else if (brc == J5D_LVO_REDIRECT) {
+                    if (sp_push(sb, st, after, errbuf, errlen)) return 1;
+                    g_stats.calls_pushed++;
+                    if (++depth > g_stats.max_call_depth)
+                        g_stats.max_call_depth = depth;
+                    pc = st->pc;
+                } else {
+                    pc = after;
+                }
+            } else {
+                if (sp_push(sb, st, after, errbuf, errlen)) return 1;
+                g_stats.calls_pushed++;
+                g_stats.computed_jumps++;
+                if (++depth > g_stats.max_call_depth) g_stats.max_call_depth = depth;
+                pc = target;
+            }
         }
         else if ((top & 0xFFF8u) == 0x4EF0u) {       /* jmp (d8,An,Xn) -> jump      */
-            uint32_t target, after;
+            uint32_t target, after, base;
             if (control_indexed_ea(sb, st, tpc, st->a[top & 7u],
                                    &target, &after, errbuf, errlen)) return 1;
-            g_stats.computed_jumps++;
-            pc = target;
+            base = libbase_of_target(target, a6_libbase);
+            if (base) {
+                uint32_t ret;
+                int brc = call_vector_by_target(target, base, st, lvo, user,
+                                                 "jmp(d8,An,Xn)",
+                                                 errbuf, errlen);
+                if (brc && brc != J5D_LVO_REDIRECT &&
+                    brc != J5D_LVO_REDIRECT_RTE && brc != J5D_LVO_BLOCK)
+                    return 1;
+                g_stats.lib_calls++;
+                if (brc == J5D_LVO_BLOCK) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(d8,An,Xn): blocked tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    BLOCK_YIELD_AT(ret);
+                } else if (brc == J5D_LVO_REDIRECT_RTE) {
+                    if (st->a[7] >= initial_sp)
+                        RFAIL("jmp(d8,An,Xn): Supervisor tail call has no caller frame");
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    if (push_rte_frame(sb, st, ret, errbuf, errlen)) return 1;
+                    pc = st->pc;
+                } else if (brc == J5D_LVO_REDIRECT) {
+                    pc = st->pc;
+                } else {
+                    if (st->a[7] >= initial_sp) {
+                        *exit_d0 = st->d[0];
+                        finalize_stats();
+                        return 0;
+                    }
+                    if (sp_pop(sb, st, &ret, errbuf, errlen)) return 1;
+                    g_stats.returns_popped++;
+                    if (depth) depth--;
+                    pc = ret;
+                }
+            } else {
+                g_stats.computed_jumps++;
+                pc = target;
+            }
         }
         else if (top == 0x4EBBu) {                   /* jsr (d8,PC,Xn) -> push + jump */
             uint32_t target, after;

@@ -122,7 +122,6 @@ done
     echo "$b $a <NIL: >>MacRW:corpus-out.txt"
   done <"$ENTRIES"
   echo 'Echo "=== DONE ===" >>MacRW:corpus-out.txt'
-  echo 'Wait 999999'
 } > "$RUN/startup"
 # A corpus sweep rewrites the boot Startup-Sequence and its `aros-ctl run`
 # call replaces an instance from that boot tree.  It must never do either to a

@@ -1485,7 +1485,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
          * deliberately remain untyped: recording them lets Bridge Lab
          * correlate protocols such as ARexx without pretending every message
          * is one.  Read only a fully guest-owned 40-byte prefix. */
-        if (guest_span_ok(sb, msg, 40)) {
+        if (guest_span_ok(sb, msg, 48)) {
             word20 = gread32(sb, msg + 20);
             word24 = gread32(sb, msg + 24);
             word28 = gread32(sb, msg + 28);
@@ -1493,6 +1493,22 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
             word36 = gread32(sb, msg + 36);
             word40 = gread32(sb, msg + 40);
             word44 = gread32(sb, msg + 44);
+        }
+        /* Classic applications still interpret RexxMsg word 24 as
+         * rm_LibBase and call rexxsyslib through it. AROS calls the word
+         * rm_Private2; Regina stores its TSD pointer there. For a complete
+         * RexxMsg with a real Rexx action, make the private value a semantic
+         * alias for the loaded guest rexxsyslib base. The message itself stays
+         * untouched so Regina gets its TSD back with the reply. */
+        if (length >= 128u && word24 &&
+            (((word28 >> 24) >= 1u && (word28 >> 24) <= 13u) ||
+             (word28 >> 24) >= 0xf0u)) {
+            int gi = find_guestlib_name(r, "rexxsyslib.library");
+            if (gi >= 0 && r->guestlib[gi].state == GL_READY &&
+                find_guestlib_base(r, word24) < 0 &&
+                emu68k_register_libalias(r, word24,
+                                         r->guestlib[gi].base, e, el) != 0)
+                return 1;
         }
         list = port + MP_MSGLIST;
         tailpred = gread32(sb, list + M68K_List_lh_TailPred);
@@ -1608,8 +1624,24 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                                  g_oscall_user, e, el) == 0)
             return 0;
         ledger_record(lvo, r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: a device command was sent that this "
-                 "bridge does not marshal yet (exec LVO %d)", lvo);
+        if (guest_span_ok(sb, st->a[1], M68K_IORequest_SIZEOF)) {
+            uint32_t base = gread32(sb,
+                st->a[1] + M68K_IORequest_io_Device);
+            uint32_t command = gread16(sb,
+                st->a[1] + M68K_IORequest_io_Command);
+            const char *device = "unknown device";
+            for (int i = 0; i < r->nlib; i++)
+                if (r->openlib[i].base == base) {
+                    device = r->openlib[i].name;
+                    break;
+                }
+            snprintf(e, el, "capability gap: %s command %u (0x%04x) is not "
+                     "marshalled for exec LVO %d", device, command, command,
+                     lvo);
+        } else {
+            snprintf(e, el, "capability gap: device IORequest A1=%08x is "
+                     "outside guest memory (exec LVO %d)", st->a[1], lvo);
+        }
         return 1;
     case LVO_WAITPORT: {
         /* WaitPort(port A0) -> the first message, LEFT ON the port.
@@ -1646,13 +1678,13 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
     case LVO_GETMSG: {
         uint32_t port = st->a[0];
         trace_port_call(r, "GetMsg port", st, port);
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.get",
+        bl_event(BL_DEBUG, r->cur_ctx, ctx_task(r), st->pc, "port.get",
                  "\"port\":\"%s\"", bl_id("port", port));
         event_pump(r, st, port, 0, NULL); /* polling programs need delivery */
         uint32_t list = port + MP_MSGLIST;
         uint32_t head = gread32(sb, list + M68K_List_lh_Head);
         uint32_t succ = head ? gread32(sb, head) : 0;
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.get.state",
+        bl_event(BL_DEBUG, r->cur_ctx, ctx_task(r), st->pc, "port.get.state",
                  "\"port\":\"%s\",\"raw\":\"0x%08x\",\"owner\":\"%s\","
                  "\"signal_bit\":%u,\"head\":\"0x%08x\",\"succ\":\"0x%08x\"",
                  bl_id("port", port), port, bl_id("task", gread32(sb, port + MP_SIGTASK)),
@@ -1666,12 +1698,18 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
         gwrite32(sb, list + M68K_List_lh_Head, succ);
         gwrite32(sb, succ + 4, list);
         st->d[0] = head;
-        bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc, "port.take",
+        {
+            int idcmp = port_has_event_kind(r, port, EMU68K_EVENT_IDCMP) &&
+                        guest_span_ok(sb, head, M68K_IntuiMessage_SIZEOF);
+            uint32_t cls = idcmp
+                         ? gread32(sb, head + M68K_IntuiMessage_Class) : 0;
+            int level = (idcmp && cls == 0x00400000u)
+                      ? BL_DEBUG : BL_RUNTIME;
+            bl_event(level, r->cur_ctx, ctx_task(r), st->pc, "port.take",
                  "\"port\":\"%s\",\"message\":\"%s\"",
                  bl_id("port", port), bl_id("message", head));
-        if (port_has_event_kind(r, port, EMU68K_EVENT_IDCMP) &&
-            guest_span_ok(sb, head, M68K_IntuiMessage_SIZEOF))
-            bl_event(BL_RUNTIME, r->cur_ctx, ctx_task(r), st->pc,
+            if (idcmp)
+                bl_event(level, r->cur_ctx, ctx_task(r), st->pc,
                      "idcmp.take",
                      "\"port\":\"%s\",\"message\":\"%s\","
                      "\"class\":\"0x%08x\",\"code\":\"0x%04x\","
@@ -1687,6 +1725,7 @@ int emu68k_exec_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
                      gread32(sb, head + M68K_IntuiMessage_IAddress),
                      (int16_t)gread16(sb, head + M68K_IntuiMessage_MouseX),
                      (int16_t)gread16(sb, head + M68K_IntuiMessage_MouseY));
+        }
         return 0;
     }
     case LVO_REPLYMSG: {

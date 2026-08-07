@@ -4,9 +4,11 @@
 #include "emu68k_guest_offsets.h"
 #include "bridge_lab.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define ITEM_EQUAL_U    0xfffffffeu
 #define ITEM_ERROR_U    0xffffffffu
@@ -588,20 +590,44 @@ int emu68k_dos_call(struct emu68k_run *r, j4_sandbox *sb, int lvo,
 {
     switch (lvo) {
     case DOS_LVO_DELAY:
-        /* Hosted guest tasks have no native tick scheduler to sleep on.  A
-         * cooperative handoff is the useful Delay contract here: it lets
-         * sibling processes (RexxMast, TurboCalc, RX) make progress without
-         * blocking the host thread.  Preserve the guest's tick argument,
-         * while bounding a single call so a damaged program cannot monopolise
-         * the hosted scheduler with an unbounded delay. */
+        /* Delay is a time contract, not a count of guest scheduler turns.
+         * Collapsing ticks into rapid sibling dispatch made Delay(25) return
+         * in microseconds, starved native AROS tasks and let launchers tear
+         * down their child contexts minutes earlier than requested.  Each
+         * tick gives runnable guest siblings a turn and then blocks this AROS
+         * task for one real native tick, so guest processes and native
+         * Intuition/input/timer tasks all advance during the delay. */
         {
             uint32_t ticks = st->d[1];
-            unsigned rounds = ticks > 512u ? 512u : (unsigned)ticks;
-            if (!rounds) rounds = 1u;
-            for (unsigned i = 0; i < rounds; i++)
-                if (emu68k_reschedule_siblings(r, sb, "Delay", st->pc,
-                                               e, el) != 0)
-                    return 1;
+            uint32_t rounds = ticks ? ticks : 1u;
+            for (uint32_t i = 0; i < rounds; i++) {
+                /* One nested turn is deliberately short (the engine's safe
+                 * 4096-instruction poll quantum).  Run several per 20 ms tick
+                 * so a delayed supervisor does not throttle its child
+                 * processes to a few hundred kilohertz. */
+                for (unsigned guest_turn = 0; guest_turn < 8u; guest_turn++)
+                    if (emu68k_reschedule_siblings(r, sb, "Delay tick", st->pc,
+                                                   e, el) != 0)
+                        return 1;
+                if (emu68k_oscall) {
+                    struct j5d_m68k_state native = *st;
+                    native.d[1] = ticks ? 1u : 0u;
+                    if (dos_native_call(r, DOS_LVO_DELAY, &native, e, el) != 0)
+                        return 1;
+                } else if (ticks) {
+                    struct timespec duration = { 0, 20000000L };
+                    while (nanosleep(&duration, &duration) != 0 && errno == EINTR)
+                        continue;
+                }
+                /* Native input may have arrived while this task slept.  The
+                 * typed broker is the only safe importer: it visits only
+                 * registered IDCMP/device sources, signals their recorded
+                 * guest owners, and never guesses from an ordinary port.
+                 * Without this, a supervising CLI in Delay skipped every GUI
+                 * child as "blocked" forever even though Intuition had its
+                 * wake-up event ready. */
+                (void)emu68k_event_pump(r, st, 0, UINT32_MAX, NULL);
+            }
             return 0;
         }
     case DOS_LVO_CREATEPROC: {

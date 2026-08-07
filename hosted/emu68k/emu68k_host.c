@@ -1295,6 +1295,55 @@ int emu68k_find_guestlib_base(struct emu68k_run *r, uint32_t base)
     return -1;
 }
 
+/* A semantic alias is registered as a BRIDGED base. bridge_inner() redirects
+ * calls through it into the real GUEST library vector, so the target still
+ * executes its genuine 68k implementation. Register it in every engine: the
+ * RexxMast context discovers the alias but an application context consumes it.
+ *
+ * The first user is the classic ARexx rm_LibBase contract. AROS Regina uses
+ * that same RexxMsg word as rm_Private2 for its TSD pointer. Rewriting it would
+ * break Regina on reply; aliasing preserves both meanings. */
+int emu68k_register_libalias(struct emu68k_run *r, uint32_t alias,
+                            uint32_t target, char *e, unsigned el)
+{
+    j5d_engine *active;
+
+    if (!r || !alias || !target || alias == target) return 0;
+    for (int i = 0; i < r->nlibalias; i++) {
+        if (r->libalias[i].alias != alias) continue;
+        if (r->libalias[i].target == target) return 0;
+        if (e && el)
+            snprintf(e, el, "library alias %08x changed target from %08x to %08x",
+                     alias, r->libalias[i].target, target);
+        return 1;
+    }
+    if (r->nlibalias >= EMU68K_LIBALIAS_MAX) {
+        if (e && el)
+            snprintf(e, el, "more than %d library aliases in one guest run",
+                     EMU68K_LIBALIAS_MAX);
+        return 1;
+    }
+    r->libalias[r->nlibalias].alias = alias;
+    r->libalias[r->nlibalias].target = target;
+    r->nlibalias++;
+
+    active = j5d_engine_active();
+    if (r->eng) {
+        j5d_engine_activate(r->eng);
+        j5d_register_libbase(alias);
+    }
+    for (int i = 0; i < r->nctx; i++)
+        if (r->ctx[i].eng) {
+            j5d_engine_activate(r->ctx[i].eng);
+            j5d_register_libbase(alias);
+        }
+    j5d_engine_activate(active);
+    bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), 0,
+             "library.alias", "\"alias\":\"0x%08x\",\"target\":\"0x%08x\"",
+             alias, target);
+    return 0;
+}
+
 /* A library base has a vector area below it and a Library structure above it,
  * and both have to be inside the arena before anything dereferences either. */
 static int plausible_libbase(const struct emu68k_run *r, uint32_t base)
@@ -1705,7 +1754,16 @@ int emu68k_event_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
     local_matches = (unsigned)probe.d[1];
     if (matched) *matched = local_matches;
     if (delivered || local_matches)
-        bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
+    {
+        /* A parked GUI polls its bound native source on every scheduler turn.
+         * Empty polls and INTUITICKS-only delivery are useful when diagnosing
+         * the broker itself, but at runtime level they can bury the first real
+         * mouse/menu event in seconds. Keep those at debug; any other delivered
+         * class remains part of the normal interaction trace. */
+        int level = (!delivered ||
+                     (probe.d[2] && !(probe.d[2] & ~0x00400000u)))
+                  ? BL_DEBUG : BL_RUNTIME;
+        bl_event(level, r->cur_ctx, emu68k_ctx_task(r), st->pc,
                  "event.pump",
                  "\"destination\":\"%s\",\"mask\":\"0x%08x\","
                  "\"matched_sources\":%u,\"delivered\":%d,"
@@ -1714,6 +1772,7 @@ int emu68k_event_pump(struct emu68k_run *r, struct j5d_m68k_state *st,
                  port ? bl_id("port", port) : "*", mask,
                  local_matches, delivered, probe.d[2], probe.d[3],
                  probe.d[4] & 0xffffu);
+    }
     if (delivered && port)
         bl_event(BL_RUNTIME, r->cur_ctx, emu68k_ctx_task(r), st->pc,
                  "port.pump", "\"port\":\"%s\",\"messages\":%d",
@@ -1872,7 +1931,7 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
     nsb = r->jit_sb;
     c.lib = &r->lib; c.sb = &r->sb; c.run = r;
 
-    bl_event(BL_RUNTIME, idx, ctx->task, pc, "scheduler.resume",
+    bl_event(BL_DEBUG, idx, ctx->task, pc, "scheduler.resume",
              "\"from\":%d", outer);
     ctx->on_stack = 1;
     r->cur_ctx = idx;
@@ -1892,9 +1951,22 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
         j5d_register_libbase(EXEC_BASE);
         for (i = 0; i < r->nlib; i++)
             j5d_register_libbase(r->openlib[i].base);
+        for (i = 0; i < r->nlibalias; i++)
+            j5d_register_libbase(r->libalias[i].alias);
         for (i = 0; i < GUESTLIB_MAX; i++)
-            if (r->guestlib[i].state == GL_READY && r->guestlib[i].base)
-                j5d_register_guest_libbase(r->guestlib[i].base);
+            if (r->guestlib[i].state == GL_READY && r->guestlib[i].base) {
+                struct guestlib_live *g = &r->guestlib[i];
+                j5d_register_guest_libbase(g->base);
+                /* A library may return a caller-specific clone from Open.
+                 * Open registered that address only in whichever context's
+                 * engine happened to execute the continuation.  Every other
+                 * context must replay the complete live set too, or a call
+                 * through the clone (Regina vector 21 was the first proof)
+                 * is decoded as ordinary code at base-LVO. */
+                for (int j = 0; j < g->open_count; j++)
+                    if (g->open_base[j])
+                        j5d_register_guest_libbase(g->open_base[j]);
+            }
     }
     /* A child context may be a polling task that never calls Wait.  Give it a
      * bounded quantum so it can park at an engine safe point and return the
@@ -1915,9 +1987,54 @@ int emu68k_run_context_nested(struct emu68k_run *r, j4_sandbox *sb, int idx,
             ctx->finished = 1;            /* it returned: the process exited  */
         } else if (rc == J5D_RC_YIELD) {
             if (!ctx->blocked)
-                bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                bl_event(BL_DEBUG, idx, ctx->task, ctx->st.pc,
                          "scheduler.yield", "\"reason\":\"quantum\"");
             rc = 0;                       /* parked safely; parent continues  */
+        } else {
+            /* Hardware faults already have J5N bundles. Ordinary decoder and
+             * bridge errors used to return only a PC, then teardown could
+             * obscure even that by blocking in resource cleanup. Preserve the
+             * failing context and nearby guest bytes while the arena is live. */
+            bl_event(BL_RUNTIME, idx, ctx->task, ctx->st.pc,
+                     "scheduler.error", "\"rc\":%d,\"a6\":\"0x%08x\"",
+                     rc, ctx->st.a[6]);
+            if (emu68k_host_getenv("EMU68K_TRACE_FAULT")) {
+                uint32_t start = ctx->st.pc >= 32u ? ctx->st.pc - 32u : 0u;
+                uint32_t target = ctx->st.pc;
+                const char *atpc = (e && *e) ? strstr(e, "@pc=") : NULL;
+                if (atpc) (void)sscanf(atpc + 4, "%x", &target);
+                fprintf(stderr,
+                        "[68k/fault] ctx=%d task=%08x rc=%d pc=%08x "
+                        "a6=%08x a7=%08x d0=%08x d1=%08x: %s\n",
+                        idx, ctx->task, rc, ctx->st.pc, ctx->st.a[6],
+                        ctx->st.a[7], ctx->st.d[0], ctx->st.d[1],
+                        (e && *e) ? e : "guest execution failed");
+                fputs("[68k/fault] regs", stderr);
+                for (unsigned i = 0; i < 8u; i++)
+                    fprintf(stderr, " d%u=%08x", i, ctx->st.d[i]);
+                for (unsigned i = 0; i < 8u; i++)
+                    fprintf(stderr, " a%u=%08x", i, ctx->st.a[i]);
+                fputc('\n', stderr);
+                if (guest_span_ok(sb, start, 96u)) {
+                    const uint8_t *bytes = j4_sandbox_host(sb, start);
+                    fprintf(stderr, "[68k/fault] bytes %08x:", start);
+                    for (unsigned i = 0; i < 96u; i++)
+                        fprintf(stderr, "%s%02x", (i % 16u) ? " " : "\n  ",
+                                bytes[i]);
+                    fputc('\n', stderr);
+                }
+                if (target != ctx->st.pc) {
+                    start = target >= 32u ? target - 32u : 0u;
+                    if (guest_span_ok(sb, start, 96u)) {
+                        const uint8_t *bytes = j4_sandbox_host(sb, start);
+                        fprintf(stderr, "[68k/fault] target bytes %08x:", start);
+                        for (unsigned i = 0; i < 96u; i++)
+                            fprintf(stderr, "%s%02x", (i % 16u) ? " " : "\n  ",
+                                    bytes[i]);
+                        fputc('\n', stderr);
+                    }
+                }
+            }
         }
     } else {
         ctx->can_unwind = 0;              /* it blocked back; state is parked */
@@ -1946,25 +2063,80 @@ int emu68k_reschedule_siblings(struct emu68k_run *r, j4_sandbox *sb,
 {
     int outer = r->cur_ctx;
     int ran = 0;
+    int root_idle = reason && !strcmp(reason, "root process exited");
 
-    bl_event(BL_RUNTIME, outer, emu68k_ctx_task(r), pc, "scheduler.yield",
-             "\"reason\":\"%s\"", reason ? reason : "cooperative");
+    if (!root_idle)
+        bl_event(BL_DEBUG, outer, emu68k_ctx_task(r), pc, "scheduler.yield",
+                 "\"reason\":\"%s\"", reason ? reason : "cooperative");
     for (int i = 0; i < r->nctx; i++)
     {
         struct emu68k_ctx *other = &r->ctx[i];
         if (i == outer || !other->live || other->finished || other->on_stack)
             continue;
-        if (other->blocked &&
-            !(emu68k_gread32(sb, other->task + TASK_SIGRECVD_OFF) &
-              other->wait_mask))
+        if (other->blocked) {
+            uint32_t got = emu68k_gread32(sb,
+                                          other->task + TASK_SIGRECVD_OFF) &
+                           other->wait_mask;
+            if (!got) {
+                /* Native Intuition/device messages do not set a bit in the
+                 * guest Task until the event broker has rebuilt and queued
+                 * them.  A parked Wait() therefore has to poll its typed
+                 * native sources before the scheduler decides it is still
+                 * asleep.  Previously the early skip below made that poll
+                 * impossible once the root process exited: the pointer moved,
+                 * but SELECTDOWN/UP never reached TurboCalc. */
+                j5d_engine *outer_eng = r->ctx[outer].eng;
+                r->cur_ctx = i;
+                emu68k_gwrite32(sb, EXEC_BASE + EXECBASE_THISTASK,
+                                other->task);
+                j5d_engine_activate(other->eng);
+                (void)emu68k_event_pump(r, &other->st, 0,
+                                        other->wait_mask, NULL);
+                j5d_engine_activate(outer_eng);
+                r->cur_ctx = outer;
+                emu68k_gwrite32(sb, EXEC_BASE + EXECBASE_THISTASK,
+                                r->ctx[outer].task);
+                got = emu68k_gread32(sb,
+                                     other->task + TASK_SIGRECVD_OFF) &
+                      other->wait_mask;
+            }
+            if (!got) continue;
+        }
+        if (emu68k_run_context_nested(r, sb, i, e, el) != 0) {
+            /* One guest Process is not the whole emulated machine.  Once a
+             * cooperatively scheduled sibling has faulted outside Forbid(),
+             * quarantine that context and let its parent and peers continue.
+             * Propagating the error through the currently running parent used
+             * to tear down every window in the run, turning an RX cleanup bug
+             * into a frozen or terminated Macaros instance.  A fault while the
+             * child owns the guest scheduler lock is not containable: state it
+             * protected may be half-mutated, so retain the fail-loud path. */
+            if (other->forbid_depth)
+                return 1;
+            other->failed = 1;
+            other->finished = 1;
+            other->blocked = 0;
+            bl_event(BL_RUNTIME, i, other->task, other->st.pc,
+                     "scheduler.contained",
+                     "\"reason\":\"guest-process-fault\"");
+            if (emu68k_host_getenv("EMU68K_TRACE_FAULT"))
+                fprintf(stderr, "[68k/fault] contained ctx=%d task=%08x; "
+                        "continuing parent ctx=%d\n", i, other->task, outer);
+            if (e && el) e[0] = '\0';
+            ran++;
             continue;
-        if (emu68k_run_context_nested(r, sb, i, e, el) != 0)
-            return 1;
+        }
         ran++;
     }
-    bl_event(BL_RUNTIME, outer, emu68k_ctx_task(r), pc, "scheduler.resume",
-             "\"after\":\"%s\",\"siblings_ran\":%d",
-             reason ? reason : "cooperative", ran);
+    /* A persistent GUI process can remain idle for hours. Do not turn that
+     * healthy state into two trace records per host quantum (one test produced
+     * a 3.7 GiB log in under two minutes). Record root-afterlife cycles only
+     * when a child actually woke and did work. */
+    if (!root_idle || ran)
+        bl_event(BL_DEBUG, outer, emu68k_ctx_task(r), pc, "scheduler.resume",
+                 "\"after\":\"%s\",\"siblings_ran\":%d",
+                 reason ? reason : "cooperative", ran);
+    r->scheduler_ran = ran;
     return 0;
 }
 
@@ -2510,6 +2682,44 @@ int emu68k_dos_create_new_proc(struct emu68k_run *r, j4_sandbox *sb,
 static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user,
                         char *e, unsigned el);
 
+/* The mathieee libraries return their numeric result in registers AND set the
+ * 68k N/Z/V flags.  A native AROS call updates the host CPU flags, which cannot
+ * cross back into the emulated CCR by itself.  Reconstruct the documented
+ * result flags here; C and X are outside the libraries' SetSR masks and remain
+ * unchanged.  This matters even when callers ignore D0: classic code commonly
+ * branches directly after IEEEDPTst/IEEEDPCmp. */
+static void restore_mathieee_ccr(const char *lib, int lvo,
+                                 struct j5d_m68k_state *st)
+{
+    int long_result = 0, double_result = 0;
+    uint32_t cc;
+
+    if (!strcmp(lib, "mathieeedoubbas.library")) {
+        long_result = (lvo == 5 || lvo == 7 || lvo == 8);
+        double_result = (lvo >= 6 && lvo <= 16 && !long_result);
+    } else if (!strcmp(lib, "mathieeedoubtrans.library")) {
+        long_result = (lvo == 17);
+        double_result = (lvo >= 5 && lvo <= 21 && !long_result && lvo != 9);
+    }
+    if (!long_result && !double_result) return;
+
+    cc = st->ccr & (J5D_CCR_C | J5D_CCR_X);
+    if (long_result) {
+        int32_t v = (int32_t)st->d[0];
+        if (v == 0) cc |= J5D_CCR_Z;
+        else if (v < 0) cc |= J5D_CCR_N;
+    } else {
+        uint64_t bits = ((uint64_t)st->d[0] << 32) | st->d[1];
+        uint64_t magnitude = bits & UINT64_C(0x7fffffffffffffff);
+        if (magnitude == 0) cc |= J5D_CCR_Z;
+        else if (bits >> 63) cc |= J5D_CCR_N;
+        /* AROS's classic mathieee implementation uses the largest finite
+         * double as its overflow sentinel and sets V with it. */
+        if (magnitude == UINT64_C(0x7fefffffffffffff)) cc |= J5D_CCR_V;
+    }
+    st->ccr = cc;
+}
+
 static int bridge(int lvo, struct j5d_m68k_state *st, void *user, char *e,
                   unsigned el)
 {
@@ -2535,6 +2745,27 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
     struct bctx *c = user;
     struct emu68k_run *r = c->run;
     uint32_t a6 = st->a[6];
+
+    /* A classic ARexx application calls rexxsyslib vectors through the
+     * RexxMsg.rm_LibBase word. Under AROS Regina that word contains a private
+     * interpreter pointer, registered as an alias when the RexxMsg is sent.
+     * Enter the actual guest library vector and present its real base in A6. */
+    if (r) {
+        for (int i = 0; i < r->nlibalias; i++)
+            if (r->libalias[i].alias == a6) {
+                uint32_t target = r->libalias[i].target;
+                if (find_guestlib_base(r, target) < 0) {
+                    if (e && el)
+                        snprintf(e, el,
+                                 "library alias %08x targets unavailable base %08x",
+                                 a6, target);
+                    return 1;
+                }
+                st->a[6] = target;
+                st->pc = target - 6u * (uint32_t)lvo;
+                return J5D_LVO_REDIRECT;
+            }
+    }
 
     /* A vector a guest library PATCHED with SetFunction runs the guest routine
      * instead of the bridge - that is what patching means, and it has to hold
@@ -2655,6 +2886,7 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
             if (emu68k_oscall &&
                 emu68k_oscall(r->openlib[i].name, lvo, st, r->reserve, emu68k_oscall_user,
                          e, el) == 0) {
+                restore_mathieee_ccr(r->openlib[i].name, lvo, st);
                 if (!strcmp(r->openlib[i].name, "intuition.library"))
                     emu68k_intuition_post_call(r, c->sb, lvo, st);
                 return 0;
@@ -2685,10 +2917,32 @@ static int bridge_inner(int lvo, struct j5d_m68k_state *st, void *user, char *e,
     /* the built-in stub OS (the corpus path: PutChar/AllocMem/FreeMem) */
     int rc = stublib_dispatch(c->lib, c->sb, lvo, (struct M68KState *)st, e, el);
     if (rc) {
+        const char *node_name = NULL;
+        uint32_t node_name_addr = 0;
+        /* Unknown bases are often real guest Library/Device structures that
+         * reached us through a path other than exec.OpenLibrary (for example
+         * io_Device or an application-owned facade). Their public Node name
+         * is still valuable evidence: report it while the arena is live
+         * instead of reducing the failure to an ambiguous LVO number. */
+        if (guest_span_ok(c->sb, st->a[6], M68K_Library_SIZEOF)) {
+            node_name_addr = emu68k_gread32(
+                c->sb, st->a[6] + M68K_Library_lib_Node_ln_Name);
+            node_name = emu68k_guest_cstr(c->sb, node_name_addr);
+        }
         emu68k_ledger_record(lvo, r && r->name[0] ? r->name : NULL);
-        snprintf(e, el, "capability gap: library function LVO %d (offset %d) on "
-                        "an unrecognised base %08x is not marshalled yet",
-                 lvo, -6 * lvo, st->a[6]);
+        if (node_name && *node_name) {
+            fprintf(stderr,
+                    "[emu68k] unrecognised base %08x identifies as \"%s\"\n",
+                    st->a[6], node_name);
+            snprintf(e, el, "capability gap: %s function LVO %d (offset %d) "
+                            "on unregistered guest base %08x is not marshalled yet",
+                     node_name, lvo, -6 * lvo, st->a[6]);
+        } else {
+            snprintf(e, el, "capability gap: library function LVO %d (offset %d) on "
+                            "an unrecognised base %08x (node name %08x) is not "
+                            "marshalled yet",
+                     lvo, -6 * lvo, st->a[6], node_name_addr);
+        }
     }
     return rc;
 }
@@ -3119,6 +3373,17 @@ void emu68k_run_set_mouse_buttons(emu68k_run *r, unsigned int buttons)
     j5d_engine_activate(previous);
 }
 
+static int emu68k_live_child_count(const struct emu68k_run *r)
+{
+    int live = 0;
+
+    if (!r) return 0;
+    for (int i = 1; i < r->nctx; i++)
+        if (r->ctx[i].live && !r->ctx[i].finished)
+            live++;
+    return live;
+}
+
 int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
                        unsigned int *exit_d0, char *err, unsigned errlen)
 {
@@ -3145,6 +3410,45 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     uint32_t d0 = 0;
     char lerr[256] = {0};
 
+    /* SYS_Asynch creates a real guest Process, not a disposable callback.
+     * Once the root command has returned there is no root PC to resume, so
+     * drive the remaining process group directly.  Returning DONE here used
+     * to make Emu68k_RunSeg unmap the shared arena while TurboCalc, RexxMast
+     * and their native Intuition objects were still live; the visible result
+     * was the whole Macaros window disappearing immediately after a successful
+     * ARexx run. */
+    if (r->root_finished) {
+        r->scheduler_ran = 0;
+        int sched_rc = emu68k_reschedule_siblings(r, &r->sb,
+                                                   "root process exited", 0,
+                                                   lerr, sizeof lerr);
+        int children = emu68k_live_child_count(r);
+
+        j5n_signal_remove();
+        j5n_signal_set_classifier(NULL, NULL);
+        j5d_engine_activate(NULL);
+        flush_output(r);
+
+        if (r->kill_req) {
+            r->done = 1;
+            snprintf(err, errlen, "killed");
+            return EMU68K_RC_KILLED;
+        }
+        if (sched_rc != 0) {
+            r->done = 1;
+            r->failed = 1;
+            snprintf(err, errlen, "%s", lerr[0] ? lerr
+                                                   : "guest process group failed");
+            return EMU68K_RC_ERROR;
+        }
+        if (!children) {
+            r->done = 1;
+            if (exit_d0) *exit_d0 = r->root_d0;
+            return EMU68K_RC_DONE;
+        }
+        return r->scheduler_ran ? EMU68K_RC_YIELD : EMU68K_RC_IDLE;
+    }
+
     /* The root context is executing on this native stack too.  Mark it just
      * like a nested context so a sibling that reaches a cooperative yield
      * cannot recursively re-enter its still-active parent. */
@@ -3163,6 +3467,21 @@ int emu68k_run_quantum(emu68k_run *r, unsigned long max_roundtrips,
     flush_output(r);
 
     if (rc == 0) {
+        int children = emu68k_live_child_count(r);
+        if (children) {
+            /* The root has returned, but its asynchronous children still own
+             * guest pointers and native mirrors backed by this arena. */
+            r->root_finished = 1;
+            r->root_d0 = d0;
+            if (r->nctx > 0) {
+                r->ctx[0].finished = 1;
+                bl_event(BL_RUNTIME, 0, r->ctx[0].task, r->st.pc,
+                         "scheduler.finish",
+                         "\"reason\":\"root-return\",\"children\":%d",
+                         children);
+            }
+            return EMU68K_RC_YIELD;
+        }
         r->done = 1;
         if (exit_d0) *exit_d0 = d0;
         return EMU68K_RC_DONE;

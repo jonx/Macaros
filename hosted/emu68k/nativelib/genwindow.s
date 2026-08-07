@@ -184,6 +184,21 @@ region_passed:
     move.l  a4,a6
     jsr     INT_DrawImage(a6)
 
+    ; Reuse that exact guest Image address with a larger planar payload.
+    ; Requesters commonly rebuild one scratch Image as their dimensions
+    ; change; the retained native Image pointer must stay stable while its
+    ; separately owned data mirror grows.
+    lea     testimage(pc),a1
+    move.w  #32,4(a1)
+    move.w  #2,6(a1)
+    lea     testimagedata2(pc),a0
+    move.l  a0,10(a1)
+    move.l  d6,a0
+    move.l  50(a0),a0
+    moveq   #4,d0
+    moveq   #4,d1
+    jsr     INT_DrawImage(a6)
+
     ; A program-owned scratch RastPort is also a first-class mirror.  Populate
     ; its three typed references from the Window's issued RastPort and render
     ; through a generated graphics crossing.
@@ -358,6 +373,8 @@ testimage2:
     dc.l 0
 testimagedata:
     dc.w $aaaa
+testimagedata2:
+    dc.w $aaaa,$5555,$f0f0,$0f0f
 scratchrp:
     ds.b 100
 

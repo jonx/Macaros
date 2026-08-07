@@ -41,7 +41,7 @@ HEADERS = [
     "dos/dos.h", "dos/dosextens.h", "dos/dosasl.h", "dos/exall.h",
     "dos/datetime.h", "dos/rdargs.h", "dos/var.h",
     "utility/tagitem.h", "utility/hooks.h", "utility/date.h",
-    "exec/lists.h", "exec/ports.h",
+    "exec/lists.h", "exec/ports.h", "devices/inputevent.h",
     "exec/tasks.h", "exec/execbase.h", "exec/libraries.h",
     "exec/semaphores.h", "exec/memory.h", "exec/interrupts.h",
     "workbench/workbench.h", "intuition/classes.h", "intuition/intuition.h",
@@ -59,6 +59,7 @@ TYPES = [
     "FileInfoBlock", "AnchorPath", "AChain", "DateStamp", "DateTime", "CSource", "InfoData",
     "DosPacket", "LocalVar", "ExAllControl", "DevProc",
     "TagItem", "Node", "MinNode", "List", "MinList", "MsgPort", "Message",
+    "InputEvent",
     "DiskObject", "ExAllData", "Hook", "IClass",
     "Rectangle",
     "Window", "Screen", "NewWindow", "NewScreen", "RastPort", "Preferences", "BitMap",
@@ -84,7 +85,7 @@ OFFSET_TYPES = ["Task", "ETask", "ExecBase", "Library", "CommandLineInterface",
                 "FileInfoBlock", "ExAllData", "GelsInfo", "collTable",
                 "AnimOb", "AnimComp", "Bob", "VSprite", "UCopList",
                 "CopList", "CopIns", "SimpleSprite", "Rectangle",
-                "CyberModeNode", "CDrawMsg"]
+                "CyberModeNode", "CDrawMsg", "InputEvent"]
 
 # `struct Screen` is intentionally only marshalled through byte 83. Its head is
 # the AmigaOS ABI exactly (LeftEdge 8, Flags 20, Font 40, ViewPort 44, RastPort
@@ -108,6 +109,11 @@ KNOWN_M68K = {
                             "fib_FileName": 8, "fib_Protection": 116,
                             "fib_Size": 124, "fib_NumBlocks": 128}),
     "Hook":          (20, {"h_Entry": 8, "h_SubEntry": 12, "h_Data": 16}),
+    "InputEvent":    (22, {"ie_NextEvent": 0, "ie_Class": 4,
+                            "ie_SubClass": 5, "ie_Code": 6,
+                            "ie_Qualifier": 8, "ie_position_ie_xy_ie_x": 10,
+                            "ie_TimeStamp_tv_secs": 14,
+                            "ie_TimeStamp_tv_micro": 18}),
     # A 68k program reads its own stack bounds straight out of its Task, so
     # these three have to be the AmigaOS offsets to the byte.
     "Task":          (92, {"tc_Flags": 14, "tc_State": 15, "tc_SigAlloc": 18,

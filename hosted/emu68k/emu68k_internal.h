@@ -19,6 +19,7 @@
 #define GUESTSEG_MAX 32
 #define GUESTPOOL_MAX 32
 #define EMU68K_PATCH_MAX 16
+#define EMU68K_LIBALIAS_MAX 32
 #define GUESTLIB_OPENS_MAX 32
 #define EMU68K_MAX_CTX 8
 #define LIBBASE_MAX 64
@@ -182,6 +183,7 @@ struct emu68k_ctx {
     uint8_t               started;
     uint8_t               on_stack;
     uint8_t               finished;
+    uint8_t               failed;
     uint8_t               blocked;
     uint16_t              forbid_depth;
     uint32_t              wait_mask;
@@ -213,6 +215,12 @@ struct emu68k_run {
     long                  flushed;
     uint32_t              resume_pc;
     int                   started;
+    /* A guest SystemTags(SYS_Asynch) child shares this run's 32-bit arena.
+     * The root command may return while those processes are still alive, but
+     * the arena cannot be freed underneath them.  Keep the process group
+     * scheduled until its last child exits (or the run is explicitly killed). */
+    int                   root_finished;
+    uint32_t              root_d0;
     int                   done;
     volatile int          kill_req;
     double                deadline;
@@ -224,6 +232,12 @@ struct emu68k_run {
     struct guestseg_live  guestseg[GUESTSEG_MAX];
     struct guestpool_live guestpool[GUESTPOOL_MAX];
     struct { uint32_t base; int lvo; uint32_t guest_fn; } patch[EMU68K_PATCH_MAX];
+    /* Classic ARexx exposes rexxsyslib.library in RexxMsg.rm_LibBase. AROS
+     * renamed that word rm_Private2 and Regina stores an interpreter-private
+     * pointer there. Legacy applications still call vectors through the word,
+     * so retain a per-run alias without rewriting Regina's shared message. */
+    struct { uint32_t alias, target; } libalias[EMU68K_LIBALIAS_MAX];
+    int                   nlibalias;
     struct {
         uint32_t port;
         uint32_t guest_name;
@@ -244,6 +258,7 @@ struct emu68k_run {
     uint32_t              command_return;
     uint8_t               command_can_unwind;
     uint32_t              poll_quantum;
+    int                   scheduler_ran;
     int                   failed;
     struct {
         uint32_t port;
@@ -354,6 +369,8 @@ void emu68k_ledger_record(int, const char *);
 
 int emu68k_find_guestlib_name(struct emu68k_run *, const char *);
 int emu68k_find_guestlib_base(struct emu68k_run *, uint32_t);
+int emu68k_register_libalias(struct emu68k_run *, uint32_t, uint32_t,
+                             char *, unsigned);
 int emu68k_load_guestlib(struct emu68k_run *, const char *, uint32_t, int *,
                          char *, unsigned);
 int emu68k_open_guestlib_now(struct emu68k_run *, const char *, uint32_t,

@@ -776,6 +776,18 @@
 #define M68K_CDrawMsg_cdm_BytesPerPix 22
 #define M68K_CDrawMsg_cdm_ColorModel 24
 
+/* struct InputEvent: 22 bytes on m68k (InputEvent) */
+#define M68K_InputEvent_SIZEOF 22
+#define M68K_InputEvent_ie_NextEvent 0
+#define M68K_InputEvent_ie_Class 4
+#define M68K_InputEvent_ie_SubClass 5
+#define M68K_InputEvent_ie_Code 6
+#define M68K_InputEvent_ie_Qualifier 8
+#define M68K_InputEvent_ie_position_ie_xy_ie_x 10
+#define M68K_InputEvent_ie_position_ie_xy_ie_y 12
+#define M68K_InputEvent_ie_TimeStamp_tv_secs 14
+#define M68K_InputEvent_ie_TimeStamp_tv_micro 18
+
 /* struct AreaInfo: 24 bytes on m68k (AreaInfo) */
 #define M68K_AreaInfo_SIZEOF 24
 #define M68K_AreaInfo_VctrTbl 0

@@ -49,6 +49,16 @@ static const uint8_t LIB[] = {
     0x20,0x3c,0x00,0x00,0x01,0x00, 0x72,0x01, 0x4e,0xae,0xff,0x3a, 0x24,0x40,
     0x70,0x41, 0x4e,0xae,0xff,0xe2, 0x22,0x4a, 0x20,0x3c,0x00,0x00,0x01,0x00,
     0x4e,0xae,0xff,0x2e, 0x70,0x00, 0x4e,0x75 };
+/* TurboCalc's command dispatcher exposed this ordinary dynamic-vector form:
+ * D7 selects a vector and jsr (d8,A6,D7.w) calls it.  D7=0 plus d8=-30 names
+ * PutChar here; the facade vector bytes remain zero to prove the dispatcher
+ * recognises the registered base instead of trying to execute its storage. */
+static const uint8_t LIB_INDEXED[] = {
+    0x70,0x41,             /* moveq #'A',d0       */
+    0x7e,0x00,             /* moveq #0,d7         */
+    0x4e,0xb6,0x70,0xe2,   /* jsr (-30,a6,d7.w)   */
+    0x70,0x00,             /* moveq #0,d0         */
+    0x4e,0x75 };
 /* lea ORG+0x100,a2; move.l a1,32(a2); beq taken; d0=1; rts; taken:d0=42;rts.
  * A1 begins at zero. The checked memory-store helper must not replace MOVE's Z
  * with the private bounds-comparison flags before the BEQ consumes it. */
@@ -221,6 +231,44 @@ static void run_libcall(void)
     free(mem);
 }
 
+static void run_indexed_libcall(void)
+{
+    uint8_t *mem = calloc(1, SZ);
+    j4_sandbox jsb;
+    j5d_sandbox sb = { mem, ORG, SZ };
+    stub_lib lib;
+    struct bctx c = { &lib, &jsb };
+    struct j5d_m68k_state st;
+    uint32_t d0 = 0;
+    char err[200] = {0};
+
+    /* run_libcall released the J3 mappings; discard stublib's corresponding
+     * per-LVO function-pointer cache before asking it to build another. */
+    stublib_reset_thunk_cache();
+    j4_sandbox_init(&jsb, mem, ORG, SZ);
+    memcpy(mem, LIB_INDEXED, sizeof LIB_INDEXED);
+    memset(&st, 0, sizeof st);
+    if (stublib_init(&lib, &jsb, LIBBASE, HEAP_BASE, HEAP_END)) {
+        printf("  lib-index stublib_init failed -> FAIL\n");
+        g_fail = 1;
+        free(mem);
+        return;
+    }
+    int rc = j5d_run(&sb, ORG, LIBBASE, &st, &d0,
+                     bridge, &c, err, sizeof err);
+    int ok = rc == 0 && d0 == 0 && lib.ncalls == 1 &&
+             lib.calls[0].lvo == STUB_LVO_PUTCHAR &&
+             lib.outlen == 1 && lib.out[0] == 'A';
+    printf("  lib-index jsr (d8,A6,D7.w) dynamic vector -> %s\n",
+           ok ? "PASS" : "FAIL");
+    if (rc) printf("    run error: %s\n", err);
+    if (!ok) g_fail = 1;
+    j5d_run_free();
+    j3_free_all_thunks();
+    stublib_reset_thunk_cache();
+    free(mem);
+}
+
 /* ===================== negative control: corrupt one opcode ==================== */
 static void neg_control(void)
 {
@@ -342,6 +390,7 @@ int main(void)
                 "MOVE.L zero to memory keeps Z across the checked store for BEQ");
     run_movew_d16_to_d16();
     run_libcall();
+    run_indexed_libcall();
     run_bounds_regression();
     neg_control();
 

@@ -47,6 +47,7 @@ typedef void (*emu68k_sink_fn)(const char *buf, long len, void *user);
 #define EMU68K_RC_DONE   0   /* program exited; *exit_d0 holds its D0            */
 #define EMU68K_RC_YIELD  1   /* quantum used up; call emu68k_run_quantum again   */
 #define EMU68K_RC_KILLED 2   /* a kill request landed at a safe point            */
+#define EMU68K_RC_IDLE   4   /* live async children are all parked; pace caller  */
 #define EMU68K_RC_ERROR  (-1)/* load/translate/fault error; err holds the reason */
 #define EMU68K_RC_HARDWARE 3 /* [T2b] the program touched the Amiga hardware: a
                               * ROUTING event (it needs a full machine emulator),

@@ -134,6 +134,9 @@ int  stublib_init(stub_lib *lib, j4_sandbox *sb, uint32_t libbase,
 struct M68KState;  /* the [J3] state struct (j3_jit68k.h) */
 int  stublib_dispatch(stub_lib *lib, j4_sandbox *sb, int lvo,
                       struct M68KState *st, char *errbuf, unsigned errlen);
+/* Pair with j3_free_all_thunks(): cached emitted function pointers must not
+ * survive the MAP_JIT regions they name. */
+void stublib_reset_thunk_cache(void);
 
 /* Convenience: the 68k byte-offset (negative) a caller uses to reach LVO n. */
 uint32_t stublib_vector_addr(const stub_lib *lib, int lvo);

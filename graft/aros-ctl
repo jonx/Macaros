@@ -109,6 +109,11 @@ bootd_pids() {
          index($0," AROSBootstrap ")) {print $1}'
 }
 
+unload_job() {
+    launchctl bootout "gui/$(id -u)/$JOB_LABEL" 2>/dev/null ||
+        launchctl remove "$JOB_LABEL" 2>/dev/null || true
+}
+
 # Stop the instance(s) bound to this boot tree. Reports each pid it actually
 # signalled and leaves the running tally in STOPPED_COUNT for the caller. The
 # pidfile target is killed first, so the boot-tree sweep then skips it (it is
@@ -141,6 +146,10 @@ stop_instances_for_bootd() {
         done
     fi
 
+    # A submitted launchd job is deliberately outside the caller's process
+    # group. Remove this harness endpoint's job after its process has stopped
+    # so the label can be reused immediately by the next explicit run.
+    unload_job
     rm -f "$PIDF" "$FIFO"
 }
 
@@ -167,6 +176,12 @@ request_guest_shutdown() {
 FIFO="${AROS_CTL_FIFO:-/tmp/aros-cm.ctl}"
 LOG="${AROS_CTL_LOG:-/tmp/aros-window.log}"
 PIDF="${AROS_CTL_PIDF:-/tmp/aros-cm.pid}"
+# Include the endpoint paths in the default launchd label so explicitly
+# isolated harnesses do not collide. cksum is available on every supported
+# macOS and keeps arbitrary path characters out of the service label.
+JOB_KEY="$(printf '%s\n%s\n' "$FIFO" "$PIDF" | cksum | awk '{print $1}')"
+JOB_LABEL="${AROS_CTL_JOB_LABEL:-org.aros.aros-ctl.$(id -u).$JOB_KEY}"
+JOB_PLIST="${AROS_CTL_JOB_PLIST:-$ROOT/run/darwin-aarch64/aros-ctl-$JOB_KEY.plist}"
 
 ctl() {
     if [ ! -p "$FIFO" ]; then
@@ -666,27 +681,84 @@ run)
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
     mkdir -p "$ROOT/run/darwin-aarch64"
-    ( cd "$BOOTD" && exec nohup env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$FIFO" \
-        DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
-        AROS_CM_WATCHDOG_SECS="${AROS_CM_WATCHDOG_SECS:-}" \
-        AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
-        EMU68K_LIBS_PATH="${EMU68K_LIBS_PATH:-}" \
-        EMU68K_COMMAND_PATH="${EMU68K_COMMAND_PATH:-}" \
-        EMU68K_BRIDGE_TRACE="${EMU68K_BRIDGE_TRACE:-}" \
-        EMU68K_BRIDGE_TRACE_LEVEL="${EMU68K_BRIDGE_TRACE_LEVEL:-}" \
-        EMU68K_BRIDGE_TREE="${EMU68K_BRIDGE_TREE:-}" \
-        EMU68K_TRACE_CALLS="${EMU68K_TRACE_CALLS:-}" \
-        EMU68K_TRACE_OSCALL="${EMU68K_TRACE_OSCALL:-}" \
-        EMU68K_TRACE_TASKS="${EMU68K_TRACE_TASKS:-}" \
-        EMU68K_DEBUG_EXEC="${EMU68K_DEBUG_EXEC:-}" \
-        EMU68K_TRACE_FAULT="${EMU68K_TRACE_FAULT:-}" \
-        EMU68K_MAX_SECONDS="${EMU68K_MAX_SECONDS:-}" \
-        EMU68K_GUESTSIDE_LIBS="${EMU68K_GUESTSIDE_LIBS:-}" \
-        AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
-        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
-        ./Macaros -c "$BOOTD/AROSBootstrap.conf" ${AROS_KERNEL_ARGS:-} </dev/null >"$LOG" 2>&1 ) &
-    echo $! > "$PIDF"
-    echo "AROS pid $(cat "$PIDF")  log=$LOG  control=$FIFO"
+    # Do not export absent optional switches as empty strings. The bridge's
+    # boolean diagnostics intentionally use getenv(name), so NAME="" still
+    # means enabled; exporting every switch here used to turn full call tracing
+    # on for every harness run and could produce hundreds of megabytes of log.
+    run_env=(
+        "AROS_DARWIN_THREADED=1"
+        "AROS_CM_CONTROL=$FIFO"
+        "DYLD_FALLBACK_LIBRARY_PATH=$HOME/lib"
+        "AROS_HOST_VOLUME=$AROS_HOST_VOLUME"
+        "AROS_SETTINGS_SCHEMA=$HOME/lib/settings.json"
+        "AROS_RUN_DIR=$ROOT/run/darwin-aarch64"
+    )
+    for name in \
+        AROS_CM_WATCHDOG_SECS \
+        EMU68K_LIBS_PATH EMU68K_COMMAND_PATH \
+        EMU68K_BRIDGE_TRACE EMU68K_BRIDGE_TRACE_LEVEL \
+        EMU68K_BRIDGE_TRACE_MAX_BYTES EMU68K_BRIDGE_TREE \
+        EMU68K_TRACE_CALLS EMU68K_TRACE_OSCALL EMU68K_TRACE_TASKS \
+        EMU68K_DEBUG_EXEC EMU68K_TRACE_FAULT EMU68K_MAX_SECONDS \
+        EMU68K_GUESTSIDE_LIBS
+    do
+        if [ -n "${!name:-}" ]; then
+            run_env+=("$name=${!name}")
+        fi
+    done
+    # nohup alone is insufficient when a command runner tears down the entire
+    # invoking process group. A launchd job gives the hosted OS the same
+    # lifetime whether `run` came from a terminal, CI, or an agent. Use a real
+    # plist rather than `launchctl submit`: submitted jobs are inferred as
+    # keepalive, and routing through Apple's /usr/bin/env or /bin/sh strips
+    # DYLD_FALLBACK_LIBRARY_PATH before Macaros can load host shims.
+    unload_job
+    : > "$LOG"
+    plutil -create xml1 "$JOB_PLIST"
+    plutil -insert Label -string "$JOB_LABEL" "$JOB_PLIST"
+    plutil -insert ProgramArguments -array "$JOB_PLIST"
+    launch_args=("$BOOTD/Macaros" -c "$BOOTD/AROSBootstrap.conf")
+    if [ -n "${AROS_KERNEL_ARGS:-}" ]; then
+        # Preserve the launcher's historical whitespace-separated kernel-arg
+        # contract while putting each resulting argument in the plist array.
+        launch_args+=( ${AROS_KERNEL_ARGS} )
+    fi
+    i=0
+    for value in "${launch_args[@]}"; do
+        plutil -insert "ProgramArguments.$i" -string "$value" "$JOB_PLIST"
+        i=$((i + 1))
+    done
+    plutil -insert EnvironmentVariables -dictionary "$JOB_PLIST"
+    for value in "${run_env[@]}"; do
+        name="${value%%=*}"
+        plutil -insert "EnvironmentVariables.$name" -string "${value#*=}" "$JOB_PLIST"
+    done
+    plutil -insert WorkingDirectory -string "$BOOTD" "$JOB_PLIST"
+    plutil -insert StandardOutPath -string "$LOG" "$JOB_PLIST"
+    plutil -insert StandardErrorPath -string "$LOG" "$JOB_PLIST"
+    plutil -insert ProcessType -string Interactive "$JOB_PLIST"
+    plutil -insert RunAtLoad -bool YES "$JOB_PLIST"
+    if ! launchctl bootstrap "gui/$(id -u)" "$JOB_PLIST"; then
+        echo "aros-ctl: could not bootstrap launchd job $JOB_LABEL" >&2
+        rm -f "$PIDF" "$FIFO"
+        exit 1
+    fi
+    pid=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        pid="$(launchctl print "gui/$(id -u)/$JOB_LABEL" 2>/dev/null |
+            awk '/^[[:space:]]*pid = / {print $3; exit}')"
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && break
+        pid=""
+        sleep 0.05
+    done
+    if [ -z "$pid" ]; then
+        echo "aros-ctl: launchd job $JOB_LABEL did not produce a live process" >&2
+        unload_job
+        rm -f "$PIDF" "$FIFO"
+        exit 1
+    fi
+    echo "$pid" > "$PIDF"
+    echo "AROS pid $pid  job=$JOB_LABEL  log=$LOG  control=$FIFO"
     ;;
 stop)
     BOOTD="$(find_bootd)"
@@ -724,6 +796,7 @@ kill)
             n=$((n + 1))
         fi
     done
+    unload_job
     rm -f "$PIDF" "$FIFO"
     if [ "$n" -gt 0 ]; then
         echo "killed $n instance(s); removed $FIFO and $PIDF"
@@ -749,6 +822,7 @@ status)
 
     echo "state=running"
     echo "pid=$pid ($source)"
+    echo "job=$JOB_LABEL"
     echo "pidfile=$PIDF"
     if [ -p "$FIFO" ]; then
         echo "fifo=$FIFO ok"

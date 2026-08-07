@@ -55,7 +55,7 @@ maintain is the bottom boundary.
 | path | what it is |
 |---|---|
 | `~/Source/aros-aarch64` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
-| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is clean on `checkpoint/emu68k-progdir-20260807` at `b594c9ba09`. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
+| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is `checkpoint/emu68k-progdir-20260807` at `b594c9ba09` plus the uncommitted generated/runtime side of this update. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
 | `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
 | `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
 | `~/Source/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
@@ -263,7 +263,68 @@ that the intended guest-side `asl.library` itself initializes. The retained diag
 `~/AROS/Shared/photodemo-identity-20260805.trace.jsonl` and
 `~/AROS/Shared/photodemo-waterline-events-20260805.trace.jsonl`.
 
-### TurboCalc live breadth probe — resume here
+### TurboCalc Stage 2 — current result (2026-08-07)
+
+Stage 2 is now an end-to-end pass, not an application-side dispatch blocker.
+The real 68k RexxMast, RX and TurboCalc processes share one guest arena; RX
+addresses `TCALC`, writes `10` and `1.25`, installs `=A1+A2`, reads the formula
+and value back, and produces:
+
+```
+STAGE2-PASS TCALC formula==A1+A2 value=11.25
+```
+
+The generic fixes exposed by this run are:
+
+- dynamic indexed `(d8,An,Xn)` library calls are recognized by the JIT;
+- classic `RexxMsg.rm_LibBase` calls route through a per-run alias while
+  Regina retains its AROS-private word at the same offset;
+- `console.device/RawKeyConvert` converts a generated `InputEvent` layout;
+- `mathieeedoubtrans/IEEEDPPow` has a safe native implementation, and both
+  IEEE-double library families restore their documented 68k CCR side effects;
+- returning from a root command no longer frees the arena under live
+  `SYS_Asynch` guest processes; the run owns the process group until its last
+  child exits or it is explicitly killed;
+- a blocked guest `Wait()` polls its typed native event sources before the
+  scheduler decides it is still asleep, so mouse buttons and menus wake an
+  application after the launcher has returned;
+- the OS-side runner distinguishes an ordinary JIT quantum from a fully idle
+  process group. Ordinary work only reschedules; idle groups sleep one AROS
+  timer tick. This keeps initial execution fast and the persistent GUI near
+  idle CPU without starving Intuition or the hosted control task.
+
+The live proof after `STAGE2-PASS` dismisses the demo requester, selects a
+cell, and opens the Project menu. The instance remains responsive and the
+sheet redraw is complete; the large gray missing/backfill rectangles from the
+earlier run do not reproduce on the corrected scheduler/event path.
+
+The Print Sheet path is a second deterministic UI proof. `PRINT` originally
+left an empty requester and large staircase-shaped gray backing blocks because
+TurboCalc reused one classic `struct Image` after changing its dimensions.
+The mirror had allocated the planar words inline and therefore treated the
+first size as immutable; its named refusal contained the TurboCalc task after
+the requester window had opened. Image mirrors now keep the native `Image`
+address stable (Intuition may retain it) while owning the endian-converted
+planar words in a separately replaceable buffer. The same request now renders
+its range, quality, layout, preview/file/cancel and print controls completely,
+without a capability gap. `genwindow` exercises the generic contract by
+drawing the same guest Image address, growing its planar payload, and drawing
+it again; the focused corpus reports `[T3WINDOW] PASS`.
+
+The Stage 2 launcher deletes its previous result before starting RX, and the
+script writes the result stream sequentially. An old PASS can therefore no
+longer make a new launch return early or leave stale trailing diagnostic lines.
+
+Bridge Lab traces are bounded even when a new idle-loop bug is introduced.
+Runtime detail stops at 32 MiB by default, one `trace.truncated` record names
+the limit, and 64 KiB remains reserved for summary/failure and `run.end`
+records. `EMU68K_BRIDGE_TRACE_MAX_BYTES` overrides the limit; `0` explicitly
+selects unlimited output. The cap never changes guest execution.
+
+The investigation log below is retained for provenance. It is superseded by
+the result above; do not resume its intermediate “remaining blocker” steps.
+
+### TurboCalc investigation log (historical, superseded)
 
 TurboCalc 5 from Aminet is installed at
 `~/AROS/Shared/TurboCalc5/TurboCalc/TurboCalc`; the startup script is
@@ -390,7 +451,9 @@ remove `Regina68k/stage2.result`, boot with
 `AROS_CTL_STARTUP_FILE=~/AROS/Shared/regina-stage2-startup` and a FRESH
 `EMU68K_BRIDGE_TRACE` (runtime level is enough; avoid `EMU68K_TRACE_CALLS=1`
 on a full boot - it floods `/private/tmp/aros-sidecar.log`, 800 MB last
-time), and judge only `STAGE2-PASS`/`FAIL` plus the trace: expect a
+time). Bridge Lab itself defaults to a 32 MiB cap; set
+`EMU68K_BRIDGE_TRACE_MAX_BYTES` only when a smaller diagnostic budget is
+needed. Judge only `STAGE2-PASS`/`FAIL` plus the trace: expect a
 synthesized ACTIVEWINDOW delivery for window:2 right after its ModifyIDCMP,
 then the parent-port reply chain resuming, the main task reaching its idle
 loop, and a guest `port.get` on TCALC.  If the stall persists with the
@@ -787,15 +850,26 @@ lookup before it exercises the signal contract.
 
 The harness no longer kills an existing Macaros process unless explicitly
 requested (`AROS_CTL_RESTART=1`, `stop`, or `kill`).  A Stage 2 run may be
-restarted when needed; remove or rename the previous
-`Regina68k/stage2.result` before judging a new run.  A successful boot alone is
-not a Stage 2 proof: retain the fresh Bridge Lab trace and verify that the
-result file contains `STAGE2-PASS` with both formula and value checks.
+restarted when needed; the launcher removes the previous result before it
+starts RX. A successful boot alone is not a Stage 2 proof: retain the fresh
+Bridge Lab trace and verify that the result file contains `STAGE2-PASS` with
+both formula and value checks.
 
-If a boot reaches only a blank Cocoa screen and logs `Could not open version
-36 or higher of library "dos.library"`, it is an independent staged-OS boot
-artifact issue: rebuild only `kernel-dos` through `graft/rebuild-aros.sh`, then
-restart.  Do not misclassify that pre-Startup failure as an emu68k result.
+`aros-ctl run` is now owned by a non-keepalive launchd plist rather than the
+calling shell or a submitted inferred-keepalive job. It launches `Macaros`
+directly, carries only explicitly enabled optional trace variables, and sets
+the working directory to the selected boot directory. Consequently a payload
+return does not kill the OS, empty diagnostic variables do not accidentally
+enable full tracing, and EMU/MacRO/MacRW bootability no longer depends on the
+terminal's current directory. Only `stop`, `kill`, a guest power request, or an
+explicit replacement ends the session. See the control-harness README for the
+payload-vs-replacement contract.
+
+The early bootstrap line `Could not open version 36 or higher of library
+"dos.library"` is a misleading probe and is not, by itself, a failure: normal
+boots in the successful Stage 2 runs print it and continue. Diagnose only the
+first later fatal event, crash bundle, or missing startup milestone; do not
+rebuild DOS merely because this line appeared.
 
 For repeat runs use the tail-set environment shown in method step 7, plus:
 
@@ -844,11 +918,11 @@ The remaining corpus milestone is application breadth, not these fixtures.
 ## Repo state — IMPORTANT
 
 The host/graft repo is `main` in the user's own `jonx/AROS-AArch64` repository;
-the latest pre-this-update commit is `f7d829c` (per-program PROGDIR, non-starving
-idle and BPTR facade fields).  The AROS checkout is clean at `b594c9ba09` on
-`checkpoint/emu68k-progdir-20260807`.  Do not commit or push that checkout:
-authorization is only for the user's own `jonx` repositories.  Preserve any
-new parallel work discovered in either tree.
+the pre-this-update commit is `0e59b1a`. The AROS checkout remains based at
+`b594c9ba09` on `checkpoint/emu68k-progdir-20260807`, but has the uncommitted
+OS-side generated files and runtime changes paired with this host update.
+Do not commit or push that checkout: authorization is only for the user's own
+`jonx` repositories. Preserve any new parallel work discovered in either tree.
 
 - `hosted/jit68k/j4_loader.c` + `j4_hunk.h`: HUNK_RELOC32SHORT/DREL32 support.
   This is what let five tail libraries load at all.

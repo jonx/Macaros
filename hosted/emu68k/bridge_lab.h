@@ -26,7 +26,10 @@
 #define BL_CALLS    3
 #define BL_DEBUG    4
 
-/* Open the trace if EMU68K_BRIDGE_TRACE names a file; emits run.start. */
+/* Open the trace if EMU68K_BRIDGE_TRACE names a file; emits run.start.
+ * Runtime detail is capped at 32 MiB by default, with 64 KiB reserved for the
+ * trace.truncated and final summary records. EMU68K_BRIDGE_TRACE_MAX_BYTES
+ * overrides the cap; zero explicitly selects unlimited output. */
 void bl_open(const char *program);
 void bl_close(const char *result);
 

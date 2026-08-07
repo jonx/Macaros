@@ -246,6 +246,11 @@
           "field": "BitMap",
           "kind": "object",
           "type": "BitMap"
+        },
+        {
+          "field": "Font",
+          "kind": "object",
+          "type": "TextFont"
         }
       ]
     },
@@ -1108,7 +1113,8 @@
         "intuition/pointerclass.h",
         "intuition/gadgetclass.h",
         "intuition/icclass.h",
-        "gadgets/colorwheel.h"
+        "gadgets/colorwheel.h",
+        "libraries/mui.h"
       ],
       "max_items": 70,
       "tags": [
@@ -1493,6 +1499,10 @@
           "name": "GA_IntuiText",
           "kind": "struct",
           "type": "IntuiText"
+        },
+        {
+          "name": "MUIA_Frame",
+          "kind": "u32"
         }
       ],
       "export": true

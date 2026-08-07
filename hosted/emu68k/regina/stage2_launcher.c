@@ -44,6 +44,11 @@ int main(void)
 {
     LONG result;
 
+    /* Each launch owns one result contract.  Leaving an older PASS in place
+     * lets the launcher return before the new RX process has executed, while
+     * positional LINEOUT writes can leave stale trailing diagnostics. */
+    DeleteFile("MacRW:Regina68k/stage2.result");
+
     if (SystemTags("MacRW:Regina68k/commands/RexxMast", SYS_Asynch, TRUE, TAG_DONE) == -1 ||
         !wait_for_port("REXX")) {
         PutStr("STAGE2-FAIL REXX port did not appear\n");
@@ -99,7 +104,8 @@ int main(void)
         PutStr("STAGE2-FAIL RX could not be launched\n");
         return 22;
     }
-    for (unsigned turns = 0; turns < 6000u; turns++) {
+    /* 600 * 25 ticks at the Amiga 50 Hz DOS clock = five minutes. */
+    for (unsigned turns = 0; turns < 600u; turns++) {
         if (result_complete()) return 0;
         Delay(25);
     }
