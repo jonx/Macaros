@@ -301,15 +301,26 @@ earlier run do not reproduce on the corrected scheduler/event path.
 The Print Sheet path is a second deterministic UI proof. `PRINT` originally
 left an empty requester and large staircase-shaped gray backing blocks because
 TurboCalc reused one classic `struct Image` after changing its dimensions.
-The mirror had allocated the planar words inline and therefore treated the
+The mirror had allocated the planar payload inline and therefore treated the
 first size as immutable; its named refusal contained the TurboCalc task after
 the requester window had opened. Image mirrors now keep the native `Image`
 address stable (Intuition may retain it) while owning the endian-converted
-planar words in a separately replaceable buffer. The same request now renders
-its range, quality, layout, preview/file/cancel and print controls completely,
-without a capability gap. `genwindow` exercises the generic contract by
+structure fields and a separately replaceable planar buffer. The same request
+now renders its range, quality, layout, preview/file/cancel and print controls
+completely, without a capability gap. `genwindow` exercises the generic contract by
 drawing the same guest Image address, growing its planar payload, and drawing
 it again; the focused corpus reports `[T3WINDOW] PASS`.
+
+The planar payload itself is an MSB-first bit stream, not an array of numeric
+`UWORD` values.  Word-wise endian conversion had exchanged the left and right
+eight-pixel halves of every 16-pixel row: Zoom/Print radio buttons appeared as
+a separated dash and crescent, and toolbar icons looked shifted and
+overlapping.  Image mirrors now preserve the bytes exactly, matching the
+existing guest-owned `BitMap` path and native graphics.library's planar
+contract.  `genwindow` draws the asymmetric source bytes `$80,$01` into a
+guest-owned plane and asserts the destination bytes remain `$80,$01`, so a
+half-word swap fails deterministically.  The real TurboCalc toolbar, both
+requesters and selected radio state are visually correct after the change.
 
 Requester and sheet clicks are also verified on the real application.  The
 remaining failure was not native input delivery: Bridge Lab showed both
@@ -365,7 +376,7 @@ gaps in sequence; none of the fixes is TurboCalc-specific:
   About), rather than merely highlighting a row.
 
 That Image-mirror issue is now fixed: the native Image identity remains stable
-while its converted planar data is safely replaceable.  TurboCalc then exposed
+while its mirrored planar data is safely replaceable.  TurboCalc then exposed
 a second generic representation error: it reads public fields of the
 `locale.library` `struct Locale` returned by `OpenLocale`.  `Locale` is now a
 generated guest-readable facade (168-byte 68k layout), instead of an opaque

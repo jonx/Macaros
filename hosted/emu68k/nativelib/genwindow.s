@@ -174,8 +174,30 @@ dispose_region_failed:
 
 region_passed:
 
-    ; Program-owned classic Images are retained native mirrors: planar words
-    ; are endian-converted, and NextImage is a bounded native chain.
+    ; Prove ImageData is copied as an MSB-first bit stream, not converted as
+    ; numeric UWORDs.  Draw into a guest-owned one-row planar bitmap so the
+    ; exact destination bytes are an oracle independent of window layering.
+    move.l  a2,a6
+    lea     imagerp(pc),a1
+    jsr     GFX_InitRastPort(a6)
+    lea     imagebitmap(pc),a0
+    lea     imagerp(pc),a1
+    move.l  a0,4(a1)               ; RastPort.BitMap
+    clr.w   imageplane
+    lea     imagerp(pc),a0
+    lea     testimage(pc),a1
+    moveq   #0,d0
+    moveq   #0,d1
+    move.l  a4,a6
+    jsr     INT_DrawImage(a6)
+    cmp.b   #$80,imageplane
+    bne.w   image_left_failed
+    cmp.b   #$01,imageplane+1
+    bne.w   image_next_failed
+
+    ; Program-owned classic Images are retained native mirrors. Planar bytes
+    ; preserve their exact MSB-first stream order, and NextImage is a bounded
+    ; native chain.
     move.l  d6,a0
     move.l  50(a0),a0
     lea     testimage(pc),a1
@@ -300,6 +322,15 @@ region_passed:
     jsr     INT_CloseScreen(a6)
     bra.s   close_libs_pass
 
+image_left_failed:
+    lea     imageleftmsg(pc),a0
+    bsr.w   say
+    bra.w   close_window_failed
+image_next_failed:
+    lea     imagenextmsg(pc),a0
+    bsr.w   say
+    bra.w   close_window_failed
+
 close_window_failed:
     move.l  a4,a6
     move.l  d6,a0
@@ -354,6 +385,8 @@ layersname:    dc.b "layers.library",0
 title:         dc.b "Generated 68k Window",0
 passmsg:       dc.b "[T3WINDOW] PASS",10,0
 failmsg:       dc.b "[T3WINDOW] FAIL",10,0
+imageleftmsg:  dc.b "[T3WINDOW] FAIL: planar high byte was reordered",10,0
+imagenextmsg:  dc.b "[T3WINDOW] FAIL: planar low byte was reordered",10,0
 fittext:       dc.b "fit",0
 narrowtext:    dc.b "x",0
     even
@@ -372,9 +405,18 @@ testimage2:
     dc.b 0,2
     dc.l 0
 testimagedata:
-    dc.w $aaaa
+    dc.b $80,$01
 testimagedata2:
     dc.w $aaaa,$5555,$f0f0,$0f0f
+imagebitmap:
+    dc.w 2,1
+    dc.b 0,1
+    dc.w 0
+    dc.l imageplane,0,0,0,0,0,0,0
+imageplane:
+    dc.w 0
+imagerp:
+    ds.b 100
 scratchrp:
     ds.b 100
 
