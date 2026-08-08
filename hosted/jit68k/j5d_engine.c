@@ -412,6 +412,13 @@ static const uint8_t reg_a[8] = { REG_A0, REG_A1, REG_A2, REG_A3, REG_A4, REG_A5
  * fp[] never needs hand-encoding; static-asserted against the J5O_OFF_* literals j5c_ra.c uses. */
 #define J5O_FP0  8u                 /* d8 = FP0 ... d15 = FP7 */
 #include <stddef.h>
+
+
+/* The staging buffer a composed block is built into, and how much of it the
+ * prologue/epilogue may need around the decoder body. The decoder bounds itself
+ * against this, not against its own scratch buffer. */
+#define J5D_STAGING_WORDS   65536u
+#define J5D_COMPOSE_RESERVE   512u
 _Static_assert(offsetof(struct j5d_m68k_state, fpcr) == 144u, "[J5o] fpcr offset drift");
 _Static_assert(offsetof(struct j5d_m68k_state, fpsr) == 148u, "[J5o] fpsr offset drift");
 
@@ -1657,6 +1664,12 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
      * couple dozen AArch64 words; 64K words covers a multi-thousand-instruction block. */
     static uint32_t body[65536];
     uint32_t *bp = body;
+    /* The composed block is copied into the CALLER's staging buffer, which is
+     * far smaller than `body`. Bounding only `body` guarded the source and left
+     * the destination to overflow - silently corrupting the stack until a
+     * fortified libc caught it. Reserve room for the prologue/epilogue the
+     * composer adds around the body. */
+    const size_t body_cap = J5D_STAGING_WORDS - J5D_COMPOSE_RESERVE;
 
     /* Point the HOOK 2 fetch base at the sandbox host bytes for this block's PC. */
     const uint8_t *blk_host = sb->host_mem + (pc - sb->origin);
@@ -1670,7 +1683,7 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
         if (++guard > 4000) TFAIL("block decode guard tripped");
         if (cur_pc < sb->origin || (uint64_t)cur_pc + 2 > (uint64_t)sb->origin + sb->size)
             TFAIL("pc out of sandbox during translate");
-        if ((size_t)(bp - body) > sizeof(body)/sizeof(body[0]) - 256) TFAIL("block body overflow");
+        if ((size_t)(bp - body) > body_cap) TFAIL("block body exceeds the staging buffer");
 
         const uint8_t *ophost = sb->host_mem + (cur_pc - sb->origin);
         uint16_t op = be16(ophost);
@@ -1878,6 +1891,8 @@ static unsigned translate_block(j5d_sandbox *sb, uint32_t pc, uint32_t *out,
     }
 
     /* The decoder body (every register/ALU/flag/move/memory opcode, REAL Emu68 decoders). */
+    if ((size_t)(ptr - out) + body_words > J5D_STAGING_WORDS)
+        TFAIL("composed block would overflow the staging buffer");
     memcpy(ptr, body, body_words * sizeof(uint32_t));
     ptr += body_words;
 
@@ -1998,7 +2013,10 @@ static j5d_cached_block *get_block(j5d_sandbox *sb, uint32_t pc, char *errbuf, u
     g_stats.block_cache_misses++;                        /* MISS: translate once, cache by PC      */
     if (cache_reserve_one(errbuf, errlen)) return NULL;
 
-    uint32_t staging[8192];
+    /* Static, not on the stack: at this size it would blow an AROS task stack,
+     * and the engine is documented single-runner (one translated run at a time,
+     * all emit on one host thread), which is what makes a shared buffer sound. */
+    static uint32_t staging[J5D_STAGING_WORDS];
     uint32_t end_pc = pc;
     unsigned long ea_before = g_j5d_ea_emits;
     j5d_cached_block tmp; memset(&tmp, 0, sizeof tmp);

@@ -1,0 +1,72 @@
+#!/bin/sh
+# app-sweep - run each REAL application once, one boot per application, and
+# report what it reached. The fixture corpus (graft/68k-corpus) proves
+# mechanisms; this proves applications, which is the actual goal.
+#
+# Each application gets: a fresh instance, its own startup file, a bounded
+# wait, a screenshot, and a verdict line. A screenshot is the evidence - a
+# process that is alive proves nothing about whether the application drew.
+#
+#   graft/app-sweep [outdir]
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
+OUT="${1:-$HOME/AROS/Shared/app-sweep-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$OUT"
+
+SETTLE="${APP_SWEEP_SETTLE:-45}"     # seconds to let an application come up
+LIBS="gadtools.library,iffparse.library,locale.library,icon.library,\
+datatypes.library,coolimages.library,asl.library,diskfont.library,\
+commodities.library,muimaster.library,stdc.library,posixc.library,fd.library,\
+rexxsyslib.library,rexxsupport.library"
+LIBPATH="/Users/jkn/Source/references/aros-m68k-20260804/libs"
+
+# name : startup file : marker file to report (optional)
+APPS="
+Photogenics:photodemo-startup:photodemo-play.txt
+TurboCalc5:turbocalc5-startup:turbocalc5-launch-4.txt
+Wordworth2:wordworth2-startup:wordworth2-launch.txt
+Wordworth7:wordworth7-startup:wordworth7-launch.txt
+Imagine4:imagine4-startup:imagine4-launch.txt
+"
+
+report="$OUT/RESULTS.txt"
+: > "$report"
+
+for entry in $APPS; do
+    name="${entry%%:*}"; rest="${entry#*:}"
+    startup="${rest%%:*}"; marker="${rest#*:}"
+    sf="$HOME/AROS/Shared/$startup"
+    if [ ! -f "$sf" ]; then
+        echo "$name: SKIP (no $startup)" >> "$report"; continue
+    fi
+    pkill -f "Macaros -c" 2>/dev/null; sleep 1
+    [ -n "$marker" ] && rm -f "$HOME/AROS/Shared/$marker"
+
+    AROS_CTL_RESTART=1 AROS_CTL_STARTUP_FILE="$sf" \
+    EMU68K_GUESTSIDE_LIBS="$LIBS" EMU68K_LIBS_PATH="$LIBPATH" \
+    "$ROOT/graft/aros-ctl" run >/dev/null 2>&1
+
+    i=0
+    while [ "$i" -lt "$SETTLE" ]; do sleep 1; i=$((i + 1)); done
+
+    "$ROOT/graft/aros-ctl" shot "$OUT/$name.png" >/dev/null 2>&1
+    cp /tmp/aros-window.log "$OUT/$name.log" 2>/dev/null
+
+    alive=no; pgrep -f "Macaros -c" >/dev/null 2>&1 && alive=yes
+    gaps="$(grep -c "capability gap" "$OUT/$name.log" 2>/dev/null || echo 0)"
+    faults="$(grep -c "JIT FAULT\|host fault in translated" "$OUT/$name.log" 2>/dev/null || echo 0)"
+    hw="$(grep -c "classified hardware fault" "$OUT/$name.log" 2>/dev/null || echo 0)"
+    wins="$(grep -c "port.bind\|OpenWindow" "$OUT/$name.log" 2>/dev/null || echo 0)"
+    {
+        printf '%s: alive=%s gaps=%s faults=%s hardware=%s window-activity=%s\n' \
+            "$name" "$alive" "$gaps" "$faults" "$hw" "$wins"
+        [ -n "$marker" ] && [ -f "$HOME/AROS/Shared/$marker" ] && \
+            printf '    marker: %s\n' "$(tail -2 "$HOME/AROS/Shared/$marker" | tr '\n' ' ')"
+        grep -m1 "capability gap\|classified hardware fault" "$OUT/$name.log" 2>/dev/null | \
+            sed 's/^/    first-gap: /'
+    } >> "$report"
+done
+
+pkill -f "Macaros -c" 2>/dev/null
+echo "=== app sweep complete -> $OUT ==="
+cat "$report"

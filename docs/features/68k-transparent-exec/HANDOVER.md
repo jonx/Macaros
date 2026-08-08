@@ -1094,6 +1094,68 @@ run.  Its bounded trace is
 left running for interactive testing.  Continue breadth testing from this
 working screen; do not return to the already-fixed list symptom.
 
+## JIT staging-buffer overflow (2026-08-08) - FIXED
+
+Photogenics regressed to `Error 0x80000009 - Trace error` immediately after
+`Input()` returned.  SEVEN A/Bs (each a real rebuild + rerun) cleared: segment
+frame 8/4/ZERO bytes, the PROGDIR prelude, the whole OS module at 026038f40e,
+the aliased-MOVE codegen rewrite, and the OS crossings at d3a62c845a
+(pre-regeneration).  None of them.
+
+The tell: the fault PC `0x18C88E140` was BYTE-IDENTICAL across every dylib
+rebuild - so it is not in our binary.  `atos` gives
+`__chk_fail_overflow (libsystem_c.dylib)`, the _FORTIFY_SOURCE guard.  lldb
+ATTACHED to a correctly-booted instance (launching under lldb fails - the
+harness sets DYLD_FALLBACK_LIBRARY_PATH and entitlements; and AROS's own
+SIGUSR1/SIGALRM must be passed through with
+`process handle -n false -p true -s false ...`, then `thread select 2`) gives:
+
+    __chk_fail_overflow <- __memcpy_chk <- libemu68k.dylib`j5d_run_inner+4212
+
+In `hosted/jit68k/j5d_engine.c`:
+
+    uint32_t staging[8192];        /*  32768 B - DESTINATION            */
+    static uint32_t body[65536];   /* 262144 B - source                 */
+    memcpy(ptr, body, body_words * sizeof(uint32_t));   /* unbounded    */
+
+The decode loop bounded `body` against ITS OWN size; the composed block is
+copied into the caller's `staging`, eight times smaller.  Disassembly confirms
+it: `mov w3, #0x7f44` = 32580 = staging minus the 47 prologue words already
+emitted.  A STACK BUFFER OVERFLOW that had been silently corrupting memory
+under every large block; it only surfaced because the SDK moved mid-session
+(Xcode -> CommandLineTools) and the rebuild enabled _FORTIFY_SOURCE.  Suspect
+this as a cause of unexplained flakiness before 2026-08-08.
+
+Fix: the decoder bounds itself against the DESTINATION
+(`J5D_STAGING_WORDS - J5D_COMPOSE_RESERVE`), a hard check guards the memcpy so
+an oversized block is a NAMED refusal, and `staging` is sized to match `body`
+and made `static` (256 KB on an AROS task stack would be its own crash; the
+engine is documented single-runner, which is what makes a shared buffer sound).
+
+Verified against `graft/68k-corpus` (genexecfull PASS, the three negative
+controls still failing closed, no other line changed) and TurboCalc 5, which
+draws its full spreadsheet and registers the TCALC port.  The sweep also shows
+what the corruption had been costing: `gengadget` used to report a bare "host
+fault in translated code" and now names its real gap again ("stale or unknown
+GA_Previous object token"), so a silent overflow had been eating a diagnosis.
+
+OPEN: `pgsdemo.library` (PhotoDemo's own, in `PhotoDemo/libs/`) is not found.
+Neither `Assign LIBS: ... ADD` nor `EMU68K_LIBS_PATH` made it resolve, and NO
+`OpenLibrary("pgsdemo...")` appears in the log - so it is opened by a path form
+neither route covers.  Launch/resolution question, not the JIT bug.
+
+OPEN, and unrelated to the above: Imagine 4 REGRESSED between the 2026-08-04
+sweep (full UI on its own 640x480 screen) and now.  It launches, then dies with
+`0x07000004 - unexpected DOS packet received` inside dos.library `dopacket`,
+task `Imagine.fp`.  A/B'd with the JIT fix stashed and rebuilt: the alert
+reproduces identically without it, so the cause is elsewhere in the 08-05..08-07
+batch (PROGDIR prelude, guest idle via dos.Delay, seglist framing) - all three
+issue DOS calls that the earlier build did not.  "Unexpected DOS packet" means a
+task waiting on `pr_MsgPort` got a message that was not the packet it sent,
+which is what a DOS call issued from inside another one looks like; start with
+the PROGDIR prelude's `Lock`/`SetProgramDir`.  Reproduce with
+`graft/app-sweep` or one boot on `MacRW:imagine4-startup` (it uses `WBRun`).
+
 ## Seglist framing for the top-level program (2026-08-07) - FIXED
 
 Found by running an arbitrary Aminet-style tool (`~/Downloads/Test`, a
