@@ -1175,7 +1175,7 @@ on the two early-exit paths.  The wait accepts `SIGBREAKF_CTRL_C` as well as
 the port signal: a process can reach here with no CLI and no Workbench behind
 it, and an unkillable launch is worse than one without its arguments.
 
-## Photogenics: a program that loads its own font (2026-08-08) - OPEN
+## Photogenics: a program that loads its own font (2026-08-08) - FONT DONE
 
 `Could not open pgsdemo.library!` was never a resolution bug in the bridge.  The
 trace (`EMU68K_TRACE_CALLS=1`, then grep `OpenLibrary`) shows the program asking
@@ -1201,15 +1201,31 @@ open and the program reaches its real blocker:
 Photogenics loads a bitmap font itself and hands graphics the `struct TextFont`
 inside the segment it just loaded.  That font is guest memory with guest
 pointers in it (tf_CharData, tf_CharLoc, tf_CharSpace, tf_CharKern), and
-graphics is bridged, so the crossing wants a native TextFont it issued.  This is
-a facade in the direction we have not built: a structure the GUEST owns crossing
-into native code.  Serving it means constructing a native TextFont over
-host-visible copies of the guest glyph data, keying it to the guest address, and
-implementing ExtendFont.  Routing diskfont natively instead does NOT help - the
-font never went through diskfont - and makes it fail later and less clearly.
+graphics is bridged, so the crossing wanted a native TextFont it had issued.
+Routing diskfont natively does NOT help - the font never went through diskfont -
+and makes it fail later and less clearly.
 
-Any program that ships its own bitmap fonts lands here, so it is worth doing
-properly rather than per-application.
+FIXED by adopting it.  `textfont_adopt_guest` in `emu68k_oscall.c` builds one
+native TextFont over converted copies of the guest glyph tables (the raster is
+bytes and crosses as bytes; CharLoc/CharSpace/CharKern are big-endian tables and
+convert element by element), registers it under the GUEST ADDRESS so the program
+reads its own pointer back out of `rp->Font`, and frees it with the run.  Unlike
+the Gadget/Image mirrors nothing is copied back: a font is a read-only resource,
+the library renders from it and never writes to it.  Resolution goes through
+`emu68k_object_from_guest`, so every crossing that takes a TextFont gets it for
+free.  ExtendFont is implemented alongside, since a program doing this calls it
+first; a tag list is still refused by name.
+
+THE NEXT THING, still open: Photogenics now runs on past the font and stops in
+pgsdemo.library at guest PC $332A90, right after its own `AddFont`, reported as
+`exception vector page $002`.  Read that classification with suspicion - it is
+the runtime hardware guard describing a NULL dereference, not a machine access.
+The sequence is `Forbid` / `FindName(&GfxBase->TextFonts, name)` -> 0 /
+`AddFont` / then a walk that dereferences a null.  The library is doing list
+surgery on the GUEST-VISIBLE GfxBase facade while `AddFont` linked the font into
+the real native list, so the two disagree.  Reproduce with `EMU68K_TRACE_FAULT=1`
+(dumps 96 bytes of guest code at the fault PC and all registers) plus
+`EMU68K_TRACE_CALLS=1`.
 
 ## Seglist framing for the top-level program (2026-08-07) - FIXED
 
