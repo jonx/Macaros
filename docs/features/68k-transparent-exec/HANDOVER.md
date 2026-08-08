@@ -1144,17 +1144,36 @@ Neither `Assign LIBS: ... ADD` nor `EMU68K_LIBS_PATH` made it resolve, and NO
 `OpenLibrary("pgsdemo...")` appears in the log - so it is opened by a path form
 neither route covers.  Launch/resolution question, not the JIT bug.
 
-OPEN, and unrelated to the above: Imagine 4 REGRESSED between the 2026-08-04
-sweep (full UI on its own 640x480 screen) and now.  It launches, then dies with
-`0x07000004 - unexpected DOS packet received` inside dos.library `dopacket`,
-task `Imagine.fp`.  A/B'd with the JIT fix stashed and rebuilt: the alert
-reproduces identically without it, so the cause is elsewhere in the 08-05..08-07
-batch (PROGDIR prelude, guest idle via dos.Delay, seglist framing) - all three
-issue DOS calls that the earlier build did not.  "Unexpected DOS packet" means a
-task waiting on `pr_MsgPort` got a message that was not the packet it sent,
-which is what a DOS call issued from inside another one looks like; start with
-the PROGDIR prelude's `Lock`/`SetProgramDir`.  Reproduce with
-`graft/app-sweep` or one boot on `MacRW:imagine4-startup` (it uses `WBRun`).
+## The Workbench startup message was never taken (2026-08-08) - FIXED
+
+Found while verifying the above: Imagine 4 launched with `WBRun` died on
+`0x07000004 - unexpected DOS packet received` in dos.library `dopacket`, while
+the SAME program launched from the shell ran perfectly.  That difference is the
+whole diagnosis - it is the launch, not the program.
+
+`dopacket` alerts `AN_AsyncPkt` when `internal_WaitPkt` returns something other
+than the packet it just sent.  A Workbench launch (`OpenWorkbenchObject` ->
+workbench.library `handler.c`) does `CreateNewProc` and then `PutMsg`es a
+WBStartup to the new process's own port.  Native programs take it in their
+startup code (`compiler/autoinit/fromwb.c`); a routed 68k program had nobody to
+do it, so the message sat on `pr_MsgPort` and the first DOS call on that process
+collected it instead of its reply.
+
+It only became visible on 2026-08-08 because the PROGDIR prelude - which issues
+a `Lock` at the top of the first OS call - was the first thing to make a DOS
+call that early.  Before that the collision happened later or not at all.  Note
+the trap when dating this: the AROS-side `emu68k.library` in the boot image is
+built separately, so a source commit can be days older than the first run that
+has it.  Compare the MODULE's mtime, not the commit date.
+
+`Emu68k_RunSeg` now does what a Workbench program does: takes the message,
+adopts `sm_ArgList[0].wa_Lock` as the current directory (a Workbench process
+starts with none), hands the argument names and lock tokens to the guest
+through `emu68k_run_set_workbench` - built earlier and until now never called
+from AROS - and replies the message under `Forbid()` at end of run, including
+on the two early-exit paths.  The wait accepts `SIGBREAKF_CTRL_C` as well as
+the port signal: a process can reach here with no CLI and no Workbench behind
+it, and an unkillable launch is worse than one without its arguments.
 
 ## Seglist framing for the top-level program (2026-08-07) - FIXED
 
