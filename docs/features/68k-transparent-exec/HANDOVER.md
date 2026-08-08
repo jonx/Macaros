@@ -1175,6 +1175,42 @@ on the two early-exit paths.  The wait accepts `SIGBREAKF_CTRL_C` as well as
 the port signal: a process can reach here with no CLI and no Workbench behind
 it, and an unkillable launch is worse than one without its arguments.
 
+## Photogenics: a program that loads its own font (2026-08-08) - OPEN
+
+`Could not open pgsdemo.library!` was never a resolution bug in the bridge.  The
+trace (`EMU68K_TRACE_CALLS=1`, then grep `OpenLibrary`) shows the program asking
+for `photodemo:demodata/libs/pgsdemo.library` - its own volume name, by a path
+nothing had assigned.  Two lines of launch recipe fix it, and they belong with
+any package that was shipped as a bootable disk:
+
+    Assign PhotoDemo: MacRW:PhotoDemo
+    Assign LIBS:  PhotoDemo:libs  ADD
+    Assign FONTS: PhotoDemo:fonts ADD
+
+The lesson is cheap to reuse: when a library "will not resolve", get the NAME
+the program actually passed before touching the resolver.  It asked for
+something nobody had assigned; no search path could have found it.
+
+With those, pgsdemo, asl, gadtools, colorwheel.gadget and workbench.library all
+open and the program reaches its real blocker:
+
+    LoadSeg("FONTS:photogenics/8") -> entry=00397818
+    graphics.library LVO 136 (-816) ExtendFont  a0=00397852   -> capability gap
+    ... then: stale or unknown TextFont object token 00397852
+
+Photogenics loads a bitmap font itself and hands graphics the `struct TextFont`
+inside the segment it just loaded.  That font is guest memory with guest
+pointers in it (tf_CharData, tf_CharLoc, tf_CharSpace, tf_CharKern), and
+graphics is bridged, so the crossing wants a native TextFont it issued.  This is
+a facade in the direction we have not built: a structure the GUEST owns crossing
+into native code.  Serving it means constructing a native TextFont over
+host-visible copies of the guest glyph data, keying it to the guest address, and
+implementing ExtendFont.  Routing diskfont natively instead does NOT help - the
+font never went through diskfont - and makes it fail later and less clearly.
+
+Any program that ships its own bitmap fonts lands here, so it is worth doing
+properly rather than per-application.
+
 ## Seglist framing for the top-level program (2026-08-07) - FIXED
 
 Found by running an arbitrary Aminet-style tool (`~/Downloads/Test`, a
