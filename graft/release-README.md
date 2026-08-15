@@ -16,8 +16,10 @@ Macaros requires an Apple Silicon Mac and macOS 12 or newer. Double-click
 macOS version, memory, Metal graphics, disk space, and app signature.
 
 To install, drag **Macaros.app** onto the **Applications** shortcut, then open it
-from Applications. The notarized release should open normally through
-Gatekeeper.
+from Applications. This interim release is Developer ID signed but not
+Apple-notarized. If Gatekeeper blocks the first launch, Control-click the app,
+choose **Open**, and confirm once. On macOS versions that require it, use
+**System Settings -> Privacy & Security -> Open Anyway**.
 
 ## What is included
 
@@ -71,7 +73,8 @@ for instructions. Nothing is uploaded automatically, and session traces are boun
 - The delivery DMG and outer `Macaros.app` bundle are Developer ID signed. The
   hosted AROS engine and bridge libraries currently retain ad-hoc signatures
   and run without Apple's hardened runtime so the hosted scheduler continues
-  to work. They do not have independent Developer ID signatures.
+  to work. They do not have independent Developer ID signatures, so this image
+  is not Apple-notarized.
 
 ## Licence and notices
 

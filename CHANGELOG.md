@@ -14,14 +14,15 @@
   report folder and issue tracker, while session, task, call, and JIT traces have
   fixed retention and size ceilings so diagnostics cannot consume the disk.
 - **Release identity has one source.** The root `VERSION` file now supplies the
-  bundle, disk image, manifest, and About window. About reports 0.2.1 build 5;
+  bundle, disk image, manifest, and About window. About reports 0.2.1 build 6;
   release builds fail when their generated metadata disagrees.
 - **The signed image now passes its own boot gate.** The delivery DMG and outer
   application bundle are Developer ID signed. The hosted AROS engine and bridge
   libraries retain ad-hoc signatures without hardened runtime because enabling
   it currently stops signal-context task switching during bootstrap. This is an
-  explicit interim limitation, and publication requires a boot from the exact
-  signed and stapled disk image.
+  explicit interim limitation. The image is therefore Developer ID signed but
+  not Apple-notarized, and publication requires a boot from the exact signed
+  disk image.
 
 ## 2026-08-15 - Macaros gets its own release home
 

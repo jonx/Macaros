@@ -11,8 +11,14 @@ AROS clipboard writable when Macaros is launched directly from its read-only
 delivery image, so the Edit menu and Command-C/Command-V clipboard bridge work
 without configuration or files left over from a developer installation.
 
-The About window now reads version 0.2.1 and build 5 from the same release
+The About window now reads version 0.2.1 and build 6 from the same release
 identity used to generate the app bundle, disk image, and build manifest.
+
+The DMG and outer application bundle are Developer ID signed, but this release
+is not Apple-notarized. Its embedded hosted engine and bridge libraries retain
+ad-hoc signatures so AROS can use its current scheduler. If Gatekeeper blocks
+the first launch, Control-click **Macaros.app**, choose **Open**, and confirm
+once, or use **System Settings -> Privacy & Security -> Open Anyway**.
 
 ## What this release is
 

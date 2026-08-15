@@ -33,6 +33,11 @@ security find-identity -v -p codesigning | grep -Fq "\"$IDENTITY\"" || {
     echo "codesigning identity is not available: $IDENTITY" >&2
     exit 1
 }
+if [ "$MODE" = --notarize ] && [ "$SIGN_SCOPE" = outer ]; then
+    echo "outer-only releases cannot currently pass Apple notarization" >&2
+    echo "use --package-test, or use MACAROS_SIGN_SCOPE=full after the scheduler is hardened-runtime compatible" >&2
+    exit 2
+fi
 
 "$HERE/make-aros-release.sh" --check
 

@@ -23,9 +23,10 @@ Do not publish a candidate until every item below is resolved.
   Macaros is hosted under Darwin, where Apple reserves `x18` and signal delivery
   does not preserve a guest value. All C/C++ objects need `-ffixed-x18`, Rust
   code needs the checked-in `+reserve-x18` target, and assembly must avoid it.
-- Configure an Apple notarytool keychain profile. The default profile name used
-  by the scripts is `D4Mac`, matching the shared signing reference in the
-  parent source directory.
+- A fully signed build additionally requires the Apple notarytool Keychain
+  profile `D4Mac`, matching the shared signing reference in the parent source
+  directory. The interim outer-only build cannot pass notarization while its
+  embedded host code remains ad-hoc.
 
 These are provenance and distribution gates, not boot-test gates. An unsigned
 internal candidate can still be built and tested while they are being closed.
@@ -111,7 +112,7 @@ the source and build trees, launch it there, and confirm that it boots without t
 Test once with a fresh macOS user account as well; this catches dependencies on
 existing files under `~/Library/Application Support/AROS` or `~/AROS/Shared`.
 
-## 4. Sign, notarize, and build the final delivery image
+## 4. Sign and build the interim delivery image
 
 Store credentials once (Apple ID, team ID, and an app-specific password):
 
@@ -123,23 +124,23 @@ Only after John has tested and approved the exact unsigned image, run:
 
 ```sh
 export MACAROS_SIGN_IDENTITY='Developer ID Application: Name (TEAMID)'
-export MACAROS_NOTARY_PROFILE=D4Mac
 export MACAROS_SIGN_SCOPE=outer
-graft/sign-macaros-release.sh --notarize
+graft/sign-macaros-release.sh --package-test
 ```
 
 The current `outer` scope signs the `Macaros.app` bundle with Developer ID and
 hardened runtime but preserves the build-time ad-hoc signatures on the hosted
-AROS executables and bridge libraries. It then builds, signs, submits, and
-staples the delivery DMG. The app is not submitted separately in this scope.
-The result is `build/Macaros.dmg`.
+AROS executables and bridge libraries. It then builds and signs the delivery
+DMG. This scope cannot pass Apple notarization; the result is a signed but
+unnotarized `build/Macaros.dmg`.
 
 This is an interim arrangement. AROS switches tasks through Darwin signal
 contexts, and enabling hardened runtime on the hosted engine stops the system
 during `dos.library` bootstrap. `MACAROS_SIGN_SCOPE=full` signs every host Mach-O
 with hardened runtime and is retained for testing a future portable scheduler
-correction. Do not use that scope for a release until the exact signed image
-passes the complete boot and application test.
+correction. When that work is ready, set the `D4Mac` notary profile and use
+`--notarize`. Do not use the full scope for a release until the exact signed
+image passes the complete boot and application test.
 
 For an internal Developer-ID-signed candidate without notarization, use
 `--package-test`. Use `--sign-only` when only the app bundle is required.
@@ -152,8 +153,7 @@ desktop/application smoke. Finally verify the signature and record checksums:
 
 ```sh
 codesign --verify --strict --verbose=2 build/Macaros.app
-xcrun stapler validate build/Macaros.dmg
-spctl --assess --type open --context context:primary-signature --verbose=2 build/Macaros.dmg
+codesign --verify --verbose=2 build/Macaros.dmg
 shasum -a 256 build/Macaros.dmg
 ```
 

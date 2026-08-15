@@ -15,11 +15,17 @@ version is not planned; macOS deliberately remains the hardware-facing host.
 
 ## Download
 
-Download the current signed and notarized disk image from the
+Download the current Developer ID-signed disk image from the
 [Macaros releases page](https://github.com/jonx/Macaros/releases/latest). Macaros
 0.2.1 requires an Apple Silicon Mac running macOS 12 or newer. Before installing,
 run **Check Macaros Compatibility.command** from the disk image; it checks the
 machine, available space, bundled runtime, legacy 68k components, and signature.
+
+Macaros 0.2.1 is not Apple-notarized because its embedded hosted runtime uses
+the interim signing arrangement documented below. If Gatekeeper blocks the
+first launch, Control-click **Macaros.app**, choose **Open**, and confirm once;
+on macOS versions that require it, use **System Settings -> Privacy & Security
+-> Open Anyway**.
 
 Release changes are recorded in [CHANGELOG.md](CHANGELOG.md), with the complete
 scope and developer ABI requirements in [RELEASE-NOTES.md](RELEASE-NOTES.md).
@@ -55,7 +61,7 @@ from the public release; developers can restore it for a private build with
   hardened runtime. This preserves the current hosted scheduler behavior; it
   does not mean that the embedded host code has an independent Developer ID
   signature. A portable scheduler correction is required before the complete
-  host layer can use hardened runtime.
+  host layer can use hardened runtime and the complete image can be notarized.
 
 ## Repository boundary
 
