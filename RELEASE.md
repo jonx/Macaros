@@ -131,6 +131,13 @@ inside-out, signs the app with hardened runtime, submits and staples the app,
 creates a DMG without rebuilding the signed app, then signs, submits, and
 staples the DMG. The result is `build/Macaros.dmg`.
 
+The two hosted AROS executables are Developer-ID signed with the required
+entitlements but deliberately do not carry the `CS_RUNTIME` flag. AROS switches
+tasks through Darwin signal contexts, and hardening those executables stops the
+system during `dos.library` bootstrap. Host dylibs and the containing app remain
+hardened. Do not change this split without passing a boot test from the exact
+signed disk image.
+
 For an internal Developer-ID-signed candidate without notarization, use
 `--sign-only`, then create the image with
 `graft/make-aros-release.sh --dmg-only`.

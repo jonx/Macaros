@@ -42,8 +42,19 @@ for binary in \
     "$APP/Contents/Resources/AROS/boot/darwin/AROSBootstrap" \
     "$APP/Contents/Resources/AROS/boot/darwin/Macaros"; do
     [ -f "$binary" ] || { echo "missing hosted runtime: $binary" >&2; exit 1; }
-    codesign --force --options runtime --timestamp \
+    # Do not apply the hardened-runtime flag to the hosted AROS executables.
+    # Their scheduler switches AROS tasks through Darwin signal contexts; with
+    # CS_RUNTIME enabled the signed process dies during dos.library bootstrap.
+    # The executable remains Developer-ID signed with the narrow JIT/dyld
+    # entitlements below, while the containing app and all host dylibs retain
+    # hardened runtime. The exact signed-image boot gate below the signing step
+    # is mandatory for this reason.
+    codesign --force --timestamp \
         --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$binary"
+    if codesign -dvv "$binary" 2>&1 | grep -q 'flags=.*runtime'; then
+        echo "hosted runtime was accidentally hardened: $binary" >&2
+        exit 1
+    fi
 done
 
 echo ">> signing application bundle"

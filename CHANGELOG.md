@@ -16,6 +16,11 @@
 - **Release identity has one source.** The root `VERSION` file now supplies the
   bundle, disk image, manifest, and About window. About reports 0.2.1 build 5;
   release builds fail when their generated metadata disagrees.
+- **The notarized image now passes its own boot gate.** The hosted AROS
+  executables remain Developer-ID signed without applying a hardened-runtime
+  mode that is incompatible with their signal-context task switching. The app
+  and host libraries remain hardened, and publication requires a boot from the
+  exact signed disk image.
 
 ## 2026-08-15 - Macaros gets its own release home
 
