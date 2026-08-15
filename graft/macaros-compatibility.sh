@@ -104,6 +104,19 @@ if [ -d "$APP" ]; then
         fail "the bundled arm64 Macaros runtime is missing or invalid"
     fi
 
+    emu68k_engine="$APP/Contents/Frameworks/libemu68k.dylib"
+    emu68k_guest="$APP/Contents/Resources/AROS/Libs/emu68k.library"
+    if [ -f "$emu68k_engine" ] && /usr/bin/file "$emu68k_engine" 2>/dev/null | /usr/bin/grep -q 'arm64'; then
+        pass "legacy 68k host engine is present and arm64"
+    else
+        fail "legacy 68k support is incomplete: libemu68k.dylib is missing or invalid"
+    fi
+    if [ -f "$emu68k_guest" ]; then
+        pass "AROS emu68k.library is present"
+    else
+        fail "legacy 68k support is incomplete: AROS emu68k.library is missing"
+    fi
+
     app_kib=$(/usr/bin/du -sk "$APP" 2>/dev/null | awk '{print $1}')
     app_kib=${app_kib:-0}
     required_kib=$((app_kib + INSTALL_HEADROOM_KIB))

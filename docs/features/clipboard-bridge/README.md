@@ -122,16 +122,24 @@ is why it must sit in `~/lib` with `DYLD_FALLBACK_LIBRARY_PATH` pointing there.
 
 ## How it's wired into the boot
 
-`run-window.sh` / `aros-ctl` set up the AROS side so console copy/paste works:
+The packaged Macaros app sets up the AROS side so console copy/paste works:
 
 ```
-Assign CLIPS: SYS:clips           # clipboard.device backing dir (host-visible)
-Run >SYS:conclip.log ConClip      # console <-> clipboard.device (R-Amiga C/V)
+MakeDir RAM:Clipboards
+Assign CLIPS: RAM:Clipboards      # writable even when the app/DMG is read-only
+Run >NIL: ConClip                 # console <-> clipboard.device (R-Amiga C/V)
 ```
 
 `clipboard.device` + `iffparse.library` + `con-handler` + `ConClip` are added to
-the kickstart module set. With `CLIPS:` assigned to a host folder, a clip is also
-a readable file at `<AROS>/clips/0` — handy for verification.
+the kickstart module set. The release must not assign `CLIPS:` under `SYS:`: the
+embedded system volume is sealed and a delivery image is mounted read-only.
+Clipboard data is transient, so the RAM-backed directory is the appropriate
+default and also avoids retaining copied text between sessions.
+
+The developer launchers (`run-window.sh` and `aros-ctl`) may instead use the
+writable `SYS:clips` directory. That leaves clipboard unit 0 visible on the host
+as `<AROS>/clips/0`, which is useful for automated inspection; it is not the
+packaged release configuration.
 
 ## Hardening Notes
 
@@ -163,6 +171,8 @@ The bridge is intentionally conservative:
   not replayed.
 - The control harness can exercise this path without opening the Settings panel:
   `graft/aros-ctl clipboard off` / `graft/aros-ctl clipboard on`.
+- The release audit rejects a package whose startup assigns `CLIPS:` to the
+  sealed system volume and requires the writable `RAM:Clipboards` assignment.
 - `graft/clipboard-smoke` now verifies the Mac→AROS path and the runtime toggle:
   it deploys current artifacts, explicitly enables sharing so local user defaults
   cannot skew the test, proves a token crosses while enabled, a token does not

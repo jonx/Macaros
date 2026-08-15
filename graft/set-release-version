@@ -1,0 +1,39 @@
+#!/bin/sh
+# Update the one release-identity file consumed by both Macaros app builders.
+set -eu
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+VERSION_FILE="$ROOT/VERSION"
+
+usage() {
+    echo "usage: $0 <version> <build-number>" >&2
+    echo "example: $0 0.2.2 1" >&2
+    exit 2
+}
+
+[ "$#" = 2 ] || usage
+new_version="$1"
+new_build="$2"
+
+case "$new_version" in
+    ''|*[!0-9.]*) echo "invalid version: $new_version" >&2; exit 2 ;;
+esac
+case "$new_version" in
+    .*|*.|*..*) echo "invalid version: $new_version" >&2; exit 2 ;;
+esac
+case "$new_build" in
+    ''|*[!0-9]*) echo "invalid build number: $new_build" >&2; exit 2 ;;
+esac
+
+tmp="$VERSION_FILE.tmp.$$"
+trap 'rm -f "$tmp"' EXIT INT TERM
+{
+    echo '# Single source of truth for Macaros release identity.'
+    printf 'MACAROS_VERSION=%s\n' "$new_version"
+    printf 'MACAROS_BUILD_NUMBER=%s\n' "$new_build"
+} > "$tmp"
+mv "$tmp" "$VERSION_FILE"
+trap - EXIT INT TERM
+
+echo "Macaros release version is now $new_version (build $new_build)"

@@ -1,6 +1,6 @@
 # Implementation spec — Macaros compatibility reporting
 
-> Status: **specified, not built** · Target: hosted AROS on macOS, with the 68k
+> Status: **slice 1 partially built; reporter UI remains** · Target: hosted AROS on macOS, with the 68k
 > execution service as the first producer · Drafted 2026-08-05 · Companion surfaces:
 > [host app shell](../host-app-shell/README.md),
 > [transparent 68k execution](../68k-transparent-exec/README.md), and

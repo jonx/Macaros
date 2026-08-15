@@ -1673,7 +1673,26 @@ uint32_t emu68k_ctx_task(struct emu68k_run *r);
 int emu68k_trace_tasks(void)
 {
     static int on = -1;
-    if (on < 0) on = emu68k_host_getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
+    static unsigned long count, limit;
+    static int truncated;
+    if (on < 0) {
+        const char *value;
+        char *end = NULL;
+        unsigned long parsed;
+        on = emu68k_host_getenv("EMU68K_TRACE_TASKS") ? 1 : 0;
+        value = emu68k_host_getenv("EMU68K_TRACE_TASKS_MAX");
+        parsed = value && *value ? strtoul(value, &end, 10) : 10000ul;
+        limit = (end && *end == '\0' && parsed) ? parsed : 10000ul;
+        if (limit > 100000ul) limit = 100000ul;
+    }
+    if (!on) return 0;
+    if (count++ < limit) return 1;
+    if (!truncated) {
+        fprintf(stderr, "[68k/task] trace truncated after %lu events "
+                        "(EMU68K_TRACE_TASKS_MAX)\n", limit);
+        truncated = 1;
+    }
+    on = 0;
     return on;
 }
 

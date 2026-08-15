@@ -72,6 +72,34 @@
  * native FP block run; tell the compiler not to reorder across the fenv calls. */
 #pragma STDC FENV_ACCESS ON
 
+/* Per-block tracing is a sharp diagnostic tool: an earlier launcher mistake
+ * enabled it for normal runs and produced a many-gigabyte log. Keep it opt-in,
+ * but make even an explicitly enabled trace finite. The configurable value is
+ * clamped so a typo cannot restore an unbounded stream. */
+static int j5g_trace_allow(void)
+{
+    static int initialized;
+    static unsigned long count, limit;
+    static int truncated;
+
+    if (!getenv("J5G_TRACE")) return 0;
+    if (!initialized) {
+        const char *value = getenv("J5G_TRACE_MAX");
+        char *end = NULL;
+        unsigned long parsed = value && *value ? strtoul(value, &end, 10) : 10000ul;
+        limit = (end && *end == '\0' && parsed) ? parsed : 10000ul;
+        if (limit > 100000ul) limit = 100000ul;
+        initialized = 1;
+    }
+    if (count++ < limit) return 1;
+    if (!truncated) {
+        fprintf(stderr, "[blk] trace truncated after %lu blocks (J5G_TRACE_MAX)\n",
+                limit);
+        truncated = 1;
+    }
+    return 0;
+}
+
 /* [J5n] The DIAGNOSTICS funnel hook. EVERY fault path in this dispatcher routes through
  * here when a diag config is registered (j5d_set_diag); NULL (the whole existing corpus)
  * is the zero-overhead fast path. The macro snapshots the per-run instruction coordinate
@@ -2602,7 +2630,7 @@ static int j5d_run_inner(j5d_sandbox *sb, uint32_t entry_pc, uint32_t a6_libbase
         if (!b) return 1;                            /* errbuf set                  */
 
         st->pc = pc;
-        if (getenv("J5G_TRACE"))      /* opt-in per-block PC trace (debug aid, off by default) */
+        if (j5g_trace_allow())         /* opt-in and bounded; see helper above */
             fprintf(stderr, "[blk] pc=%08x end=%08x\n", pc, b->end_pc);
 
         /* Keep the signal net's PC snapshot current even on the normal chained path. The

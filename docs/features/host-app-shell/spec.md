@@ -96,6 +96,9 @@ gating decision; everything below assumes it is resolved.
   `LSMinimumSystemVersion`. The dylib's install name becomes
   `@rpath/cocoametal.dylib` (or `@loader_path/../Frameworks/…`), retiring the
   `DYLD_FALLBACK_LIBRARY_PATH` hack (`run-window.sh:99`).
+- **Version source.** `VERSION` at repository root supplies both bundle version
+  fields. About obtains the version/build from the generated bundle identity at
+  runtime; a hardcoded product version in host-shell source is a packaging bug.
 - **Codesign preserved.** Keep the ad-hoc + hardened-runtime signature
   (`run-window.sh:93–95`) and entitlements — including `allow-jit` (the J1 / 68k-JIT
   path) and whatever the hostlib `dlopen` needs. Sign the dylib and the bundle; verify the
@@ -126,7 +129,7 @@ Use the label **"Settings…"** (Ventura+), not "Preferences…".
 | **View** | Enter Full Screen (⌃⌘F) · Scaling ▸ · Filter ▸ · Scanlines (toggle) · Retina/HiDPI · Show/Hide Toolbar | `CM_OPT_FULLSCREEN`/`SCALE_MODE`/`FILTER`/`EFFECT` (`cocoametal.h:116–122`) |
 | **Machine** | Reset (⌃⌘R) · Power ▸ (Request Power Down · Force Shut Down · Force Quit) · ── · Capture Input (⌃⌘I) · Volumes ▸ (eject/reveal) · Share Clipboard (✓) · Send Key ▸ | `CM_OPT_POWER`; capture grab; `cm_volume_*`; `CM_OPT_CLIPBOARD_SHARE`; synthesized rawkeys |
 | **Window** | Minimize (⌘M) · Zoom · Bring All to Front | standard |
-| **Help** | AROS Help · AROS Website · Report an Issue | URLs |
+| **Help** | Report a Compatibility Problem… · Show Reports · ── · AROS Website · Open Macaros Issue Tracker | local reports; URLs |
 
 `[PUB-UTM]`: the **Machine** menu and its graded **Power ▸** submenu mirror UTM's
 "Virtual Machine"/"Power" shape (Apache-2.0,

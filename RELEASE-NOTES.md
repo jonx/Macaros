@@ -1,4 +1,18 @@
-# Macaros 0.2 release notes
+# Macaros 0.2.1 release notes
+
+This release corrects the 0.2.0 delivery image by bundling the host-side
+`libemu68k.dylib` required by `emu68k.library`. The package audit and compatibility
+checker now reject an image missing either half of legacy support. Macaros also keeps
+bounded local compatibility diagnostics and exposes them through the Help menu; it
+does not upload them.
+
+The packaged desktop now backs `CLIPS:` with `RAM:Clipboards`. This makes the
+AROS clipboard writable when Macaros is launched directly from its read-only
+delivery image, so the Edit menu and Command-C/Command-V clipboard bridge work
+without configuration or files left over from a developer installation.
+
+The About window now reads version 0.2.1 and build 5 from the same release
+identity used to generate the app bundle, disk image, and build manifest.
 
 ## What this release is
 

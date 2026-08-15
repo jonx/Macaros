@@ -681,6 +681,8 @@ run)
     artifact_line "Wanderer" "$AROS/System/Wanderer/Wanderer"
     rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
     mkdir -p "$ROOT/run/darwin-aarch64"
+    AROS_RUN_DIR="$ROOT/run/darwin-aarch64"; export AROS_RUN_DIR
+    [ -f "$HERE/report-env.sh" ] && . "$HERE/report-env.sh"
     # Do not export absent optional switches as empty strings. The bridge's
     # boolean diagnostics intentionally use getenv(name), so NAME="" still
     # means enabled; exporting every switch here used to turn full call tracing
@@ -691,17 +693,19 @@ run)
         "DYLD_FALLBACK_LIBRARY_PATH=$HOME/lib"
         "AROS_HOST_VOLUME=$AROS_HOST_VOLUME"
         "AROS_SETTINGS_SCHEMA=$HOME/lib/settings.json"
-        "AROS_RUN_DIR=$ROOT/run/darwin-aarch64"
+        "AROS_RUN_DIR=$AROS_RUN_DIR"
+        "AROS_REPORT_DIR=$AROS_REPORT_DIR"
     )
     for name in \
         AROS_CM_WATCHDOG_SECS \
         EMU68K_LIBS_PATH EMU68K_COMMAND_PATH \
         EMU68K_BRIDGE_TRACE EMU68K_BRIDGE_TRACE_LEVEL \
         EMU68K_BRIDGE_TRACE_MAX_BYTES EMU68K_BRIDGE_TREE \
-        EMU68K_TRACE_CALLS EMU68K_TRACE_CALLS_MAX EMU68K_TRACE_OSCALL EMU68K_TRACE_TASKS \
+        EMU68K_TRACE_CALLS EMU68K_TRACE_CALLS_MAX EMU68K_TRACE_OSCALL \
+        EMU68K_TRACE_TASKS EMU68K_TRACE_TASKS_MAX \
         EMU68K_DEBUG_EXEC EMU68K_TRACE_FAULT EMU68K_JIT_DIAG EMU68K_MAX_SECONDS \
         EMU68K_GUESTSIDE_LIBS EMU68K_DEAD_CHIPS EMU68K_SCAN_OVERRIDE \
-        JIT68K_CRASH_DIR JIT68K_WATCH_GUEST JIT68K_WATCH_VALUE J5G_TRACE
+        JIT68K_CRASH_DIR JIT68K_WATCH_GUEST JIT68K_WATCH_VALUE J5G_TRACE J5G_TRACE_MAX
     do
         if [ -n "${!name:-}" ]; then
             run_env+=("$name=${!name}")

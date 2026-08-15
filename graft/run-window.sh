@@ -408,18 +408,18 @@ cp -f "$BOOTD/AROSBootstrap" "$BOOTD/Macaros"
 
 echo ">> A 'Macaros' window will open — click it for keyboard focus, then type."
 mkdir -p "$ROOT/run/darwin-aarch64"   # File > screenshot/Record Movie land here
+AROS_RUN_DIR="$ROOT/run/darwin-aarch64"; export AROS_RUN_DIR
+[ -f "$HERE/report-env.sh" ] && . "$HERE/report-env.sh"
 cd "$BOOTD"
 if [ -n "${AROS_CM_CONTROL:-}" ]; then
     exec env AROS_DARWIN_THREADED=1 AROS_CM_CONTROL="$AROS_CM_CONTROL" \
         DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
-        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
         ./Macaros -c "$BOOTD/AROSBootstrap.conf" ${AROS_KERNEL_ARGS:-}
 else
     exec env AROS_DARWIN_THREADED=1 DYLD_FALLBACK_LIBRARY_PATH="$HOME/lib" \
         AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
         AROS_SETTINGS_SCHEMA="$HOME/lib/settings.json" \
-        AROS_RUN_DIR="$ROOT/run/darwin-aarch64" \
         ./Macaros -c "$BOOTD/AROSBootstrap.conf" ${AROS_KERNEL_ARGS:-}
 fi

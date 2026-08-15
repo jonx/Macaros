@@ -33,14 +33,19 @@ DYLIB="${AROS_CTL_DYLIB:-$ROOT/build/cocoametal.dylib}"
 PASTEBOARD="${AROS_CTL_PASTEBOARD_DYLIB:-$ROOT/build/libpasteboard.dylib}"
 COREAUDIO="${AROS_CTL_COREAUDIO_DYLIB:-$ROOT/build/libcoreaudio.dylib}"
 BSDSOCK="${AROS_CTL_BSDSOCK_DYLIB:-$ROOT/build/libbsdsockhost.dylib}"
+EMU68K="${AROS_CTL_EMU68K_DYLIB:-$ROOT/build/libemu68k.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
 ICON="${AROS_CTL_ICON:-$ROOT/hosted/cocoametal/Macaros.icns}"
 APP="${AROS_APP:-$ROOT/build/Macaros.app}"
 COMPAT="$HERE/macaros-compatibility.sh"
 RELEASE_README="$HERE/release-README.md"
 NOTICES="$ROOT/notices"
-VERSION="${MACAROS_VERSION:-0.2.0}"
-BUILD_NUMBER="${MACAROS_BUILD_NUMBER:-2}"
+REPORT_ENV="$HERE/report-env.sh"
+VERSION_FILE="${MACAROS_VERSION_FILE:-$ROOT/VERSION}"
+[ -r "$VERSION_FILE" ] || { echo "missing release version file: $VERSION_FILE" >&2; exit 1; }
+. "$VERSION_FILE"
+VERSION="${MACAROS_VERSION:-}"
+BUILD_NUMBER="${MACAROS_BUILD_NUMBER:-}"
 INCLUDE_MOONSTONE="${MACAROS_INCLUDE_MOONSTONE:-0}"
 AROS_SOURCE_TREE="${MACAROS_AROS_SOURCE:-$ROOT/../aros-upstream}"
 ZED_SOURCE_TREE="${MACAROS_ZED_SOURCE:-$ROOT/../zed-aros}"
@@ -101,6 +106,17 @@ AROSROOT="$APP/Resources/AROS"
 BOOTD="$AROSROOT/boot/darwin"
 STATE="${AROS_STATE_DIR:-$HOME/Library/Application Support/AROS}"
 mkdir -p "$STATE"
+AROS_RUN_DIR="$STATE"; export AROS_RUN_DIR
+[ -f "$APP/Resources/report-env.sh" ] && . "$APP/Resources/report-env.sh"
+MACAROS_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist" 2>/dev/null || true)"
+MACAROS_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist" 2>/dev/null || true)"
+export MACAROS_VERSION MACAROS_BUILD_NUMBER
+
+# The desktop remains usable without the optional legacy engine, but do not let
+# a damaged installation make 68k programs fail without an explanation.
+if [ ! -f "$APP/Frameworks/libemu68k.dylib" ]; then
+    /usr/bin/osascript -e "display alert \"Legacy 68k support is unavailable\" message \"The Macaros 68k engine is missing. Reinstall Macaros from the release disk image. Native AROS programs are unaffected.\" as warning" >/dev/null 2>&1 || true
+fi
 
 # Bundle-relative conf: expand @AROSROOT@ from the read-only template into the
 # writable state dir (never write inside the .app — it would break the seal).
@@ -130,7 +146,6 @@ exec env AROS_DARWIN_THREADED=1 \
     DYLD_FALLBACK_LIBRARY_PATH="$APP/Frameworks" \
     AROS_SETTINGS_SCHEMA="$APP/Resources/settings.json" \
     AROS_HOST_VOLUME="$AROS_HOST_VOLUME" \
-    AROS_RUN_DIR="$STATE" \
     ./Macaros -c "$STATE/AROSBootstrap.conf"'
 
 # Desktop Startup-Sequence — the exact set graft/run-window.sh writes for
@@ -149,7 +164,7 @@ If NOT EXISTS "RAM:ENV"
     Assign "ENV:" "RAM:ENV"
 EndIf
 Assign "T:" "RAM:T"
-Assign "CLIPS:" "SYS:clips"
+Assign "CLIPS:" "RAM:Clipboards"
 If EXISTS "C:SetClock"
     SetClock LOAD
 EndIf
@@ -284,7 +299,8 @@ write_build_manifest() {
             "$APP/Contents/Frameworks/cocoametal.dylib" \
             "$APP/Contents/Frameworks/libpasteboard.dylib" \
             "$APP/Contents/Frameworks/libcoreaudio.dylib" \
-            "$APP/Contents/Frameworks/libbsdsockhost.dylib"; do
+            "$APP/Contents/Frameworks/libbsdsockhost.dylib" \
+            "$APP/Contents/Frameworks/libemu68k.dylib"; do
             [ -f "$artifact" ] || continue
             artifact_rel=${artifact#"$APP/"}
             artifact_hash=$(shasum -a 256 "$artifact" | awk '{print $1}')
@@ -394,14 +410,19 @@ if [ "${1:-}" = "--check" ]; then
         ck 0 "no crash snapshots or host crash reports embedded"
     fi
     [ -f "$A/Resources/AROS/S/Startup-Sequence" ];      ck $? "desktop Startup-Sequence baked"
+    grep -q '^Assign "CLIPS:" "RAM:Clipboards"$' "$A/Resources/AROS/S/Startup-Sequence" 2>/dev/null; ck $? "clipboard uses writable RAM:Clipboards"
+    ! grep -q '^Assign "CLIPS:" "SYS:clips"$' "$A/Resources/AROS/S/Startup-Sequence" 2>/dev/null; ck $? "clipboard does not target the sealed system volume"
     [ -f "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl" ]; ck $? "conf template present"
     # THE self-containment invariant: no path in the template escapes the bundle.
     if grep -qE '/(Users|private|tmp|Volumes)/' "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl" 2>/dev/null; then
         echo "    FAIL: conf template still has host-absolute paths:"; grep -nE '/(Users|private|tmp|Volumes)/' "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl" | head; fail=1
     else ck 0 "conf template is bundle-relative (@AROSROOT@ only)"; fi
-    for m in cocoametal libpasteboard libcoreaudio libbsdsockhost; do
+    for m in cocoametal libpasteboard libcoreaudio libbsdsockhost libemu68k; do
         [ -f "$A/Frameworks/$m.dylib" ]; ck $? "Frameworks/$m.dylib"
     done
+    [ -f "$A/Resources/report-env.sh" ];                  ck $? "bounded report environment helper"
+    grep -q 'report-env.sh' "$A/MacOS/Macaros" 2>/dev/null; ck $? "launcher configures local Reports folder"
+    grep -q 'export MACAROS_VERSION MACAROS_BUILD_NUMBER' "$A/MacOS/Macaros" 2>/dev/null; ck $? "launcher passes bundle identity to About"
     [ -x "$A/MacOS/Macaros" ];                          ck $? "launcher executable"
     [ -f "$A/Resources/Documentation/README.md" ];      ck $? "release README embedded"
     [ -f "$A/Resources/Documentation/RELEASE-NOTES.md" ]; ck $? "release notes embedded"
@@ -413,6 +434,8 @@ if [ "${1:-}" = "--check" ]; then
     [ -f "$A/Resources/Documentation/BUILD-MANIFEST.txt" ]; ck $? "build manifest embedded"
     grep -q '@AROSROOT@' "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl"; ck $? "template uses @AROSROOT@ placeholder"
     plutil -lint "$A/Info.plist" >/dev/null 2>&1;       ck $? "Info.plist valid"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$A/Info.plist" 2>/dev/null)" = "$VERSION" ]; ck $? "bundle version matches VERSION"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$A/Info.plist" 2>/dev/null)" = "$BUILD_NUMBER" ]; ck $? "bundle build number matches VERSION"
     [ "$fail" = 0 ] && { echo "[REL] PASS"; exit 0; } || { echo "[REL] FAIL"; exit 1; }
 fi
 
@@ -429,10 +452,12 @@ BOOTD="$(find_bootd)"
 [ -n "$BOOTD" ] && [ -x "$BOOTD/AROSBootstrap" ] || { echo "make-aros-release.sh: no AROSBootstrap (set AROS_CTL_BOOTD)" >&2; exit 1; }
 SRC="$(cd "$BOOTD/../.." && pwd)"   # .../darwin-aarch64/AROS
 [ -f "$DYLIB" ] || { echo "missing $DYLIB (make cocoametal-dylib, or set AROS_CTL_DYLIB)" >&2; exit 1; }
+[ -f "$EMU68K" ] || { echo "missing $EMU68K (make emu68k-dylib, or set AROS_CTL_EMU68K_DYLIB)" >&2; exit 1; }
 [ -x "$COMPAT" ] || { echo "missing executable compatibility checker: $COMPAT" >&2; exit 1; }
 [ -f "$RELEASE_README" ] || { echo "missing release README: $RELEASE_README" >&2; exit 1; }
 [ -f "$ROOT/RELEASE-NOTES.md" ] || { echo "missing release notes: $ROOT/RELEASE-NOTES.md" >&2; exit 1; }
 [ -d "$NOTICES" ] || { echo "missing third-party notices directory: $NOTICES" >&2; exit 1; }
+[ -f "$REPORT_ENV" ] || { echo "missing report environment helper: $REPORT_ENV" >&2; exit 1; }
 
 # require the prepared desktop payloads — this script does NOT re-stage them
 for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer \
@@ -538,9 +563,11 @@ cp "$DYLIB" "$APP/Contents/Frameworks/cocoametal.dylib"
 [ -f "$PASTEBOARD" ] && cp "$PASTEBOARD" "$APP/Contents/Frameworks/libpasteboard.dylib"
 [ -f "$COREAUDIO" ]  && cp "$COREAUDIO"  "$APP/Contents/Frameworks/libcoreaudio.dylib"
 [ -f "$BSDSOCK" ]    && cp "$BSDSOCK"    "$APP/Contents/Frameworks/libbsdsockhost.dylib"
+cp "$EMU68K" "$APP/Contents/Frameworks/libemu68k.dylib"
 cp "$SCHEMA" "$APP/Contents/Resources/settings.json"
 [ -f "$ICON" ] && cp "$ICON" "$APP/Contents/Resources/Macaros.icns"
 [ -f "$HERE/aros-host-conf.sh" ] && cp "$HERE/aros-host-conf.sh" "$APP/Contents/Resources/aros-host-conf.sh"
+cp "$REPORT_ENV" "$APP/Contents/Resources/report-env.sh"
 mkdir -p "$APP/Contents/Resources/Documentation"
 cp "$RELEASE_README" "$APP/Contents/Resources/Documentation/README.md"
 cp "$ROOT/RELEASE-NOTES.md" "$APP/Contents/Resources/Documentation/RELEASE-NOTES.md"

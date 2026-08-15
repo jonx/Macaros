@@ -40,7 +40,7 @@ desktop boot so all required payloads are staged:
 
 ```sh
 graft/build-darwin-aarch64.sh
-make cocoametal-dylib pasteboard-dylib coreaudio-dylib bsdsock-dylib
+make cocoametal-dylib pasteboard-dylib coreaudio-dylib bsdsock-dylib emu68k-dylib
 graft/aros-ctl deploy
 graft/deploy-check
 AROS_CTL_STARTUP_MODE=desktop graft/run-window.sh
@@ -77,20 +77,23 @@ MACAROS_INCLUDE_MOONSTONE=1 MOONSTONE_SRC=/path/to/assets \
 Before distributing such a private variant, separately confirm permission to
 redistribute its data, graphics, and soundtrack and add its notices.
 
-## 3. Build an unsigned candidate
+## 3. Set the release version and build an unsigned candidate
 
-Version and build number are explicit inputs:
+`VERSION` is the single source of truth for the app bundle, About window, disk
+image name, and build manifest. Update it with:
 
 ```sh
-MACAROS_VERSION=0.2.0 MACAROS_BUILD_NUMBER=2 \
-  graft/make-aros-release.sh
+graft/set-release-version 0.2.2 1
+graft/make-aros-release.sh
 graft/make-aros-release.sh --check
 ```
+
+Increase the build number when rebuilding the same public version. Do not edit
+the version string in the app source or packaging scripts.
 
 For a public candidate, make dirty or missing source checkouts fatal:
 
 ```sh
-MACAROS_VERSION=0.2.0 MACAROS_BUILD_NUMBER=2 \
 MACAROS_REQUIRE_CLEAN_SOURCES=1 graft/make-aros-release.sh
 ```
 
@@ -99,7 +102,9 @@ or dirty state, repository URLs, and SHA-256 hashes of the principal binaries.
 This records provenance; it does not by itself prove that a staged binary was
 built from the named revision, so retain the component build logs as well.
 
-The result is `build/Macaros.app`. The `--dmg` form also creates the unsigned
+The release audit requires both `AROS/Libs/emu68k.library` and its host-side
+`Frameworks/libemu68k.dylib`; a package with only one half fails the build. The result
+is `build/Macaros.app`. The `--dmg` form also creates the unsigned
 `build/Macaros.dmg` delivery image. Copy the candidate to a directory outside
 the source and build trees, launch it there, and confirm that it boots without those trees.
 Test once with a fresh macOS user account as well; this catches dependencies on

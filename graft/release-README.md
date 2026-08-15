@@ -47,6 +47,18 @@ Keep documents and settings in `MacRW:`. The AROS system volume inside the app
 is read-only so updates and code signing remain safe. Macaros keeps its other
 per-user state in `~/Library/Application Support/AROS`.
 
+## Clipboard
+
+Plain-text clipboard sharing is enabled by default. Copy text in a Mac app,
+focus the Macaros window, and choose **Edit -> Paste** or press **Command-V**.
+To copy from an AROS Shell, select text and choose **Edit -> Copy** or press
+**Command-C**, then paste it into a Mac app normally. Macaros maps those actions
+to the Amiga clipboard keys expected by AROS; no setup is required.
+
+Compatibility diagnostics are stored locally in the `Reports` folder there. Use
+**Help -> Show Reports** to inspect them or **Help -> Report a Compatibility Problem...**
+for instructions. Nothing is uploaded automatically, and session traces are bounded.
+
 ## Current limits
 
 - Zed does not yet include a language server or Git command integration.

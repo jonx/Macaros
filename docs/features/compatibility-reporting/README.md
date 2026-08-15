@@ -1,8 +1,10 @@
 # Compatibility reporting
 
-**Status: specified, not built.** This feature turns failures and visible compatibility
-problems into reviewable local report packages, then lets the user explicitly choose
-whether to save, share, or submit them.
+**Status: local collection and menu access built; review/export/submission UI remains.**
+The first implementation keeps bounded compatibility evidence in one private local
+folder and exposes it through the Macaros Help menu. The later stages described below
+turn those files into reviewable packages and let the user explicitly choose whether
+to save, share, or submit them.
 
 The reporting UI belongs to **Macaros**, not to an AROS application. Macaros can still
 capture the framebuffer, open a consent sheet, and save a report when a 68k program has
@@ -28,9 +30,24 @@ technical reports locally, but every submission requires a review sheet and an e
 **Send** action. Screenshots, program binaries, and guest-memory snapshots have separate
 consent controls.
 
-## Where diagnostics are today
+## What works today
 
-Until this feature is implemented, the relevant development surfaces are fragmented:
+Packaged and development launchers now set `AROS_REPORT_DIR` and keep structured 68k
+diagnostics under its `session/` directory. Each session trace is capped at 4 MiB and at
+most 20 generated session traces are retained. JIT crash bundles use the same private
+report root. Raw call tracing remains opt-in and has a fixed 10,000-call ceiling.
+The opt-in block and task debug streams are also capped and cannot be configured above
+100,000 records.
+
+The Macaros **Help** menu provides:
+
+- **Report a Compatibility Problem...**, which explains that reports remain local and
+  offers the report folder or the Macaros issue tracker;
+- **Show Reports**, which reveals the local folder in Finder; and
+- **Open Macaros Issue Tracker**, kept separate from the compatibility workflow.
+
+Nothing is sent automatically. The full review, redaction, export, and submission UI in
+the specification is not built yet. Existing development surfaces that remain useful:
 
 - `graft/aros-ctl log` reads the hosted-session log, normally
   `/tmp/aros-window.log`.
@@ -40,12 +57,12 @@ Until this feature is implemented, the relevant development surfaces are fragmen
   directory.
 - Standalone JIT faults write a `.tar.gz` crash bundle and print its path; see
   [run68k crash bundles](../../../hosted/jit68k/run68k.md#crash-bundles).
-- Structured bridge traces are opt-in today through `EMU68K_BRIDGE_TRACE` and
-  `EMU68K_BRIDGE_TRACE_LEVEL`.
+- Standalone engine runs can opt into structured bridge traces through
+  `EMU68K_BRIDGE_TRACE` and `EMU68K_BRIDGE_TRACE_LEVEL`; Macaros launchers configure
+  the bounded local trace automatically.
 
-The implemented feature will consolidate these under a single `Reports` directory and
-surface it through **Help -> Show Reports** and **Help -> Report a Compatibility
-Problem...**.
+The packaged folder is `~/Library/Application Support/AROS/Reports`; development
+launchers use `run/darwin-aarch64/Reports`.
 
 ## What to send
 

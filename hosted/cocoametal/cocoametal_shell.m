@@ -83,6 +83,22 @@ static NSTextField *cmsh_about_label(NSString *s, CGFloat sz, NSColor *col, NSFo
 
 static NSWindow *gAboutWin = nil;
 
+static NSString *cmsh_release_value(const char *environmentName, NSString *bundleKey) {
+    const char *value = getenv(environmentName);
+    if (value && value[0]) return [NSString stringWithUTF8String:value];
+    id bundled = [[NSBundle mainBundle] objectForInfoDictionaryKey:bundleKey];
+    return [bundled isKindOfClass:[NSString class]] && [bundled length] ? bundled : nil;
+}
+
+static NSString *cmsh_version_label(void) {
+    NSString *version = cmsh_release_value("MACAROS_VERSION", @"CFBundleShortVersionString");
+    NSString *build = cmsh_release_value("MACAROS_BUILD_NUMBER", @"CFBundleVersion");
+    if (!version) version = @"development";
+    if (build)
+        return [NSString stringWithFormat:@"Version %@ (build %@)  ·  hosted darwin-aarch64", version, build];
+    return [NSString stringWithFormat:@"Version %@  ·  hosted darwin-aarch64", version];
+}
+
 static void cmsh_show_about(void) {
     if (gAboutWin) { [gAboutWin makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; return; }
 
@@ -110,7 +126,7 @@ static void cmsh_show_about(void) {
 
     NSTextField *name   = cmsh_about_label(@"Macaros", 28, [NSColor labelColor], NSFontWeightBold);
     NSTextField *tag    = cmsh_about_label(@"a macaron: AROS on a Mac", 13, violet, NSFontWeightMedium);
-    NSTextField *ver    = cmsh_about_label(@"Version 0.1  ·  hosted darwin-aarch64", 11, [NSColor secondaryLabelColor], NSFontWeightRegular);
+    NSTextField *ver    = cmsh_about_label(cmsh_version_label(), 11, [NSColor secondaryLabelColor], NSFontWeightRegular);
 
     NSBox *sep = [[NSBox alloc] init];
     sep.boxType = NSBoxSeparator;
@@ -171,6 +187,29 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
     return [dir stringByAppendingPathComponent:
             [NSString stringWithFormat:@"%@-%@-%@.%@", cm__app_name(), prefix,
                                        [f stringFromDate:[NSDate date]], ext]];
+}
+
+/* Compatibility evidence is deliberately local. The packaged launcher supplies
+ * AROS_REPORT_DIR; the fallbacks keep bare development launches useful. */
+static NSString *cmsh_report_dir(void) {
+    const char *configured = getenv("AROS_REPORT_DIR");
+    if (configured && *configured) return @(configured);
+    const char *run = getenv("AROS_RUN_DIR");
+    if (run && *run) return [@(run) stringByAppendingPathComponent:@"Reports"];
+    return [NSHomeDirectory() stringByAppendingPathComponent:
+            @"Library/Application Support/AROS/Reports"];
+}
+
+static BOOL cmsh_prepare_report_dir(NSString **pathOut) {
+    NSString *path = cmsh_report_dir();
+    NSError *error = nil;
+    BOOL ok = [[NSFileManager defaultManager] createDirectoryAtPath:path
+                                       withIntermediateDirectories:YES
+                                                        attributes:@{NSFilePosixPermissions:@0700}
+                                                             error:&error];
+    if (!ok) NSLog(@"[shell] cannot create Reports directory %@: %@", path, error);
+    if (pathOut) *pathOut = path;
+    return ok;
 }
 
 @implementation CMShellController
@@ -298,9 +337,35 @@ static NSString *cmsh_capture_path(NSString *prefix, NSString *ext) {
 - (void)websiteAction:(id)s {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://aros.org"]];
 }
-- (void)reportAction:(id)s {
+- (void)issueTrackerAction:(id)s {
     [[NSWorkspace sharedWorkspace]
-        openURL:[NSURL URLWithString:@"https://github.com/aros-development-team/AROS/issues"]];
+        openURL:[NSURL URLWithString:@"https://github.com/jonx/Macaros/issues"]];
+}
+- (void)showReportsAction:(id)s {
+    NSString *path = nil;
+    if (cmsh_prepare_report_dir(&path))
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+    else {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"Macaros could not open the Reports folder";
+        alert.informativeText = @"Check that ~/Library/Application Support/AROS is writable.";
+        [alert runModal];
+    }
+}
+- (void)reportAction:(id)s {
+    NSString *path = nil;
+    cmsh_prepare_report_dir(&path);
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Report a Compatibility Problem";
+    alert.informativeText = @"Macaros keeps bounded diagnostic files locally. Nothing is uploaded automatically. Review the Reports folder before attaching relevant files to a Macaros issue.";
+    [alert addButtonWithTitle:@"Show Reports"];
+    [alert addButtonWithTitle:@"Open Macaros Issue Tracker"];
+    [alert addButtonWithTitle:@"Cancel"];
+    NSModalResponse response = [alert runModal];
+    if (response == NSAlertFirstButtonReturn && path)
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+    else if (response == NSAlertSecondButtonReturn)
+        [self issueTrackerAction:s];
 }
 @end
 
@@ -419,8 +484,11 @@ static void cmsh_build_menu(CMShellController *c) {
     [NSApp setWindowsMenu:window];
 
     NSMenu *help = cmsh_submenu(bar, @"Help");
+    cmsh_add(help, @"Report a Compatibility Problem…", @selector(reportAction:), c, @"", 0);
+    cmsh_add(help, @"Show Reports", @selector(showReportsAction:), c, @"", 0);
+    [help addItem:[NSMenuItem separatorItem]];
     cmsh_add(help, @"AROS Website", @selector(websiteAction:), c, @"", 0);
-    cmsh_add(help, @"Report an Issue", @selector(reportAction:), c, @"", 0);
+    cmsh_add(help, @"Open Macaros Issue Tracker", @selector(issueTrackerAction:), c, @"", 0);
     [NSApp setHelpMenu:help];
 
     [NSApp setMainMenu:bar];

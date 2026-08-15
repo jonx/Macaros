@@ -241,6 +241,10 @@ is what spike [G1] settles before anything else is built.**
   and the entitlements (the J1 `allow-jit` path for the 68k JIT, and the
   hostlib `dlopen`). `run-window.sh` becomes a thin "build the bundle, then `open` it"
   wrapper (keeping a `--terminal` mode for the unattended serial channel).
+- **Release identity.** The root `VERSION` file is the only build input for the
+  product version and build number. Both app builders generate `Info.plist` from
+  it, the launcher exports that generated identity, and the custom About window
+  reads it at runtime. The About source must never contain a release number.
 - **Custom icon — the macaron.** A purple (cassis) macaron on a violet squircle,
   delivered two ways so every launch path shows it: `hosted/cocoametal/Macaros.icns` in
   `Contents/Resources` (referenced by `CFBundleIconFile`) for the `.app`, and the same art
@@ -291,7 +295,7 @@ don't apply (HIG).
                     Filter ▸ (Nearest · Linear) · Scanlines (toggle) ·
                     Retina / HiDPI (toggle) · Show/Hide Toolbar
  Window             Minimize (⌘M) · Zoom · Bring All to Front
- Help               AROS Help · AROS Website · Report an Issue
+ Help               Report a Compatibility Problem… · Show Reports · AROS Website · Open Macaros Issue Tracker
 ```
 
 Grounding: **Machine** = UTM's "Virtual Machine" menu + the Power submenu verbatim shape

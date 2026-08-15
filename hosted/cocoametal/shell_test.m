@@ -55,6 +55,16 @@ static int saw_setting(CMEvent *ev, int n, int code, int x) {
             (x < 0 || ev[i].x == x)) return 1;
     return 0;
 }
+static int saw_amiga_chord(CMEvent *ev, int n, int key) {
+    for (int i = 0; i + 3 < n; i++) {
+        if (ev[i].type     == CM_EV_KEY && ev[i].code     == 54 && ev[i].pressed     == 1 && ev[i].mods     == CM_MOD_CMD &&
+            ev[i + 1].type == CM_EV_KEY && ev[i + 1].code == key && ev[i + 1].pressed == 1 && ev[i + 1].mods == CM_MOD_CMD &&
+            ev[i + 2].type == CM_EV_KEY && ev[i + 2].code == key && ev[i + 2].pressed == 0 && ev[i + 2].mods == CM_MOD_CMD &&
+            ev[i + 3].type == CM_EV_KEY && ev[i + 3].code == 54 && ev[i + 3].pressed == 0 && ev[i + 3].mods == 0)
+            return 1;
+    }
+    return 0;
+}
 static int dir_has_png(NSString *dir) {
     NSArray<NSString *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
     for (NSString *f in files)
@@ -84,6 +94,8 @@ int main(int argc, const char **argv) {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        setenv("MACAROS_VERSION", "9.8.7", 1);
+        setenv("MACAROS_BUILD_NUMBER", "321", 1);
 
         CMPixelDesc fmt = { .bytesPerPixel = 4,
             .blueShift = 0, .greenShift = 8, .redShift = 16, .alphaShift = 24,
@@ -102,17 +114,39 @@ int main(int argc, const char **argv) {
         NSWindow *dispWin = [NSApp windows].firstObject;
         check(dispWin && [dispWin.title isEqual:@"Macaros"],
               "display window is titled by the host app, not the cm_open argument");
-        NSMenu *file = sub(bar, @"File"), *view = sub(bar, @"View"), *machine = sub(bar, @"Machine");
+        NSMenu *file = sub(bar, @"File"), *edit = sub(bar, @"Edit"),
+               *view = sub(bar, @"View"), *machine = sub(bar, @"Machine");
+        NSMenu *help = sub(bar, @"Help");
         NSMenuItem *shot = item(file, @"Take Screenshot");
         check(shot && [shot.keyEquivalent isEqual:@"3"], "File ▸ Take Screenshot = ⇧⌘3");
         check(sub(view, @"Scaling") && item(view, @"Scanlines"), "View ▸ Scaling + Scanlines present");
         check(item(machine, @"Reset") &&
               item(item(machine, @"Power").submenu, @"Force Quit"),
               "Machine ▸ Reset + Power ▸ Force Quit present");
+        check(item(help, @"Report a Compatibility Problem…") &&
+              item(help, @"Show Reports") &&
+              item(help, @"Open Macaros Issue Tracker"),
+              "Help exposes local reports and the Macaros issue tracker separately");
+        NSMenuItem *about = item(bar.itemArray.firstObject.submenu, @"About Macaros");
+        [NSApp sendAction:about.action to:about.target from:about];
+        NSWindow *aboutWin = nil;
+        for (NSWindow *w in [NSApp windows])
+            if ([w.title isEqual:@"About Macaros"]) { aboutWin = w; break; }
+        check(aboutWin && view_has_label(aboutWin.contentView, @"Version 9.8.7 (build 321)"),
+              "About reads release version and build number at runtime");
         CMEvent ev[16]; int n = cm_pump_(cx, ev, 16);
         long cs = -1; cm_get_(cx, CM_OPT_CLIPBOARD_SHARE, &cs);
         check(cs == 1 && !saw_setting(ev, n, CM_OPT_CLIPBOARD_SHARE, -1),
               "Share Clipboard default is ON without an early AROS-facing event");
+
+        /* Edit ▸ Paste must inject the guest's complete Right-Amiga+V chord.
+         * A menu flash without these four transitions is a silent no-op. */
+        NSMenuItem *paste = item(edit, @"Paste");
+        check(paste != nil, "Edit ▸ Paste present");
+        [NSApp sendAction:paste.action to:paste.target from:paste];
+        n = cm_pump_(cx, ev, 16);
+        check(saw_amiga_chord(ev, n, 9),
+              "Edit ▸ Paste injects Right-Amiga+V down/up into AROS");
 
         /* (1b) File ▸ Take Screenshot uses the real menu action and AROS_RUN_DIR. */
         NSString *shotDir = [NSTemporaryDirectory() stringByAppendingPathComponent:

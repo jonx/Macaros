@@ -13,6 +13,17 @@ of AROS itself, compiled for AArch64 and integrated with the Mac.
 It is also a test bed for our own AROS concepts. A bare-metal Apple Silicon
 version is not planned; macOS deliberately remains the hardware-facing host.
 
+## Download
+
+Download the current signed and notarized disk image from the
+[Macaros releases page](https://github.com/jonx/Macaros/releases/latest). Macaros
+0.2.1 requires an Apple Silicon Mac running macOS 12 or newer. Before installing,
+run **Check Macaros Compatibility.command** from the disk image; it checks the
+machine, available space, bundled runtime, legacy 68k components, and signature.
+
+Release changes are recorded in [CHANGELOG.md](CHANGELOG.md), with the complete
+scope and developer ABI requirements in [RELEASE-NOTES.md](RELEASE-NOTES.md).
+
 ## What it can do
 
 - Boot the full Wanderer desktop in a resizable native window.
@@ -112,9 +123,13 @@ The release process is documented in [RELEASE.md](RELEASE.md). To create an
 unsigned internal candidate:
 
 ```sh
-MACAROS_VERSION=0.2.0 MACAROS_BUILD_NUMBER=2 \
-  graft/make-aros-release.sh --dmg
+graft/set-release-version 0.2.2 1
+graft/make-aros-release.sh --dmg
 ```
+
+`VERSION` at the repository root is the single release identity used by the
+bundle, About window, disk image, and build manifest. Increase the build number
+when rebuilding the same public version.
 
 The disk image includes a short README and a double-clickable compatibility
 checker. Signing, notarization, and publishing are separate steps and happen

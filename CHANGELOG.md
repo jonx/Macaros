@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1 - 2026-08-15
+
+- **Legacy 68k support is complete in the delivery image.** The 0.2.0 package
+  contained `emu68k.library` but omitted its arm64 host engine. The image now
+  includes and audits both halves. A missing engine produces a useful message
+  instead of making every 68k program look invalid; the classic 68k LhA command
+  has been exercised through archive creation, listing, and extraction.
+- **Clipboard sharing works when launched from the disk image.** `CLIPS:` now
+  uses a writable RAM-backed directory instead of the sealed AROS system volume.
+  Edit -> Paste and Command-V work without developer files or configuration.
+- **Compatibility reports stay local and bounded.** The Help menu opens the
+  report folder and issue tracker, while session, task, call, and JIT traces have
+  fixed retention and size ceilings so diagnostics cannot consume the disk.
+- **Release identity has one source.** The root `VERSION` file now supplies the
+  bundle, disk image, manifest, and About window. About reports 0.2.1 build 5;
+  release builds fail when their generated metadata disagrees.
+
 ## 2026-08-15 - Macaros gets its own release home
 
 - **The product now lives in `jonx/Macaros`.** The graft, documentation,

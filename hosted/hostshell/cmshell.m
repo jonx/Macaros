@@ -160,7 +160,7 @@ static NSImage *cmsh_make_icon(void) {
 }
 - (void)reportAction:(id)sender {
     [[NSWorkspace sharedWorkspace]
-        openURL:[NSURL URLWithString:@"https://github.com/aros-development-team/AROS/issues"]];
+        openURL:[NSURL URLWithString:@"https://github.com/jonx/Macaros/issues"]];
 }
 
 /* a dropped folder → mount as a volume (R-VOLUME drag-and-drop seam) */
@@ -295,7 +295,7 @@ static void cmsh_build_menu(CMShellController *c) {
     /* --- Help --- */
     NSMenu *help = cmsh_submenu(bar, @"Help");
     cmsh_add(help, @"AROS Website", @selector(websiteAction:), c, @"", 0);
-    cmsh_add(help, @"Report an Issue", @selector(reportAction:), c, @"", 0);
+    cmsh_add(help, @"Open Macaros Issue Tracker", @selector(reportAction:), c, @"", 0);
     [NSApp setHelpMenu:help];
 
     [NSApp setMainMenu:bar];

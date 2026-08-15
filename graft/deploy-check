@@ -99,6 +99,7 @@ if [ -d "$AROS_APP" ]; then
     compare "app pasteboard" "$ROOT/build/libpasteboard.dylib" "$APPC/Frameworks/libpasteboard.dylib" || true
     compare "app coreaudio" "$ROOT/build/libcoreaudio.dylib" "$APPC/Frameworks/libcoreaudio.dylib" || true
     compare "app bsdsock" "$ROOT/build/libbsdsockhost.dylib" "$APPC/Frameworks/libbsdsockhost.dylib" || true
+    compare "app emu68k" "$ROOT/build/libemu68k.dylib" "$APPC/Frameworks/libemu68k.dylib" || true
     compare "app schema fw" "$ROOT/hosted/cocoametal/settings.json" "$APPC/Frameworks/settings.json" || true
     compare "app schema res" "$ROOT/hosted/cocoametal/settings.json" "$APPC/Resources/settings.json" || true
     compare "app host conf" "$HERE/aros-host-conf.sh" "$APPC/MacOS/aros-host-conf.sh" || true
