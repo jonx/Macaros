@@ -11,7 +11,8 @@
     — so the layout must match: x[0..28], fp(x29), lr(x30), sp, pc, cpsr.
 
     This shape is also the AROS-canonical equivalent of the bare-metal Phase-1 trap
-    frame in boot/kern.h (x[31] + elr + spsr): pc carries ELR_EL1 when trapped and
+    frame in docs/hosted/initial-platform-bringup/qemu-virt/boot/kern.h
+    (x[31] + elr + spsr): pc carries ELR_EL1 when trapped and
     cpsr carries SPSR_EL1.
 */
 

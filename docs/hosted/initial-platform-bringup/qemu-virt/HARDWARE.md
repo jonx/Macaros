@@ -1,5 +1,9 @@
 # HARDWARE.md — grounded reference for the QEMU `virt` target
 
+> This reference belongs to the historical, runnable platform-bring-up scaffold.
+> It describes the pinned QEMU target used by that scaffold, not Apple hardware
+> or the current hosted Macaros runtime.
+
 **Ground your work, don't dream it.** Every value here is from an authoritative
 source, not from priors. Primary source is the device tree the *actual* QEMU
 binary emits for the *exact* flags we boot with — regenerate it any time with

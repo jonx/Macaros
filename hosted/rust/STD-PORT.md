@@ -162,7 +162,7 @@ run `cargo clean` first — cargo caches the std build and won't re-run `build.r
 - **`x18` is not reserved in the Rust target yet.** macOS zeroes `x18` across signal
   delivery, and AROS-hosted preempts via signals, so any long-lived value the
   compiler parks in `x18` can be clobbered (this is exactly the ffmpeg h264 bug; see
-  [hosted/x18probe](../x18probe/README.md) and `NOTES.md`). ffmpeg fixed
+  [hosted/x18probe](../x18probe/README.md) and `docs/history/DECISION-LOG.md`). ffmpeg fixed
   it with `-ffixed-x18`. The Rust target should do the equivalent — add the LLVM
   **`reserve-x18`** target feature to `aarch64-unknown-aros.json`
   (`"features": "+v8a,+neon,+reserve-x18"`, verify the exact spelling) and rebuild.
@@ -236,7 +236,7 @@ The flag was already in `config/make.cfg.in` but the deployed modules predated i
 the fix was to **force-recompile the Rust-runtime path** (`posixc`, `stdc`, `exec`,
 `kernel`, `timer`, `dos`, `emul-handler`) — each dropped to ~2 x18 uses (compiler-rt
 soft-float residual). After that, `Instant`/`SystemTime` and `std::thread` both work,
-verified live. See the build doc + NOTES.md for the x18 finding. (Separately, the
+verified live. See the build doc + docs/history/DECISION-LOG.md for the x18 finding. (Separately, the
 hosted RTC still isn't host-synced, so REALTIME reads ~1978 — UPSTREAM-NOTES #36 — but
 it no longer faults.)
 

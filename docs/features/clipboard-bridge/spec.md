@@ -386,7 +386,7 @@ approval dialog. The pasteboard itself is the oracle — ground-truth text cross
 boundary and is asserted byte-equal on the far side, read back **through the host**
 (`host_pb_get_text` / `pbpaste`), never off a screen. Each spike prints one unique
 `[C#] …` line the harness greps for, with the expected payload (the `[H1]…[H12]`
-discipline, NOTES.md).
+discipline, docs/history/DECISION-LOG.md).
 
 - **[C0] Wiring + scheme decision.** Host-only: `host_pb_set_text("rt<C0>")` then
   `host_pb_get_text`; print `[C0] PB rt=<...> cc=<changeCount>`. **PASS** = round-trips
@@ -420,7 +420,7 @@ discipline, NOTES.md).
   (datatypes/ILBM — **UNVERIFIED** target format). Deferred; interface fixed above.
 
 Clean exit / watchdog: PASS exits fast via the existing semihosting `SYS_EXIT` path; a
-hung sync loop is reaped by the harness watchdog (NOTES.md). No spike waits on a human.
+hung sync loop is reaped by the harness watchdog (docs/history/DECISION-LOG.md). No spike waits on a human.
 
 ## Build / integration
 
@@ -470,7 +470,7 @@ hung sync loop is reaped by the harness watchdog (NOTES.md). No spike waits on a
 `[OURS]` `hosted/device.c` (H11 device dispatcher, scheme-A base), `hosted/msgport.c`
 (H10 ports), `hosted/signal.c` (H9 Wait/Signal), `hosted/abishim.{S,c}` (H3 host-call
 boundary), `hosted/exec.c` (H4 boot-anchor/main-thread model), `hosted/display.c` (H7
-host-shim peer + ImageIO), NOTES.md (marker discipline). ·
+host-shim peer + ImageIO), docs/history/DECISION-LOG.md (marker discipline). ·
 `[DERIVED]` We independently determined that a host-backed virtual clipboard device
 needs IFF-FTXT host sync plus the truncation-hardening / size-cap edge cases
 (R-IFFHARDEN) — restated from the IFF spec + defensive-bounds reasoning; that the

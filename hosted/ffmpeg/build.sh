@@ -1,7 +1,7 @@
 #!/bin/bash
 # build.sh — [FF0] stage: cross-build libavutil for darwin-aarch64 AROS and install
 # it into a local sysroot the C: smoke links against. Native software port: ARM code
-# built *for* AROS by the crosstools, not a host bridge. See NOTES.md "[FF0]" and
+# built *for* AROS by the crosstools, not a host bridge. See docs/history/DECISION-LOG.md "[FF0]" and
 # docs/features/ffmpeg-native/README.md.
 #
 # Pinned ffmpeg (FF0 is version-insensitive; matches the reference headers). Source

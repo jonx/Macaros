@@ -187,7 +187,7 @@ and the proper, as-developed path). It loads just as fast (stripped). **Caveats:
   so the OS itself has the same latent bug. The host cannot rescue it: macOS wipes
   `x18` before any AROS code runs, and the darwin `SAVEREGS` faithfully copies that
   zero. So the fix is `-ffixed-x18` across the aarch64-AROS ABI, not host-side
-  preservation. See [NOTES.md](../../../NOTES.md).
+  preservation. See [docs/history/DECISION-LOG.md](../../../docs/history/DECISION-LOG.md).
 - Raw-ES demuxers (`h264`/`hevc`) are deliberately **off**: their fuzzy probe
   mis-claims other raw streams (a `.m4v` mpeg4 ES) and then scans the whole file
   via the custom AVIO and stalls. Container h264 still comes through mov/matroska.

@@ -12,12 +12,14 @@ working on the project after the repository split.
 - **[jonx/AROS](https://github.com/jonx/AROS/tree/aarch64-darwin-graft):** the
   working AROS source fork and the AArch64/Darwin operating-system changes.
 - **[zed-aros](https://github.com/jonx/zed-aros):** the AROS port of Zed.
-- **[Feraille](https://github.com/jonx/Feraille):** Ferail application work.
+- **[Ferail](https://github.com/jonx/Ferail):** Ferail application work.
 - **AROS-AArch64:** archived. It is a redirect and must not receive new work.
 
-The old QEMU `virt` experiment is retained in `boot/`; its notes are under
-`docs/hosted/qemu-virt/`. It remains useful architecture evidence, but it is not
-a plan for booting directly on Apple hardware.
+The old QEMU `virt` experiment, its source, and the Phase 1/Phase 2 notes are
+retained in the
+[initial platform bring-up archive](../hosted/initial-platform-bringup/README.md).
+It remains useful architecture evidence for new platform ports, but it is not a
+plan for booting directly on Apple hardware.
 
 ## Non-negotiable technical rules
 
@@ -45,7 +47,7 @@ suite.
    identifiable.
 2. Run the focused test while developing, then `make hosted-test` for integration
    changes. Release work also requires the desktop, 68k, exFAT, host-volume, and
-   clipboard smoke tests described in `RELEASE.md`.
+   clipboard smoke tests described in [`RELEASE.md`](../../RELEASE.md).
 3. The normal public image contains Zed and Ferail. Moonstone is excluded unless
    a private build explicitly sets `MACAROS_INCLUDE_MOONSTONE=1` and supplies its
    binary and assets.
@@ -61,5 +63,7 @@ the AROS upstream project without first discussing the exact action with John
 and receiving explicit approval.** Work against John's fork or a local branch by
 default. Upstreaming is always a separate decision.
 
-Start with `README.md`, `GETTING-STARTED.md`, and `RELEASE.md`; detailed designs
-and verification evidence live under `docs/features/`.
+Start with [`README.md`](../../README.md),
+[`GETTING-STARTED.md`](../../GETTING-STARTED.md), and
+[`RELEASE.md`](../../RELEASE.md); detailed designs and verification evidence
+live under [`docs/features/`](../features/README.md).

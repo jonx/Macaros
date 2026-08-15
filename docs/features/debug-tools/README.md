@@ -705,7 +705,7 @@ run.
 
 This is the template for any "does the host preserve X across a signal?" question:
 reproduce the exact host mechanism (here, a timer signal mid-compute) in a tiny
-standalone program, no AROS boot required. Result and the fix: [NOTES.md](../../../NOTES.md)
+standalone program, no AROS boot required. Result and the fix: [docs/history/DECISION-LOG.md](../../../docs/history/DECISION-LOG.md)
 and the [ffmpeg-native](../ffmpeg-native/README.md) `x18` section.
 
 ### Picking one

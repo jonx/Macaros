@@ -401,7 +401,7 @@ programmatically:
   capture flag toggles.
 
 Every spike prints one greppable marker and exits clean — the `[M*]`/`[H*]`/`[D*]`
-discipline (NOTES.md). The window/menus *do* appear on screen during a run (that's the
+discipline (docs/history/DECISION-LOG.md). The window/menus *do* appear on screen during a run (that's the
 feature); the *verdict* never depends on a human seeing them.
 
 ## Plan — spikes in the loop

@@ -12,7 +12,7 @@
  *      alive, and a fresh instance runs normally afterwards;
  *   D. two engine runs SEQUENTIALLY IN ONE PROCESS on separate instances (the exact
  *      sequence that crashed with the global single-run engine — see the [T0-P1]
- *      NOTES.md finding).
+ *      docs/history/DECISION-LOG.md finding).
  * Marker: [T0P3] PASS / FAIL. */
 
 #include "j4_hunk.h"
@@ -250,7 +250,7 @@ int main(void)
     prog_free(Q);
 
     /* ================= D. two sequential runs, one process, two instances ========= */
-    /* The exact sequence that crashed the global single-run engine ([T0-P1] NOTES.md
+    /* The exact sequence that crashed the global single-run engine ([T0-P1] docs/history/DECISION-LOG.md
      * finding: stale chained blocks in freed JIT memory). No forks here, on purpose. */
     prog *D1 = prog_new(mbuf, mlen);
     CHECK(prog_run(D1, err, sizeof err) == 0, err);

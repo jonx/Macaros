@@ -127,7 +127,7 @@ addresses in a 32-bit arena; LoadSeg returns a chain of small native
 `[BPTR next][descriptor]` nodes the existing DOS machinery handles unchanged
 (fast-BPTR identity for `GetSegListInfo`, blind-walk `UnLoadSeg`); the guest
 arena teardown hangs off seg-registry removal, so identity and lifetime share
-one mechanism. Rationale and rejected alternatives: the NOTES.md decision
+one mechanism. Rationale and rejected alternatives: the docs/history/DECISION-LOG.md decision
 entry of the same date.
 
 ### 3. The routing ladder - `AUTO | JIT | FULL`

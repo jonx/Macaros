@@ -104,7 +104,7 @@ AROS side (aarch64, AROS crosstools)                Host side (Apple toolchain, 
 
 The boot push hit the wall: *"W^X refuses a one-shot RWX anon mmap even with JIT
 entitlements"* and *"executing code loaded into the pool (LoadSeg) needs the W^X-aware
-path later"* (`NOTES.md`) `[OURS]`. The JIT code cache is a **separate** region from the
+path later"* (`docs/history/DECISION-LOG.md`) `[OURS]`. The JIT code cache is a **separate** region from the
 RW AROS RAM pool, mapped and patched per Apple's MAP_JIT contract `[PUB]`:
 
 - **R-JIT-MAP.** `mmap(NULL, len, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0)`.
@@ -327,7 +327,7 @@ Restated from two independent facts, not from any reference:
   ranges (I/D-cache not coherent for self-modified code). The process needs
   `com.apple.security.cs.allow-jit`.
 - **`[OURS]` H4/H6 single-thread scheduler.** The hosted exec scheduler runs all AROS
-  tasks on a **single underlying host thread** (H6, `NOTES.md`; `hosted/kern.c`), modelling
+  tasks on a **single underlying host thread** (H6, `docs/history/DECISION-LOG.md`; `hosted/kern.c`), modelling
   the macOS main thread as the boot/anchor task (H4). There is no true host-thread
   parallelism among AROS tasks today.
 

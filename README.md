@@ -34,12 +34,16 @@ from the public release; developers can restore it for a private build with
 This repository owns the Macaros product and integration layer:
 
 ```
-boot/        standalone QEMU virt bring-up used to prove AArch64 fundamentals
 graft/       build, deployment, control, compatibility, and release tools
 harness/     unattended QEMU and hosted test harnesses
 hosted/      macOS host bridges, AROS-side integration experiments, and JIT
-docs/        feature designs, specifications, and project documentation
+docs/        current feature docs, project records, and the initial bring-up archive
 ```
+
+The original standalone QEMU kernel and Phase 1/Phase 2 notes now live under
+[`docs/hosted/initial-platform-bringup/`](docs/hosted/initial-platform-bringup/README.md).
+They are retained as a working reference for adding AROS support to another
+platform, not as the current Macaros implementation plan.
 
 The source projects remain separate so their histories and responsibilities do
 not become tangled:
@@ -49,14 +53,14 @@ not become tangled:
 - [jonx/AROS-AArch64](https://github.com/jonx/AROS-AArch64) is retained as a
   redirect to this repository so old links and history remain understandable.
 - [jonx/zed-aros](https://github.com/jonx/zed-aros) and
-  [jonx/Feraille](https://github.com/jonx/Feraille) develop the bundled apps.
+  [jonx/Ferail](https://github.com/jonx/Ferail) develop the bundled apps.
 
 Do not publish changes to the AROS upstream project without first discussing
 the exact change with John and receiving explicit approval. This rule is also
 recorded in [AGENTS.md](AGENTS.md) for future work in this checkout.
 
 For a concise document to give existing collaborators after the repository
-split, see [TEAM-HANDOFF.md](TEAM-HANDOFF.md).
+split, see [docs/project/COLLABORATOR-GUIDE.md](docs/project/COLLABORATOR-GUIDE.md).
 
 ## Requirements
 

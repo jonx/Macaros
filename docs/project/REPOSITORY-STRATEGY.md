@@ -17,8 +17,9 @@ The implementation boundaries are:
 
 The migration preserved the history of `graft/`, `docs/`, `harness/`, and
 `hosted/` by filtering those paths into Macaros before removing them from
-AROS-AArch64. Its remaining `boot/` experiment and project Markdown were then
-moved here as well. Future issues and changes should follow ownership: AROS
+AROS-AArch64. Its original QEMU experiment is retained under
+[`docs/hosted/initial-platform-bringup/`](../hosted/initial-platform-bringup/README.md).
+Future issues and changes should follow ownership: AROS
 source and architecture work goes to the AROS fork, application bugs go to their
 application repositories, and assembly experiments, host integration, installer,
 or release problems go to Macaros. AROS-AArch64 receives only its final redirect

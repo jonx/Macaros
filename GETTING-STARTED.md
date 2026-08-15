@@ -195,13 +195,13 @@ has several runnable copies of the same artifacts. Read
 
 | You want to… | Read |
 |---|---|
-| The big picture and why the project is shaped this way | [README.md](README.md) · [ROADMAP.md](ROADMAP.md) |
-| Architecture decisions and the bug log | [NOTES.md](NOTES.md) |
+| The big picture and current documentation map | [README.md](README.md) · [docs/README.md](docs/README.md) |
+| Architecture decisions and the bug log | [Decision log](docs/history/DECISION-LOG.md) |
 | Build details, traps, symptom→cause table | [docs/features/build/README.md](docs/features/build/README.md) |
 | Deploy/run and the "several copies" trap | [docs/features/deployment/README.md](docs/features/deployment/README.md) |
 | Drive/verify AROS headlessly | [docs/features/control-harness/README.md](docs/features/control-harness/README.md) |
 | The full host-feature set (built + planned) | [docs/features/README.md](docs/features/README.md) |
-| How the two repos relate + the patch snapshot | [GRAFT.md](GRAFT.md) · [graft/README.md](graft/README.md) |
+| How the two repos relate + the active graft tools | [docs/project/REPOSITORY-STRATEGY.md](docs/project/REPOSITORY-STRATEGY.md) · [graft/README.md](graft/README.md) |
+| How the original AArch64 and hosted ports were started | [docs/hosted/initial-platform-bringup/](docs/hosted/initial-platform-bringup/README.md) |
 
 Welcome aboard.
-</content>

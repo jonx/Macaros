@@ -36,7 +36,7 @@ zeroed it → SIGSEGV).
 
 ## Where the decision lives
 
-- [NOTES.md](../../NOTES.md) — the `x18` reservation decision and rationale.
+- [docs/history/DECISION-LOG.md](../../docs/history/DECISION-LOG.md) — the `x18` reservation decision and rationale.
 - [ffmpeg-native](../../docs/features/ffmpeg-native/README.md) — the h264 crash
   this explains and the `-ffixed-x18` fix.
 - [debug-tools](../../docs/features/debug-tools/README.md) — the probe as a

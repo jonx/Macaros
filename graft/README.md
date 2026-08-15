@@ -1,6 +1,7 @@
 # graft/ — the first concrete AArch64-darwin patch set for the AROS tree
 
-These are the **starter patches** that turn [GRAFT.md](../GRAFT.md)'s map into real
+These are the **starter patches** that turn the
+[initial graft map](../docs/hosted/initial-platform-bringup/GRAFT.md) into real
 code against `aros-upstream`. They are faithful translations of *proven* templates,
 not speculation:
 

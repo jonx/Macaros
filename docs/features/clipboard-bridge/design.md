@@ -395,7 +395,7 @@ This project (`.`):
   varargs); how AROS calls `host_pb_*`.
 - `hosted/exec.c` — scheduler + macOS main thread modelled as the boot-anchor
   task (the off-main-thread fallback).
-- `NOTES.md` — thesis, H1–H12 log, marker/unattended-loop discipline.
+- `docs/history/DECISION-LOG.md` — thesis, H1–H12 log, marker/unattended-loop discipline.
 
 New (to write): `hosted/pasteboard.m` — `host_pb_{get,set}_text`,
 `host_pb_change_count`, later `host_pb_{get,set}_png`.

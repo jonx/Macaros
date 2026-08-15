@@ -438,7 +438,7 @@ link map (overlay object linked, dummy not).
 - Host-call mechanism: `../aros-upstream/arch/all-hosted/hostlib/`
   (`HostLib_Open/GetInterface/Lock/Unlock`); bootstrap `dlopen/dlsym` in
   `../aros-upstream/arch/all-unix/bootstrap/`
-- This project's grounding: `NOTES.md` (H10 message ports, H11 device-on-a-file —
+- This project's grounding: `docs/history/DECISION-LOG.md` (H10 message ports, H11 device-on-a-file —
   the switched-task host-syscall pattern), `graft/WORKFLOW.md` (boot status, F1/F2),
   `hosted/device.c` (the IORequest→task→`pread/pwrite`→reply spike),
   upstream commit `a68e4c5c` (emul-handler builds on modern macOS).

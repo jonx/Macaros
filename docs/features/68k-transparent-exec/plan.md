@@ -48,7 +48,7 @@ are the only hard ones.
 
 T0 is no longer a decision list: each item is a working proof, because each
 one, wrong, forces a rework of the loader, engine API or marshaller in T1/T3.
-Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
+Decisions and outcomes recorded in [docs/history/DECISION-LOG.md](../../../docs/history/DECISION-LOG.md).
 
 - **`[T0-P1]` Guest address model + loader representation.** ✅ **PROVEN
   2026-08-01** (`make hosted-emu68k-t0p1`, `hosted/emu68k/t0p1_seglist.c`).
@@ -57,7 +57,7 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   `[BPTR next][descriptor]` chain (fast-BPTR identity for `GetSegListInfo`,
   blind-walk `UnLoadSeg` compatible); the guest arena teardown hangs off the
   seg-registry removal, so identity and lifetime share one mechanism. Full
-  rationale + alternatives: the NOTES.md entry of the same date. Exit bar
+  rationale + alternatives: the docs/history/DECISION-LOG.md entry of the same date. Exit bar
   met: two real hunk binaries (integer + hardware FP) loaded, relocated,
   identified (positive + negative), run byte-exact from the proxy chain
   alone, unloaded leak-free. Byproduct: first-hand confirmation that the
@@ -122,7 +122,7 @@ Decisions and outcomes recorded in [NOTES.md](../../../NOTES.md).
   `hosted/emu68k/`, engine stays in `hosted/jit68k/`; compat DB + prefs
   formats versioned from day one (`EMU1` header).
 
-Exit criteria: all four proofs PASS, decisions in NOTES.md, corpus green.
+Exit criteria: all four proofs PASS, decisions in docs/history/DECISION-LOG.md, corpus green.
 
 ## [T1] A 68k process inside AROS - "it runs from the shell" ✅ DONE 2026-08-01
 
@@ -279,7 +279,7 @@ does not claim falls through to the derived crossings, so a crossing that
 needs judgement is never silently replaced by one inferred from a signature.
 Still ahead here: printf-class varargs, the tier-2 structure types, callbacks.
 
-**The standing rule** (see NOTES.md, 2026-08-02): bridge to AROS's own
+**The standing rule** (see docs/history/DECISION-LOG.md, 2026-08-02): bridge to AROS's own
 implementation by default; implement in the guest ONLY when the result cannot
 cross the boundary (a guest base, guest-arena memory, a structure the program
 walks). MatchFirst therefore calls the native MatchFirst into a native

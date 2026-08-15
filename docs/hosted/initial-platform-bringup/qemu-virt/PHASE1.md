@@ -1,5 +1,10 @@
 # Phase 1 — AArch64 backend on QEMU `virt`
 
+> **Historical, runnable reference.** This milestone sequence proved the
+> AArch64 fundamentals before Macaros moved to hosted AROS. The accompanying
+> kernel is retained for developers bringing AROS to another architecture or
+> platform; it is not a Macaros runtime component.
+
 The genuine contribution: bring AROS's lowest layer up on 64-bit ARM, on a fully
 observable target, before any Apple Silicon work. Every milestone is gated by the
 autonomous loop — `make run MARKER='[Mx]'` must go green with **zero manual steps**.

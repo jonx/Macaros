@@ -463,7 +463,7 @@ This repo (`.`):
   unsafe; poll `timer.device`), `docs/features/bsdsocket-net/{design.md,spec.md}`
   (§R-DARWIN-WAKE — the same finding, proven live), `docs/features/host-volume/`
   (the "finish an existing all-unix overlay for darwin" precedent).
-- `NOTES.md` H3 (`hosted/abishim.S` host-call shim), H11 (`hosted/device.c` —
+- `docs/history/DECISION-LOG.md` H3 (`hosted/abishim.S` host-call shim), H11 (`hosted/device.c` —
   IORequest→device task→host syscall→reply, two-sided verify), H9/H10 (Wait/Signal,
   ports). `hosted/host.c`, `hosted/signal.c`, `hosted/msgport.c`.
 

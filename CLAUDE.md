@@ -30,7 +30,7 @@ already solve them; read the doc instead of rediscovering the trap.
 - **Per-subsystem design / spec / status** → [docs/features/README.md](docs/features/README.md)
   is the index (each folder has a README, then `design.md` / `spec.md` for depth).
   Start there for any feature, driver, or host-bridge task.
-- **Architecture decisions and rationale** → [NOTES.md](NOTES.md) (the decision log).
+- **Architecture decisions and rationale** → [decision log](docs/history/DECISION-LOG.md).
 - **Drive / verify the running AROS headlessly** → `aros-ctl`, the control
   harness ([docs/features/control-harness/README.md](docs/features/control-harness/README.md)).
 - **The independent-work / provenance rules** for any `spec.md` →

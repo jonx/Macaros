@@ -527,7 +527,7 @@ This repo (`.`):
   re-probe, the darwin "poll a `Delay()` tick, don't host-`Signal`" caveat).
 - Host shim precedents: `hosted/bsdsocket/` (host pump, `hostlib` wiring,
   `bsdsock_host.h`), `hosted/clipboard/` (NSPasteboard poll on a `Delay()` tick).
-- Grounding: `NOTES.md` (H3 `hosted/abishim.S` variadic ABI; H9/H10
+- Grounding: `docs/history/DECISION-LOG.md` (H3 `hosted/abishim.S` variadic ABI; H9/H10
   `hosted/signal.c`/`hosted/msgport.c` Wait/Signal + ports; `hostlib.resource`
   `HostLib_Open`/`GetPointer`), `docs/features/darwin-aarch64-port-inventory.md`
   (the gap map; MIDI joins audio/sockets as a host-backed subsystem).

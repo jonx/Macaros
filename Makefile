@@ -1,4 +1,9 @@
-# AROS AArch64 bring-up — agent loop entry points.
+# Macaros build and verification entry points.
+#
+# The `image`/`run`/`shot`/`dbg`/`test` targets preserve the original standalone
+# QEMU AArch64 bring-up as a platform-porting reference. Its source now lives in
+# docs/hosted/initial-platform-bringup/qemu-virt/boot. Current hosted Macaros
+# targets follow below.
 #
 #   make run                 build + boot + verify the default marker ([M1])
 #   make run MARKER='[M3]'   verify a specific serial marker
@@ -25,6 +30,7 @@ ASFLAGS := $(COMMON)
 CFLAGS  := $(COMMON) -O2 -mstrict-align -mgeneral-regs-only -fno-stack-protector
 
 ELF     := build/aros-aarch64.elf
+QEMU_BOOT := docs/hosted/initial-platform-bringup/qemu-virt/boot
 OBJS    := build/start.o build/kmain.o build/uart.o build/shell.o build/exc.o build/vectors.o build/mmu.o build/irq.o build/pmm.o build/task.o build/switch.o build/fb.o build/sched.o
 MARKER  ?= [M10]
 # Cumulative markers a healthy boot prints, in order. Extend as milestones land.
@@ -45,14 +51,14 @@ M68K_LIBS_PATH ?= $(HOME)/Source/references/aros-m68k-20260804/libs
 build:
 	@mkdir -p build
 
-build/%.o: boot/%.S | build
+build/%.o: $(QEMU_BOOT)/%.S | build
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-build/%.o: boot/%.c | build
+build/%.o: $(QEMU_BOOT)/%.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(ELF): $(OBJS) boot/linker.ld
-	$(LD) -T boot/linker.ld $(OBJS) -o $@
+$(ELF): $(OBJS) $(QEMU_BOOT)/linker.ld
+	$(LD) -T $(QEMU_BOOT)/linker.ld $(OBJS) -o $@
 
 image: $(ELF)
 	@echo ">> built $(ELF)"

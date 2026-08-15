@@ -483,7 +483,7 @@ AROS upstream (`../aros-upstream`):
   (`Host_HostLib_Open`/`GetPointer`), `arch/all-hosted/hostlib/`.
 
 This repo (`.`):
-- `NOTES.md` — H3 (Apple variadic ABI / `hosted/abishim.S`), H4/H6 (scheduler,
+- `docs/history/DECISION-LOG.md` — H3 (Apple variadic ABI / `hosted/abishim.S`), H4/H6 (scheduler,
   single-thread `Forbid` barrier), H7 (render-to-PNG unattended-verify stance),
   H9/H10 (Wait/Signal, message ports), H11 (`hosted/device.c` — IORequest → device
   task → real macOS syscall → reply).

@@ -164,7 +164,7 @@ int        cm_open_settings(CMContext *);
 
 `[PUB]` **AppKit rule:** `NSApplication`/`NSWindow`/`NSView`/`NSEvent` must be used on
 the **main thread**, with a running run loop. `[OURS]` AROS models the macOS main thread
-as the low-priority boot/anchor task (H4, NOTES.md). `[OURS]` the hosted scheduler runs
+as the low-priority boot/anchor task (H4, docs/history/DECISION-LOG.md). `[OURS]` the hosted scheduler runs
 on a **single underlying thread** (H6), so there is no true host-thread parallelism to
 coordinate — only run-loop servicing.
 

@@ -4,7 +4,7 @@
  * Proves the toolchain + C runtime carry a real library: the version string comes
  * from inside libavutil.a, and av_malloc/av_mallocz/av_free exercise ffmpeg's
  * allocator on this target. One PASS/FAIL line per check; returns 0 on full PASS,
- * 20 (FAILAT trips) otherwise. See docs/features/ffmpeg-native/README.md, NOTES.md.
+ * 20 (FAILAT trips) otherwise. See docs/features/ffmpeg-native/README.md, docs/history/DECISION-LOG.md.
  *
  * Output goes through dos PutStr, NOT printf: printf pulls stdcio.library, which is
  * not present in every AROS distribution (e.g. /tmp/arosbuild), and the smoke proves

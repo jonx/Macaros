@@ -121,7 +121,7 @@ stands on it.
 
 ## Related docs
 
-- [GRAFT.md](../GRAFT.md) — the map from AROS internals to the new target.
+- [Initial graft map](../docs/hosted/initial-platform-bringup/GRAFT.md) — the map from AROS internals to the new target.
 - [graft/README.md](README.md) — the starter patch set, with honest build status.
 - [graft/UPSTREAM-NOTES.md](UPSTREAM-NOTES.md) — build-system friction worth fixing
   upstream (the `-g` bloat, the dead ACPICA dep, fetch hangs, the bit-rotted darwin

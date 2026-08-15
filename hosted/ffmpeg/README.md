@@ -29,7 +29,7 @@ What is proven and reproducible:
 
 - **Toolchain trees are split.** SDK at `/tmp/arosbuild`, AROS-patched crosstools at
   `/tmp/aros-crosstools`. Discovery requires a COMPLETE SDK (stale `/private/tmp`
-  scratchpad copies get OS-GC'd half-empty). See NOTES.md `[[aros-build-tree-layout]]`.
+  scratchpad copies get OS-GC'd half-empty). See docs/history/DECISION-LOG.md `[[aros-build-tree-layout]]`.
 - **`/tmp/arosbuild` is missing `Libs/stdcio.library`** (has the static lib + headers,
   and posixc/stdc/dos/intuition runtime). FF0Smoke needs `StdCIOBase` via
   libavutil/posixc. Deploy `stdcio.library` into `Libs/` (the tree owner should build
@@ -38,7 +38,7 @@ What is proven and reproducible:
   `graft/ffmpeg-smoke`'s `bench-run` path cold-start-halts on `/tmp/arosbuild`; that
   harness needs updating to the `aros-ctl` method.
 
-## How it works — the toolchain recipe (verified live, see NOTES.md "[FF0]")
+## How it works — the toolchain recipe (verified live, see docs/history/DECISION-LOG.md "[FF0]")
 
 ffmpeg's `configure` is pointed at **`aros-cc.sh`**, which is the AROS-patched clang
 driver (`--target=aarch64-unknown-aros`) plus three AROS-specific flags. The driver

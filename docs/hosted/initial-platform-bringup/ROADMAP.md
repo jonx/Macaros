@@ -1,11 +1,18 @@
-# AROS-AArch64 — Roadmap
+# Initial AROS-AArch64 roadmap
+
+> **Historical document.** This records the sequence used to start the project.
+> It is retained as a reference for new architecture and hosted-platform ports;
+> it is not the current Macaros roadmap. See the
+> [feature index](../../features/README.md) and
+> [project backlog](../../project/BACKLOG.md) for current work.
 
 The big-picture arc, so the plan doesn't live only in a chat log. Phase 1 has its
 own detailed milestone checklist in the
-[QEMU bring-up notes](docs/hosted/qemu-virt/PHASE1.md);
+[QEMU bring-up notes](qemu-virt/PHASE1.md);
 this file is the map
 above it and the rationale for the ordering. Granular cross-cutting tasks (the
-"we'll get to it" backlog) live in [TODO.md](TODO.md).
+"we'll get to it" backlog) now lives in the
+[project backlog](../../project/BACKLOG.md).
 
 ## The one rule that shapes everything
 
@@ -33,7 +40,8 @@ entirely. Native-on-Apple-Silicon is explicitly a non-goal.
 The autonomous loop itself. LLVM cross-toolchain (clang + ld.lld + lldb) + QEMU,
 a `make run` that builds an AArch64 ELF, boots it headless on QEMU `virt`, and
 emits one uniform PASS/FAIL verdict. Observation channels validated on the Mac:
-serial markers, QEMU fault trace, lldb CPU-state. See [NOTES.md](NOTES.md).
+serial markers, QEMU fault trace, lldb CPU-state. See the
+[decision log](../../history/DECISION-LOG.md).
 
 ## Phase 1 — AArch64 backend on QEMU `virt`  ✅ (done)
 
@@ -41,8 +49,8 @@ Brought the lowest layer up on 64-bit ARM, on a fully observable target.
 Milestones **M1…M10**: serial → C runtime → exception vectors → MMU → timer IRQ →
 physical memory → context switch → shell → framebuffer → **preemptive
 multitasking**. All green in the loop (`make test`); detail in
-[QEMU bring-up notes](docs/hosted/qemu-virt/PHASE1.md),
-retrospective in [NOTES.md](NOTES.md). Standalone
+[QEMU bring-up notes](qemu-virt/PHASE1.md),
+retrospective in the [decision log](../../history/DECISION-LOG.md). Standalone
 deliverable: AROS's first *native* AArch64 bring-up.
 
 ## Phase 2 — Hosted on macOS  (in progress)
@@ -69,7 +77,8 @@ hosted-test`). Done so far:
   **no Apple-Silicon W^X / MAP_JIT wall**.
 
 **Remaining — the graft (the honest mountain):** stop spiking and integrate the
-real AROS tree. Grounded entry points are mapped in [GRAFT.md](GRAFT.md): AROS has
+real AROS tree. Grounded entry points are mapped in the
+[graft notes](GRAFT.md): AROS has
 a *darwin hosted* backend (`arch/all-darwin` + `arch/all-unix`) but it lacks
 AArch64 and is bit-rotted to ~2010 Xcode. The punch list — add the `aarch64` case
 to `configure`'s darwin flavour, write `arch/all-darwin/kernel/cpu_aarch64.h` (the
@@ -91,7 +100,7 @@ bit-rot as a private fork. The standalone deliverable even if Phase 2 stalls:
 `arch/aarch64-all` is header-only scaffolding for an unfinished *hosted-Linux*
 flavour — real atomics, an incomplete `ExceptionContext`, no kernel — so there's
 no native boot/vectors/MMU/context-switch to duplicate. We reuse and fix those
-headers at the graft. See NOTES.md.)
+headers at the graft. See docs/history/DECISION-LOG.md.)
 
 ---
 

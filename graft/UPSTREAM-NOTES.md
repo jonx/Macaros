@@ -422,7 +422,7 @@ did. New issues found (candidate patches / bug reports):
 > Not an AROS bug: `clock_gettime` itself works from a C command (rc=0, correct
 > `sizeof(timespec)`=16, `sizeof(long)`=8). The *Rust* path faulting on it is the x18
 > clobber in the not-yet-`-ffixed-x18` timer/posixc code (the x18 finding in
-> [NOTES.md](../NOTES.md); the OS-wide rebuild covers it).
+> [docs/history/DECISION-LOG.md](../docs/history/DECISION-LOG.md); the OS-wide rebuild covers it).
 
 37. **`bsdsocket.library` treats `FIONBIO`/non-blocking as a no-op, so socket
     non-blocking and timeouts aren't honoured.** `arch/all-unix/bsdsocket` keeps the

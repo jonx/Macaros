@@ -11,7 +11,7 @@
 //
 // Grounded against the assembly Apple clang emits for snprintf("%d %d %d",...):
 // the three ints are `str`'d to [sp], [sp+8], [sp+16] while x5..x7 sit unused
-// (see NOTES.md "H3 grounding"). A hosted AROS thus cannot just `bl _printf`
+// (see docs/history/DECISION-LOG.md "H3 grounding"). A hosted AROS thus cannot just `bl _printf`
 // with args in registers; it must marshal the variadic tail onto the stack. This
 // file is that marshaller, written by hand the way AROS's host bridge must.
 //

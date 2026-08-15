@@ -12,7 +12,7 @@ that un-gates Feraille's folder-size walker. Day-to-day status, launch
 contract, and feature-parity table live in the Feraille repo:
 `~/Source/Feraille/docs/features/aros-port.md` (the authoritative page);
 backend field notes in `~/Source/zed-aros/crates/gpui_aros/PORTING.md` +
-`HANDOFF.md`.
+the [July 2026 historical handoff](../../history/handoffs/HANDOFF-2026-07-06.md).
 
 Stage-1 probe (still useful as a smoke): `C:FerailleProbe` prints
 `FERAILLE-AROS: CORE PASS` (treemap layout + HTML export, homoglyph name

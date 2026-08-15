@@ -1,5 +1,11 @@
 # The Graft — from the Phase-2 spikes to the real AROS tree
 
+> **Historical document.** This was the initial integration map from the
+> standalone experiments into AROS. It is useful when approaching another AROS
+> platform port, but its status and branch references are not current Macaros
+> instructions. Start with the [build documentation](../../features/build/README.md)
+> for the maintained workflow.
+
 Phase 2's hosted spikes (H1–H8) de-risked the entire *host-facing* surface of a
 hosted AROS on Apple Silicon. This file is the bridge: exactly where each proven
 idea plugs into the real AROS source tree, grounded against
@@ -61,7 +67,7 @@ host kernel's `SAVEREGS`/`RESTOREREGS` (`cpu_arm.h:92`) `CopyMemQuick` straight
 between the macOS `mcontext.__ss` and `struct ExceptionContext`, *relying on
 identical layout*. So the fix must make `ExceptionContext` match Darwin's
 `_STRUCT_ARM_THREAD_STATE64` (`__x[29]`, `__fp`, `__lr`, `__sp`, `__pc`, `__cpsr`).
-*Prototype:* our Phase-1 trap frame (`boot/kern.h`: `x[31]` + `elr` + `spsr`) is
+*Prototype:* our Phase-1 trap frame (`qemu-virt/boot/kern.h`: `x[31]` + `elr` + `spsr`) is
 already the correct shape; H4's `struct Task` carries the full `_STRUCT_MCONTEXT64`.
 
 ### 4. Complete the `arch/aarch64-all` native CPU bits
@@ -70,7 +76,8 @@ already the correct shape; H4's `struct Task` carries the full `_STRUCT_MCONTEXT
 `arch/all-unix`/`arch/all-darwin`, so the AArch64-specific need is the context
 machinery.
 *Prototype:* **H4** reproduces the exact `core_Schedule`/`cpu_Switch`/`core_Switch`/
-`core_Dispatch` contract (grounded against `arch/arm-native/kernel/*`); our `boot/`
+`core_Dispatch` contract (grounded against `arch/arm-native/kernel/*`); our
+`qemu-virt/boot/`
 has the bare-metal version of the same primitives.
 
 ### 5. Crosstools / toolchain
@@ -179,7 +186,8 @@ in order:
    Wanderer desktop in a live Cocoa/Metal window (see the root README).
 
 Run it yourself: **`~/aros-darwin/run.sh`** (a self-contained signed bundle). The
-upstream-worthy friction along the way is logged in `graft/UPSTREAM-NOTES.md`
+upstream-worthy friction along the way is logged in
+`../../../graft/UPSTREAM-NOTES.md`
 (25 items).
 
 ## Honest assessment

@@ -9,7 +9,7 @@ Give the hosted AROS working TCP/IP *immediately* by mapping AROS's
 The Mac's kernel stack does the real work — routing, TCP state machine, DNS,
 the NIC — and AROS code reaches it through the standard `socket()/connect()/
 send()/recv()/WaitSelect()` LVO calls it already expects. This is the Phase-2
-thesis (NOTES.md "H11") applied to the network: *macOS owns the driver; AROS
+thesis (docs/history/DECISION-LOG.md "H11") applied to the network: *macOS owns the driver; AROS
 reaches it via standard exec calls.*
 
 The alternative — bring up AROS's own TCP/IP stack (AROSTCP) on an emulated NIC —
@@ -266,7 +266,7 @@ gap"), structured as a port of `arch/all-mingw32/bsdsocket/`:
 
 `Forbid()/Permit()` brackets the host call sequence where a descriptor's bookkeeping
 is mutated (as mingw32 does in `socket.c`), with the H6 caveat noted: on a single
-underlying thread a **compiler barrier** suffices (NOTES.md H6), not a CPU fence.
+underlying thread a **compiler barrier** suffices (docs/history/DECISION-LOG.md H6), not a CPU fence.
 
 ### The bridge (non-blocking sockets ↔ WaitSelect/signals; errno translation)
 
@@ -378,7 +378,7 @@ on localhost**, started by the harness itself:
 
 Localhost loopback needs no entitlement on macOS (unlike raw BPF/`utun`, which is
 exactly why we forward at the *socket* layer, not the NIC layer). Timeouts use the
-existing bash watchdog (NOTES.md "portable timeout") so a hung connect is reaped
+existing bash watchdog (docs/history/DECISION-LOG.md "portable timeout") so a hung connect is reaped
 into a FAIL, preserving the unattended guarantee.
 
 ## What proves "the internet works" in AROS — the test tools
@@ -443,7 +443,7 @@ bounded follow-on, not claimed here.
   output `fd_set`s and the in/out `*sigmask`, with no lost wakeups when a kqueue
   event and an exec `Signal` race, is the subtle part. Mitigation: the H9 lesson —
   `Wait` checks `tc_SigRecvd` *before* parking, so a Signal that races ahead is
-  still seen (NOTES.md H9); apply the same discipline to the pump's signal. The
+  still seen (docs/history/DECISION-LOG.md H9); apply the same discipline to the pump's signal. The
   mingw32 port never solved this (its `WaitSelect` is a stub), so there's no
   *in-tree* reference impl to copy — [N2] is genuinely new for AROS, and the
   race-free wake is derived independently from H9 + the AmiTCP autodoc.
@@ -498,7 +498,7 @@ This project:
 - `hosted/signal.c` (H9), `hosted/msgport.c` (H10) — Wait/Signal + ports, the wait-then-signal substrate for the kqueue bridge.
 - `hosted/abishim.S`, `hosted/host.c` (H3) — the AAPCS64↔Apple-arm64 host-call shim every socket syscall crosses.
 - `hosted/exec.c` (H4/H6) — the single-underlying-thread + SIGALRM scheduler model the pump thread must not perturb; the `Forbid` compiler-barrier rule.
-- `NOTES.md` — H1–H12 spike log and the "ground it, don't dream it" discipline.
+- `docs/history/DECISION-LOG.md` — H1–H12 spike log and the "ground it, don't dream it" discipline.
 - `graft/WORKFLOW.md` — current boot state (3-module kickstart, cold-start halt); where this library slots after `dos.library`.
 
 Independent work: no third-party implementation source — emulator, agent, driver,

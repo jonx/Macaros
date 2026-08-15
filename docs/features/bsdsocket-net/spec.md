@@ -10,7 +10,7 @@ otherwise — was read, searched, or consulted in producing this spec, and any r
 to existing implementations is coincidental.** Implement only from this spec + the approved
 sources cited by tag: `[PUB]` POSIX / Apple `man` pages / published standards, `[AROS]`
 in-tree AROS headers and modules (paths given), `[OURS]` this project's spikes (the
-H-series in `NOTES.md`). `[DERIVED]` items are independently-derived requirements flagged
+H-series in `docs/history/DECISION-LOG.md`). `[DERIVED]` items are independently-derived requirements flagged
 for extra verification; each stands solely on its cited `[PUB]`/`[AROS]`/`[OURS]`
 justification — implement from that justification. Our design is kqueue + one pump thread,
 derived from the AmiTCP autodoc semantics + macOS `kqueue` docs + this project's H-series.
@@ -374,7 +374,7 @@ drop a readiness or a `*sigmask` signal that arrives in it. Discipline:
 
 **Justification `[OURS]`.** The "check `tc_SigRecvd` before parking" guarantee is H9
 (`hosted/signal.c`, grounded in `rom/exec/signal.c`); the project explicitly records that a
-Signal racing ahead of `Wait` is still seen (NOTES.md H9) `[OURS]`. The H6 caveat — that the
+Signal racing ahead of `Wait` is still seen (docs/history/DECISION-LOG.md H9) `[OURS]`. The H6 caveat — that the
 `Forbid` compiler-barrier shortcut holds only *within* the single underlying thread and a
 real second OS thread needs a true lock — follows directly from the H6 lesson (a write that
 must be visible across a true thread boundary needs more than a compiler barrier) `[OURS]`.
@@ -464,7 +464,7 @@ The whole suite is hermetic and TCC-free because **the server is on the same Mac
 localhost**, started by the harness itself. Localhost loopback needs no entitlement on macOS
 (unlike raw BPF/`utun`). Each marker is one runnable binary printing one `[N#] PASS/FAIL`,
 driven by the existing bash watchdog (TERM-then-KILL, since stock macOS has no GNU `timeout`
-— NOTES.md "portable timeout"), reaping a hung connect into a FAIL. Every spike asserts
+— docs/history/DECISION-LOG.md "portable timeout"), reaping a hung connect into a FAIL. Every spike asserts
 **values**, never "it didn't crash." The harness asserts at **both** ends (the host echo
 server logs the bytes it echoed; AROS asserts `recv == sent`) — the H11 two-sided check
 (`hosted/device.c`: client checks `read==write` *and* main re-reads through the host).
@@ -630,7 +630,7 @@ symbol plumbing), `arch/all-hosted/hostlib/` (`hostlib.resource`). · `[OURS]`
 `hosted/signal.c` (H9 Wait/Signal, check-`tc_SigRecvd`-before-park), `hosted/msgport.c`
 (H10 ports), `hosted/abishim.S`+`hosted/host.c` (H3 host-call shim), `hosted/exec.c` (H4/H6
 single underlying thread + SIGALRM + the `Forbid` compiler-barrier rule and its true-thread
-limit), `NOTES.md` (H-series + "portable timeout" watchdog + "ground it, don't dream it"),
+limit), `docs/history/DECISION-LOG.md` (H-series + "portable timeout" watchdog + "ground it, don't dream it"),
 `graft/WORKFLOW.md` (boot state / where the library slots). · `[DERIVED]` the
 non-blocking-host-I/O → pump → raise an exec `Signal` → `WaitSelect` bridge, that one pump
 thread suffices over a thread-per-socket, and the lost-wakeup race — each independently

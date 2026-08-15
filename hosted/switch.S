@@ -1,6 +1,6 @@
 // Hosted AArch64 AROS — cooperative context switch for macOS (Mach-O).
 //
-// Identical coroutine switch to the bare-metal boot/switch.S, but for Mach-O the
+// Identical coroutine switch to the archived QEMU bring-up switch.S, but for Mach-O the
 // symbol carries a leading underscore (_ctx_switch). It runs at EL0 inside a
 // normal macOS process — ctx_switch uses no privileged instructions, so the same
 // register save/restore that drove the native scheduler works hosted too. That

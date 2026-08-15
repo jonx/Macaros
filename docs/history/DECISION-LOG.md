@@ -1,5 +1,10 @@
 # AROS AArch64 — Architecture and Decision Log
 
+This is the chronological record of the work that led to Macaros. It preserves
+design rationale and debugging evidence; current instructions live in the
+[feature index](../features/README.md) and root
+[getting-started guide](../../GETTING-STARTED.md).
+
 This is the project from the long conversation: give AROS a 64-bit ARM (AArch64)
 backend, brought up on QEMU `virt` first, with my Apple Silicon MacBook Air as
 the eventual hosted target. The non-negotiable constraint is that an AI agent
@@ -11,7 +16,7 @@ with no manual step in the middle. If a step needs a human, it doesn't scale.
 `x18` is the AAPCS64 **platform register, reserved on Darwin**. On Apple Silicon
 the macOS kernel owns it and **zeroes `x18` in the signal context** it hands a
 handler. Proven with a 30-line host probe
-([`hosted/x18probe/`](hosted/x18probe/README.md)): put a sentinel in `x18`,
+([`hosted/x18probe/`](../../hosted/x18probe/README.md)): put a sentinel in `x18`,
 let a timer signal fire while the program holds it, read `x18` back from the signal
 frame → `0x0000000000000000`, every run. AROS-hosted preempts tasks via signals,
 so any value left live in `x18` is gone the moment a preemption fires.
@@ -69,8 +74,8 @@ then build its metatarget.
   trace, lldb CPU-state, or (from M9) a framebuffer screendump — and always gets
   the same PASS/FAIL block back. It never needs to know which channel mattered.
 - **Layout:** the standalone bring-up now lives in
-  [`boot/`](boot/), with its notes in
-  [`docs/hosted/qemu-virt/`](docs/hosted/qemu-virt/PHASE1.md);
+  [the standalone QEMU kernel](../hosted/initial-platform-bringup/qemu-virt/boot/),
+  with its [Phase 1 notes](../hosted/initial-platform-bringup/qemu-virt/PHASE1.md);
   `harness/` contains the loop and observation channels, and `Makefile` provides
   the hosted and integration entry points.
 
@@ -124,7 +129,7 @@ naming `cpu_*` / `core_*` / `Krn*`; split `rom/kernel` ↔ `arch/<cpu>-all` ↔
 Every hardware fact is verified against an authoritative source before code is
 written against it — the DTB the actual QEMU binary emits (`make dtb`), the QEMU
 board docs, the arm64 boot protocol - and recorded in the
-[QEMU hardware map](docs/hosted/qemu-virt/HARDWARE.md) with its
+[QEMU hardware map](../hosted/initial-platform-bringup/qemu-virt/HARDWARE.md) with its
 citation. This already paid for itself at M2: (1) the docs say the default GIC is
 v3, but our exact invocation emits **v2** — the machine wins; (2) the boot
 protocol says x0 = DTB, but QEMU's ELF `-kernel` path actually enters with
@@ -180,7 +185,8 @@ hosted ports share, now exercised on the MacBook before the graft.
 `arch/aarch64-all/include/aros/cpucontext.h` defines `struct ExceptionContext` as
 `{ IPTR r[29]; IPTR fp; IPTR sp; IPTR pc; }` — it mislabels x30 as `fp`, omits
 SPSR_EL1 entirely, and has no FP/NEON pointer. Our Phase-1 trap frame
-(`boot/kern.h`: `x[31]` + `elr` + `spsr`) is the correct shape. When we graft, we
+(`docs/hosted/initial-platform-bringup/qemu-virt/boot/kern.h`:
+`x[31]` + `elr` + `spsr`) is the correct shape. When we graft, we
 *fix* that header rather than inherit it — a concrete, grounded AROS contribution.
 
 ### H5: the AROS exec memory model, hosted (grounded against the real tree)

@@ -17,7 +17,7 @@
 ## What & why
 
 Hosted AROS on Apple Silicon can already load and run AROS's own *native* AArch64
-modules (exec.library, kernel.resource — see NOTES.md, "Hosted AROS BOOTS").
+modules (exec.library, kernel.resource — see docs/history/DECISION-LOG.md, "Hosted AROS BOOTS").
 What it cannot do is run a real classic Amiga binary — a 68k hunk executable off
 an ADF or a Workbench disk — because there is no 68k CPU on this machine and AROS
 has no 68k translator for AArch64. This feature is a host-side **68k→AArch64 JIT**:
@@ -159,7 +159,7 @@ library base. `arch/m68k-all/include/aros/cpu.h`:
   `lib - n*6`.
 - `__AROS_USE_FULLJMP` is **defined** for m68k (real executable jump code in the
   vector), in contrast to AArch64/x86_64 where vectors are data pointers
-  (`arch/x86_64-all/include/aros/cpu.h`; and NOTES.md H8: "64-bit AROS library
+  (`arch/x86_64-all/include/aros/cpu.h`; and docs/history/DECISION-LOG.md H8: "64-bit AROS library
   vectors are data pointers").
 
   The table is built by `rom/exec/makefunctions.c` (`MakeFunctions`) via
@@ -190,7 +190,7 @@ AROS code cannot do on this OS: produce and run native machine code.
 
 - **Executable memory under W^X.** Apple Silicon refuses a one-shot RWX anon mmap
   (the boot push hit this: "W^X refuses a one-shot RWX anon mmap even with JIT
-  entitlements" — NOTES.md; the AROS RAM pool is mapped `RW`, and "executing code
+  entitlements" — docs/history/DECISION-LOG.md; the AROS RAM pool is mapped `RW`, and "executing code
   *loaded into* the pool (LoadSeg) needs the W^X-aware path later"). The JIT code
   cache is a separate region: `mmap(..., PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_ANON|MAP_JIT, ...)`,
   written only inside a `pthread_jit_write_protect_np(0)` … `pthread_jit_write_protect_np(1)`
@@ -245,7 +245,7 @@ contracts, never by calling macOS directly:
   `AllocMem` with d0/d1 marshalled to AArch64 args. The native library then does its
   normal thing (the H5 allocator, etc.).
 - **Native AROS → host (macOS) service:** unchanged — those libraries already reach
-  the host through `hostlib.resource` and the host-call shim (NOTES.md H3; the
+  the host through `hostlib.resource` and the host-call shim (docs/history/DECISION-LOG.md H3; the
   hosted boot uses `hostlib.resource`). So a 68k program that draws on screen ends up
   going 68k→(JIT bridge)→native graphics.library→host display driver
   (`hosted/display.c`, render-to-PNG) — three defined boundaries, no shortcuts.
@@ -400,7 +400,7 @@ Every cited path is under `../aros-upstream` unless noted.
   (e.g. `AROS_UFHA(struct Hook *, h, A0)`) register-arg hook/user functions.
 
 Working-repo references (`.`):
-- `NOTES.md` — H3 host-call ABI shim; H5 allocator; H7 render-to-PNG display; H8
+- `docs/history/DECISION-LOG.md` — H3 host-call ABI shim; H5 allocator; H7 render-to-PNG display; H8
   64-bit vectors are data pointers; the boot push's W^X / MAP_JIT note ("executing code
   loaded into the pool (LoadSeg) needs the W^X-aware path later").
 - `graft/cpu_aarch64.h` — host-signal→AROS-trap bridge, `_STRUCT_ARM_NEON_STATE64`,

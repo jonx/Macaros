@@ -1,5 +1,10 @@
 # Phase 2 — Hosted on macOS
 
+> **Historical document.** These completed spikes established the hosted model
+> that Macaros now uses. They remain runnable regression examples and a template
+> for a new hosted platform; current subsystem documentation lives in the
+> [feature index](../../../features/README.md).
+
 The payoff path: AROS as a **native arm64 macOS process**, with macOS owning every
 driver (console, memory, later display/input). This is also the de-facto AROS
 contribution — upstream's `arch/aarch64-all` is already a *hosted* (`emulation`)
@@ -40,7 +45,7 @@ marshaller that bridges an AROS-side call descriptor (fixed args + a 64-bit arg
 array) into Apple's variadic ABI; a double rides through as its bit pattern
 (Apple parks variadic FP in the integer stack slots too). Grounded against the
 exact assembly this machine's `clang` emits (not the JS-only Apple doc) — all
-four AAPCS64 divergences confirmed empirically; see NOTES.md "H3 grounding".
+four AAPCS64 divergences confirmed empirically; see docs/history/DECISION-LOG.md "H3 grounding".
 **Observe:** `[H3] host-call ABI shim ok: ...` — correct path prints `11 22 33`/
 `7 3.5 Z`/`<AROS>`, a naive register-passing control prints `0 0 0` (divergence
 shown real *and* bridged). **Files:** `hosted/abishim.S`, `hosted/abishim.c`.
@@ -104,7 +109,7 @@ on-screen Cocoa/Metal window — verifying a live window unattended needs macOS
 Screen-Recording permission (a manual step), so the loop uses render-to-PNG and
 the window is a thin human-facing addition for later.
 
-![AROS hosted display](docs/h7-hosted-display.png)
+![AROS hosted display](../../../h7-hosted-display.png)
 
 ### H8 — A tiny exec.library via the real LVO mechanism ✅
 Everything in AROS is a library, reached through a jump-vector table just BELOW
@@ -182,6 +187,7 @@ device-I/O path reaches a real host resource (H11), and **everything runs throug
 the real `exec.library` LVO hub (H12)**. What's left is no longer a *hosted* unknown — it's **the graft**:
 AROS's own crosstools for `aarch64-darwin` + its `configure`/`mmake` build system,
 then bootstrapping the real `exec.library` from the AROS tree on these proven
-primitives. The grounded, code-level entry points are in [GRAFT.md](GRAFT.md), with
-a first patch set in [`graft/`](graft/). That's where cheap spiking ends and
+primitives. The grounded, code-level entry points are in the
+[graft notes](../GRAFT.md), with a first patch set in
+[`graft/`](../../../../graft/). That's where cheap spiking ends and
 large-scale integration begins — the honest mountain flagged from the start.

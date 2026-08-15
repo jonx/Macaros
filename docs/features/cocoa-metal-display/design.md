@@ -17,7 +17,7 @@ its bitmap into. The result: the hosted AROS desktop shows up in a Mac window,
 ideally retina/HiDPI with GPU-accelerated blits.
 
 This is the natural next driver under the project thesis — *"macOS owns the
-drivers; AROS reaches them via standard exec I/O"* (NOTES.md, Phase-2). The host
+drivers; AROS reaches them via standard exec I/O"* (docs/history/DECISION-LOG.md, Phase-2). The host
 side does the real Cocoa/Metal work; AROS talks to it only through the standard
 graphics HIDD / bitmap-class LVOs. Nothing about the AROS-facing contract changes
 from what graphics.library already expects of the SDL/X11 drivers; only the host
@@ -26,7 +26,7 @@ backend is new.
 The hard constraint this whole document is organised around: **a live on-screen
 window cannot be verified unattended by screen-capture** (`screencapture` needs
 macOS Screen-Recording / TCC approval — a manual click that breaks the
-build→run→observe→verdict loop, exactly why H7 deferred the window — NOTES.md
+build→run→observe→verdict loop, exactly why H7 deferred the window — docs/history/DECISION-LOG.md
 "H7"). So the design must keep a *programmatic* pixel channel alongside the live
 window. See "The unattended-verification tension".
 
@@ -291,7 +291,7 @@ deferred.)
 insists most UI work — and `CAMetalLayer.nextDrawable` / event pumping — happens
 on the process **main thread**. In this project the macOS main thread *is* the
 AROS boot task: H4 models "the macOS main thread as a low-priority 'boot' anchor
-task" (NOTES.md:119). So we do **not** spin a second pthread for Cocoa; we drive
+task" (docs/history/DECISION-LOG.md:119). So we do **not** spin a second pthread for Cocoa; we drive
 the run loop from an AROS task, taking `HostLib_Lock()` around each host call.
 Precedent is exact and Apple-specific: the iOS UIKit driver's
 `arch/all-ios/hidd/uikit/eventtask.c` runs `EventTask()` — an AROS task that
@@ -300,7 +300,7 @@ Precedent is exact and Apple-specific: the iOS UIKit driver's
 same file documents the host-ABI hazard we inherit on Apple Silicon: *"MacOS X
 ABI says that stack must be aligned at 16 bytes boundary. Some functions crash …
 deeply inside UIKit … `CFRunLoopRunInMode()` …"* (`eventtask.c:17–24`) — our
-host-call shim (`hosted/abishim.S`, NOTES.md H3) already owns the AAPCS64↔Apple
+host-call shim (`hosted/abishim.S`, docs/history/DECISION-LOG.md H3) already owns the AAPCS64↔Apple
 ABI boundary, and 16-byte SP alignment is the relevant invariant here.
 
 So: a single **`cocoa.hidd` event task**, VBlank-signalled (the SDL/UIKit model),
@@ -321,7 +321,7 @@ macOS-keycode mapping we can adapt).
 
 The whole reason H7 stopped at a PNG: **verifying a live NSWindow on screen
 requires `screencapture`, which requires macOS Screen-Recording (TCC) approval — a
-manual click that breaks the unattended loop** (NOTES.md "H7"). A live window that
+manual click that breaks the unattended loop** (docs/history/DECISION-LOG.md "H7"). A live window that
 can only be eyeballed is, by this project's standing rule, unverifiable.
 
 Resolution: **the live window and the verification channel are decoupled.** We
@@ -398,7 +398,7 @@ read a file/buffer, emit one verdict block. Concretely:
   input → expected AROS events** (D5) — never `screencapture`, so **no TCC
   prompt, no manual step**.
 - Each spike prints a unique marker `[D1]…[D6]` (the marker discipline,
-  NOTES.md), exits clean (so PASS is fast), and is reaped by the bash watchdog on
+  docs/history/DECISION-LOG.md), exits clean (so PASS is fast), and is reaped by the bash watchdog on
   hang.
 - For human inspection only, the presented drawable is *also* re-encoded to PNG
   via the already-proven H7 ImageIO path (`hosted/display.c host_present`) into
@@ -441,7 +441,7 @@ read a file/buffer, emit one verdict block. Concretely:
   rects and present once per VBlank tick (the event task already has the VBlank
   signal). Deferred past D3.
 - **W^X is *not* a risk here** — the host shim dylib is ordinary signed code; we
-  generate no executable memory (contrast the LoadSeg path, NOTES.md graft). Noted
+  generate no executable memory (contrast the LoadSeg path, docs/history/DECISION-LOG.md graft). Noted
   so we don't build a workaround for a non-problem (the H8 lesson).
 - **Cursor.** `moHidd_Gfx_SetCursorShape/Pos/Visible` are optional; initially hide
   the macOS cursor over the view and let AROS draw its own (SDL does
@@ -450,7 +450,7 @@ read a file/buffer, emit one verdict block. Concretely:
 ## References
 
 In-project:
-- `NOTES.md` — H3 (host-call ABI shim), H4 (macOS main thread = boot task), H7
+- `docs/history/DECISION-LOG.md` — H3 (host-call ABI shim), H4 (macOS main thread = boot task), H7
   (render-to-PNG display + the TCC/Screen-Recording deferral reasoning), H8 (no
   W^X wall for data vectors).
 - `hosted/display.c` — H7: AROS `AllocMem` framebuffer + ImageIO present

@@ -123,16 +123,16 @@ codesign -s - -f -o runtime --entitlements jit68k.entitlements.plist <binary>
 
 (`com.apple.security.cs.allow-unsigned-executable-memory` is **not** required —
 `allow-jit` + MAP_JIT is the W^X-clean path.) This retires the deferred-LoadSeg W^X
-wall NOTES.md flagged ("executing code loaded into the pool (LoadSeg) needs the W^X-
+wall docs/history/DECISION-LOG.md flagged ("executing code loaded into the pool (LoadSeg) needs the W^X-
 aware path later").
 
 ### AROS side (to wire)
 
 At integration, the three primitives are not called directly — they route through
 **`hostlib.resource` + `abishim.S`**, exactly like every other macOS call in the
-hosted port (NOTES.md H3; the boot already brings up `hostlib.resource`). The JIT
+hosted port (docs/history/DECISION-LOG.md H3; the boot already brings up `hostlib.resource`). The JIT
 code cache is a **separate** region from the RW AROS RAM pool (which is mapped RW,
-not RWX — NOTES.md "Map the AROS RAM pool RW"); the sandbox of §5 is ordinary
+not RWX — docs/history/DECISION-LOG.md "Map the AROS RAM pool RW"); the sandbox of §5 is ordinary
 `AllocMem` RW memory, only the code cache is MAP_JIT. The signing step in
 `graft/bootrun.sh` must add the `allow-jit` entitlement once the bootstrap adopts
 the hardened runtime (it carries the `--entitlements` slot already).
@@ -141,7 +141,7 @@ the hardened runtime (it carries the `--entitlements` slot already).
 
 `pthread_jit_write_protect_np` toggles **per-thread** writability of all MAP_JIT
 pages. So **all JIT emission and all execution of translated blocks must happen on
-the same host thread** — the single H6 scheduler thread (NOTES.md H4/H6;
+the same host thread** — the single H6 scheduler thread (docs/history/DECISION-LOG.md H4/H6;
 `hosted/kern.c`). Under today's single-thread model this is satisfied automatically.
 **Frozen forward constraint:** if the scheduler ever dispatches AROS tasks onto
 multiple host threads, each emitting/executing thread must re-assert the toggle on
@@ -358,11 +358,11 @@ hooks the owner builds. The seam (§1 hook + §2 routing + §3 bridge + §4 exce
 | J5i | 68k exception/SR model + the `graft/cpu_aarch64.h` host-signal seam (stated) | JIT | ✅ `[J5i]` green; vectors 2/4/5/32+n, SR+PC frame, `rte`, S bit |
 | A | **The seglist-68k-tagging mechanism** (§1) — the one new AROS data-flow change | AROS | ☐ UNVERIFIED — owner decides (options in §1); the biggest open question |
 | B | The `RunCommand`/`CallEntry` divert → `jit68k_run` (§1) | AROS | ☐ — at the A4-entry point (`callentry.S:18,100,104-115`); consumes the §1 tag |
-| C | Route `jit_region` primitives through `hostlib.resource` + `abishim.S`; add `allow-jit` in `bootrun.sh` (§2) | AROS | ☐ — like every other macOS call (NOTES.md H3) |
+| C | Route `jit_region` primitives through `hostlib.resource` + `abishim.S`; add `allow-jit` in `bootrun.sh` (§2) | AROS | ☐ — like every other macOS call (docs/history/DECISION-LOG.md H3) |
 | D | Pass the **real** library bases + FD/register tables; set `jit68k_set_lvo_handler` to the AROS marshal callback (§3) | AROS | ☐ — replaces the stub `exec`; native libs unchanged |
 | E | Wire host `SIGSEGV`/`SIGBUS` in translated code → `j5d_raise_exception` via `graft/cpu_aarch64.h` (§4) | AROS | ☐ — recover the m68k PC + fault kind, then the proven 68k vector path |
 | F | Sandbox-backed allocator (`AllocMem` + `MEMF_31BIT`/equiv) + the return-pointer-outside-sandbox case (§5) | AROS | ☐ UNVERIFIED flag; resolves the deferred `[J3]` pointer case |
-| G | A real Amiga app through the boot (vs the corpus) | both | ☐ — gated on the boot reaching `dos.library` (NOTES.md cold-start halt) |
+| G | A real Amiga app through the boot (vs the corpus) | both | ☐ — gated on the boot reaching `dos.library` (docs/history/DECISION-LOG.md cold-start halt) |
 
 Rows J1–J5i are the JIT side, **done**. Rows A–G are the AROS side, **to wire** —
 A–B are the LoadSeg hook + tagging, C is the host-call routing, D is the LVO bridge

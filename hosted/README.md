@@ -32,7 +32,7 @@ this page is the code-side map. Maturity is shown in three tiers:
 | `gpufx/` | GPU-accelerated 2D (YUV→RGB + scale) via a compute section in the cocoametal shim + a `gpufx.library` front door; FFViewX's GPU video path runs on it (5–7×) | [gpufx](../docs/features/gpufx/README.md) |
 | `gpufx-bench/` | Rust benchmark (`C:GpuFxBench`) measuring the software vs gpufx pixel paths (video convert + gpui scale) | [gpufx](../docs/features/gpufx/README.md) |
 | `exwalk/` | Concurrent directory-walker stress test for the emul-handler (Examine/ExNext/ExAll) | `hosted/exwalk/build.sh` |
-| `*.c` / `*.S` (top level) | The Act-2 spikes H1–H12 (`host.c`, `preempt.c`, `abishim.*`, `exec.c`, `execboot.c`, `display.c`, `device.c`, `mem.c`, `kern.c`, `signal.c`, `msgport.c`, `library.c`, `switch.S`) — all green via `make hosted-test` | [PHASE2.md](../PHASE2.md) |
+| `*.c` / `*.S` (top level) | The Act-2 spikes H1–H12 (`host.c`, `preempt.c`, `abishim.*`, `exec.c`, `execboot.c`, `display.c`, `device.c`, `mem.c`, `kern.c`, `signal.c`, `msgport.c`, `library.c`, `switch.S`) — all green via `make hosted-test` | [initial hosted bring-up](../docs/hosted/initial-platform-bringup/macos-hosted/PHASE2.md) |
 
 ## Started
 
