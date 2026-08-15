@@ -307,7 +307,7 @@ mkdir -p "$HOME/lib"
 [ -f "$ROOT/build/libbsdsockhost.dylib" ] && cp -f "$ROOT/build/libbsdsockhost.dylib" "$HOME/lib/libbsdsockhost.dylib"
 if [ ! -f "$HOME/lib/cocoametal.dylib" ]; then
     echo "cocoametal.dylib missing — build it:" >&2
-    echo "    cd ~/Source/aros-aarch64 && make cocoametal-dylib" >&2
+    echo "    cd ~/Source/Macaros && make cocoametal-dylib" >&2
     exit 1
 fi
 echo ">> cocoametal.dylib $(shasum -a 256 "$HOME/lib/cocoametal.dylib" | awk '{print substr($1,1,12)}') from $HOME/lib"

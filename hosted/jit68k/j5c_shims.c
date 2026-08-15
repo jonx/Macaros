@@ -145,8 +145,9 @@ uint32_t *EMIT_ResetOffsetPC(uint32_t *ptr) { _pc_rel = 0; return ptr; }
  * conservative, but was not: it made MOVE clear X even though MOVE only sets NZVC.
  *
  * Lines 6/A/F are not translated through a decoder that calls this shim in the hosted
- * engine.  Preserve all flags for them (mask zero), which is the fail-safe behaviour if
- * that boundary changes later.
+ * engine.  The early J5c milestone also deliberately links only the 1/2/3/7/8/9/B/C/D
+ * decoder families. Preserve all flags for unavailable families (mask zero), which is
+ * the fail-safe behaviour if that boundary changes later.
  * =================================================================================== */
 uint8_t M68K_GetSRMask(uint16_t *m68k_stream)
 {
@@ -154,19 +155,25 @@ uint8_t M68K_GetSRMask(uint16_t *m68k_stream)
     uint32_t sr;
 
     switch (opcode >> 12) {
+#ifndef J5C_EARLY_DECODER_SET
     case 0x0: sr = GetSR_Line0(opcode); break;
+#endif
     case 0x1: sr = GetSR_Line1(opcode); break;
     case 0x2: sr = GetSR_Line2(opcode); break;
     case 0x3: sr = GetSR_Line3(opcode); break;
+#ifndef J5C_EARLY_DECODER_SET
     case 0x4: sr = GetSR_Line4(opcode); break;
     case 0x5: sr = GetSR_Line5(opcode); break;
+#endif
     case 0x7: sr = GetSR_Line7(opcode); break;
     case 0x8: sr = GetSR_Line8(opcode); break;
     case 0x9: sr = GetSR_Line9(opcode); break;
     case 0xb: sr = GetSR_LineB(opcode); break;
     case 0xc: sr = GetSR_LineC(opcode); break;
     case 0xd: sr = GetSR_LineD(opcode); break;
+#ifndef J5C_EARLY_DECODER_SET
     case 0xe: sr = GetSR_LineE(opcode); break;
+#endif
     default: return 0;
     }
     return (uint8_t)(sr & SR_CCR);

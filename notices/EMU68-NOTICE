@@ -1,0 +1,285 @@
+NOTICE — Emu68 quarantine dir (adopted MPL-2.0 source)
+======================================================
+
+This directory contains files VENDORED VERBATIM from the Emu68 project. They are
+kept here, unmodified, with their original Mozilla Public License v2.0 (MPL-2.0)
+Exhibit-A headers intact. They are NOT AROS-licensed and MUST NOT be intermixed
+with or pasted into AROS-licensed source. See docs/features/CLEANROOM.md (licence
+map: "Emu68 ... Adoptable as isolated files (file-level copyleft)") and
+docs/features/68k-jit/spec.md (the [J0] decision: adapt Emu68's AArch64 emitter).
+
+Upstream
+--------
+  Repository : https://github.com/michalsc/Emu68
+  Commit     : 305f686f84712f88c4d80d35769af5c60a4e988b
+  Commit date: 2025-12-08 ("Merge pull request #310 from michalsc/1.0.7", v1.0.7)
+  Fetched    : 2026-06-24 via `git clone --depth 1`
+  Licence    : MPL-2.0 (Exhibit A header present in each file below)
+
+Files taken (verbatim, byte-identical to upstream include/)
+-----------------------------------------------------------
+  A64.h                 <- Emu68 include/A64.h
+      The self-contained AArch64 instruction emitter: `static inline uint32_t`
+      encoders (mov_immed_u16, movk, add_reg, ret/bx_lr, ...). This is the single
+      high-value asset the [J0] decision adopts. Lines 1..650 (the `#ifndef _A64_H`
+      body) are pure encoders depending only on <stdint.h>. The section after
+      line 650 (`#include <RegisterAllocator.h>` + the EMIT_* register-allocator
+      helpers) is NOT used by the [J2] spike; it is present only because the file
+      is kept verbatim.
+
+  RegisterAllocator.h   <- Emu68 include/RegisterAllocator.h
+      Declarations-only header (the RA_*/EMIT_* register-allocator interface).
+      Vendored solely so that A64.h's verbatim `#include <RegisterAllocator.h>`
+      (line 652) resolves and the file compiles unmodified. NONE of these RA_*
+      functions are defined or called by the [J2] spike — the spike hand-emits
+      without a register allocator. Full register-allocator adoption is [J3] scope.
+      ([J5c] now IMPLEMENTS this interface in OUR j5c_ra.c — see below.)
+
+Files taken for [J5c] (verbatim — the REAL per-opcode decoders, re-hosted)
+--------------------------------------------------------------------------
+  [J5c] proved that re-hosting Emu68's REAL decoders works for the register/ALU/control
+  opcode class. These files are vendored BYTE-VERBATIM from upstream (commit 305f686, the
+  same pin as above) and DRIVEN by our glue (hosted/jit68k/j5c_*.c) behind three hosted
+  hooks; their alias-chains are rewritten to plain forwarders ONLY in build-dir copies
+  (see "Build-time darwinize" below), never in these files.
+  M68k_EA.c       <- Emu68 src/M68k_EA.c        (effective-address decode)
+  M68k_LINE8.c    <- Emu68 src/M68k_LINE8.c     (OR / DIVU/DIVS dispatch)
+  M68k_LINE9.c    <- Emu68 src/M68k_LINE9.c     (SUB / SUBA / SUBX)
+  M68k_LINEB.c    <- Emu68 src/M68k_LINEB.c     (CMP / CMPA / EOR)
+  M68k_LINEC.c    <- Emu68 src/M68k_LINEC.c     (AND / MUL dispatch / ABCD/EXG)
+  M68k_LINED.c    <- Emu68 src/M68k_LINED.c     (ADD / ADDA / ADDX)
+  M68k_MOVE.c     <- Emu68 src/M68k_MOVE.c      (move / moveq)
+  M68k_MULDIV.c   <- Emu68 src/M68k_MULDIV.c    (MUL/DIV bodies; EMIT_MULS_W etc.)
+  M68k.h          <- Emu68 include/M68k.h       (struct M68KState, VECTOR_*, SR_*)
+  support.h       <- Emu68 include/support.h    (BE/LE helpers, decls)
+  cache.h         <- Emu68 include/cache.h      (enum CacheType, cache_read_* sigs)
+  EmuFeatures.h   <- Emu68 include/EmuFeatures.h
+  config.h        <- Emu68 include/config.h
+  nodes.h         <- Emu68 include/nodes.h
+  lists.h         <- Emu68 include/lists.h
+  md5.h           <- Emu68 include/md5.h
+
+  The three [J5a] runtime couplings are bridged by OUR (AROS-licensed, NON-MPL) files:
+    hosted/jit68k/j5c_shims.c  — HOOK 2 cache_read_16 (big-endian fetch from the host
+                                 stream, splicing back the 32-bit-truncated address) +
+                                 PC helpers + M68K_GetSRMask=>SR_CCR + __m68k_state.
+    hosted/jit68k/j5c_ra.c     — HOOK 3: OUR register allocator implementing the RA_*
+                                 interface, with a MEMORY-BACKED CCR (ldr/str from the
+                                 state struct) instead of Emu68's mrs/msr TPIDR_EL0.
+    hosted/jit68k/j5c_build.c  — drives the REAL EMIT_lineX decoders; HOOK 1 EA surface.
+  These call/link the vendored decoders but copy NO Emu68 source (MPL FAQ Q11-Q13).
+
+Files taken for [J5d] (verbatim — broadening the corpus through the JIT)
+-----------------------------------------------------------------------
+  [J5d] BROADENS [J5c] so the WHOLE apps68k corpus (mul/fact/arraysum/libcall) runs
+  through the JIT via the REAL decoders + OUR re-hosted dispatcher. Two MORE files are
+  vendored BYTE-VERBATIM from the same pin (commit 305f686); Exhibit-B re-grep clean:
+  M68k_LINE5.c    <- Emu68 src/M68k_LINE5.c     (ADDQ / SUBQ / Scc / DBcc / TRAPcc)
+  M68k_CC.c       <- Emu68 src/M68k_CC.c        (EMIT_TestCondition / EMIT_JumpOnCondition;
+                                                 linked for LINE5's Scc/DBcc table, but the
+                                                 corpus never executes those — the [J5d]
+                                                 dispatcher owns Bcc itself.)
+  [J5d] also adds OUR (AROS-licensed, NON-MPL) glue, reusing the [J5c] hooks:
+    hosted/jit68k/j5d_engine.c      — the little engine: a per-basic-block translator that
+                                      DRIVES the real decoders (EMIT_move/line5/8/9/B/C/D/
+                                      moveq) for every ALU/move/memory opcode + OUR
+                                      re-hosted dispatcher ("MainLoop") owning inter-block
+                                      control flow (Bcc/BRA/JSR/RTS), the LEA address
+                                      compute, and the jsr-through-vector -> [J3] bridge.
+    hosted/jit68k/j5d_ea_helpers.c  — HOOK 1: the (An)-class sandbox-memory EA emitter the
+                                      darwinized M68k_EA.c calls (sandbox-base add + REV
+                                      byteswap + post/pre index). The disclosed [J5a] fix.
+    hosted/jit68k/j5d_interp.c      — the INDEPENDENT from-scratch oracle (no Emu68).
+  These call/link the vendored decoders but copy NO Emu68 source (MPL FAQ Q11-Q13).
+
+Files taken for [J5g] (verbatim — broaden the ISA + addressing-mode coverage)
+-----------------------------------------------------------------------------
+  [J5g] BROADENS the driven decoder set toward running any self-contained 68k program.
+  Three MORE files are vendored BYTE-VERBATIM from the same pin (commit 305f686); the
+  Exhibit-B re-grep is clean (Exhibit-A header only) and `diff` vs upstream is empty:
+  M68k_LINE0.c    <- Emu68 src/M68k_LINE0.c   (immediates/bit ops: ORI/ANDI/EORI/SUBI/
+                                               ADDI/CMPI/BTST/BCHG/BCLR/BSET/MOVEP/CAS)
+  M68k_LINE4.c    <- Emu68 src/M68k_LINE4.c   (misc: CLR/NEG/NOT/TST/EXT/SWAP/LEA/PEA/
+                                               MOVEM/JMP/JSR/RTS/LINK/TRAP/... dispatch)
+  M68k_LINEE.c    <- Emu68 src/M68k_LINEE.c   (shifts/rotates: ASL/ASR/LSL/LSR/ROL/ROR/
+                                               ROXL/ROXR + the BFxxx bitfield ops)
+  The engine dispatcher (j5d_engine.c) drives EMIT_line0 / EMIT_line4 / EMIT_lineE for
+  groups 0/4/E (and EMIT_move for the .b/.w move groups 1/3). The flag helpers they call
+  (EMIT_GetNZCV / EMIT_GetNZxx / EMIT_ClearFlags / EMIT_SetFlagsConditional ...) are
+  `static inline` in the already-vendored A64.h. [J5g] also adds OUR (AROS-licensed,
+  NON-MPL) glue:
+    hosted/jit68k/j5g_shims.c       — link stubs for the un-driven LINE4 sub-ops the
+                                      verbatim files reference (the debug/disasm trace
+                                      gate read by EMIT_MOVEC; M68K_PopReturnAddress used
+                                      by EMIT_RTS) — never on a hot path; the dispatcher
+                                      owns all control flow.
+    hosted/jit68k/j5d_ea_helpers.c  — EXTENDED with j5d_ea_addr_offset / j5d_ea_addr_index
+                                      (the (d16,An)/(d8,An,Xn)/abs/PC-rel sandbox EA the
+                                      funnel-helper rewrite calls; see darwinize below).
+    hosted/jit68k/{j5g_test.c,j5d_interp.c} — the [J5g] driver + the oracle (extended to
+                                      every new opcode/mode/size).
+  These call/link the vendored decoders but copy NO Emu68 source (MPL FAQ Q11-Q13). The
+  w0->x1 state-pointer fix (a fourth bare-metal coupling: Emu68 hardcodes w0 as a flag-
+  extraction scratch) and the C/V CCR-layout fix are entirely in OUR files (j5c_ra.c,
+  j5d_engine.c, j5c_build.c, j5d_jit68k.h) — no quarantine edit.
+
+Files taken for [J5o] (verbatim — the 68881/68882 FPU coprocessor decoder + its libm/tlsf deps)
+----------------------------------------------------------------------------------------------
+  [J5o] adds the FPU CORE (FMOVE/format-conversions + FADD/FSUB/FMUL/FDIV/FSQRT/FABS/FNEG/FCMP/
+  FTST), driving Emu68's REAL line-F (FPU coprocessor) decoder. Three MORE files are vendored
+  BYTE-VERBATIM from the same pin (commit 305f686); the Exhibit-B re-grep is clean and `diff`
+  vs upstream is EMPTY for each (verified 2026-06-25):
+  M68k_LINEF.c    <- Emu68 src/M68k_LINEF.c     (the FPU coprocessor decoder: EMIT_FPU =
+                                                 FMOVE/FMOVEM/FADD/.../FCMP/FTST + the line-F
+                                                 MOVE16/CINV/CPUSH branch; carries the Exhibit-A
+                                                 MPL header)
+  math/libm.h     <- Emu68 src/math/libm.h      (the decoder's OWN libm — struct double2/rq +
+                                                 the transcendental decls M68k_LINEF.c references;
+                                                 a header, inherits the repo MPL via the project
+                                                 LICENSE — no per-file header upstream either)
+  tlsf.h          <- Emu68 include/tlsf.h        (the bare-metal allocator interface the line-F
+                                                 MOVE16/CINV branch references; header, repo MPL)
+  The engine dispatcher (j5d_engine.c) drives EMIT_lineF for group F. The FP arithmetic/convert/
+  compare encoders it calls (faddd/fsubd/fmuld/fdivd/fsqrtd/fabsd/fnegd/fcmpd/fcmpzd/fcvtds/
+  fcvtsd/scvtf_32toD/fcvtzs_Dto32 + EMIT_GetFPUFlags) are `static inline` in the already-vendored
+  A64.h. [J5o] also adds OUR (AROS-licensed, NON-MPL) glue, which CALLS/LINKS the vendored decoder
+  but copies NO Emu68 source (MPL FAQ Q11-Q13):
+    hosted/jit68k/j5o_fpu_shims.c   — link stubs for the symbols the monolithic verbatim
+                                      M68k_LINEF.c references but the [J5o] DRIVEN set never reaches
+                                      (the 80-bit .x runtime Load96bit/Store96bit; the packed .p +
+                                      transcendental math; the bare-metal TLSF/cache-maintenance);
+                                      M68K_IsBranch is authored from the PUBLISHED 68000 branch
+                                      encodings (an ISA fact, not Emu68 expression). Each stub is a
+                                      documented no-op or abort-on-call (a future increment that
+                                      drives them trips loudly and must port a real implementation).
+    hosted/jit68k/j5d_ea_helpers.c  — EXTENDED with the FP single/double + integer-format sandbox
+                                      memory helpers (j5d_fpu_f{ldd,std,lds,sts}* + j5d_fpu_i{ldr,
+                                      str,ldrh,strh,ldrb,strb}*: base-adjust + per-element byteswap).
+    hosted/jit68k/j5c_ra.c          — EXTENDED with the FPU register file (FP0..FP7 -> d8..d15) +
+                                      memory-backed FPCR/FPSR (RA_MapFPURegister/RA_ModifyFPSR/
+                                      RA_FlushFPCR), implementing RegisterAllocator.h's FPU side.
+    hosted/jit68k/{j5o_test.c,j5d_interp.c} — the [J5o] driver + the INDEPENDENT C-double oracle.
+
+Build-time darwinize (NO edit to the verbatim files)
+----------------------------------------------------
+  The vendored decoders use GNU __attribute__((alias(...))) function aliases, which
+  clang/Mach-O REJECTS ("aliases are not supported on darwin"). hosted/jit68k/
+  emu68_darwinize.pl (OURS) reads each verbatim file above and writes a Darwin-compatible
+  COPY to build/emu68-darwin/ in which each alias declaration is rewritten into an
+  equivalent plain-C tail-call forwarder (+ forward prototypes). The files in THIS
+  directory are NOT modified — `diff` against upstream is empty for every one of them.
+  Only the build-dir copies are compiled. This is a portability finding, not a licence
+  edit: the quarantine stays byte-verbatim.
+
+  [J5d]/[J5g] SECOND build-time transform (the disclosed [J5a]/M68k_EA.c edit) — applied to
+  the BUILD-DIR COPY of M68k_EA.c ONLY, gated by emu68_darwinize.pl's `--ea-sandbox` flag
+  (the [J5d]/[J5g]/apps builds pass it; the [J5c] build does NOT, so its copy is alias-only
+  and links no helper). Each DIRECT load/store site whose base register holds a 68k address
+      *ptr++ = ldr_offset(reg_An, *arm_reg, 0);            // (An)   modes 2/3/4 ([J5d])
+      *ptr++ = ldr_offset_postindex(reg_An, *arm_reg, 4);  // (An)+  ... str/pre likewise
+      *ptr++ = ldr_offset(tmp_reg, *arm_reg, 0);           // abs.l  mode 7.1 ([J5g])
+  is rewritten to a call to OUR sandbox-translating emitter
+      ptr = j5d_ea_mem(ptr, KIND, <base>, *arm_reg, IMM);  // j5d_ea_helpers.c (OURS)
+  which adds the sandbox base (host = base_adjust + <base>, UXTW), byteswaps with REV, and
+  applies the post/pre index. KIND is derived MECHANICALLY from the original encoder name
+  (size/sign/index), so the patch is a pure call-substitution preserving operand order.
+  abs.l (mode 7.1) is an Emu68 inconsistency — it does NOT use the funnel helpers below, it
+  materialises the address in `tmp_reg` and emits a direct ldr/str, so the direct-site match
+  covers `tmp_reg` as well as `reg_An`. The QUARANTINE M68k_EA.c is NOT touched — `diff`
+  against upstream stays empty (verified).
+
+  [J5g] THIRD build-time transform (the EA FUNNEL-HELPER rewrite, also --ea-sandbox-gated)
+  — the (d16,An)/(d8,An,Xn)/abs.w/abs.l/(d16,PC)/(d8,PC,Xn) modes do NOT use the direct
+  (An)-class sites above; the REAL Emu68 EA decoder routes them through FOUR inline funnel
+  helpers (load_reg_from_addr / load_reg_from_addr_offset / store_reg_to_addr / store_reg_
+  to_addr_offset). The script replaces the BODY of each (a name-based, whole-body call-
+  substitution) with a tail-call to OUR j5d_ea_addr_offset / j5d_ea_addr_index (j5d_ea_
+  helpers.c), which compute base+offset or base+index<<shift, add the sandbox base-adjust
+  (UXTW), byteswap with REV, and do the size-correct load/store (size 0 = LEA address-
+  compute, NO memory). The DECODE stays the REAL decoder; only the memory touch is
+  sandboxed. Applied to the BUILD-DIR copy ONLY; the QUARANTINE M68k_EA.c stays BYTE-
+  VERBATIM (`diff` vs upstream empty, verified).
+
+  [J5l] FOURTH build-time transform (the EMIT_MOVEM sandbox rewrite) — applied to the
+  BUILD-DIR COPY of M68k_LINE4.c ONLY, gated by emu68_darwinize.pl's `--movem-sandbox`
+  flag (the [J5l]/apps builds pass it). EMIT_MOVEM does NOT use M68k_EA.c's
+  ldr_offset(reg_An,...) sites the --ea-sandbox transform rewrites: it resolves the EA base
+  ONCE (size 0, so `base` holds the 68k ADDRESS) and emits its OWN inner loop of raw, often
+  PAIRED, transfers straight off `base` —
+      *ptr++ = stp_preindex(base, rt1, reg, -block_size);  // -(An) predecrement save (.l)
+      *ptr++ = stp(base, rt1, reg, offset);                // (An)/(d16,An) control store
+      *ptr++ = strh_offset[_preindex](base, reg, ...);     // .w store
+      *ptr++ = ldp_postindex(base, rt1, reg, 8);           // (An)+ postincrement restore
+      *ptr++ = ldp(base, rt1, reg, offset);  ldr_offset(...); ldrsh_offset(...);  // loads
+  the 1:1-MMU + big-endian-CPU assumption. The script rewrites each such MEMORY site (scoped
+  to those whose base operand is the literal `base` — uniquely movem; lea/link/unlk/pea use
+  dest/src/sp) to a call to OUR j5d_movem_* helpers (j5d_ea_helpers.c, OURS): host =
+  base_adjust + (uint32_t)base (UXTW), a per-register REV byteswap, DECOMPOSING the 32-bit
+  W-register pairs (stp/ldp) into per-register accesses, and PRESERVING the pre/post-index An
+  update (stp_preindex => An-=N first; ldp_postindex => An+=N last). The non-memory base
+  arithmetic Emu68 emits (the add_immed/sub_immed bumping/snapshotting the 68k An) is left
+  AS-IS. The DECODE (the register-mask order — REVERSED for predecrement, normal otherwise —
+  the block sizing, the base-on-the-list tmp_base_reg snapshot, the post/pre An update) stays
+  100% the REAL EMIT_MOVEM. The QUARANTINE M68k_LINE4.c is NOT touched — `diff` vs upstream
+  stays empty (verified). No new file is vendored ([J5g] already vendored M68k_LINE4.c).
+
+  [J5o] FIFTH/SIXTH build-time transforms (the FPU sandbox + the libm asm-fix) — applied to the
+  BUILD-DIR COPIES of M68k_LINEF.c and math/libm.h ONLY, gated by `--fpu-sandbox` / `--libm-asm-fix`
+  (the [J5o] build passes them). M68k_LINEF.c's FPU_FetchData/FPU_StoreData resolve the EA base
+  ONCE and emit their OWN fp/integer load/store straight off the resolved 68k address (the 1:1-MMU
+  + big-endian assumption) — NOT via M68k_EA.c. `--fpu-sandbox` rewrites each such MEMORY site
+  (scoped to those whose base operand is the literal `int_reg`/`off`): the .s/.d FP forms
+  (fldd/fstd/flds/fsts + pre/post/pimm) to OUR j5d_fpu_f* helpers, and the integer .l/.w/.b forms
+  (ldr/str/ldrsh/strh/ldrsb/strb + ur/pre/post) to OUR j5d_fpu_i* helpers — both base-adjust +
+  per-element byteswap (REV64/REV/REV16), sign-correct for the decoder's scvtf/fcvtzs. It also
+  NEUTRALISES the bodies of the bare-metal GNU-as asm thunks clang/Mach-O cannot assemble and the
+  driven FPU set never reaches (the transcendental Poly* thunks; the MOVE16/CINV cache-maintenance).
+  `--libm-asm-fix` fixes the two clang-incompatible inline-asm constraints in math/libm.h. The
+  DECODE + the FP ARITHMETIC stay 100% the REAL decoder; the QUARANTINE M68k_LINEF.c / math/libm.h
+  are NOT touched — `diff` vs upstream stays empty (verified). The engine's `EMIT_lineF` carries a
+  WEAK fallback (in OUR j5d_engine.c) so the integer-only spikes that do not link M68k_LINEF.c still
+  build; the strong vendored decoder overrides it in the [J5o] build.
+
+NOT taken (Emu68's bare-metal runtime — deliberately re-hosted, never lifted)
+-----------------------------------------------------------------------------
+  src/aarch64/{start,vectors,mmu}.c, src/raspi/*, src/pistorm/*, src/boards/*,
+  src/support.c (bare-metal cache asm), src/tlsf.c, src/cache.c (the SOFTWARE m68k
+  D/I cache — replaced by HOOK 2 in j5c_shims.c), src/aarch64/RegisterAllocator64.c
+  (the EL0-sysreg SR/CTX RA — replaced by OUR j5c_ra.c), src/M68k_Translator.c +
+  src/ExecutionLoop.c (the ICache/LRU + MainLoop funnel — re-hosted minimally as OUR
+  per-PC block cache + dispatcher in j5d_engine.c), src/M68k_SR.c (the all-16-line
+  GetSRMask/INSNLength fan-out — severed by M68K_GetSRMask=>SR_CCR in j5c_shims.c), and
+  the line decoders NOT yet needed (M68k_LINE{0,4,6,E,F}.c — the [J5d]/[J5f] dispatcher
+  decodes Bcc/BRA/BSR/JSR/JMP/LEA itself, including the [J5f] real return stack
+  (bsr/jsr/rts push/pop on a7), computed jmp(An)/jsr(An), and the full Bcc .B/.W/.L
+  widths, rather than re-host LINE4/6's REG_PC/branch-target/M68K_PushReturnAddress model;
+  M68k_Exception.c, M68k_FPU.c).
+
+Exhibit-B (MPL <-> LGPL compatibility) check
+--------------------------------------------
+  Grep for the "Incompatible With Secondary Licenses" Exhibit-B notice across ALL
+  vendored files (the [J2] pair AND the [J5c]+[J5d] decoder set + headers): NONE FOUND
+  (every file carries only the Exhibit-A header). Per MPL-2.0 sec. 3.3, the absence of
+  the Exhibit-B notice makes these files compatible with the LGPL secondary licence AROS
+  uses. RE-RUN before re-vendoring any further file — must print nothing (the NOTICE doc
+  itself quotes the phrase, so restrict to source):
+    grep -rn "Incompatible With Secondary Licenses" hosted/jit68k/emu68/ --include='*.c' --include='*.h'
+  (Confirmed empty for the [J5c] AND [J5d] vendoring — M68k_LINE5.c, M68k_CC.c — on 2026-06-25.)
+  ([J5f] vendored NO new file — the PC-driven dispatcher / real return stack / computed
+  jumps / full Bcc widths are dispatcher-level C in OUR files (j5d_engine.c, j5d_interp.c)
+  — so the Exhibit-B set is unchanged; re-grep on 2026-06-25 still empty.)
+  (Confirmed empty for the [J5o] vendoring — M68k_LINEF.c, math/libm.h, tlsf.h — on 2026-06-25.)
+
+Local edits to these files
+--------------------------
+  NONE. EVERY file in this directory (the [J2] pair AND the [J5c]+[J5d]+[J5g]+[J5o] decoder
+  set + headers, including M68k_LINE5.c, M68k_CC.c, and the [J5o] M68k_LINEF.c / math/libm.h /
+  tlsf.h) is byte-identical to upstream — `diff` against the pinned commit is empty for each.
+  All glue/adaptation lives in separate, AROS-licensed files OUTSIDE this directory
+  (hosted/jit68k/j2_*.c, j5c_*.c, j5d_*.c, j5o_*.c) and in the build-time darwinize generator
+  (hosted/jit68k/emu68_darwinize.pl, which writes patched COPIES to build/emu68-darwin/ — the
+  alias-forwarder transform for all files, plus the [J5d] (An)-EA call-substitution under
+  --ea-sandbox, the [J5l] movem rewrite under --movem-sandbox, and the [J5o] FPU sandbox +
+  libm asm-fix under --fpu-sandbox/--libm-asm-fix — and never touches these files). Any future
+  edit to a file in THIS directory stays MPL-2.0 and its source must be disclosed under MPL;
+  record the edit here.

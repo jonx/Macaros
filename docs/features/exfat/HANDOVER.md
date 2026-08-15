@@ -181,7 +181,7 @@ The upstream head also contains later exFAT handler work (`6a588892ab`,
 ## Useful commands
 
 ```sh
-cd /Users/jkn/Source/aros-aarch64
+cd /Users/jkn/Source/Macaros
 ./graft/exfat-acceptance-smoke
 
 # Or run individual gates:

@@ -3,7 +3,7 @@
 # the full AROS Wanderer desktop on a clean Mac (no ~/aros-build, no ../aros-upstream).
 #
 # Sibling to make-aros-app.sh (the dev wrapper). The difference is self-containment:
-# this EMBEDS the whole prepared AROS volume (fonts + AROSDefault theme + Cocoa
+# this EMBEDS a release-filtered AROS volume (fonts + AROSDefault theme + Cocoa
 # monitor + AROS.boot + the full C:/Libs: set incl. FFViewX, FFView, gpufx.library,
 # RustHello) inside Contents/Resources/AROS, and ships a launcher that regenerates a
 # bundle-relative AROSBootstrap.conf into a per-user writable dir at each launch (the
@@ -11,16 +11,18 @@
 #
 # NO DUPLICATION of the deployment: the source tree is the one graft/run-window.sh
 # has already prepared in ~/aros-build (desktop payloads staged, media + rust
-# artifacts installed). We copy it, normalise the conf paths, and bake the desktop
-# Startup-Sequence — nothing is re-deployed.
+# artifacts installed). We copy its runtime payload, normalise the conf paths, and
+# bake the desktop Startup-Sequence. Developer files, test disks, logs, caches,
+# and crash reports are deliberately outside the release boundary.
 #
 #   ./make-aros-release.sh                 build build/Macaros.app (unsigned)
 #   ./make-aros-release.sh --dmg           …then wrap it in build/Macaros.dmg
+#   ./make-aros-release.sh --dmg-only      wrap an existing signed app without rebuilding it
 #   ./make-aros-release.sh --check         static self-containment audit of an existing build
 #   AROS_APP=/path ./make-aros-release.sh  build elsewhere
 #
-# Signing/notarization is a SEPARATE step (Developer ID, see ~/Source/apple-codesigning.md):
-#   codesign inside-out + xcrun notarytool submit + stapler — run once this boots clean.
+# Signing/notarization is a SEPARATE step; see RELEASE.md and
+# graft/sign-macaros-release.sh.
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,13 +36,39 @@ BSDSOCK="${AROS_CTL_BSDSOCK_DYLIB:-$ROOT/build/libbsdsockhost.dylib}"
 SCHEMA="$ROOT/hosted/cocoametal/settings.json"
 ICON="${AROS_CTL_ICON:-$ROOT/hosted/cocoametal/Macaros.icns}"
 APP="${AROS_APP:-$ROOT/build/Macaros.app}"
+COMPAT="$HERE/macaros-compatibility.sh"
+RELEASE_README="$HERE/release-README.md"
+NOTICES="$ROOT/notices"
+VERSION="${MACAROS_VERSION:-0.2.0}"
+BUILD_NUMBER="${MACAROS_BUILD_NUMBER:-2}"
+INCLUDE_MOONSTONE="${MACAROS_INCLUDE_MOONSTONE:-0}"
+AROS_SOURCE_TREE="${MACAROS_AROS_SOURCE:-$ROOT/../aros-upstream}"
+ZED_SOURCE_TREE="${MACAROS_ZED_SOURCE:-$ROOT/../zed-aros}"
+FERAIL_SOURCE_TREE="${MACAROS_FERAIL_SOURCE:-$ROOT/../Ferail}"
+MOONSTONE_SOURCE_TREE="${MACAROS_MOONSTONE_SOURCE:-$ROOT/../MoonstoneCS}"
 # The editor is the memory-hungry payload; 512 MB boots the desktop but cannot
 # hold Zed.
 MEMORY="${AROS_HOST_MEMORY:-1280}"
 
-# Dev-tree binaries that must not ship: the superseded editor shim and the
-# pre-rename Ferail copy.
-EXCLUDE_C="ZedAros Feraille"
+case "$VERSION" in *[!0-9.]*|'') echo "invalid MACAROS_VERSION: $VERSION" >&2; exit 2 ;; esac
+case "$BUILD_NUMBER" in *[!0-9]*|'') echo "invalid MACAROS_BUILD_NUMBER: $BUILD_NUMBER" >&2; exit 2 ;; esac
+case "$INCLUDE_MOONSTONE" in 0|1) ;; *) echo "MACAROS_INCLUDE_MOONSTONE must be 0 or 1" >&2; exit 2 ;; esac
+
+# Developer probes and superseded application builds must not ship.
+EXCLUDE_C="AEdit AHISmoke BevelProbe BrkProbe CRT64Probe CatalogProbe ClockTest \
+DeviceProbe EXFATFailpointProbe EXFATFormatProbe EXFATGeometryProbe \
+EXFATMediaChangeProbe EXFATNameProbe EXFATReadonlyProbe EXFATSparseProbe \
+EXFATWriteProbe FDSK64Probe FF3Avio FFProbe FFThumb Feraille GpuFxBench \
+GpuFxTest GpuiSmoke KqProbe PrefsProbe ProcProbe RustAlloc RustBulk RustPath \
+RustProc RustShell RustStack RustStd RustStream SockProbe TestLib TimerTest \
+ZedAros nettest reactortest socktest"
+
+# Only these top-level items cross from the mutable developer boot tree into the
+# product. In particular, never copy crash/, DiskImages/, Developer/, T/, hidden
+# user state, symbols, or loose 68k test fixtures.
+RUNTIME_ROOT_ITEMS="AROS.boot C Classes Devs Extras Fonts L Libs Locale Prefs S \
+Storage System Tools Utilities boot clips Devs.info Fonts.info Libs.info \
+Locale.info Prefs.info Storage.info System.info Tools.info Utilities.info"
 
 # The game reads its assets from one root, music included: the soundtrack is
 # 15 MB of pre-rendered tunes the AHI backend streams.
@@ -55,8 +83,8 @@ INFO_PLIST='<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleExecutable</key><string>Macaros</string>
   <key>CFBundleIconFile</key><string>Macaros</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>@MACAROS_VERSION@</string>
+  <key>CFBundleVersion</key><string>@MACAROS_BUILD_NUMBER@</string>
   <key>NSHumanReadableCopyright</key><string>Copyright © 2026 John Knipper. AROS under the AROS Public License.</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
@@ -205,8 +233,124 @@ find_bootd() {
     printf '%s\n' ""
 }
 
+write_build_manifest() {
+    manifest="$APP/Contents/Resources/Documentation/BUILD-MANIFEST.txt"
+    require_clean="${MACAROS_REQUIRE_CLEAN_SOURCES:-0}"
+    manifest_failed=0
+    {
+        echo "format=macaros-build-manifest-v1"
+        echo "product=Macaros"
+        echo "version=$VERSION"
+        echo "build=$BUILD_NUMBER"
+        echo "generated_utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        source_specs="Macaros|$ROOT|origin AROS|$AROS_SOURCE_TREE|fork Zed|$ZED_SOURCE_TREE|jonx Ferail|$FERAIL_SOURCE_TREE|origin"
+        [ "$INCLUDE_MOONSTONE" = 1 ] && source_specs="$source_specs Moonstone|$MOONSTONE_SOURCE_TREE|origin"
+        for source_spec in $source_specs; do
+            source_name=${source_spec%%|*}
+            source_rest=${source_spec#*|}
+            source_dir=${source_rest%|*}
+            source_remote=${source_rest##*|}
+            if git -C "$source_dir" rev-parse --git-dir >/dev/null 2>&1; then
+                source_rev=$(git -C "$source_dir" rev-parse HEAD)
+                source_branch=$(git -C "$source_dir" branch --show-current 2>/dev/null || echo detached)
+                [ -n "$source_branch" ] || source_branch=detached
+                if [ -n "$(git -C "$source_dir" status --porcelain 2>/dev/null)" ]; then
+                    source_state=dirty
+                    [ "$require_clean" = 1 ] && manifest_failed=1
+                else
+                    source_state=clean
+                fi
+                source_url=$(git -C "$source_dir" remote get-url "$source_remote" 2>/dev/null || \
+                    git -C "$source_dir" remote get-url origin 2>/dev/null || echo unknown)
+                source_upstream=$(git -C "$source_dir" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)
+                if [ "$source_upstream" != none ]; then
+                    source_counts=$(git -C "$source_dir" rev-list --left-right --count "$source_upstream...HEAD" 2>/dev/null || echo "unknown unknown")
+                    source_behind=$(printf '%s\n' "$source_counts" | awk '{print $1}')
+                    source_ahead=$(printf '%s\n' "$source_counts" | awk '{print $2}')
+                else
+                    source_ahead=unknown
+                    source_behind=unknown
+                fi
+                printf 'source=%s\trevision=%s\tstate=%s\tbranch=%s\tupstream=%s\tahead=%s\tbehind=%s\turl=%s\n' \
+                    "$source_name" "$source_rev" "$source_state" "$source_branch" \
+                    "$source_upstream" "$source_ahead" "$source_behind" "$source_url"
+            else
+                printf 'source=%s\trevision=unknown\tstate=missing\turl=unknown\n' "$source_name"
+                [ "$require_clean" = 1 ] && manifest_failed=1
+            fi
+        done
+        for artifact in \
+            "$DST/C/Zed" "$DST/C/Ferail" "$DST/C/Moonstone" \
+            "$APP/Contents/Frameworks/cocoametal.dylib" \
+            "$APP/Contents/Frameworks/libpasteboard.dylib" \
+            "$APP/Contents/Frameworks/libcoreaudio.dylib" \
+            "$APP/Contents/Frameworks/libbsdsockhost.dylib"; do
+            [ -f "$artifact" ] || continue
+            artifact_rel=${artifact#"$APP/"}
+            artifact_hash=$(shasum -a 256 "$artifact" | awk '{print $1}')
+            printf 'artifact=%s\tsha256=%s\n' "$artifact_rel" "$artifact_hash"
+        done
+    } > "$manifest"
+    if [ "$manifest_failed" = 1 ]; then
+        echo "make-aros-release.sh: source manifest contains dirty or missing inputs" >&2
+        echo "unset MACAROS_REQUIRE_CLEAN_SOURCES for an internal candidate" >&2
+        exit 1
+    fi
+}
+
+require_clean_sources() {
+    [ "${MACAROS_REQUIRE_CLEAN_SOURCES:-0}" = 1 ] || return 0
+    source_failure=0
+    source_specs="Macaros|$ROOT AROS|$AROS_SOURCE_TREE Zed|$ZED_SOURCE_TREE Ferail|$FERAIL_SOURCE_TREE"
+    [ "$INCLUDE_MOONSTONE" = 1 ] && source_specs="$source_specs Moonstone|$MOONSTONE_SOURCE_TREE"
+    for source_spec in $source_specs; do
+        source_name=${source_spec%%|*}
+        source_dir=${source_spec#*|}
+        if ! git -C "$source_dir" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "release source missing: $source_name ($source_dir)" >&2
+            source_failure=1
+        elif [ -n "$(git -C "$source_dir" status --porcelain 2>/dev/null)" ]; then
+            echo "release source is dirty: $source_name ($source_dir)" >&2
+            source_failure=1
+        fi
+    done
+    [ "$source_failure" = 0 ] || exit 1
+}
+
+make_dmg() {
+    DMG="${AROS_DMG:-$ROOT/build/Macaros.dmg}"
+    STAGE="${AROS_DMG_STAGE:-$ROOT/build/dmg-root}"
+    [ -d "$APP" ] || { echo "make-aros-release.sh: missing app for DMG: $APP" >&2; exit 1; }
+    [ -x "$COMPAT" ] || { echo "make-aros-release.sh: missing compatibility checker: $COMPAT" >&2; exit 1; }
+    rm -f "$DMG"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+    echo ">> staging disk image contents ..."
+    /usr/bin/ditto "$APP" "$STAGE/$(basename "$APP")"
+    cp -f "$RELEASE_README" "$STAGE/README.md"
+    cp -f "$ROOT/RELEASE-NOTES.md" "$STAGE/RELEASE-NOTES.md"
+    cp -f "$COMPAT" "$STAGE/Check Macaros Compatibility.command"
+    chmod +x "$STAGE/Check Macaros Compatibility.command"
+    if [ -n "${MACAROS_SIGN_IDENTITY:-}" ]; then
+        codesign --force --options runtime --timestamp \
+            --sign "$MACAROS_SIGN_IDENTITY" "$STAGE/Check Macaros Compatibility.command"
+    else
+        codesign --force --sign - "$STAGE/Check Macaros Compatibility.command"
+    fi
+    cp -f "$ROOT/LICENSE" "$STAGE/LICENSE"
+    cp -f "$ROOT/THIRD-PARTY-NOTICES.md" "$STAGE/THIRD-PARTY-NOTICES.md"
+    [ -d "$NOTICES" ] || { echo "make-aros-release.sh: missing notices directory: $NOTICES" >&2; exit 1; }
+    /usr/bin/ditto "$NOTICES" "$STAGE/Licenses"
+    ln -s /Applications "$STAGE/Applications"
+    echo ">> building $DMG ..."
+    hdiutil create -quiet -volname "Macaros $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+    rm -rf "$STAGE"
+    echo ">> built $DMG ($(du -sh "$DMG" | awk '{print $1}'))"
+}
+
 # --- static self-containment audit -----------------------------------------
 if [ "${1:-}" = "--check" ]; then
+    # Audit every invariant and report the full set instead of stopping at the
+    # first failed test under the script's normal `set -e` behavior.
+    set +e
     fail=0; ck() { if [ "$1" = 0 ]; then printf '    ok: %s\n' "$2"; else printf '    FAIL: %s\n' "$2"; fail=1; fi; }
     echo "[REL] self-containment audit of $APP"
     A="$APP/Contents"
@@ -219,20 +363,36 @@ if [ "${1:-}" = "--check" ]; then
     [ -e "$A/Resources/AROS/C/RustHello" ];             ck $? "RustHello embedded (C:RustHello)"
     [ -e "$A/Resources/AROS/C/Zed" ];                   ck $? "Zed embedded (C:Zed)"
     [ -e "$A/Resources/AROS/C/Ferail" ];                ck $? "Ferail embedded (C:Ferail)"
-    [ -e "$A/Resources/AROS/C/Moonstone" ];             ck $? "Moonstone embedded (C:Moonstone)"
-    [ -d "$A/Resources/AROS/Moonstone/extracted/moonahdk" ]; ck $? "Moonstone game assets"
-    [ -d "$A/Resources/AROS/Moonstone/assets/data" ];   ck $? "Moonstone data tables"
-    [ -d "$A/Resources/AROS/Moonstone/assets/music" ];  ck $? "Moonstone soundtrack"
+    [ -e "$A/Resources/AROS/Libs/emu68k.library" ];     ck $? "legacy 68k execution library embedded"
+    [ -e "$A/Resources/AROS/L/exfat-handler" ];         ck $? "exFAT filesystem handler embedded"
+    [ -e "$A/Resources/AROS/Devs/DOSDrivers/EXFAT0" ];  ck $? "exFAT DOSDriver embedded"
     [ -f "$A/Resources/AROS/C/Zed.info" ];              ck $? "Zed icon"
     [ -f "$A/Resources/AROS/C/Ferail.info" ];           ck $? "Ferail icon"
-    [ -f "$A/Resources/AROS/C/Moonstone.info" ];        ck $? "Moonstone icon"
     grep -q '^:C/Zed$'       "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Zed on the desktop (.backdrop)"
     grep -q '^:C/Ferail$'    "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Ferail on the desktop (.backdrop)"
-    grep -q '^:C/Moonstone$' "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Moonstone on the desktop (.backdrop)"
-    grep -q 'MOONSTONE_ROOT' "$A/Resources/AROS/S/Startup-Sequence" 2>/dev/null; ck $? "MOONSTONE_ROOT set at boot"
+    if grep -q '^Moonstone$' "$A/Resources/Documentation/COMPONENTS.txt" 2>/dev/null; then
+        [ -e "$A/Resources/AROS/C/Moonstone" ];             ck $? "optional Moonstone embedded"
+        [ -d "$A/Resources/AROS/Moonstone/extracted/moonahdk" ]; ck $? "Moonstone game assets"
+        [ -d "$A/Resources/AROS/Moonstone/assets/data" ];   ck $? "Moonstone data tables"
+        [ -d "$A/Resources/AROS/Moonstone/assets/music" ];  ck $? "Moonstone soundtrack"
+        [ -f "$A/Resources/AROS/C/Moonstone.info" ];        ck $? "Moonstone icon"
+        grep -q '^:C/Moonstone$' "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Moonstone on the desktop"
+    else
+        [ ! -e "$A/Resources/AROS/C/Moonstone" ];           ck $? "Moonstone binary excluded by default"
+        [ ! -e "$A/Resources/AROS/Moonstone" ];             ck $? "Moonstone assets excluded by default"
+        ! grep -q '^:C/Moonstone$' "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Moonstone absent from desktop"
+    fi
     for x in $EXCLUDE_C; do
         [ ! -e "$A/Resources/AROS/C/$x" ];              ck $? "dev-only C:$x not shipped"
     done
+    for x in crash DiskImages Developer T .cache .config .local symbols.out; do
+        [ ! -e "$A/Resources/AROS/$x" ];                ck $? "private/developer AROS:$x not shipped"
+    done
+    if find "$A/Resources/AROS" -type f \( -name '*.snapshot' -o -name '*.ips' -o -name '*.core' \) -print -quit 2>/dev/null | grep -q .; then
+        ck 1 "no crash snapshots or host crash reports embedded"
+    else
+        ck 0 "no crash snapshots or host crash reports embedded"
+    fi
     [ -f "$A/Resources/AROS/S/Startup-Sequence" ];      ck $? "desktop Startup-Sequence baked"
     [ -f "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl" ]; ck $? "conf template present"
     # THE self-containment invariant: no path in the template escapes the bundle.
@@ -243,35 +403,65 @@ if [ "${1:-}" = "--check" ]; then
         [ -f "$A/Frameworks/$m.dylib" ]; ck $? "Frameworks/$m.dylib"
     done
     [ -x "$A/MacOS/Macaros" ];                          ck $? "launcher executable"
+    [ -f "$A/Resources/Documentation/README.md" ];      ck $? "release README embedded"
+    [ -f "$A/Resources/Documentation/RELEASE-NOTES.md" ]; ck $? "release notes embedded"
+    [ -f "$A/Resources/Documentation/LICENSE" ];        ck $? "AROS licence embedded"
+    [ -f "$A/Resources/Documentation/THIRD-PARTY-NOTICES.md" ]; ck $? "third-party notices embedded"
+    [ -f "$A/Resources/Documentation/Licenses/ZED-LICENSE-GPL" ]; ck $? "Zed GPL licence embedded"
+    [ -f "$A/Resources/Documentation/Licenses/FERAIL-THIRD-PARTY-NOTICES.md" ]; ck $? "Ferail notices embedded"
+    [ -f "$A/Resources/Documentation/Licenses/EMU68-NOTICE" ]; ck $? "Emu68 notice embedded"
+    [ -f "$A/Resources/Documentation/BUILD-MANIFEST.txt" ]; ck $? "build manifest embedded"
     grep -q '@AROSROOT@' "$A/Resources/AROS/boot/darwin/AROSBootstrap.conf.tmpl"; ck $? "template uses @AROSROOT@ placeholder"
     plutil -lint "$A/Info.plist" >/dev/null 2>&1;       ck $? "Info.plist valid"
     [ "$fail" = 0 ] && { echo "[REL] PASS"; exit 0; } || { echo "[REL] FAIL"; exit 1; }
 fi
+
+if [ "${1:-}" = "--dmg-only" ]; then
+    "$0" --check
+    make_dmg
+    exit 0
+fi
+
+case "${1:-}" in ""|--dmg) ;; *) echo "usage: $0 [--check|--dmg|--dmg-only]" >&2; exit 2 ;; esac
 
 # --- real build ------------------------------------------------------------
 BOOTD="$(find_bootd)"
 [ -n "$BOOTD" ] && [ -x "$BOOTD/AROSBootstrap" ] || { echo "make-aros-release.sh: no AROSBootstrap (set AROS_CTL_BOOTD)" >&2; exit 1; }
 SRC="$(cd "$BOOTD/../.." && pwd)"   # .../darwin-aarch64/AROS
 [ -f "$DYLIB" ] || { echo "missing $DYLIB (make cocoametal-dylib, or set AROS_CTL_DYLIB)" >&2; exit 1; }
+[ -x "$COMPAT" ] || { echo "missing executable compatibility checker: $COMPAT" >&2; exit 1; }
+[ -f "$RELEASE_README" ] || { echo "missing release README: $RELEASE_README" >&2; exit 1; }
+[ -f "$ROOT/RELEASE-NOTES.md" ] || { echo "missing release notes: $ROOT/RELEASE-NOTES.md" >&2; exit 1; }
+[ -d "$NOTICES" ] || { echo "missing third-party notices directory: $NOTICES" >&2; exit 1; }
 
 # require the prepared desktop payloads — this script does NOT re-stage them
-for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer Devs/Monitors/Cocoa C/Zed C/Ferail C/Moonstone; do
+for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer \
+    Devs/Monitors/Cocoa C/Zed C/Ferail Libs/emu68k.library L/exfat-handler \
+    Devs/DOSDrivers/EXFAT0; do
     [ -e "$SRC/$p" ] || { echo "make-aros-release.sh: $SRC missing $p — boot desktop once via run-window.sh first" >&2; exit 1; }
 done
-for p in extracted/moonahdk assets/data; do
-    [ -d "$MOONSTONE_SRC/$p" ] || { echo "make-aros-release.sh: $MOONSTONE_SRC missing $p (set MOONSTONE_SRC)" >&2; exit 1; }
-done
+if [ "$INCLUDE_MOONSTONE" = 1 ]; then
+    [ -e "$SRC/C/Moonstone" ] || { echo "make-aros-release.sh: optional C:Moonstone is missing" >&2; exit 1; }
+    for p in extracted/moonahdk assets/data assets/music; do
+        [ -d "$MOONSTONE_SRC/$p" ] || { echo "make-aros-release.sh: $MOONSTONE_SRC missing $p (set MOONSTONE_SRC)" >&2; exit 1; }
+    done
+fi
+require_clean_sources
 
 echo ">> source AROS tree: $SRC ($(du -sh "$SRC" | awk '{print $1}'))"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 
-echo ">> embedding AROS volume (read-only) ..."
-# Copy the prepared tree; drop host-side scratch that must not ship.
-/usr/bin/ditto "$SRC" "$APP/Contents/Resources/AROS"
+echo ">> embedding release-filtered AROS volume (read-only) ..."
 DST="$APP/Contents/Resources/AROS"
+mkdir -p "$DST"
+for item in $RUNTIME_ROOT_ITEMS; do
+    [ -e "$SRC/$item" ] || continue
+    /usr/bin/ditto "$SRC/$item" "$DST/$item"
+done
 rm -f "$DST/Devs/Monitors/headless" 2>/dev/null || true
 for x in $EXCLUDE_C; do rm -f "$DST/C/$x" "$DST/C/$x.info"; done
+[ "$INCLUDE_MOONSTONE" = 1 ] || rm -f "$DST/C/Moonstone" "$DST/C/Moonstone.info"
 
 # Desktop icons: Wanderer draws a backdrop icon for each `:path` line in the
 # volume's .backdrop, so the two apps land on the desktop without moving them
@@ -279,18 +469,19 @@ for x in $EXCLUDE_C; do rm -f "$DST/C/$x" "$DST/C/$x.info"; done
 # make-aros-icon.py from each project's own artwork).
 cp -f "$HERE/icons/Zed.info"       "$DST/C/Zed.info"
 cp -f "$HERE/icons/Ferail.info"    "$DST/C/Ferail.info"
-cp -f "$HERE/icons/Moonstone.info" "$DST/C/Moonstone.info"
-printf ':C/Zed\n:C/Ferail\n:C/Moonstone\n' > "$DST/.backdrop"
+printf ':C/Zed\n:C/Ferail\n' > "$DST/.backdrop"
 
-echo ">> embedding Moonstone assets ..."
-mkdir -p "$DST/Moonstone/assets"
-/usr/bin/ditto "$MOONSTONE_SRC/extracted"   "$DST/Moonstone/extracted"
-/usr/bin/ditto "$MOONSTONE_SRC/assets/data" "$DST/Moonstone/assets/data"
-# The soundtrack: pre-rendered tunes (.wav) with the OPL captures (.dro) they
-# were rendered from, which the game falls back to when a .wav is missing.
-/usr/bin/ditto "$MOONSTONE_SRC/assets/music" "$DST/Moonstone/assets/music"
-cp -f "$MOONSTONE_SRC/CH.PIV" "$DST/Moonstone/CH.PIV" 2>/dev/null || true
-: > "$DST/Moonstone/.moonstone-root"
+if [ "$INCLUDE_MOONSTONE" = 1 ]; then
+    cp -f "$HERE/icons/Moonstone.info" "$DST/C/Moonstone.info"
+    printf ':C/Moonstone\n' >> "$DST/.backdrop"
+    echo ">> embedding optional Moonstone assets ..."
+    mkdir -p "$DST/Moonstone/assets"
+    /usr/bin/ditto "$MOONSTONE_SRC/extracted"   "$DST/Moonstone/extracted"
+    /usr/bin/ditto "$MOONSTONE_SRC/assets/data" "$DST/Moonstone/assets/data"
+    /usr/bin/ditto "$MOONSTONE_SRC/assets/music" "$DST/Moonstone/assets/music"
+    cp -f "$MOONSTONE_SRC/CH.PIV" "$DST/Moonstone/CH.PIV" 2>/dev/null || true
+    : > "$DST/Moonstone/.moonstone-root"
+fi
 
 # HOME points at the writable host share, not at SYS: — the embedded volume is
 # inside the signed bundle and must stay untouched.
@@ -303,7 +494,12 @@ rm -f "$DST/Prefs/Env-Archive/AROS_FSW_ROOTS"   # dev paths; the launcher writes
 cp -f "$DST/boot/darwin/AROSBootstrap" "$DST/boot/darwin/Macaros"
 
 # Bake the desktop Startup-Sequence.
-mkdir -p "$DST/S"; printf '%s\n' "$STARTUP_SEQUENCE" > "$DST/S/Startup-Sequence"
+mkdir -p "$DST/S"
+if [ "$INCLUDE_MOONSTONE" = 1 ]; then
+    printf '%s\n' "$STARTUP_SEQUENCE" > "$DST/S/Startup-Sequence"
+else
+    printf '%s\n' "$STARTUP_SEQUENCE" | grep -v '^SetEnv MOONSTONE_ROOT ' > "$DST/S/Startup-Sequence"
+fi
 
 # Build the bundle-relative conf TEMPLATE: every module path -> @AROSROOT@/<rel>.
 # Take the base conf's module lines (normalising both relative and host-absolute
@@ -345,23 +541,28 @@ cp "$DYLIB" "$APP/Contents/Frameworks/cocoametal.dylib"
 cp "$SCHEMA" "$APP/Contents/Resources/settings.json"
 [ -f "$ICON" ] && cp "$ICON" "$APP/Contents/Resources/Macaros.icns"
 [ -f "$HERE/aros-host-conf.sh" ] && cp "$HERE/aros-host-conf.sh" "$APP/Contents/Resources/aros-host-conf.sh"
+mkdir -p "$APP/Contents/Resources/Documentation"
+cp "$RELEASE_README" "$APP/Contents/Resources/Documentation/README.md"
+cp "$ROOT/RELEASE-NOTES.md" "$APP/Contents/Resources/Documentation/RELEASE-NOTES.md"
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/Documentation/LICENSE"
+cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/Documentation/THIRD-PARTY-NOTICES.md"
+/usr/bin/ditto "$NOTICES" "$APP/Contents/Resources/Documentation/Licenses"
+printf 'Zed\nFerail\n' > "$APP/Contents/Resources/Documentation/COMPONENTS.txt"
+if [ "$INCLUDE_MOONSTONE" = 1 ]; then
+    printf 'Moonstone\n' >> "$APP/Contents/Resources/Documentation/COMPONENTS.txt"
+fi
 printf '%s' "$LAUNCHER"   > "$APP/Contents/MacOS/Macaros"; chmod +x "$APP/Contents/MacOS/Macaros"
-printf '%s' "$INFO_PLIST" > "$APP/Contents/Info.plist"
+printf '%s' "$INFO_PLIST" | sed \
+    -e "s|@MACAROS_VERSION@|$VERSION|g" \
+    -e "s|@MACAROS_BUILD_NUMBER@|$BUILD_NUMBER|g" \
+    > "$APP/Contents/Info.plist"
+write_build_manifest
 
 echo ">> built $APP ($(du -sh "$APP" | awk '{print $1}'))"
 "$0" --check || { echo ">> self-containment audit FAILED"; exit 1; }
 
 if [ "${1:-}" = "--dmg" ]; then
-    DMG="${AROS_DMG:-$ROOT/build/Macaros.dmg}"
-    STAGE="${AROS_DMG_STAGE:-$ROOT/build/dmg-root}"
-    rm -f "$DMG"; rm -rf "$STAGE"; mkdir -p "$STAGE"
-    echo ">> staging disk image contents ..."
-    /usr/bin/ditto "$APP" "$STAGE/$(basename "$APP")"
-    cp -f "$HERE/release-README.md" "$STAGE/README.md"
-    echo ">> building $DMG ..."
-    hdiutil create -quiet -volname "Macaros" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-    rm -rf "$STAGE"
-    echo ">> built $DMG ($(du -sh "$DMG" | awk '{print $1}'))"
+    make_dmg
 fi
 
 echo ">> next: test-boot (relocated), then Developer-ID sign + notarize + staple."

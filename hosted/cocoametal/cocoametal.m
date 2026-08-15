@@ -518,13 +518,16 @@ void cm_upload_rect(CMContext *cx, const void *src, int srcStride,
     if (x + w > cx->w || y + h > cx->h) return;
     /* Rotate to the next ring slot BEFORE writing it, so the CPU never overwrites
      * the texture the previous (still in-flight, async) cm_present is sampling on
-     * the GPU. The matching cm_present samples this same slot via cx->fbTex. */
+     * the GPU. The matching cm_present samples this same slot via cx->fbTex.
+     *
+     * Every ring slot must contain a complete frame. src is the whole caller-owned
+     * framebuffer, so refresh the full slot even when the API reports a dirty rect.
+     * This preserves cm_upload_rect's partial-update semantics across ring rotation
+     * without copying from a texture that may still be in flight. */
     cx->fbIdx = (cx->fbIdx + 1) % 3;
     cx->fbTex = cx->fbRing[cx->fbIdx];
-    /* src points at the top-left of the WHOLE framebuffer; offset to the rect. */
-    const uint8_t *base = (const uint8_t *)src + (size_t)y * srcStride + (size_t)x * 4;
-    MTLRegion region = MTLRegionMake2D((NSUInteger)x, (NSUInteger)y,
-                                       (NSUInteger)w, (NSUInteger)h);
+    const uint8_t *base = (const uint8_t *)src;
+    MTLRegion region = MTLRegionMake2D(0, 0, (NSUInteger)cx->w, (NSUInteger)cx->h);
     [cx->fbTex replaceRegion:region
                  mipmapLevel:0
                    withBytes:base

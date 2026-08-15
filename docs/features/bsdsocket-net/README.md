@@ -30,7 +30,7 @@ Screenshots of each verdict are regenerated locally by the smoke run
 ## Quick start
 
 ```sh
-cd ~/Source/aros-aarch64
+cd ~/Source/Macaros
 make bsdsock-dylib                          # build the host pump shim
 ./graft/aros-ctl deploy                     # deploy it to ~/lib for HostLib_Open
 graft/bsdsock-livetest.sh                   # host unit tests + the live nettest
@@ -106,7 +106,7 @@ See [design.md → "What proves the internet works"](design.md) for the full mat
 
 ## Where the code lives
 
-**Host side (this repo — `aros-aarch64`):**
+**Host side (this repo — `Macaros`):**
 
 - [hosted/bsdsocket/](../../../hosted/bsdsocket/) — `bsdsock_pump.c` (the kqueue
   readiness pump + the `ps_create_cb` wake seam), `bsdsock_shim.c` (non-blocking

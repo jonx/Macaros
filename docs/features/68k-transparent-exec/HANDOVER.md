@@ -55,7 +55,7 @@ maintain is the bottom boundary.
 
 | path | what it is |
 |---|---|
-| `~/Source/aros-aarch64` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
+| `~/Source/Macaros` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
 | `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is `checkpoint/emu68k-progdir-20260807` at `b594c9ba09` plus the uncommitted generated/runtime side of this update. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
 | `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
 | `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
@@ -144,8 +144,8 @@ The unit of work is **a library**, never a function.
    rexxsyslib.library,rexxsupport.library" \
    EMU68K_LIBS_PATH=/Users/jkn/Source/references/aros-m68k-20260804/libs \
    EMU68K_MAX_SECONDS=40 CORPUS_TIMEOUT=300 \
-   /Users/jkn/Source/aros-aarch64/graft/68k-corpus \
-   /Users/jkn/Source/aros-aarch64/build/t3all <out>
+   /Users/jkn/Source/Macaros/graft/68k-corpus \
+   /Users/jkn/Source/Macaros/build/t3all <out>
    ```
    Use absolute paths: a compound command that `cd`s elsewhere silently breaks
    relative ones and the corpus never runs (cost an hour twice).

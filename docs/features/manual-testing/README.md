@@ -14,7 +14,7 @@ something a smoke does not cover.
 ## Boot the interactive desktop
 
 ```sh
-cd ~/Source/aros-aarch64
+cd ~/Source/Macaros
 AROS_CTL_STARTUP_MODE=desktop graft/run-window.sh
 ```
 

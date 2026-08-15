@@ -29,7 +29,7 @@ GadTools review queue alone.
 ## Repositories and local rules
 
 - Integration/tooling repository:
-  `/Users/jkn/Source/aros-aarch64`, branch `main`
+  `/Users/jkn/Source/Macaros`, branch `main`
 - AROS source repository:
   `/Users/jkn/Source/aros-upstream`, branch
   `aarch64-darwin-graft`

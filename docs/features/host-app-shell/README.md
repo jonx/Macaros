@@ -22,17 +22,20 @@ in a disk image.
 
 ## What the release desktop carries
 
-Three applications sit on the Wanderer backdrop: the editor
-([Zed](../zed-editor/README.md)), the file manager
-([Ferail](../feraille-gpui/README.md)) and the game (Moonstone). They stay in
+Two applications sit on the Wanderer backdrop in the standard release: the
+editor ([Zed](../zed-editor/README.md)) and the file manager
+([Ferail](../feraille-gpui/README.md)). They stay in
 `C:` so they also work as shell commands; the desktop icons come from
 `SYS:.backdrop`, which lists one `:path` per leave-out icon.
 
-The release differs from the dev tree in three ways that the editor depends on:
+Moonstone remains available to private builds through
+`MACAROS_INCLUDE_MOONSTONE=1`, but its binary, icon, environment variable, and
+assets are absent from the standard release.
+
+The release differs from the dev tree in two ways that the editor depends on:
 `HOME` is `MacRW:` (the embedded volume is inside a signed bundle and must stay
-read-only), `MOONSTONE_ROOT` points at the embedded game assets, and the
-launcher writes `AROS_FSW_ROOTS` into the share as `.macaros-boot` because only
-it knows where the share landed.
+read-only), and the launcher writes `AROS_FSW_ROOTS` into the share as
+`.macaros-boot` because only it knows where the share landed.
 
 ### Making an icon
 

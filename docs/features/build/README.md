@@ -8,7 +8,7 @@ deploy stages and runs them.
 
 > The OS source is a **separate** checkout at `../aros-upstream` (branch
 > `aarch64-darwin-graft`). You build from there, commit there, and push to the
-> jonx fork (remote `fork`). This repo (`aros-aarch64`) is only the host/graft
+> jonx fork (remote `fork`). This repo (`Macaros`) is only the host/graft
 > layer.
 
 ---

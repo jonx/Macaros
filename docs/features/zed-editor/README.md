@@ -179,7 +179,7 @@ host language server. Staging:
   bsdsocket park, and named an async-layer OS fix as the critical path. **That
   was wrong** — a test-harness artifact. The `PollFd` park
   (`bsdsocket_util.c`) polls every ~20 ms (`Delay(1)`) with a level-triggered
-  kqueue pump (`aros-aarch64/hosted/bsdsocket/bsdsock_pump.c`) that raises the
+  kqueue pump (`Macaros/hosted/bsdsocket/bsdsock_pump.c`) that raises the
   task signal on readiness, so recv wakes promptly. The real cause of the hangs
   was the **host bridge**: it served one connection at a time and blocked, so
   repeated test boots left half-closed connections and orphaned `rust-analyzer`

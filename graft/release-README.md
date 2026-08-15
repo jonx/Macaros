@@ -1,62 +1,63 @@
 # Macaros
 
-AROS for Apple Silicon. A complete AmigaOS-like desktop running natively on
-macOS, in a window, with two large applications on it.
+Macaros brings AROS—the open-source AmigaOS-compatible operating system—to an
+ordinary Mac app. It runs natively on Apple Silicon and opens the Wanderer
+desktop in a resizable Cocoa/Metal window.
 
-Drag **Macaros.app** to your Applications folder and launch it. The first
-launch may need a right-click and *Open*, because macOS is careful with apps it
-has not seen before.
+This release is a hosted environment for testing our own AROS and application
+platform concepts. AROS runs inside a normal arm64 macOS process and uses the
+Mac for hardware-facing services. A bare-metal Apple Silicon version is not
+planned.
 
-## The desktop
+## Before installing
 
-Macaros boots to the Wanderer desktop. Three application icons sit on it:
+Macaros requires an Apple Silicon Mac and macOS 12 or newer. Double-click
+**Check Macaros Compatibility.command** for a local check of the processor,
+macOS version, memory, Metal graphics, disk space, and app signature.
 
-- **Zed** - the Zed code editor, built for AROS. Editing, syntax highlighting,
-  project panel, and a terminal running a real AROS shell (Cmd-J opens it).
-- **Ferail** - a power-user file manager with a duplicate finder, a disk-usage
-  treemap, and an archive browser.
-- **Moonstone** - the 1991 Amiga game, rebuilt in Rust from its own data.
+To install, drag **Macaros.app** onto the **Applications** shortcut, then open it
+from Applications. The notarized release should open normally through
+Gatekeeper.
 
-Double-click an icon to start it. The editor and the file manager are large
-programs and take a few seconds to load.
+## What is included
 
-Everything is also reachable from a shell: the three applications live in `C:`,
-so `Zed`, `Ferail` and `Moonstone` work as commands, as does the rest of the
-AmigaDOS command set.
+Two applications are placed on the Wanderer desktop:
 
-## Sharing files with the Mac
+- **Zed**, a native AROS build of the Zed editor.
+- **Ferail**, a file manager with search, duplicate finding, disk-usage views,
+  and archive browsing.
 
-A folder on your Mac is mounted twice inside AROS:
+Macaros also includes the AmigaDOS command set, the FFView media viewer,
+CoreAudio sound, networking through the Mac, a shared clipboard, and 2D GPU
+acceleration. Its legacy compatibility layer runs a growing set of classic 68k
+applications, and the included exFAT driver can mount supported exFAT media and
+disk images from AROS.
 
-- `MacRW:` read and write
-- `MacRO:` the same folder, read only
+Double-click a desktop icon to launch it. Zed and Ferail are large applications
+and may take a few seconds to open.
 
-By default the folder is `~/AROS/Shared`. Anything you drop in it shows up in
-AROS immediately, and files AROS writes there appear on the Mac. Zed keeps its
-settings in that folder, so they survive an update of the app.
+## Sharing files with macOS
 
-To use a different folder, set `AROS_SHARE` before launching:
+Macaros creates `~/AROS/Shared`. Inside AROS the same folder appears as:
 
-    AROS_SHARE=/path/to/folder open -a Macaros
+- `MacRW:` for reading and writing
+- `MacRO:` for read-only access
 
-## Also on board
+Keep documents and settings in `MacRW:`. The AROS system volume inside the app
+is read-only so updates and code signing remain safe. Macaros keeps its other
+per-user state in `~/Library/Application Support/AROS`.
 
-Media playback (the FFView image and video viewer), audio through CoreAudio,
-networking through the Mac's stack, a shared clipboard with macOS (copy in one,
-paste in the other), and a resizable window that changes the AROS screen mode
-with it.
+## Current limits
 
-## Known limits
+- Zed does not yet include a language server or Git command integration.
+- Compatibility with classic 68k applications is growing, but is not complete.
+- Live addition or removal of host volumes still requires restarting Macaros.
 
-- The editor has no language server yet, so no completion or go-to-definition.
-- There is no `git` command inside AROS, so the editor's version-control
-  features stay quiet.
-- The game is silent: its music is decoded but AROS has no audio backend for it
-  yet, so those files are left out of this build.
-- The AROS volume lives inside the app bundle and is read only. Work in
-  `MacRW:` or `RAM:`.
+## Licence and notices
 
-## Licence and credit
-
-AROS is distributed under the AROS Public Licence. The bundled applications
-carry their own licences. Ported and assembled by John Knipper.
+AROS is distributed under the AROS Public Licence. Bundled applications and
+third-party components retain their own licences. See **LICENSE** and
+**THIRD-PARTY-NOTICES.md** in this disk image. Developers should also read
+**RELEASE-NOTES.md**, especially the requirement that all AArch64 AROS code for
+Macaros reserve Apple platform register `x18`. Macaros is ported and assembled
+by John Knipper.

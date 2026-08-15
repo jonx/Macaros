@@ -250,7 +250,7 @@ same build works from Terminal.
 
 ## Where the code lives
 
-**Host side (this repo — `aros-aarch64`):**
+**Host side (this repo — `Macaros`):**
 
 - [graft/aros-ctl](../../../graft/aros-ctl) — the CLI: subcommands → FIFO lines, the
   `char2vk` table, the `run`/`stop` lifecycle and boot staging, PPM→PNG.

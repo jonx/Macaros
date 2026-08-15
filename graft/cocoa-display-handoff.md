@@ -168,14 +168,14 @@ ever the one we were `Show`'d.
 
 (`cocoagfx_hiddclass.c` and the cocoametal sources live in the two repos:
 AROS core under `~/Source/aros-upstream`, the dylib under
-`~/Source/aros-aarch64/hosted/cocoametal`.)
+`~/Source/Macaros/hosted/cocoametal`.)
 
 ## 9. Repro
 
 ```sh
 # windowed boot with a control FIFO:
-~/Source/aros-aarch64/graft/aros-ctl run
-~/Source/aros-aarch64/graft/aros-ctl shot /tmp/x.png   # cm_readback -> gray
+~/Source/Macaros/graft/aros-ctl run
+~/Source/Macaros/graft/aros-ctl shot /tmp/x.png   # cm_readback -> gray
 
 # the shell IS there — dump the AROS framebuffer directly:
 #   set startup-sequence to "Version\nC:GrabScreen SYS:gs.ppm", boot, convert gs.ppm

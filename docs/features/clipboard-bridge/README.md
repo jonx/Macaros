@@ -92,7 +92,7 @@ sketches how `ILBM`/PNG would layer on later.)
 
 ## Where the code lives
 
-**Host side (this repo — `aros-aarch64`):**
+**Host side (this repo — `Macaros`):**
 
 - [hosted/clipboard/pasteboard.m](../../../hosted/clipboard/pasteboard.m) +
   `pasteboard.h` — the `NSPasteboard` shim: `host_pb_get_text` / `host_pb_set_text`
