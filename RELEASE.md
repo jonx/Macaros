@@ -24,7 +24,8 @@ Do not publish a candidate until every item below is resolved.
   does not preserve a guest value. All C/C++ objects need `-ffixed-x18`, Rust
   code needs the checked-in `+reserve-x18` target, and assembly must avoid it.
 - Configure an Apple notarytool keychain profile. The default profile name used
-  by the scripts is `macaros`.
+  by the scripts is `D4Mac`, matching the shared signing reference in the
+  parent source directory.
 
 These are provenance and distribution gates, not boot-test gates. An unsigned
 internal candidate can still be built and tested while they are being closed.
@@ -115,14 +116,14 @@ existing files under `~/Library/Application Support/AROS` or `~/AROS/Shared`.
 Store credentials once (Apple ID, team ID, and an app-specific password):
 
 ```sh
-xcrun notarytool store-credentials macaros
+xcrun notarytool store-credentials D4Mac
 ```
 
 Only after John has tested and approved the exact unsigned image, run:
 
 ```sh
 export MACAROS_SIGN_IDENTITY='Developer ID Application: Name (TEAMID)'
-export MACAROS_NOTARY_PROFILE=macaros
+export MACAROS_NOTARY_PROFILE=D4Mac
 export MACAROS_SIGN_SCOPE=outer
 graft/sign-macaros-release.sh --notarize
 ```

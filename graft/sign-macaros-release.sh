@@ -8,7 +8,7 @@ APP="${AROS_APP:-$ROOT/build/Macaros.app}"
 DMG="${AROS_DMG:-$ROOT/build/Macaros.dmg}"
 ENTITLEMENTS="${MACAROS_ENTITLEMENTS:-$HERE/aros-host-release.entitlements.plist}"
 IDENTITY="${MACAROS_SIGN_IDENTITY:-}"
-NOTARY_PROFILE="${MACAROS_NOTARY_PROFILE:-macaros}"
+NOTARY_PROFILE="${MACAROS_NOTARY_PROFILE:-D4Mac}"
 SIGN_SCOPE="${MACAROS_SIGN_SCOPE:-outer}"
 MODE="${1:---notarize}"
 
