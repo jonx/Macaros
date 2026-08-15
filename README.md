@@ -55,6 +55,9 @@ Do not publish changes to the AROS upstream project without first discussing
 the exact change with John and receiving explicit approval. This rule is also
 recorded in [AGENTS.md](AGENTS.md) for future work in this checkout.
 
+For a concise document to give existing collaborators after the repository
+split, see [TEAM-HANDOFF.md](TEAM-HANDOFF.md).
+
 ## Requirements
 
 - An Apple Silicon Mac
