@@ -74,13 +74,23 @@ ABI.
 
 ## Current limits
 
-- Legacy 68k compatibility is substantial but incomplete, especially for
-  programs that require original Amiga custom hardware.
+- Ferail is early. It cannot yet launch programs or open files by
+  double-clicking them; use Wanderer or the AROS Shell for those operations.
+- Legacy 68k compatibility is early and incomplete. Confirmed programs such as
+  LhA work, but programs that require missing operating-system calls or
+  original Amiga custom hardware may fail.
 - Zed does not yet include the complete language-server or Git integration of
   its upstream desktop releases.
 - Some host-volume and settings changes require restarting Macaros.
 - This release is experimental. Keep important data outside the writable shared
   volume until the relevant workflow has been tested.
+
+The delivery DMG and outer application bundle are Developer ID signed. As an
+interim compatibility measure, the hosted AROS engine and bridge libraries keep
+their build-time ad-hoc signatures and run without Apple's hardened runtime.
+They do not have independent Developer ID signatures. The complete host layer
+will move to hardened runtime only after a portable hosted-scheduler correction
+has been implemented and tested.
 
 The exact source revisions, states, repository URLs, and artifact hashes are in
 the `BUILD-MANIFEST.txt` embedded in the app. Third-party licences and generated

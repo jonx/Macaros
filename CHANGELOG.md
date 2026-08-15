@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 - 2026-08-15
+## 0.2.1 - 2026-08-16
 
 - **Legacy 68k support is complete in the delivery image.** The 0.2.0 package
   contained `emu68k.library` but omitted its arm64 host engine. The image now
@@ -16,11 +16,12 @@
 - **Release identity has one source.** The root `VERSION` file now supplies the
   bundle, disk image, manifest, and About window. About reports 0.2.1 build 5;
   release builds fail when their generated metadata disagrees.
-- **The notarized image now passes its own boot gate.** The hosted AROS
-  executables remain Developer-ID signed without applying a hardened-runtime
-  mode that is incompatible with their signal-context task switching. The app
-  and host libraries remain hardened, and publication requires a boot from the
-  exact signed disk image.
+- **The signed image now passes its own boot gate.** The delivery DMG and outer
+  application bundle are Developer ID signed. The hosted AROS engine and bridge
+  libraries retain ad-hoc signatures without hardened runtime because enabling
+  it currently stops signal-context task switching during bootstrap. This is an
+  explicit interim limitation, and publication requires a boot from the exact
+  signed and stapled disk image.
 
 ## 2026-08-15 - Macaros gets its own release home
 

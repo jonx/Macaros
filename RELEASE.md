@@ -123,24 +123,25 @@ Only after John has tested and approved the exact unsigned image, run:
 ```sh
 export MACAROS_SIGN_IDENTITY='Developer ID Application: Name (TEAMID)'
 export MACAROS_NOTARY_PROFILE=macaros
+export MACAROS_SIGN_SCOPE=outer
 graft/sign-macaros-release.sh --notarize
 ```
 
-The script signs nested libraries and both hosted runtime executables
-inside-out, signs the app with hardened runtime, submits and staples the app,
-creates a DMG without rebuilding the signed app, then signs, submits, and
-staples the DMG. The result is `build/Macaros.dmg`.
+The current `outer` scope signs the `Macaros.app` bundle with Developer ID and
+hardened runtime but preserves the build-time ad-hoc signatures on the hosted
+AROS executables and bridge libraries. It then builds, signs, submits, and
+staples the delivery DMG. The app is not submitted separately in this scope.
+The result is `build/Macaros.dmg`.
 
-The two hosted AROS executables are Developer-ID signed with the required
-entitlements but deliberately do not carry the `CS_RUNTIME` flag. AROS switches
-tasks through Darwin signal contexts, and hardening those executables stops the
-system during `dos.library` bootstrap. Host dylibs and the containing app remain
-hardened. Do not change this split without passing a boot test from the exact
-signed disk image.
+This is an interim arrangement. AROS switches tasks through Darwin signal
+contexts, and enabling hardened runtime on the hosted engine stops the system
+during `dos.library` bootstrap. `MACAROS_SIGN_SCOPE=full` signs every host Mach-O
+with hardened runtime and is retained for testing a future portable scheduler
+correction. Do not use that scope for a release until the exact signed image
+passes the complete boot and application test.
 
 For an internal Developer-ID-signed candidate without notarization, use
-`--sign-only`, then create the image with
-`graft/make-aros-release.sh --dmg-only`.
+`--package-test`. Use `--sign-only` when only the app bundle is required.
 
 ## 5. Verify the exact upload
 
@@ -149,9 +150,9 @@ Compatibility.command**, drag Macaros to Applications, launch it, and repeat the
 desktop/application smoke. Finally verify the signature and record checksums:
 
 ```sh
-codesign --verify --deep --strict --verbose=2 build/Macaros.app
-spctl --assess --type execute --verbose=2 build/Macaros.app
+codesign --verify --strict --verbose=2 build/Macaros.app
 xcrun stapler validate build/Macaros.dmg
+spctl --assess --type open --context context:primary-signature --verbose=2 build/Macaros.dmg
 shasum -a 256 build/Macaros.dmg
 ```
 

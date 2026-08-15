@@ -40,6 +40,23 @@ The normal release includes Zed and Ferail. Moonstone is deliberately excluded
 from the public release; developers can restore it for a private build with
 `MACAROS_INCLUDE_MOONSTONE=1` after providing its binary and assets.
 
+## Current limitations
+
+- Ferail is at an early stage. Its file-management views work, but it cannot yet
+  launch programs or open files by double-clicking them. Launch applications
+  from Wanderer or the AROS Shell instead.
+- Legacy 68k support is also early and incomplete. Confirmed programs such as
+  LhA work, but compatibility varies and programs that depend on unimplemented
+  operating-system calls or classic Amiga hardware may fail. Use **Help -> Show
+  Reports** after a failure to collect the bounded local compatibility report.
+- The release uses an interim signing arrangement. The delivery DMG and outer
+  `Macaros.app` bundle are Developer ID signed, while the hosted AROS engine and
+  its bridge libraries retain ad-hoc signatures and run without Apple's
+  hardened runtime. This preserves the current hosted scheduler behavior; it
+  does not mean that the embedded host code has an independent Developer ID
+  signature. A portable scheduler correction is required before the complete
+  host layer can use hardened runtime.
+
 ## Repository boundary
 
 This repository owns the Macaros product and integration layer:

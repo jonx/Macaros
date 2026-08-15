@@ -62,8 +62,16 @@ for instructions. Nothing is uploaded automatically, and session traces are boun
 ## Current limits
 
 - Zed does not yet include a language server or Git command integration.
-- Compatibility with classic 68k applications is growing, but is not complete.
+- Ferail is at an early stage. It cannot yet launch programs or open files by
+  double-clicking them; use Wanderer or the AROS Shell to launch them instead.
+- Legacy 68k support is early and incomplete. Confirmed programs such as LhA
+  work, but programs that need unimplemented operating-system calls or classic
+  Amiga hardware may fail. Check **Help -> Show Reports** after a failed test.
 - Live addition or removal of host volumes still requires restarting Macaros.
+- The delivery DMG and outer `Macaros.app` bundle are Developer ID signed. The
+  hosted AROS engine and bridge libraries currently retain ad-hoc signatures
+  and run without Apple's hardened runtime so the hosted scheduler continues
+  to work. They do not have independent Developer ID signatures.
 
 ## Licence and notices
 
