@@ -308,6 +308,15 @@ and `EXFATHotplugProbe AROSEX:` verified all three payloads byte-exact
 (`PASS AROSEX: mounted as FATX with exact payloads`). The direct USB
 hotplug/discovery acceptance gate is closed.
 
+`stage-exfat-test.sh` now stages `EXFATBootRegionProbe` in `C:` alongside
+the hotplug oracle on every deployment, so the raw-device diagnostic stays
+on the card. Two Wanderer notes for whoever reads the screen next: the
+mounted volume's window lists only files that have `.info` icons by
+default (the fixture files have none, so the window says "hidden" -- use
+Window/View/All files), and AROS shell `Echo` treats `*` inside a quoted
+string as the escape character, so status banners made of asterisks
+swallow their own closing quote; the demo script uses `=` banners.
+
 For the native Raspberry Pi 4B run, the Pi source is
 `/Users/jkn/Source/aros-upstream-raspi`, the build is
 `/Users/jkn/aros-build-850`, and the deployment harness is
