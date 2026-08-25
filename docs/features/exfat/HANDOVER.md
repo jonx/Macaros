@@ -295,6 +295,16 @@ discovery or handler validation; a fail names the corrupt read pattern. The
 checksum/offset logic is verified on this Mac against a freshly formatted
 exFAT image (main and backup regions both match).
 
+2026-08-25: the probe PASSED on the Pi 4B (both boot checksums exact, bulk
+== single-sector reads, stable rereads), which pinned the `Not a DOS disk`
+verdict on discovery. Root cause found by inspection in Poseidon
+massstorage `partitions.c`: `MatchHandler` returns the first table row
+whose mask matches, and `'FATX' & 0xffffff00 == 'FAT\0'`, so the masked
+FAT row shadowed the exFAT row and the stick was handed to `fat-handler`,
+which finds no FAT BPB and reports exactly this error. Fixed by ordering
+the exFAT row first (`exfat-pi4` commit `1abcd25bac`); the hardware re-run
+of `EXFATHotplugProbe AROSEX:` is still pending.
+
 For the native Raspberry Pi 4B run, the Pi source is
 `/Users/jkn/Source/aros-upstream-raspi`, the build is
 `/Users/jkn/aros-build-850`, and the deployment harness is
