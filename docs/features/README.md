@@ -42,11 +42,11 @@ one-look summary. Verified against the code, not just the docs.)
 [processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
 [native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
 [printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
-[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway).
+[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway) ·
+[exfat](exfat/README.md) (writable handler ships in the release bundle, phases 0–3 gated; physical Pi 4 USB hotplug acceptance still open).
 
 **⚪ Idea — design/spec only, no implementation yet:**
 [dos64-packets](dos64-packets/README.md) (dos64.library taken from master and building; consumers corrected) ·
-[exfat](exfat/README.md) (cleanroom Phase 1 spec written; no handler code yet) ·
 [serial-bridge](serial-bridge/README.md) ·
 [midi-coremidi](midi-coremidi/README.md) ·
 [usb-iokit](usb-iokit/README.md) ·

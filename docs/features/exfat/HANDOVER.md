@@ -284,6 +284,17 @@ rename/delete results. `graft/exfat-hotplug-probe-smoke` runs the identical
 oracle against Unit14 through an explicit hosted mount, isolating probe logic
 from the hardware automounter under test.
 
+When the volume does **not** mount (the `Not a DOS disk` case),
+`EXFATBootRegionProbe` (`build-exfat-bootregion-probe.sh`) is the next step
+down: it bypasses dos entirely, reads the MBR and both exFAT boot regions
+straight from the storage device (`EXFATBootRegionProbe usbscsi.device 0` on
+the Pi), validates the boot checksums on-device and compares a 12-sector bulk
+read against single-sector reads and a repeated read, all on the console. A
+pass means the device returns byte-exact exFAT data and the fault is in
+discovery or handler validation; a fail names the corrupt read pattern. The
+checksum/offset logic is verified on this Mac against a freshly formatted
+exFAT image (main and backup regions both match).
+
 For the native Raspberry Pi 4B run, the Pi source is
 `/Users/jkn/Source/aros-upstream-raspi`, the build is
 `/Users/jkn/aros-build-850`, and the deployment harness is
