@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-25 - exFAT proves itself on real USB hardware
+
+- **The exFAT handler passed its last acceptance gate: a physical USB stick
+  on a Raspberry Pi 4B.** The stick mounts read/write as `FATX` on hotplug
+  and every test payload reads back byte-exact. The failure that blocked
+  this since early August was a one-line handler-routing bug: a masked
+  `FAT` table entry shadowed the `FATX` entry, so correctly identified
+  exFAT partitions were handed to the FAT handler and reported as
+  "Not a DOS disk". A new on-screen `EXFATBootRegionProbe` diagnostic
+  (in `hosted/exfat-tests/`) proved the device data byte-exact first,
+  which pinned the fault to discovery and made the fix a certainty
+  instead of a guess.
+
 ## 0.2.1 - 2026-08-16
 
 - **Legacy 68k support is complete in the delivery image.** The 0.2.0 package

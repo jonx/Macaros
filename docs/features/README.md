@@ -27,6 +27,7 @@ one-look summary. Verified against the code, not just the docs.)
 [68k-jit (`run68k`)](68k-jit/design.md) ·
 [coreaudio-audio](coreaudio-audio/README.md) ·
 [bsdsocket-net](bsdsocket-net/README.md) ·
+[exfat](exfat/README.md) ·
 [ffmpeg-native](ffmpeg-native/README.md) ·
 [rust-aros](rust-aros/README.md) ·
 [gpufx](gpufx/README.md) ·
@@ -42,8 +43,8 @@ one-look summary. Verified against the code, not just the docs.)
 [processor-resource](processor-resource/README.md) (host CPU shim built; AROS backend pending) ·
 [native-modules](native-modules/README.md) (W^X `LoadSeg` in tree; darwin bring-up pending) ·
 [printing](printing/README.md) (print-to-PDF engine built; AROS driver blocked at `[PR0]`) ·
-[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway) ·
-[exfat](exfat/README.md) (writable handler ships in the release bundle, phases 0–3 gated; physical Pi 4 USB hotplug acceptance still open).
+[feraille-gpui](feraille-gpui/README.md) (Feraille runs on booted AROS via the `gpui_aros` CPU backend; native-shell + dirty-rect landed, GPU path underway).
+
 
 **⚪ Idea — design/spec only, no implementation yet:**
 [dos64-packets](dos64-packets/README.md) (dos64.library taken from master and building; consumers corrected) ·

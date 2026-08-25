@@ -360,7 +360,7 @@ representation for them.
 | 0.5 | 64-bit-safe disk/cache and mount geometry | delivered and gated |
 | 1 | Explicit read-only `FATX` mount, list and read | delivered and gated |
 | 2 | Writes, fault injection and external `fsck_exfat` validation | delivered and gated |
-| 3 | Formatter, media changes and shared MBR/GPT/USB content probing | implemented; a captured physical partition passes cross-OS mutation, direct USB hotplug/discovery acceptance remains |
+| 3 | Formatter, media changes and shared MBR/GPT/USB content probing | delivered; a captured physical partition passes cross-OS mutation, and the direct USB hotplug/discovery acceptance passed on the Raspberry Pi 4B on 2026-08-25 (`EXFATHotplugProbe AROSEX:` byte-exact after the massstorage handler-table fix) |
 
 USB discovery is shared across `rom/partition`, the ROM Poseidon mass-storage
 class, and the alternate workbench USB mass-storage implementation. Partition

@@ -302,8 +302,11 @@ massstorage `partitions.c`: `MatchHandler` returns the first table row
 whose mask matches, and `'FATX' & 0xffffff00 == 'FAT\0'`, so the masked
 FAT row shadowed the exFAT row and the stick was handed to `fat-handler`,
 which finds no FAT BPB and reports exactly this error. Fixed by ordering
-the exFAT row first (`exfat-pi4` commit `1abcd25bac`); the hardware re-run
-of `EXFATHotplugProbe AROSEX:` is still pending.
+the exFAT row first (`exfat-pi4` commit `1abcd25bac`). Same day, the
+hardware re-run PASSED on the Pi 4B: `AROSEX` mounts read/write as FATX
+and `EXFATHotplugProbe AROSEX:` verified all three payloads byte-exact
+(`PASS AROSEX: mounted as FATX with exact payloads`). The direct USB
+hotplug/discovery acceptance gate is closed.
 
 For the native Raspberry Pi 4B run, the Pi source is
 `/Users/jkn/Source/aros-upstream-raspi`, the build is
