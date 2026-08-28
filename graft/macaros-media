@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""macaros-media - the host side decides which physical media AROS can see.
+
+Hosted AROS reaches a real disk through hostdisk.device, which opens a host
+device node by name. Nothing in that path decides *which* node is reasonable to
+hand over, and macOS may still have the same volume mounted and writing. This
+tool is that decision:
+
+  list      show the removable/external media macOS currently has (never the
+            internal disk)
+  grant     hand one device to AROS: unmount it on the macOS side, write the
+            matching AROS mount description, and remember the grant
+  revoke    take it back and return it to macOS
+  status    show what is currently granted
+  prepare   re-resolve every grant against what is attached right now and
+            (re)write its mount description; print the names to mount
+
+A grant is remembered by volume identity (UUID when the medium has one, else
+name/size/filesystem), not by device node: /dev/disk numbers are reassigned on
+every replug.
+
+The boundary this draws is one of intent, not containment. Guest code can
+already reach the host through hostlib.resource, so this is the place where a
+person chooses what to expose, not a sandbox around a hostile guest.
+"""
+
+import argparse
+import os
+import plistlib
+import subprocess
+import sys
+
+DEFAULT_AROS = os.path.expanduser("~/aros-build/bin/darwin-aarch64/AROS")
+DEFAULT_CONF = os.path.expanduser("~/Library/Application Support/AROS/aros-host.conf")
+CONF_KEY = "media"
+
+# filesystem -> (AROS handler, mount DosType). The handler reads the real type
+# off the volume; DosType stays informational for the FAT family.
+HANDLERS = {
+    "exfat": ("exfat-handler", "0x46415458"),
+    "msdos": ("fat-handler", "0x46415400"),
+    "fat32": ("fat-handler", "0x46415402"),
+}
+
+
+def diskutil(*args):
+    out = subprocess.run(["/usr/sbin/diskutil", *args],
+                         capture_output=True)
+    if out.returncode != 0:
+        return None
+    try:
+        return plistlib.loads(out.stdout)
+    except Exception:
+        return None
+
+
+def node_of(ident):
+    ident = ident.strip()
+    if ident.startswith("/dev/"):
+        ident = ident[len("/dev/"):]
+    return ident.lstrip("r")
+
+
+def info(ident):
+    return diskutil("info", "-plist", node_of(ident))
+
+
+def fs_of(rec):
+    fs = (rec.get("FilesystemType") or rec.get("FilesystemName") or "").lower()
+    if "exfat" in fs:
+        return "exfat"
+    if "fat32" in fs:
+        return "fat32"
+    if "fat" in fs or "dos" in fs:
+        return "msdos"
+    return fs or "unknown"
+
+
+def identity(rec):
+    """A stable-enough key for a medium across replugs."""
+    for key in ("VolumeUUID", "DiskUUID"):
+        if rec.get(key):
+            return key.lower() + ":" + rec[key]
+    return "shape:%s/%s/%s" % (rec.get("VolumeName") or "-",
+                               rec.get("TotalSize") or rec.get("Size") or 0,
+                               fs_of(rec))
+
+
+def human(size):
+    size = float(size or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return "%.1f %s" % (size, unit)
+        size /= 1024
+
+
+def candidates():
+    """Every attached medium a person could reasonably hand to AROS."""
+    listing = diskutil("list", "-plist") or {}
+    found = []
+    for disk in listing.get("AllDisksAndPartitions", []):
+        idents = [disk.get("DeviceIdentifier")]
+        idents += [p.get("DeviceIdentifier") for p in disk.get("Partitions", [])]
+        for ident in [i for i in idents if i]:
+            rec = info(ident)
+            if not rec or rec.get("Internal"):
+                continue        # the host's own disk is never on offer
+            if rec.get("Content") == "GUID_partition_scheme" and rec.get("WholeDisk"):
+                continue        # offer the partitions of a partitioned disk
+            if fs_of(rec) == "unknown":
+                continue
+            found.append(rec)
+    return found
+
+
+def read_conf(path):
+    grants, other = [], []
+    if os.path.exists(path):
+        for line in open(path):
+            fields = line.split()
+            if fields and fields[0] == CONF_KEY:
+                # media <name> <ro|rw> <fs> <identity>
+                if len(fields) >= 5:
+                    grants.append({"name": fields[1], "mode": fields[2],
+                                   "fs": fields[3], "id": " ".join(fields[4:])})
+            else:
+                other.append(line)
+    return grants, other
+
+
+def write_conf(path, grants, other):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as conf:
+        for line in other:
+            conf.write(line)
+        for grant in grants:
+            conf.write("%s %s %s %s %s\n" % (CONF_KEY, grant["name"],
+                                             grant["mode"], grant["fs"],
+                                             grant["id"]))
+
+
+def dos_name(rec, taken):
+    base = "".join(c for c in (rec.get("VolumeName") or "")
+                   if c.isalnum()).upper()[:8]
+    if not base or base[0].isdigit():
+        base = "USB" + base
+    name = base
+    suffix = 0
+    while name in taken:
+        suffix += 1
+        name = "%s%d" % (base[:7], suffix)
+    return name
+
+
+def write_mountlist(aros, name, rec, mode):
+    handler, dostype = HANDLERS[fs_of(rec)]
+    block = int(rec.get("DeviceBlockSize") or 512)
+    total = int(rec.get("TotalSize") or rec.get("Size") or 0)
+    sectors = total // block
+    if sectors < 1:
+        raise SystemExit("macaros-media: %s reports no usable size" % name)
+    target = os.path.join(aros, "Devs", "DOSDrivers", name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w") as mountlist:
+        mountlist.write(
+            "FileSystem      = %s\n"
+            "Device          = hostdisk.device\n"
+            "Unit            = /dev/%s\n"
+            "Flags           = 0\n"
+            "Surfaces        = 1\n"
+            "BlocksPerTrack  = 1\n"
+            "LowCyl          = 0\n"
+            "HighCyl         = %d\n"
+            "Reserved        = 0\n"
+            "BlockSize       = %d\n"
+            "Buffers         = 64\n"
+            "BufMemType      = 1\n"
+            "StackSize       = 32768\n"
+            "Priority        = 5\n"
+            "GlobVec         = -1\n"
+            "DosType         = %s\n"
+            "Activate        = 0\n"
+            % (handler, rec["DeviceIdentifier"], sectors - 1, block, dostype))
+    # A read-only grant is enforced by the host: AROS opens the node itself, so
+    # the node's own write permission is what actually holds.
+    return target
+
+
+def host_readonly(rec, readonly):
+    node = "/dev/" + rec["DeviceIdentifier"]
+    try:
+        os.chmod(node, 0o440 if readonly else 0o640)
+        return True
+    except OSError:
+        return False
+
+
+def unmount(rec):
+    ident = rec["DeviceIdentifier"]
+    if not rec.get("MountPoint"):
+        return True
+    verb = "unmountDisk" if rec.get("WholeDisk") else "unmount"
+    done = subprocess.run(["/usr/sbin/diskutil", verb, ident],
+                          capture_output=True)
+    return done.returncode == 0
+
+
+def cmd_list(args):
+    rows = candidates()
+    if not rows:
+        print("no removable media attached")
+        return 0
+    grants, _ = read_conf(args.conf)
+    granted = {g["id"]: g for g in grants}
+    print("%-14s %-9s %-7s %-16s %s" % ("DEVICE", "SIZE", "FS", "LABEL", "STATE"))
+    for rec in rows:
+        grant = granted.get(identity(rec))
+        state = "granted to AROS as %s: (%s)" % (grant["name"], grant["mode"]) \
+            if grant else ("mounted by macOS at " + rec["MountPoint"]
+                           if rec.get("MountPoint") else "not mounted")
+        print("%-14s %-9s %-7s %-16s %s"
+              % ("/dev/" + rec["DeviceIdentifier"],
+                 human(rec.get("TotalSize") or rec.get("Size")),
+                 fs_of(rec), (rec.get("VolumeName") or "-")[:16], state))
+    return 0
+
+
+def cmd_grant(args):
+    rec = info(args.device)
+    if not rec:
+        print("macaros-media: no such device: %s" % args.device, file=sys.stderr)
+        return 1
+    if rec.get("Internal") and not os.environ.get("MACAROS_MEDIA_FORCE"):
+        print("macaros-media: %s is an internal disk, refusing" % args.device,
+              file=sys.stderr)
+        return 1
+    fs = fs_of(rec)
+    if fs not in HANDLERS:
+        print("macaros-media: AROS has no handler for filesystem '%s'" % fs,
+              file=sys.stderr)
+        return 1
+    if args.rw and not rec.get("WritableMedia", True):
+        print("macaros-media: %s is write-protected by the host" % args.device,
+              file=sys.stderr)
+        return 1
+    if not unmount(rec):
+        print("macaros-media: macOS would not release %s (files still open?)"
+              % args.device, file=sys.stderr)
+        return 1
+
+    grants, other = read_conf(args.conf)
+    key = identity(rec)
+    grants = [g for g in grants if g["id"] != key]
+    name = args.name or dos_name(rec, {g["name"] for g in grants})
+    mode = "rw" if args.rw else "ro"
+    write_mountlist(args.aros, name, rec, mode)
+    if not host_readonly(rec, mode == "ro"):
+        print("macaros-media: note: could not set node permissions on %s"
+              % rec["DeviceIdentifier"], file=sys.stderr)
+    grants.append({"name": name, "mode": mode, "fs": fs, "id": key})
+    write_conf(args.conf, grants, other)
+    print("granted %s (%s, %s) to AROS as %s: [%s]"
+          % ("/dev/" + rec["DeviceIdentifier"], rec.get("VolumeName") or "-",
+             fs, name, mode))
+    print("mount it in AROS with:  Mount DEVS:DOSDrivers/%s" % name)
+    return 0
+
+
+def cmd_revoke(args):
+    grants, other = read_conf(args.conf)
+    rec = info(args.device)
+    key = identity(rec) if rec else None
+    keep, drop = [], []
+    for grant in grants:
+        if grant["id"] == key or grant["name"].upper() == args.device.upper():
+            drop.append(grant)
+        else:
+            keep.append(grant)
+    if not drop:
+        print("macaros-media: nothing granted for %s" % args.device,
+              file=sys.stderr)
+        return 1
+    for grant in drop:
+        mountlist = os.path.join(args.aros, "Devs", "DOSDrivers", grant["name"])
+        if os.path.exists(mountlist):
+            os.unlink(mountlist)
+        print("revoked %s" % grant["name"])
+    write_conf(args.conf, keep, other)
+    if rec:
+        host_readonly(rec, False)
+        subprocess.run(["/usr/sbin/diskutil", "mount", rec["DeviceIdentifier"]],
+                       capture_output=True)
+    return 0
+
+
+def cmd_status(args):
+    grants, _ = read_conf(args.conf)
+    if not grants:
+        print("no media granted to AROS")
+        return 0
+    attached = {identity(rec): rec for rec in candidates()}
+    for grant in grants:
+        rec = attached.get(grant["id"])
+        where = "/dev/" + rec["DeviceIdentifier"] if rec else "not attached"
+        print("%-10s %-4s %-7s %s" % (grant["name"], grant["mode"],
+                                      grant["fs"], where))
+    return 0
+
+
+def cmd_prepare(args):
+    """Re-resolve grants against what is attached and refresh mount descriptions.
+
+    Device nodes move between replugs, so the mount description is authored
+    here, at boot, rather than trusted from grant time.
+    """
+    grants, _ = read_conf(args.conf)
+    attached = {identity(rec): rec for rec in candidates()}
+    for grant in grants:
+        rec = attached.get(grant["id"])
+        if not rec:
+            continue
+        if not unmount(rec):
+            print("macaros-media: %s is busy on the host, skipping"
+                  % rec["DeviceIdentifier"], file=sys.stderr)
+            continue
+        host_readonly(rec, grant["mode"] == "ro")
+        write_mountlist(args.aros, grant["name"], rec, grant["mode"])
+        print(grant["name"])
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--aros", default=os.environ.get("MACAROS_AROS_DIR", DEFAULT_AROS),
+                        help="runnable AROS tree (default: %s)" % DEFAULT_AROS)
+    parser.add_argument("--conf", default=os.environ.get("AROS_HOST_CONF", DEFAULT_CONF),
+                        help="host settings file holding the grants")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list").set_defaults(func=cmd_list)
+    grant = sub.add_parser("grant")
+    grant.add_argument("device")
+    grant.add_argument("--rw", action="store_true", help="allow AROS to write")
+    grant.add_argument("--name", help="AROS device name (default: from the label)")
+    grant.set_defaults(func=cmd_grant)
+    revoke = sub.add_parser("revoke")
+    revoke.add_argument("device", help="device node or granted AROS name")
+    revoke.set_defaults(func=cmd_revoke)
+    sub.add_parser("status").set_defaults(func=cmd_status)
+    sub.add_parser("prepare").set_defaults(func=cmd_prepare)
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -382,6 +382,7 @@ if [ "${1:-}" = "--check" ]; then
     [ -e "$A/Resources/AROS/Libs/emu68k.library" ];     ck $? "legacy 68k execution library embedded"
     [ -e "$A/Resources/AROS/L/exfat-handler" ];         ck $? "exFAT filesystem handler embedded"
     [ -e "$A/Resources/AROS/Devs/DOSDrivers/EXFAT0" ];  ck $? "exFAT DOSDriver embedded"
+    [ -e "$A/Resources/AROS/Devs/hostdisk.device" ];    ck $? "host media device embedded"
     [ -f "$A/Resources/AROS/C/Zed.info" ];              ck $? "Zed icon"
     [ -f "$A/Resources/AROS/C/Ferail.info" ];           ck $? "Ferail icon"
     grep -q '^:C/Zed$'       "$A/Resources/AROS/.backdrop" 2>/dev/null; ck $? "Zed on the desktop (.backdrop)"
@@ -462,7 +463,7 @@ SRC="$(cd "$BOOTD/../.." && pwd)"   # .../darwin-aarch64/AROS
 # require the prepared desktop payloads — this script does NOT re-stage them
 for p in AROS.boot Fonts Prefs/Presets/Themes/AROSDefault System/Wanderer/Wanderer \
     Devs/Monitors/Cocoa C/Zed C/Ferail Libs/emu68k.library L/exfat-handler \
-    Devs/DOSDrivers/EXFAT0; do
+    Devs/DOSDrivers/EXFAT0 Devs/hostdisk.device; do
     [ -e "$SRC/$p" ] || { echo "make-aros-release.sh: $SRC missing $p — boot desktop once via run-window.sh first" >&2; exit 1; }
 done
 if [ "$INCLUDE_MOONSTONE" = 1 ]; then

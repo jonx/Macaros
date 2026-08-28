@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-28 - Mount a real USB stick inside Macaros
+
+- **Macaros can now mount a physical macOS disk, and you choose which one.**
+  An exFAT (or FAT) stick, SD card, or attached disk image can be handed to
+  AROS with `aros-ctl media grant /dev/disk4s1` (add `--rw` to allow writes).
+  The Mac unmounts the volume first, so the two systems never write the same
+  filesystem at once, and the grant is remembered by the medium's identity, so
+  replugging it into a different port still works. `aros-ctl media list` shows
+  what is on offer and never lists the Mac's own disk; `revoke` gives the
+  volume back to macOS. Verified end to end: AROS reads Mac-written files,
+  files AROS writes come back byte-exact on the Mac, and the volume passes
+  `fsck_exfat`. A read-only grant really is read-only.
+- The route is `hostdisk.device`, which needed three fixes to work on macOS at
+  all: the darwin build was compiling a placeholder backend, its geometry code
+  did not compile and mis-sized disks over 2 TB, and it gave up instead of
+  falling back to read-only when the Mac allowed reading but not writing.
+
 ## 2026-08-25 - exFAT proves itself on real USB hardware
 
 - **The exFAT handler passed its last acceptance gate: a physical USB stick

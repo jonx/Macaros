@@ -322,6 +322,14 @@ plug in the physical stick, and run `EXFATHotplugProbe AROSEX:`. A pass proves
 that the active USB stack selected and loaded the handler and that all three
 post-mutation payloads are exact.
 
+A physical stick is also mountable in the hosted build, through
+`hostdisk.device` rather than a USB stack: the host grants one specific device
+node and AROS mounts it like any other volume. Verified on 2026-08-28 against a
+real macOS block device (list, read, write, `fsck_exfat -n` clean, macOS reads
+the AROS-written file back). See [host-media](../host-media/README.md); the
+handler still does not query `TD_PROTSTATUS`, so a write-protected device fails
+writes at the device layer instead of reporting `ID_WRITE_PROTECTED`.
+
 Hosted libusb pass-through is not a substitute on this Mac. The virtual HCI was
 made build-portable (`pkg-config` headers, Linux/Darwin runtime names), fixed to
 claim interfaces on hosts where kernel-driver queries are unsupported, and made

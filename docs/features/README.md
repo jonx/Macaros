@@ -28,6 +28,7 @@ one-look summary. Verified against the code, not just the docs.)
 [coreaudio-audio](coreaudio-audio/README.md) ·
 [bsdsocket-net](bsdsocket-net/README.md) ·
 [exfat](exfat/README.md) ·
+[host-media](host-media/README.md) ·
 [ffmpeg-native](ffmpeg-native/README.md) ·
 [rust-aros](rust-aros/README.md) ·
 [gpufx](gpufx/README.md) ·
@@ -103,6 +104,7 @@ one-look summary. Verified against the code, not just the docs.)
 | host-volume | A real macOS folder mounted as an AROS volume | [README](host-volume/README.md) |
 | dos64-packets | `DosPacket64` layout + send/reply plumbing for the `8001`–`8004` actions; prerequisite for files > 4 GB | [README](dos64-packets/README.md) |
 | exfat | exFAT read/write handler (`FATX`): the format on every SD card and USB stick over 32 GB | [README](exfat/README.md) |
+| host-media | Grant a physical macOS disk/stick to AROS: `hostdisk.device` + the host-side broker (`aros-ctl media`) | [README](host-media/README.md) |
 | coreaudio-audio | Real sound via a CoreAudio-backed AHI sub-driver (built) | [README](coreaudio-audio/README.md) |
 | bsdsocket-net | TCP/IP by forwarding `bsdsocket.library` to the Mac's sockets (built) | [README](bsdsocket-net/README.md) |
 | printing | `printer.device` → CUPS / print-to-PDF | [README](printing/README.md) |

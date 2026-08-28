@@ -125,6 +125,7 @@ lifecycle must opt into the old replacement semantics with
 |---|---|
 | `setting KEY VALUE [Y]` | Inject one `CM_EV_SETTING` event directly into the Cocoa HIDD input path. `KEY` is a numeric `CM_OPT_*` value, `VALUE` is carried in `x`, and optional `Y` is carried in `y`. |
 | `clipboard on\|off` | Convenience wrapper for `CM_OPT_CLIPBOARD_SHARE` (`0x14`) to pause/resume the NSPasteboard ↔ `PRIMARY_CLIP` bridge at runtime. |
+| `media [list\|grant NODE [--rw]\|revoke NAME\|status]` | Choose which physical host disk or stick AROS may see. Granting unmounts the volume on the macOS side and writes its AROS mount description; `run` mounts what is granted. See [host-media](../host-media/README.md). |
 
 ### Capture & introspection
 | Command | Effect |
