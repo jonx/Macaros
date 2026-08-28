@@ -268,6 +268,21 @@ int main(int argc, const char **argv) {
                   "the Media tab presents the device list");
         }
 
+        /* (3c) Capture Input is a real grab now: turning it on installs the key
+         * monitor that sends Command combinations to the guest, and turning it
+         * off takes it away again. */
+        NSMenuItem *capture = nil;
+        for (NSMenuItem *top in bar.itemArray)
+            if ([top.submenu itemWithTitle:@"Capture Input"])
+                capture = [top.submenu itemWithTitle:@"Capture Input"];
+        check(capture != nil, "Machine menu offers Capture Input");
+        if (capture) {
+            [NSApp sendAction:capture.action to:capture.target from:capture];
+            check(capture.state == NSControlStateValueOn, "Capture Input turns on");
+            [NSApp sendAction:capture.action to:capture.target from:capture];
+            check(capture.state == NSControlStateValueOff, "Capture Input turns off again");
+        }
+
         /* (4) Movie recording: present N frames -> cm__record_frame appends -> probe .mov */
         upload_fn   cm_upload_    = (upload_fn)  dlsym(h, "cm_upload_rect");
         present_fn  cm_present_   = (present_fn) dlsym(h, "cm_present");

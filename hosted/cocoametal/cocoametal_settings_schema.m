@@ -26,21 +26,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include "cocoametal.h"
 #include "cocoametal_media.h"
 #include "cocoametal_media_ui.h"
 
 extern NSString *cm__app_name(void);   /* host app name for window chrome */
+extern void cm__shell_prefs_changed(void);  /* settings the app shell acts on */
 
 /* ---- the descriptor vocabulary (was cmsettings.h in the POC) ---- */
 typedef enum { CMCtlCheckbox, CMCtlPopup, CMCtlSlider, CMCtlText, CMCtlPath,
                CMCtlMedia /* a live list, not one value */ } CMCtl;
 typedef enum { CMStoreDefaults, CMStoreConf } CMStoreKind;
 typedef enum { CMApplyNone, CMApplyHostOption, CMApplyArosOption,
-               CMApplyArosOptionStr, CMApplyBootOnly } CMApply;
-typedef struct { const char *label; long value; } CMChoice;
+               CMApplyArosOptionStr, CMApplyBootOnly,
+               CMApplyGuestFile /* written into the shared folder for a guest watcher */
+             } CMApply;
+typedef struct { const char *label; long value; const char *svalue; } CMChoice;
 typedef struct {
-    const char *ident, *tier, *tab, *label;
+    const char *ident, *tier, *tab, *label, *applyFile;
     CMCtl ctl; int valueIsStr;
     CMStoreKind store; const char *storeKey;
     long defNum; const char *defStr;
@@ -57,9 +61,24 @@ static char       gErr[256] = "";
 static char *dupc(NSString *s) { return s ? strdup([s UTF8String]) : NULL; }
 static int   failf(NSString *m) { snprintf(gErr, sizeof gErr, "%s", m.UTF8String ?: "error"); return -1; }
 
+static NSDictionary *const_table(void);
+
+/* A value the schema writes as text is either one of the named constants below
+ * or a value in its own right (a keymap name, say). Telling the two apart is
+ * what decides whether a popup carries numbers or strings. */
+static int const_known(id v) {
+    if ([v isKindOfClass:[NSNumber class]]) return 1;
+    if (![v isKindOfClass:[NSString class]]) return 0;
+    return const_table()[v] != nil;
+}
+
 static long const_num(id v, long deflt) {
     if ([v isKindOfClass:[NSNumber class]]) return [v longValue];
     if (![v isKindOfClass:[NSString class]]) return deflt;
+    NSNumber *n = const_table()[v]; return n ? n.longValue : deflt;
+}
+
+static NSDictionary *const_table(void) {
     static NSDictionary *K = nil;
     if (!K) K = @{
         @"CM_OPT_EFFECT":@(CM_OPT_EFFECT), @"CM_OPT_SCALE_MODE":@(CM_OPT_SCALE_MODE),
@@ -76,7 +95,7 @@ static long const_num(id v, long deflt) {
         @"CM_SCALE_PIXEL_PERFECT":@(CM_SCALE_PIXEL_PERFECT), @"CM_SCALE_ASPECT_FIT":@(CM_SCALE_ASPECT_FIT),
         @"CM_FILTER_NEAREST":@(CM_FILTER_NEAREST), @"CM_FILTER_LINEAR":@(CM_FILTER_LINEAR),
     };
-    NSNumber *n = K[v]; return n ? n.longValue : deflt;
+    return K;
 }
 static int ctl_from(NSString *s, CMCtl *out) {
     NSDictionary *M = @{@"checkbox":@(CMCtlCheckbox), @"popup":@(CMCtlPopup), @"slider":@(CMCtlSlider),
@@ -92,7 +111,7 @@ static int store_from(NSString *s, CMStoreKind *out) {
 static int apply_from(NSString *s, CMApply *out) {
     NSDictionary *M = @{@"none":@(CMApplyNone), @"hostOption":@(CMApplyHostOption),
                         @"arosOption":@(CMApplyArosOption), @"arosOptionStr":@(CMApplyArosOptionStr),
-                        @"bootOnly":@(CMApplyBootOnly)};
+                        @"bootOnly":@(CMApplyBootOnly), @"guestFile":@(CMApplyGuestFile)};
     NSNumber *n = M[s ?: @"none"]; if (!n) return 0; *out = (CMApply)n.intValue; return 1;
 }
 
@@ -120,15 +139,24 @@ static int load_schema(const char *pathC) {
         if (!store_from(store, &s.store)) { free(out); return failf([NSString stringWithFormat:@"%@: bad store '%@'", ident, store]); }
         if (!apply_from(d[@"apply"], &s.apply)) { free(out); return failf([NSString stringWithFormat:@"%@: bad apply", ident]); }
         s.ident=dupc(ident); s.tier=dupc(tier); s.tab=dupc(tab); s.label=dupc(label); s.storeKey=dupc(key);
-        s.valueIsStr = (s.ctl == CMCtlPath || s.ctl == CMCtlText) ? 1 : 0;
+        s.valueIsStr = (s.ctl == CMCtlPath || s.ctl == CMCtlText ||
+                        (d[@"default"] && !const_known(d[@"default"]))) ? 1 : 0;
         if (d[@"applyKey"]) s.applyKey = (int)const_num(d[@"applyKey"], 0);
+        if (d[@"applyFile"]) s.applyFile = dupc(d[@"applyFile"]);
+        if (s.apply == CMApplyGuestFile && !s.applyFile) { free(out);
+            return failf([NSString stringWithFormat:@"%@: guestFile needs applyFile", ident]); }
         if (s.valueIsStr) s.defStr = dupc(d[@"default"] ?: @"");
         else              s.defNum = const_num(d[@"default"], 0);
         s.minV = [d[@"min"] longValue]; s.maxV = [d[@"max"] longValue]; s.stepV = [d[@"step"] longValue];
         NSArray *ch = d[@"choices"];
         if ([ch isKindOfClass:[NSArray class]] && ch.count) {
             CMChoice *cc = calloc(ch.count, sizeof(CMChoice)); int j = 0;
-            for (NSDictionary *co in ch) { cc[j].label = dupc(co[@"label"]); cc[j].value = const_num(co[@"value"], 0); j++; }
+            for (NSDictionary *co in ch) {
+                cc[j].label = dupc(co[@"label"]);
+                if (s.valueIsStr) cc[j].svalue = dupc(co[@"value"]);
+                else              cc[j].value  = const_num(co[@"value"], 0);
+                j++;
+            }
             s.choices = cc; s.nchoices = (int)ch.count;
         }
         if (s.ctl == CMCtlMedia && s.apply != CMApplyNone) { free(out);
@@ -187,11 +215,25 @@ static void conf_set(NSString *key, NSString *val) {
 }
 
 /* ======================================================= the model ========= */
+/* A setting the guest applies to itself: leave the value in the shared folder,
+ * where a watcher inside AROS picks it up. This is how a choice reaches a
+ * running system that keeps no writable directory of its own. */
+static void write_guest_file(const CMSetting *s, const char *value) {
+    NSString *dir = @(cm_host_share_dir());
+    if (!dir.length || !s->applyFile) return;
+    NSString *path = [dir stringByAppendingPathComponent:@(s->applyFile)];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                             withIntermediateDirectories:YES attributes:nil error:NULL];
+    [[NSString stringWithFormat:@"%s\n", value ?: ""]
+        writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+}
+
 static void apply_setting(const CMSetting *s, long num, const char *str, CMContext *cx) {
     switch (s->apply) {
     case CMApplyHostOption:
     case CMApplyArosOption:    cm_set_option(cx, s->applyKey, num); break;
     case CMApplyArosOptionStr: cm_set_option_str(cx, s->applyKey, str ?: ""); break;
+    case CMApplyGuestFile:     write_guest_file(s, str ?: [@(num) stringValue].UTF8String); break;
     case CMApplyNone:
     case CMApplyBootOnly:      break;
     }
@@ -206,16 +248,33 @@ static const char *load_str(const CMSetting *s) {
     if (!v) v = s->defStr ? @(s->defStr) : @"";
     return [v UTF8String];
 }
+/* Point a popup at whatever its store currently says. */
+static void select_choice(NSPopUpButton *p, const CMSetting *s) {
+    if (s->valueIsStr) {
+        NSString *cur = @(load_str(s));
+        for (int i = 0; i < s->nchoices; i++)
+            if (s->choices[i].svalue && [cur isEqualToString:@(s->choices[i].svalue)]) {
+                [p selectItemAtIndex:i];
+                return;
+            }
+        return;
+    }
+    long cur = load_num(s);
+    for (NSMenuItem *it in p.itemArray) if (it.tag == cur) { [p selectItem:it]; return; }
+}
+
 static void set_num(const CMSetting *s, long v, CMContext *cx) {
     if (s->store == CMStoreConf) conf_set(@(s->storeKey), [@(v) stringValue]);
     else                         [du() setInteger:v forKey:@(s->storeKey)];
     apply_setting(s, v, NULL, cx);
+    cm__shell_prefs_changed();
 }
 static void set_str(const CMSetting *s, const char *v, CMContext *cx) {
     NSString *val = v ? @(v) : @"";
     if (s->store == CMStoreConf) conf_set(@(s->storeKey), val);
     else                         [du() setObject:val forKey:@(s->storeKey)];
     apply_setting(s, 0, v, cx);
+    cm__shell_prefs_changed();
 }
 
 /* ================================================ the generated window ====== */
@@ -255,6 +314,10 @@ static NSString *symbol_for_tab(NSString *tab) {
 @property (nonatomic, strong) NSMutableArray<NSString *> *tabs;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSView *> *tabViews;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTextField *> *pathFields;
+/* Every generated control, by schema index, so the window can be brought back
+ * in step with the stores when something else changes them. */
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSControl *> *controls;
+- (void)refreshFromStores;
 @end
 
 @implementation CMSettingsWC
@@ -270,10 +333,11 @@ static NSString *symbol_for_tab(NSString *tab) {
             NSPopUpButton *p = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
             for (int i = 0; i < s->nchoices; i++) {
                 [p addItemWithTitle:@(s->choices[i].label)];
-                p.lastItem.tag = (NSInteger)s->choices[i].value;
+                /* A string choice is identified by its position; a numeric one
+                 * carries its own value, so the menu item can hold it. */
+                p.lastItem.tag = s->valueIsStr ? i : (NSInteger)s->choices[i].value;
             }
-            long cur = load_num(s);
-            for (NSMenuItem *it in p.itemArray) if (it.tag == cur) { [p selectItem:it]; break; }
+            select_choice(p, s);
             p.target = self; p.action = @selector(changed:); p.tag = idx; return p;
         }
         case CMCtlSlider: {
@@ -305,7 +369,11 @@ static NSString *symbol_for_tab(NSString *tab) {
 - (void)changed:(id)sender {
     int idx = (int)[(NSControl *)sender tag];
     const CMSetting *s = &gSettings[idx];
-    if (s->valueIsStr) {
+    if (s->valueIsStr && s->ctl == CMCtlPopup) {
+        NSInteger pick = [[(NSPopUpButton *)sender selectedItem] tag];
+        if (pick >= 0 && pick < s->nchoices && s->choices[pick].svalue)
+            set_str(s, s->choices[pick].svalue, _cx);
+    } else if (s->valueIsStr) {
         set_str(s, [[(NSControl *)sender stringValue] UTF8String], _cx);
     } else {
         long v;
@@ -334,6 +402,7 @@ static NSString *symbol_for_tab(NSString *tab) {
         if (s->ctl == CMCtlMedia) { media = cm_media_panel(); continue; }
         NSTextField *lbl = [NSTextField labelWithString:[NSString stringWithFormat:@"%s:", s->label]];
         NSControl *ctl = [self controlFor:s index:i];
+        if (ctl) self.controls[@(i)] = ctl;
         NSView *right = ctl;
         if (s->ctl == CMCtlPath) {
             NSStackView *h = [NSStackView stackViewWithViews:@[ctl, [self browseButtonForIndex:i]]];
@@ -379,6 +448,37 @@ static NSString *symbol_for_tab(NSString *tab) {
         ]];
     return pad;
 }
+/* Put every control back in step with what its store now says. Called when the
+ * config file changes underneath us, so the window shows the truth whoever
+ * wrote it. */
+- (void)refreshFromStores {
+    for (NSNumber *key in self.controls) {
+        int idx = key.intValue;
+        if (idx < 0 || idx >= gCount) continue;
+        const CMSetting *s = &gSettings[idx];
+        NSControl *ctl = self.controls[key];
+        if (s->valueIsStr) {
+            if (s->ctl == CMCtlPopup) { select_choice((NSPopUpButton *)ctl, s); continue; }
+            NSString *v = @(load_str(s));
+            if (![[ctl stringValue] isEqualToString:v]) ctl.stringValue = v;
+            continue;
+        }
+        long v = load_num(s);
+        switch (s->ctl) {
+        case CMCtlCheckbox:
+            [(NSButton *)ctl setState:v ? NSControlStateValueOn : NSControlStateValueOff];
+            break;
+        case CMCtlPopup:
+            for (NSMenuItem *it in [(NSPopUpButton *)ctl itemArray])
+                if (it.tag == v) { [(NSPopUpButton *)ctl selectItem:it]; break; }
+            break;
+        default:
+            ctl.integerValue = v;
+            break;
+        }
+    }
+}
+
 - (void)selectTab:(NSString *)tab {
     NSView *v = self.tabViews[tab]; if (!v) return;
     self.window.contentView = v;
@@ -408,6 +508,7 @@ static int build_window(CMContext *cx) {
     wc.tabs = [NSMutableArray array];
     wc.tabViews = [NSMutableDictionary dictionary];
     wc.pathFields = [NSMutableDictionary dictionary];
+    wc.controls = [NSMutableDictionary dictionary];
     for (int i = 0; i < gCount; i++) {
         NSString *tab = @(gSettings[i].tab);
         if (![wc.tabs containsObject:tab]) { [wc.tabs addObject:tab]; wc.tabViews[tab] = [wc gridForTab:tab]; }
@@ -464,16 +565,88 @@ static NSString *resolve_conf_path(void) {
     return [base stringByAppendingPathComponent:@"AROS/aros-host.conf"];
 }
 
+/* ================================== applying, and noticing outside changes == */
+/* One place that turns "what the stores say" into "what the machine does".
+ *
+ * host_only is for the moment the display comes up: the guest is not yet able
+ * to take a setting event, so only the host-acted keys are applied then. Every
+ * later pass applies the AROS-facing ones too.
+ */
+static void apply_all(CMContext *cx, BOOL host_only) {
+    for (int i = 0; i < gCount; i++) {
+        const CMSetting *s = &gSettings[i];
+        if (s->apply == CMApplyNone || s->apply == CMApplyBootOnly) continue;
+        if (host_only && s->apply != CMApplyHostOption) continue;
+        if (s->valueIsStr) apply_setting(s, 0, load_str(s), cx);
+        else               apply_setting(s, load_num(s), NULL, cx);
+    }
+}
+
+static int load_schema_once(void) {
+    if (gCount > 0) return gCount;
+    set_conf_path(resolve_conf_path());
+    const char *sp = resolve_schema_path();
+    int n = sp ? load_schema(sp) : -1;
+    if (n <= 0) { NSLog(@"[shell] settings schema not loaded: %s", gErr); return 0; }
+    gSchemaPath = @(sp);          /* recorded for the window footer */
+    return n;
+}
+
+/* The config file is shared: the command-line tools write it, another Macaros
+ * may write it, and a person may edit it. Whoever changed it, the running
+ * machine follows and the open window shows the new value. */
+static CMContext *gPrefsContext = NULL;
+static dispatch_source_t gConfWatch = nil;
+
+void cm__prefs_reload(CMContext *cx) {
+    @autoreleasepool {
+        if (!load_schema_once()) return;
+        if (cx) gPrefsContext = cx;
+        apply_all(gPrefsContext, NO);
+        cm__shell_prefs_changed();
+        cm_media_prepare();                  /* grants may have changed too */
+        cm_media_panel_refresh();
+        [gWC refreshFromStores];
+    }
+}
+
+static void watch_conf_file(void);
+
+static void conf_file_changed(void) {
+    unsigned long flags = gConfWatch ? dispatch_source_get_data(gConfWatch) : 0;
+    cm__prefs_reload(NULL);
+    /* An editor that replaces the file rather than writing into it leaves the
+     * old inode behind; follow the name to the new one. */
+    if (flags & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME)) {
+        dispatch_source_cancel(gConfWatch);
+        gConfWatch = nil;
+        watch_conf_file();
+    }
+}
+
+static void watch_conf_file(void) {
+    if (gConfWatch || !gConfPath) return;
+    int fd = open(gConfPath.fileSystemRepresentation, O_EVTONLY);
+    if (fd < 0) return;
+    gConfWatch = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, (uintptr_t)fd,
+        DISPATCH_VNODE_WRITE | DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME |
+        DISPATCH_VNODE_EXTEND, dispatch_get_main_queue());
+    if (!gConfWatch) { close(fd); return; }
+    dispatch_source_set_event_handler(gConfWatch, ^{ conf_file_changed(); });
+    dispatch_source_set_cancel_handler(gConfWatch, ^{ close(fd); });
+    dispatch_resume(gConfWatch);
+}
+
+void cm__prefs_watch(CMContext *cx) {
+    gPrefsContext = cx;
+    if (!load_schema_once()) return;
+    watch_conf_file();
+}
+
 /* ------------------------------------------- the strong weak-stub overrides - */
 int cm__open_settings_appkit(CMContext *cx) {
     @autoreleasepool {
-        if (gCount == 0) {                                  /* lazy schema load on first open */
-            set_conf_path(resolve_conf_path());
-            const char *sp = resolve_schema_path();
-            int n = sp ? load_schema(sp) : -1;
-            if (n <= 0) { NSLog(@"[shell] settings schema not loaded: %s", gErr); return 1; }
-            gSchemaPath = @(sp);          /* record the resolved source for the window footer */
-        }
+        if (!load_schema_once()) return 1;
         return build_window(cx);
     }
 }
@@ -490,6 +663,14 @@ void cm__apply_persisted_options(CMContext *cx) {
          * /dev/disk number is reassigned on every replug, so the description
          * cannot be trusted from grant time. */
         cm_media_prepare();
+
+        /* Apply the rest of the schema's host-acted settings, and follow the
+         * config file from here on, so a setting works whether or not anyone
+         * ever opens the window. */
+        if (load_schema_once()) {
+            apply_all(cx, YES);
+            cm__prefs_watch(cx);
+        }
 
         NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
         if ([d objectForKey:@"cocoametal.effect"])     cm_set_option(cx, CM_OPT_EFFECT,    [d integerForKey:@"cocoametal.effect"]);

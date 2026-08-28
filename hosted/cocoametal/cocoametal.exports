@@ -34,3 +34,8 @@ _cm_gpu_open
 _cm_gpu_abi
 _cm_gpu_scale
 _cm_gpu_convert_yuv420
+
+# Settings that arrive from outside this process: the config file is shared with
+# the command-line tools, so a change there is applied and shown in the window.
+_cm__prefs_reload
+_cm__prefs_watch

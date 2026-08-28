@@ -8,4 +8,8 @@
  * kept alive for the process's lifetime so hotplug keeps updating it. */
 NSView *cm_media_panel(void);
 
+/* Re-read the media list into an already-built panel (a grant may have been
+ * made somewhere else). Safe to call when no panel exists. */
+void cm_media_panel_refresh(void);
+
 #endif /* COCOAMETAL_MEDIA_UI_H */

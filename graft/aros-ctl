@@ -340,9 +340,6 @@ write_startup_sequence() {
                 printf '%s\n' \
                     'If EXISTS "C:LoadKeymap"' \
                     '    LoadKeymap RESTORE' \
-                    'EndIf' \
-                    'If EXISTS "C:KeymapWatch"' \
-                    '    Run <NIL: >NIL: C:KeymapWatch' \
                     'EndIf'
                 printf 'SetEnv AROS_FSW_ROOTS "%s"\n' "$(fsw_roots_value)"
                 printf '%s\n' \
@@ -442,9 +439,6 @@ write_startup_sequence() {
                     'EndIf' \
                     'If EXISTS "C:LoadKeymap"' \
                     '    LoadKeymap RESTORE' \
-                    'EndIf' \
-                    'If EXISTS "C:KeymapWatch"' \
-                    '    Run <NIL: >NIL: C:KeymapWatch' \
                     'EndIf'
                 printf 'SetEnv AROS_FSW_ROOTS "%s"\n' "$(fsw_roots_value)"
             } > "$startup"
@@ -460,20 +454,20 @@ write_startup_sequence() {
         fi
     fi
 
-    mount_granted_media >> "$startup"
+    start_guest_watchers >> "$startup"
 
     [ -n "${AROS_CTL_STARTUP_EXTRA:-}" ] && printf '%s\n' "$AROS_CTL_STARTUP_EXTRA" \
         >> "$startup"
     return 0
 }
 
-# Physical host media the user granted through `aros-ctl media grant`. The mount
-# descriptions are re-authored here, at boot, because /dev/disk numbers are
-# reassigned on every replug; MediaWatch (started below) mounts them, and keeps
-# mounting whatever is granted later while the system runs.
-mount_granted_media() {
+# The two background tasks that let the host change things while AROS runs: the
+# keyboard layout, and the disks and folders the host offers. Media descriptions
+# are re-authored first because /dev/disk numbers are reassigned on every replug.
+start_guest_watchers() {
     [ "${AROS_CTL_MEDIA:-1}" = 0 ] && return 0
     [ -x "$HERE/macaros-media" ] && "$HERE/macaros-media" prepare >/dev/null 2>&1
+    printf 'If EXISTS "C:KeymapWatch"\n    Run <NIL: >NIL: C:KeymapWatch\nEndIf\n'
     printf 'If EXISTS "C:MediaWatch"\n    Run <NIL: >NIL: C:MediaWatch\nEndIf\n'
     return 0
 }

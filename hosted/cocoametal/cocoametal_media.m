@@ -36,9 +36,10 @@ static NSArray *handler_for(NSString *fs) {
  * The mount descriptions go in a directory both sides can reach: the host share
  * that AROS mounts as MacRW:. A release .app is signed and sealed, so nothing
  * may be written inside the bundle's own AROS tree. */
-static NSString *share_path(void) {
-    const char *env = getenv("MACAROS_MEDIA_DIR");
-    if (env && *env) return @(env);
+/* The host folder AROS mounts as MacRW:, as the launchers describe it. It is the
+ * one place both sides can write: a released app is sealed, so its own AROS tree
+ * is read-only. */
+static NSString *host_share(void) {
     const char *vol = getenv("AROS_HOST_VOLUME");
     if (vol && *vol) {
         for (NSString *line in [@(vol) componentsSeparatedByString:@"\n"]) {
@@ -46,11 +47,24 @@ static NSString *share_path(void) {
             NSString *path = [line substringFromIndex:6];
             NSRange semi = [path rangeOfString:@";"];
             if (semi.location != NSNotFound) path = [path substringToIndex:semi.location];
-            if (path.length)
-                return [path stringByAppendingPathComponent:@".macaros-media"];
+            if (path.length) return path;
         }
     }
-    return [NSHomeDirectory() stringByAppendingPathComponent:@"AROS/Shared/.macaros-media"];
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"AROS/Shared"];
+}
+
+const char *cm_host_share_dir(void) {
+    static char buf[1024];
+    @autoreleasepool {
+        snprintf(buf, sizeof buf, "%s", host_share().UTF8String ?: "");
+    }
+    return buf;
+}
+
+static NSString *share_path(void) {
+    const char *env = getenv("MACAROS_MEDIA_DIR");
+    if (env && *env) return @(env);
+    return [host_share() stringByAppendingPathComponent:@".macaros-media"];
 }
 
 const char *cm_media_dir(void) {

@@ -117,6 +117,10 @@ static void media_changed(void *ctx) {
 }
 @end
 
+void cm_media_panel_refresh(void) {
+    [gMedia reload];
+}
+
 NSView *cm_media_panel(void) {
     CMMediaController *ctl = gMedia ?: [CMMediaController new];
     gMedia = ctl;

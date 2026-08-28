@@ -23,12 +23,14 @@
  * resemblance to existing implementations is coincidental.
  */
 #import <AppKit/AppKit.h>
+#include <ctype.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
 #include "cocoametal.h"
+#include "cocoametal_media.h"
 #include "macaron_icon.h"
 
 /* Host-internal: inject a synthetic key transition into the event ring (defined in
@@ -171,6 +173,9 @@ static void cmsh_show_about(void) {
 @interface CMShellController : NSObject <NSApplicationDelegate>
 @property (nonatomic, assign) CMContext *cx;
 @property (nonatomic) BOOL fullscreenOn, scanlinesOn, retinaOn, clipboardOn, captureInputOn, recordingOn;
+@property (nonatomic, strong) id captureMonitor;
+@property (nonatomic) BOOL quitConfirmed;
+- (void)setCaptureInput:(BOOL)on;
 @end
 
 /* Where screenshots / recordings go: $AROS_RUN_DIR (the project's run/darwin-aarch64,
@@ -234,7 +239,10 @@ static BOOL cmsh_prepare_report_dir(NSString **pathOut) {
         NSLog(@"[shell] recording stopped (rc=%d)", rc);
     } else {
         NSString *p = cmsh_capture_path(@"movie", @"mov");
-        int rc = cm_record_start(_cx, p.UTF8String, 30, 0);
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        int fps = [d objectForKey:@"captures.movieFps"] ? (int)[d integerForKey:@"captures.movieFps"] : 30;
+        int codec = (int)[d integerForKey:@"captures.movieCodec"];
+        int rc = cm_record_start(_cx, p.UTF8String, fps, codec);
         if (rc == 0) {
             _recordingOn = YES;
             item.title = @"Stop Recording";
@@ -244,13 +252,32 @@ static BOOL cmsh_prepare_report_dir(NSString **pathOut) {
         }
     }
 }
+/* Offer another Mac folder to the running system. The request is left in the
+ * shared folder, where the guest's watcher hands it to the filesystem handler:
+ * only the guest can add a volume to its own device list. */
 - (void)openVolumeAction:(id)s {
+    (void)s;
     NSOpenPanel *op = [NSOpenPanel openPanel];
     op.canChooseDirectories = YES; op.canChooseFiles = NO; op.prompt = @"Mount";
-    if ([op runModal] == NSModalResponseOK && op.URL) {
-        NSString *spec = [NSString stringWithFormat:@"Mac:%@;WRITE", op.URL.path];
-        cm_set_option_str(_cx, CM_OPT_VOLUME_ADD, spec.UTF8String);
+    if ([op runModal] != NSModalResponseOK || !op.URL) return;
+
+    NSMutableString *name = [NSMutableString string];
+    for (NSUInteger i = 0; i < op.URL.lastPathComponent.length && name.length < 8; i++) {
+        unichar c = [op.URL.lastPathComponent characterAtIndex:i];
+        if (isalnum((int)c)) [name appendFormat:@"%C", (unichar)toupper((int)c)];
     }
+    if (name.length == 0 || isdigit([name characterAtIndex:0]))
+        [name insertString:@"MAC" atIndex:0];
+
+    NSString *spec = [NSString stringWithFormat:@"%@:%@;WRITE", name, op.URL.path];
+    NSString *path = [@(cm_host_share_dir()) stringByAppendingPathComponent:@".macaros-volumes"];
+    NSString *current = [NSString stringWithContentsOfFile:path
+                                                  encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+    if ([[current componentsSeparatedByString:@"\n"] containsObject:spec]) return;
+    NSString *updated = current.length ? [current stringByAppendingFormat:@"%@\n", spec]
+                                       : [spec stringByAppendingString:@"\n"];
+    [updated writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    NSLog(@"[shell] offered %@ to the guest as %@:", op.URL.path, name);
 }
 
 /* View (host-acted presentation) */
@@ -293,10 +320,74 @@ static BOOL cmsh_prepare_report_dir(NSString **pathOut) {
 - (void)powerDownAction:(id)s { cm_set_option(_cx, CM_OPT_POWER, CM_POWER_REQUEST_DOWN); }
 - (void)forceDownAction:(id)s { cm_set_option(_cx, CM_OPT_POWER, CM_POWER_FORCE_DOWN); }
 - (void)forceQuitAction:(id)s { cm_set_option(_cx, CM_OPT_POWER, CM_POWER_FORCE_QUIT); }
+/* Input capture: while it is on, key combinations the Mac would normally take
+ * for itself go to the guest instead, so Amiga-Q reaches AROS rather than
+ * quitting the app. The chosen release hotkey ends it. macOS keeps the handful
+ * of system shortcuts it never yields (Command-Tab among them); those still
+ * belong to the Mac. */
+- (void)setCaptureInput:(BOOL)on {
+    if (on == _captureInputOn) return;
+    _captureInputOn = on;
+    if (on) {
+        if (!_captureMonitor) {
+            __weak CMShellController *weak = self;
+            _captureMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:
+                (NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged)
+                handler:^NSEvent *(NSEvent *e) { return [weak captureEvent:e]; }];
+        }
+    } else if (_captureMonitor) {
+        [NSEvent removeMonitor:_captureMonitor];
+        _captureMonitor = nil;
+    }
+    for (NSMenuItem *it in [[NSApp mainMenu] itemArray]) {
+        NSMenuItem *found = [it.submenu itemWithTitle:@"Capture Input"];
+        if (found) found.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+/* The release combination, from the setting: 0 = Control+Option (default),
+ * 1 = Command+Option. */
+static NSEventModifierFlags cmsh_release_mods(void) {
+    NSInteger which = [[NSUserDefaults standardUserDefaults] integerForKey:@"input.releaseHotkey"];
+    return (which == 1) ? (NSEventModifierFlagCommand | NSEventModifierFlagOption)
+                        : (NSEventModifierFlagControl | NSEventModifierFlagOption);
+}
+
+- (NSEvent *)captureEvent:(NSEvent *)e {
+    NSEventModifierFlags held = e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    NSEventModifierFlags release = cmsh_release_mods();
+    if ((held & release) == release) {          /* the way out, always honoured */
+        [self setCaptureInput:NO];
+        return nil;
+    }
+    if (e.type == NSEventTypeFlagsChanged)
+        return e;                               /* the window tracks modifiers itself */
+    if (!(held & (NSEventModifierFlagCommand | NSEventModifierFlagControl)))
+        return e;                               /* plain typing already reaches the guest */
+
+    unsigned mods = 0;
+    if (held & NSEventModifierFlagShift)   mods |= CM_MOD_SHIFT;
+    if (held & NSEventModifierFlagControl) mods |= CM_MOD_CONTROL;
+    if (held & NSEventModifierFlagOption)  mods |= CM_MOD_ALT;
+    if (held & NSEventModifierFlagCommand) mods |= CM_MOD_CMD;
+    cm__inject_key((int)e.keyCode, e.type == NSEventTypeKeyDown, mods);
+    return nil;                                 /* the Mac does not also act on it */
+}
+
 - (void)captureInputAction:(id)s {
-    _captureInputOn = !_captureInputOn;
-    [(NSMenuItem *)s setState:_captureInputOn ? NSControlStateValueOn : NSControlStateValueOff];
-    /* TODO: a real exclusive input grab + release hotkey (host-side). Recorded for now. */
+    (void)s;
+    [self setCaptureInput:!_captureInputOn];
+}
+
+/* Entering full screen captures input when the setting asks for it; leaving it
+ * always gives the keyboard back, so a user cannot be stranded. */
+- (void)windowFullscreenChanged:(NSNotification *)note {
+    BOOL entering = [note.name isEqualToString:NSWindowDidEnterFullScreenNotification];
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    BOOL wanted = [d objectForKey:@"input.autoCaptureFullscreen"]
+        ? [d boolForKey:@"input.autoCaptureFullscreen"] : YES;
+    if (entering && wanted) [self setCaptureInput:YES];
+    if (!entering)          [self setCaptureInput:NO];
 }
 - (void)clipboardShareAction:(id)s {
     _clipboardOn = !_clipboardOn;
@@ -316,6 +407,28 @@ static BOOL cmsh_prepare_report_dir(NSString **pathOut) {
     cm__inject_key(key,    0, CM_MOD_CMD);   /* C/V up */
     cm__inject_key(RAMIGA, 0, 0);            /* Right-Amiga up (mods=0 clears RCOMMAND) */
 }
+/* Quitting stops a running machine, so the app asks first unless told not to.
+ * Reached from the menu, from Command-Q and from the Dock alike, because it is
+ * the delegate's answer rather than one menu item's action. */
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)app {
+    (void)app;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    BOOL confirm = [d objectForKey:@"general.confirmQuit"]
+        ? [d boolForKey:@"general.confirmQuit"] : YES;
+    if (!confirm || _quitConfirmed) return NSTerminateNow;
+
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = [NSString stringWithFormat:@"Quit %@?", cm__app_name()];
+    alert.informativeText = @"The machine is running. Anything it has not written "
+                             "to a volume will be lost.";
+    [alert addButtonWithTitle:@"Quit"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.alertStyle = NSAlertStyleWarning;
+    if ([alert runModal] != NSAlertFirstButtonReturn) return NSTerminateCancel;
+    _quitConfirmed = YES;
+    return NSTerminateNow;
+}
+
 - (void)editCopyAction:(id)s  { [self editAmigaChord:8]; }   /* Right-Amiga+C */
 - (void)editPasteAction:(id)s { [self editAmigaChord:9]; }   /* Right-Amiga+V */
 
@@ -494,6 +607,27 @@ static void cmsh_build_menu(CMShellController *c) {
     [NSApp setMainMenu:bar];
 }
 
+static void cm__apply_dock_icon(void);
+
+/* Strong override: a settings change landed, from the window, the config file or
+ * a command-line tool. Re-read what this side acts on. */
+void cm__shell_prefs_changed(void) {
+    cm__apply_dock_icon();
+}
+
+/* The Dock icon is a presentation choice: an accessory app keeps its window and
+ * menu bar but stays out of the Dock and the app switcher. */
+static void cm__apply_dock_icon(void) {
+    @autoreleasepool {
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        BOOL show = [d objectForKey:@"general.showDockIcon"]
+            ? [d boolForKey:@"general.showDockIcon"] : YES;
+        NSApplicationActivationPolicy want = show ? NSApplicationActivationPolicyRegular
+                                                  : NSApplicationActivationPolicyAccessory;
+        if ([NSApp activationPolicy] != want) [NSApp setActivationPolicy:want];
+    }
+}
+
 /* ---------------------------------------------------- cm__install_shell ----- */
 static CMShellController *gShell = nil;   /* static-strong: one shell per process */
 
@@ -506,6 +640,12 @@ void cm__install_shell(CMContext *cx) {
         NSImage *icon = cmsh_make_icon();
         if (icon) [NSApp setApplicationIconImage:icon];
         cmsh_build_menu(gShell);
+        cm__apply_dock_icon();
+        [[NSNotificationCenter defaultCenter] removeObserver:gShell];
+        for (NSNotificationName n in @[NSWindowDidEnterFullScreenNotification,
+                                       NSWindowDidExitFullScreenNotification])
+            [[NSNotificationCenter defaultCenter] addObserver:gShell
+                selector:@selector(windowFullscreenChanged:) name:n object:nil];
     }
 }
 

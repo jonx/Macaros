@@ -275,6 +275,9 @@ void cm__resync_layer(CMContext *cx);
  * cocoametal_shell.m. cm_open calls it once, on the main thread, after the window. */
 void cm__install_shell(CMContext *cx);
 
+/* See the weak stub below: settings the app shell acts on directly. */
+void cm__shell_prefs_changed(void);
+
 /* Movie capture per-present frame hook. Strong override in cocoametal_shell.m
  * (AVFoundation: append the current frame to the recording); weak no-op below so
  * the not-recording path and non-shell builds are free. cm_present calls it. */
@@ -1002,6 +1005,12 @@ __attribute__((weak)) void cm_destroy_window(CMContext *cx) {
  * strong override that actually installs the menu bar + icon. */
 __attribute__((weak)) void cm__install_shell(CMContext *cx) {
     (void)cx;
+}
+
+/* Settings the app shell itself acts on (the Dock icon today) rather than the
+ * display: re-read after any settings change, wherever it came from. Weak no-op
+ * for headless and the non-shell test builds. */
+__attribute__((weak)) void cm__shell_prefs_changed(void) {
 }
 
 /* Movie capture: the per-present frame hook is a weak no-op here (the

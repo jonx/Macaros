@@ -55,6 +55,10 @@ void cm_media_watch(void (*cb)(void *ctx), void *ctx);
 /* The shared directory holding the mount descriptions (host-side path). */
 const char *cm_media_dir(void);
 
+/* The host folder AROS mounts as MacRW:, which is where the two sides leave
+ * each other messages that must survive a sealed application bundle. */
+const char *cm_host_share_dir(void);
+
 #ifdef __cplusplus
 }
 #endif

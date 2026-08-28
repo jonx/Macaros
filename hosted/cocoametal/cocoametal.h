@@ -274,6 +274,14 @@ int        cm_get_option(CMContext *, int key, long *value);
  * if the panel is up (or already up), nonzero if it could not be opened. */
 int        cm_open_settings(CMContext *);
 
+/* Settings that live outside this process: the config file is shared with the
+ * command-line tools, so a change made there is picked up, applied, and shown
+ * in the window. cm__prefs_watch starts following the file (the display start-up
+ * does this); cm__prefs_reload re-reads and re-applies it once, which is also
+ * how a test drives the path without waiting for the file system. */
+void       cm__prefs_watch(CMContext *);
+void       cm__prefs_reload(CMContext *);
+
 /* ---- Host app shell ABI (v3, append-only — entries 13..17) ----------------
  * The menu bar / About / icon are installed host-side when the window comes up
  * (no AROS-facing call). These symbols are the few that AROS *may* also drive. */

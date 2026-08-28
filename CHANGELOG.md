@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-08-28 - Every setting does something
+
+- **The Settings window now changes the machine, not just a file.** Choices that
+  were stored and never read are wired up: quitting asks first, the Dock icon
+  can be turned off, recordings use the frame rate and codec you picked, and
+  Capture Input is a real grab with the release combination you chose (it can
+  also turn itself on when you go full screen).
+- **The keyboard layout applies while AROS runs.** Picking a layout switches it
+  immediately instead of waiting for the next launch. It was worse than that
+  before: the window wrote `0` for every layout, so the choice never arrived at
+  all.
+- **Settings changed outside the app are picked up.** The config file is shared
+  with the command-line tools, so a disk shared with `aros-ctl media`, an edit
+  made by hand, or a change from another Macaros is noticed, applied, and shown
+  in the window while everything keeps running.
+- **File ▸ Open Folder as Volume… works.** Choosing a Mac folder mounts it in
+  the running system straight away. The setting for the *shared* folder is
+  marked "next launch", because a mounted volume cannot be moved out from under
+  open files, and the window no longer pretends otherwise.
+
 ## 2026-08-28 - Mount a real USB stick inside Macaros
 
 - **Macaros can now mount a physical Mac disk, and you choose which one.** An

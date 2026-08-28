@@ -74,6 +74,9 @@ aros-ctl media status
 aros-ctl media revoke AROSEX               # give it back to macOS
 ```
 
+Every boot starts two small background tasks inside AROS, `C:MediaWatch` and
+`C:KeymapWatch`, which is how a host-side choice reaches a running system.
+
 Both halves do the same three things: refuse an internal disk and a filesystem
 AROS has no handler for, take the volume from macOS, and write the description
 plus the grant. A grant is remembered by volume identity (UUID where the medium
