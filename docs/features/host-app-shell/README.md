@@ -99,6 +99,14 @@ mounted volume out from under open file handles; File ▸ *Open Folder as Volume
 offers an additional folder to a running system instead, which is a different
 and safe operation.
 
+Those two stay in the tab they belong to, marked where the choice is made, and
+the marker earns its place by changing: it reads `next launch` until you change
+the value, and `restart to apply` once the running machine and the window
+disagree. A setting is found by subject, so collecting the start-up-only ones
+into a section of their own would only make them harder to find, and would move
+settings between tabs whenever one becomes live. Any entry with
+`"apply": "bootOnly"` gets the marker; nothing says so in its label.
+
 ### Changes that come from somewhere else
 
 `aros-host.conf` is shared with the command-line tools, so it is not only

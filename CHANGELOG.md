@@ -15,6 +15,11 @@
   with the command-line tools, so a disk shared with `aros-ctl media`, an edit
   made by hand, or a change from another Macaros is noticed, applied, and shown
   in the window while everything keeps running.
+- **Settings that need a restart say so, where you change them.** RAM and the
+  shared folder are marked "next launch", and the moment you change one it says
+  "restart to apply", so it is clear the running machine is still using the old
+  value. They stay in the tab they belong to rather than being exiled to a
+  section of their own.
 - **File ▸ Open Folder as Volume… works.** Choosing a Mac folder mounts it in
   the running system straight away. The setting for the *shared* folder is
   marked "next launch", because a mounted volume cannot be moved out from under

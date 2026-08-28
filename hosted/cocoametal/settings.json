@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "Host app-shell settings schema. ONE source of truth: each entry generates a control, binds to a store, and routes an apply. Add an entry -> it appears in the window, persists, and applies. control: checkbox|popup|slider|text|path. store: defaults (NSUserDefaults) | conf (line-oriented aros-host.conf, edited in place). apply: none | hostOption (live cm_set_option, presentation) | arosOption / arosOptionStr (AROS-facing, relayed) | bootOnly (conf only, next launch). value/applyKey/choice values may be a number OR a named CM_* constant.",
+  "_comment": "Host app-shell settings schema. ONE source of truth: each entry generates a control, binds to a store, and routes an apply. Add an entry -> it appears in the window, persists, and applies. control: checkbox|popup|slider|text|path|media (a live list that applies itself). store: defaults (NSUserDefaults) | conf (line-oriented aros-host.conf, edited in place; watched, so an outside change is applied and shown). apply: none (read where it is used) | hostOption (live cm_set_option, presentation) | arosOption / arosOptionStr (AROS-facing, relayed) | guestFile (value left in the host share for a task inside AROS to apply; needs applyFile) | bootOnly (taken at the next launch; the window marks these in place). value/applyKey/choice values may be a number OR a named CM_* constant; a popup whose values are plain names is a string setting.",
   "settings": [
     { "ident": "general.confirmQuit", "tier": "App", "tab": "General",
       "label": "Confirm before quitting", "control": "checkbox",
@@ -77,7 +77,7 @@
       "store": "defaults", "key": "sharing.clipboard", "default": 1,
       "apply": "arosOption", "applyKey": "CM_OPT_CLIPBOARD_SHARE" },
     { "ident": "sharing.folder", "tier": "Machine", "tab": "Sharing",
-      "label": "Shared folder (next launch)", "control": "path",
+      "label": "Shared folder", "control": "path",
       "store": "conf", "key": "hostvolume", "default": "~/AROS/Shared",
       "apply": "bootOnly" },
 

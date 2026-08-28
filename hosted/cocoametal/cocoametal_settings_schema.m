@@ -277,6 +277,28 @@ static void set_str(const CMSetting *s, const char *v, CMContext *cx) {
     cm__shell_prefs_changed();
 }
 
+/* What each start-up-only setting said when this machine started. A later change
+ * is stored and shown, but the running machine is still using this, which is the
+ * difference the window has to make visible. */
+static NSMutableDictionary<NSString *, NSString *> *gAtStartup = nil;
+
+static NSString *stored_value(const CMSetting *s) {
+    return s->valueIsStr ? @(load_str(s)) : [@(load_num(s)) stringValue];
+}
+
+static void snapshot_boot_settings(void) {
+    gAtStartup = [NSMutableDictionary dictionary];
+    for (int i = 0; i < gCount; i++)
+        if (gSettings[i].apply == CMApplyBootOnly)
+            gAtStartup[@(gSettings[i].ident)] = stored_value(&gSettings[i]);
+}
+
+/* Nothing yet if the snapshot was taken before this setting existed. */
+static BOOL boot_setting_pending(const CMSetting *s) {
+    NSString *was = gAtStartup[@(s->ident)];
+    return was && ![was isEqualToString:stored_value(s)];
+}
+
 /* ================================================ the generated window ====== */
 /* A footer shown on every tab so the user can see WHERE the schema + config were
  * loaded from (they can come from several places: AROS_SETTINGS_SCHEMA, next to the
@@ -308,6 +330,25 @@ static NSString *symbol_for_tab(NSString *tab) {
     return M[tab] ?: @"gearshape";
 }
 
+/* A setting the running machine cannot take. Quiet until it is changed, then it
+ * says plainly that the machine is not using what the window shows. */
+static NSTextField *boot_marker(void) {
+    NSTextField *note = [NSTextField labelWithString:@""];
+    note.font = [NSFont systemFontOfSize:10];
+    note.alignment = NSTextAlignmentLeft;
+    return note;
+}
+
+static void update_boot_marker(NSTextField *note, const CMSetting *s) {
+    BOOL pending = boot_setting_pending(s);
+    note.stringValue = pending ? @"restart to apply" : @"next launch";
+    note.textColor = pending ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor];
+    note.toolTip = pending
+        ? @"The machine is still running with the previous value. Quit and start "
+           "Macaros again to use this one."
+        : @"Taken when Macaros starts; changing it here applies at the next launch.";
+}
+
 @interface CMSettingsWC : NSObject <NSToolbarDelegate>
 @property (nonatomic, assign) CMContext *cx;
 @property (nonatomic, strong) NSWindow *window;
@@ -317,6 +358,7 @@ static NSString *symbol_for_tab(NSString *tab) {
 /* Every generated control, by schema index, so the window can be brought back
  * in step with the stores when something else changes them. */
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSControl *> *controls;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTextField *> *bootMarkers;
 - (void)refreshFromStores;
 @end
 
@@ -369,6 +411,7 @@ static NSString *symbol_for_tab(NSString *tab) {
 - (void)changed:(id)sender {
     int idx = (int)[(NSControl *)sender tag];
     const CMSetting *s = &gSettings[idx];
+    NSTextField *note = self.bootMarkers[@(idx)];
     if (s->valueIsStr && s->ctl == CMCtlPopup) {
         NSInteger pick = [[(NSPopUpButton *)sender selectedItem] tag];
         if (pick >= 0 && pick < s->nchoices && s->choices[pick].svalue)
@@ -382,6 +425,7 @@ static NSString *symbol_for_tab(NSString *tab) {
         else                           v = [(NSControl *)sender integerValue];
         set_num(s, v, _cx);
     }
+    if (note) update_boot_marker(note, s);
 }
 - (void)browse:(id)sender {
     int idx = (int)[(NSButton *)sender tag];
@@ -391,6 +435,8 @@ static NSString *symbol_for_tab(NSString *tab) {
         NSTextField *f = self.pathFields[@(idx)];
         f.stringValue = op.URL.path;
         set_str(&gSettings[idx], [op.URL.path UTF8String], _cx);
+        NSTextField *note = self.bootMarkers[@(idx)];
+        if (note) update_boot_marker(note, &gSettings[idx]);
     }
 }
 - (NSView *)gridForTab:(NSString *)tab {
@@ -404,8 +450,16 @@ static NSString *symbol_for_tab(NSString *tab) {
         NSControl *ctl = [self controlFor:s index:i];
         if (ctl) self.controls[@(i)] = ctl;
         NSView *right = ctl;
-        if (s->ctl == CMCtlPath) {
-            NSStackView *h = [NSStackView stackViewWithViews:@[ctl, [self browseButtonForIndex:i]]];
+        NSMutableArray *row = [NSMutableArray arrayWithObject:ctl];
+        if (s->ctl == CMCtlPath) [row addObject:[self browseButtonForIndex:i]];
+        if (s->apply == CMApplyBootOnly) {
+            NSTextField *note = boot_marker();
+            update_boot_marker(note, s);
+            self.bootMarkers[@(i)] = note;
+            [row addObject:note];
+        }
+        if (row.count > 1) {
+            NSStackView *h = [NSStackView stackViewWithViews:row];
             h.orientation = NSUserInterfaceLayoutOrientationHorizontal; h.spacing = 6;
             right = h;
         }
@@ -452,6 +506,11 @@ static NSString *symbol_for_tab(NSString *tab) {
  * config file changes underneath us, so the window shows the truth whoever
  * wrote it. */
 - (void)refreshFromStores {
+    for (NSNumber *key in self.bootMarkers) {
+        int idx = key.intValue;
+        if (idx >= 0 && idx < gCount)
+            update_boot_marker(self.bootMarkers[key], &gSettings[idx]);
+    }
     for (NSNumber *key in self.controls) {
         int idx = key.intValue;
         if (idx < 0 || idx >= gCount) continue;
@@ -509,6 +568,7 @@ static int build_window(CMContext *cx) {
     wc.tabViews = [NSMutableDictionary dictionary];
     wc.pathFields = [NSMutableDictionary dictionary];
     wc.controls = [NSMutableDictionary dictionary];
+    wc.bootMarkers = [NSMutableDictionary dictionary];
     for (int i = 0; i < gCount; i++) {
         NSString *tab = @(gSettings[i].tab);
         if (![wc.tabs containsObject:tab]) { [wc.tabs addObject:tab]; wc.tabViews[tab] = [wc gridForTab:tab]; }
@@ -589,6 +649,7 @@ static int load_schema_once(void) {
     int n = sp ? load_schema(sp) : -1;
     if (n <= 0) { NSLog(@"[shell] settings schema not loaded: %s", gErr); return 0; }
     gSchemaPath = @(sp);          /* recorded for the window footer */
+    snapshot_boot_settings();
     return n;
 }
 

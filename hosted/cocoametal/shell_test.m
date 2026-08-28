@@ -107,6 +107,20 @@ int main(int argc, const char **argv) {
         setenv("MACAROS_VERSION", "9.8.7", 1);
         setenv("MACAROS_BUILD_NUMBER", "321", 1);
 
+        /* Machine settings live in a shared config file that belongs to the
+         * person running Macaros. This test changes settings, so it works on a
+         * copy of its own and never touches theirs. */
+        NSString *confDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"cm-gshell-conf"];
+        [[NSFileManager defaultManager] removeItemAtPath:confDir error:NULL];
+        [[NSFileManager defaultManager] createDirectoryAtPath:confDir
+                                 withIntermediateDirectories:YES attributes:nil error:NULL];
+        NSString *confFile = [confDir stringByAppendingPathComponent:@"aros-host.conf"];
+        [@"memory 512\nkeymap pc105_f\n" writeToFile:confFile atomically:YES
+                                             encoding:NSUTF8StringEncoding error:NULL];
+        setenv("AROS_HOST_CONF", confFile.UTF8String, 1);
+        setenv("AROS_HOST_VOLUME",
+               [NSString stringWithFormat:@"MacRW:%@;WRITE", confDir].UTF8String, 1);
+
         CMPixelDesc fmt = { .bytesPerPixel = 4,
             .blueShift = 0, .greenShift = 8, .redShift = 16, .alphaShift = 24,
             .blueMask = 0x000000FF, .greenMask = 0x0000FF00,
@@ -266,6 +280,25 @@ int main(int argc, const char **argv) {
             [NSApp sendAction:mediaTab.action to:mediaTab.target from:mediaTab];
             check(view_of_class(sw.contentView, [NSTableView class]) != nil,
                   "the Media tab presents the device list");
+        }
+
+        /* (3b2) A setting the running machine cannot take is marked where it is
+         * made, and says so more loudly once it has been changed. */
+        NSToolbarItem *systemTab = nil;
+        for (NSToolbarItem *ti in sw.toolbar.items)
+            if ([ti.itemIdentifier isEqualToString:@"System"]) systemTab = ti;
+        if (systemTab) {
+            [NSApp sendAction:systemTab.action to:systemTab.target from:systemTab];
+            check(view_has_label(sw.contentView, @"next launch"),
+                  "a start-up-only setting is marked in place");
+            NSSlider *ram = (NSSlider *)view_of_class(sw.contentView, [NSSlider class]);
+            check(ram != nil, "the RAM setting is a slider");
+            if (ram) {
+                ram.integerValue = ram.integerValue == ram.maxValue ? ram.minValue : ram.maxValue;
+                [NSApp sendAction:ram.action to:ram.target from:ram];
+                check(view_has_label(sw.contentView, @"restart to apply"),
+                      "changing it says the machine is not using it yet");
+            }
         }
 
         /* (3c) Capture Input is a real grab now: turning it on installs the key
