@@ -17,6 +17,10 @@
   filesystem at once. A read-only share really is read-only: AROS cannot write
   to the disk at all. A shared disk is remembered by the volume itself, not by
   the port it was in, so replugging it elsewhere still works.
+- A disk AROS may not write now says so: it shows as `read only` in `Info`, and
+  an attempt to change anything on it comes back as "disk is write-protected"
+  instead of failing further down with a vaguer error. That covers a stick with
+  its write-protect switch on as well as a read-only share.
 - The route is `hostdisk.device`, which needed three fixes to work on macOS at
   all: the darwin build was compiling a placeholder backend, its geometry code
   did not compile and mis-sized disks over 2 TB, and it gave up instead of

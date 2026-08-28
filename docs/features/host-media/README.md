@@ -90,8 +90,10 @@ ends before the volume does.
 
 Read-only is enforced on the host, by taking write permission off the device
 node: `hostdisk.device` then opens it `O_RDONLY` and reports the unit as
-write-protected. Confirmed live: reads work, an AROS write does not reach the
-medium, and `fsck_exfat -n` stays clean.
+write-protected. The exFAT handler asks (`TD_PROTSTATUS`) and mounts the volume
+write-protected, so AROS shows it as `read only` in `Info` and refuses
+mutations with a stated reason rather than failing at the device. Confirmed
+live, and gated by `graft/exfat-writeprotect-smoke`.
 
 Grants live in `aros-host.conf` as `media <name> <ro|rw> <fs> <identity>` lines,
 next to the host app's other settings, which is why the window and the command
@@ -111,11 +113,6 @@ security boundary is the macOS process, not the guest.
 
 ## Known gaps
 
-- The exFAT handler does not query `TD_PROTSTATUS`, so on a read-only grant a
-  write fails at the device layer rather than returning
-  `ERROR_DISK_WRITE_PROTECTED` with `ID_WRITE_PROTECTED`. The medium stays
-  correct either way. The same gap applies to a stick with a physical
-  write-protect switch.
 - A medium withdrawn while AROS holds files open on it is dismounted anyway;
   AROS reports the device as gone rather than warning first.
 

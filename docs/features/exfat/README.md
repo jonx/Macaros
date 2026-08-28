@@ -56,6 +56,10 @@ instead of claiming those partition identifiers unconditionally.
   `ERROR_ACTION_NOT_KNOWN`.
 - Deterministic post-sync failpoints, old-or-new payload checks, dirty-bit
   inspection, repair fsck and clean second-fsck validation.
+- Write protection reported by the device itself (`TD_PROTSTATUS`, probed once
+  per medium): the volume reads normally, reports `ID_WRITE_PROTECTED`, and
+  refuses every mutation with `ERROR_DISK_WRITE_PROTECTED`, which is distinct
+  from the `ERROR_DISK_NOT_VALIDATED` a dirty volume gives.
 - Full-volume preflight rollback: failures before the first real mutation
   restore the exact original boot flags, while failures after mutation retain
   the conservative dirty-volume recovery contract. Case-folded create and
@@ -275,6 +279,19 @@ that allocation-changing resize and directory creation return
 zero-length create/delete still succeeds. A raw bitmap oracle and external
 `fsck_exfat -n` validate the image before and after the target run.
 
+Exercise a device that refuses writes with:
+
+```sh
+./graft/exfat-writeprotect-smoke
+```
+
+The image is clean and the volume is not dirty; only the device is
+write-protected, which `fdsk.device` reports from the image's own permissions.
+The target must read the payload, report `ID_WRITE_PROTECTED`, and refuse
+update handles, create, delete, rename, directory creation, protection changes
+and relabel with `ERROR_DISK_WRITE_PROTECTED`. A whole-image comparison then
+proves nothing was written.
+
 Exercise the inherited dirty-volume safety boundary with:
 
 ```sh
@@ -326,9 +343,9 @@ A physical stick is also mountable in the hosted build, through
 `hostdisk.device` rather than a USB stack: the host grants one specific device
 node and AROS mounts it like any other volume. Verified on 2026-08-28 against a
 real macOS block device (list, read, write, `fsck_exfat -n` clean, macOS reads
-the AROS-written file back). See [host-media](../host-media/README.md); the
-handler still does not query `TD_PROTSTATUS`, so a write-protected device fails
-writes at the device layer instead of reporting `ID_WRITE_PROTECTED`.
+the AROS-written file back). See [host-media](../host-media/README.md). A
+read-only grant, like a stick with its write-protect switch on, is reported by
+the device and the volume mounts write-protected.
 
 Hosted libusb pass-through is not a substitute on this Mac. The virtual HCI was
 made build-portable (`pkg-config` headers, Linux/Darwin runtime names), fixed to

@@ -10,6 +10,15 @@ silently treated as ordinary exFAT.
 - A volume mounted with `VolumeDirty` already set is readable but not writable.
   The handler has no repair engine and therefore is not allowed to clear a
   pre-existing dirty indication.
+- A device that refuses writes is a separate condition from a dirty volume, and
+  is asked about once per medium with `TD_PROTSTATUS`, so a swapped-in disk gets
+  its own answer. Such a volume reads normally, reports `ID_WRITE_PROTECTED`,
+  and refuses every mutation with `ERROR_DISK_WRITE_PROTECTED`: the medium is
+  intact and complete, it simply may not be changed. That is a different
+  statement from a dirty volume, whose own consistency is unproven and which
+  keeps the stricter `ERROR_DISK_NOT_VALIDATED` contract under which even
+  clearing the flag is refused. A device that cannot answer the command is
+  treated as writable; a write that cannot be done still fails on its own.
 - Before the first metadata change in an operation, clear `ClearToZero`, set
   `VolumeDirty` in the main boot sector, and force it to the device with
   `CMD_UPDATE`. These flag bytes are excluded from the boot checksum. The
@@ -103,6 +112,10 @@ space from the in-memory bitmap.
   `ERROR_DISK_FULL` without changing content, reachability or clean flags;
   zero-length create/delete still works. The fixture mutation probe rejects
   case-folded create and rename collisions while preserving the source.
+- `graft/exfat-writeprotect-smoke` mounts a volume whose device refuses writes
+  and proves that reads and `Info` are unaffected while update handles, create,
+  delete, rename, directory creation, protection changes and relabel are all
+  refused as write-protected, leaving the image byte-exact.
 - Deterministic failpoints stop after every ordered flush. Each resulting
   image must either contain the old state or the new state, or remain dirty
   and repairable without exposing freed or uninitialised data.

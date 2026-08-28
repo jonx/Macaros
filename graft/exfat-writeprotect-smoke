@@ -1,0 +1,93 @@
+#!/bin/bash
+# Prove that a device which refuses writes mounts readable, reports itself
+# write-protected, refuses every mutation for that reason, and is not altered.
+set -euo pipefail
+: "${AROS_CTL_STARTUP_MODE:=minimal}"
+export AROS_CTL_STARTUP_MODE
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+IMAGE="$AROS/DiskImages/Unit18"
+DRIVER="$AROS/Devs/DOSDrivers/EXFAT18"
+PROBE="$AROS/C/EXFATProtectProbe"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-wp.XXXXXX")"
+MOUNT="$WORK/mount"
+RESULTS="$WORK/results"
+OUT="$RESULTS/exfat-writeprotect.out"
+BEFORE="$WORK/Unit18.before"
+EXPECTED="$WORK/Existing.bin"
+DEVICE=""
+
+cleanup() {
+    local status=$?
+    [ -z "$DEVICE" ] || hdiutil detach "$DEVICE" -quiet || true
+    "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+    [ ! -e "$DRIVER" ] || unlink "$DRIVER"
+    [ ! -e "$PROBE" ] || unlink "$PROBE"
+    [ ! -e "$IMAGE" ] || { chmod u+w "$IMAGE"; unlink "$IMAGE"; }
+    if [ "$status" -ne 0 ] && [ "${EXFAT_KEEP_FIXTURE:-0}" = 1 ]; then
+        echo "keeping failed write-protect fixture at $WORK" >&2
+        return
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -x /sbin/newfs_exfat ] || { echo "FAIL: macOS newfs_exfat is required" >&2; exit 1; }
+[ -x /sbin/fsck_exfat ] || { echo "FAIL: macOS fsck_exfat is required" >&2; exit 1; }
+[ -d "$AROS/DiskImages" ] || { echo "FAIL: no runnable AROS tree at $AROS" >&2; exit 1; }
+[ ! -e "$IMAGE" ] && [ ! -e "$DRIVER" ] && [ ! -e "$PROBE" ] || {
+    echo "FAIL: Unit18, EXFAT18 or EXFATProtectProbe is already in use" >&2
+    exit 1
+}
+
+mkdir "$MOUNT" "$RESULTS"
+printf 'read-only device payload\n' >"$EXPECTED"
+truncate -s 64m "$IMAGE"
+DEVICE="$(hdiutil attach -nomount \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/newfs_exfat -v AROSWP "$DEVICE" >/dev/null
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+DEVICE="$(hdiutil attach -mountpoint "$MOUNT" \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+COPYFILE_DISABLE=1 cp -X "$EXPECTED" "$MOUNT/Existing.bin"
+sync
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+
+# The volume itself is clean and writable; only the DEVICE refuses writes, which
+# fdsk.device reports through TD_PROTSTATUS from the image's own permissions.
+DEVICE="$(hdiutil attach -nomount -readonly \
+    -imagekey diskimage-class=CRawDiskImage "$IMAGE" \
+    | awk 'NR == 1 { print $1 }')"
+/sbin/fsck_exfat -n "$DEVICE" >"$RESULTS/fsck-clean.out" 2>&1
+hdiutil detach "$DEVICE" -quiet
+DEVICE=""
+cp "$IMAGE" "$BEFORE"
+chmod a-w "$IMAGE"
+
+"$ROOT/hosted/exfat-tests/build-exfat-protect-probe.sh" >/dev/null
+cp "$ROOT/hosted/exfat-tests/EXFATProtectProbe" "$PROBE"
+cp "$ROOT/hosted/exfat-tests/EXFAT18.mountlist" "$DRIVER"
+AROS_CTL_HOST_FOLDER="$RESULTS" \
+AROS_CTL_STARTUP_EXTRA=$'Assign "FDSK:" "SYS:DiskImages"\nC:Mount DEVS:DOSDrivers/EXFAT18\nC:EXFATProtectProbe >MacRW:exfat-writeprotect.out' \
+    "$HERE/aros-ctl" run >/dev/null
+for ((second = 0; second < 30; second++)); do
+    if [ -f "$OUT" ] && grep -Eq '^\[EXFATWP\] (PASS|FAIL)' "$OUT"; then
+        break
+    fi
+    "$HERE/aros-ctl" wait 1 >/dev/null
+done
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+{ [ -f "$OUT" ] && grep -q '^\[EXFATWP\] PASS' "$OUT"; } || {
+    echo "FAIL: target write-protect probe failed" >&2
+    [ -f "$OUT" ] && cat "$OUT" >&2
+    exit 1
+}
+
+cmp "$BEFORE" "$IMAGE"
+echo "PASS: a write-protected device stays readable, reports itself, and is byte-exact"
