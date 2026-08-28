@@ -80,6 +80,10 @@
       "store": "conf", "key": "hostvolume", "default": "~/AROS/Shared",
       "apply": "arosOptionStr", "applyKey": "CM_OPT_VOLUME_ADD" },
 
+    { "ident": "sharing.media", "tier": "Machine", "tab": "Media",
+      "label": "Disks AROS may see", "control": "media",
+      "store": "conf", "key": "media", "apply": "none" },
+
     { "ident": "sound.volume", "tier": "Machine", "tab": "Sound",
       "label": "Master volume", "control": "slider",
       "store": "defaults", "key": "sound.volume", "default": 80,

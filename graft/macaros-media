@@ -29,8 +29,9 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
 
-DEFAULT_AROS = os.path.expanduser("~/aros-build/bin/darwin-aarch64/AROS")
+DEFAULT_SHARE = os.path.expanduser("~/AROS/Shared")
 DEFAULT_CONF = os.path.expanduser("~/Library/Application Support/AROS/aros-host.conf")
 CONF_KEY = "media"
 
@@ -41,6 +42,14 @@ HANDLERS = {
     "msdos": ("fat-handler", "0x46415400"),
     "fat32": ("fat-handler", "0x46415402"),
 }
+
+
+def share_from_env():
+    """The host folder AROS mounts as MacRW:, as the launchers describe it."""
+    for line in os.environ.get("AROS_HOST_VOLUME", "").splitlines():
+        if line.startswith("MacRW:"):
+            return line[len("MacRW:"):].split(";")[0]
+    return DEFAULT_SHARE
 
 
 def diskutil(*args):
@@ -76,14 +85,22 @@ def fs_of(rec):
     return fs or "unknown"
 
 
+def device_size(rec):
+    """The size of the device, not of the filesystem on it.
+
+    diskutil's TotalSize is the mounted volume's capacity, which is short of the
+    partition; a mount description built from it makes the exFAT handler refuse
+    the volume, because the partition would end before the volume does.
+    """
+    return int(rec.get("Size") or rec.get("IOKitSize") or 0)
+
+
 def identity(rec):
     """A stable-enough key for a medium across replugs."""
     for key in ("VolumeUUID", "DiskUUID"):
         if rec.get(key):
             return key.lower() + ":" + rec[key]
-    return "shape:%s/%s/%s" % (rec.get("VolumeName") or "-",
-                               rec.get("TotalSize") or rec.get("Size") or 0,
-                               fs_of(rec))
+    return "shape:%s/%s/%s" % (rec.get("VolumeName") or "-", device_size(rec), fs_of(rec))
 
 
 def human(size):
@@ -152,15 +169,23 @@ def dos_name(rec, taken):
     return name
 
 
+def media_dir(args):
+    """Where the mount descriptions live: a directory both sides can reach.
+
+    AROS sees it as MacRW:.macaros-media, so a signed app never has to write
+    inside its own sealed bundle. MediaWatch mounts what appears here.
+    """
+    return args.media_dir
+
+
 def write_mountlist(aros, name, rec, mode):
     handler, dostype = HANDLERS[fs_of(rec)]
     block = int(rec.get("DeviceBlockSize") or 512)
-    total = int(rec.get("TotalSize") or rec.get("Size") or 0)
-    sectors = total // block
+    sectors = device_size(rec) // block
     if sectors < 1:
         raise SystemExit("macaros-media: %s reports no usable size" % name)
-    target = os.path.join(aros, "Devs", "DOSDrivers", name)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    target = os.path.join(aros, name)
+    os.makedirs(aros, exist_ok=True)
     with open(target, "w") as mountlist:
         mountlist.write(
             "FileSystem      = %s\n"
@@ -205,6 +230,21 @@ def unmount(rec):
     return done.returncode == 0
 
 
+def request_removal(directory, name):
+    """Ask MediaWatch to give a device back, and wait for it to say it has."""
+    description = os.path.join(directory, name)
+    request = os.path.join(directory, ".remove-" + name)
+    if os.path.exists(description):
+        os.unlink(description)
+    os.makedirs(directory, exist_ok=True)
+    open(request, "w").close()
+    for _ in range(60):                 # MediaWatch polls about every 0.8s
+        if not os.path.exists(request):
+            return
+        time.sleep(0.1)
+    os.unlink(request)                  # no MediaWatch running; the grant is gone anyway
+
+
 def cmd_list(args):
     rows = candidates()
     if not rows:
@@ -220,7 +260,7 @@ def cmd_list(args):
                            if rec.get("MountPoint") else "not mounted")
         print("%-14s %-9s %-7s %-16s %s"
               % ("/dev/" + rec["DeviceIdentifier"],
-                 human(rec.get("TotalSize") or rec.get("Size")),
+                 human(device_size(rec)),
                  fs_of(rec), (rec.get("VolumeName") or "-")[:16], state))
     return 0
 
@@ -253,7 +293,7 @@ def cmd_grant(args):
     grants = [g for g in grants if g["id"] != key]
     name = args.name or dos_name(rec, {g["name"] for g in grants})
     mode = "rw" if args.rw else "ro"
-    write_mountlist(args.aros, name, rec, mode)
+    write_mountlist(args.media_dir, name, rec, mode)
     if not host_readonly(rec, mode == "ro"):
         print("macaros-media: note: could not set node permissions on %s"
               % rec["DeviceIdentifier"], file=sys.stderr)
@@ -262,7 +302,8 @@ def cmd_grant(args):
     print("granted %s (%s, %s) to AROS as %s: [%s]"
           % ("/dev/" + rec["DeviceIdentifier"], rec.get("VolumeName") or "-",
              fs, name, mode))
-    print("mount it in AROS with:  Mount DEVS:DOSDrivers/%s" % name)
+    print("MediaWatch mounts it as %s: — now if AROS is running, else at the "
+          "next boot" % name)
     return 0
 
 
@@ -281,9 +322,7 @@ def cmd_revoke(args):
               file=sys.stderr)
         return 1
     for grant in drop:
-        mountlist = os.path.join(args.aros, "Devs", "DOSDrivers", grant["name"])
-        if os.path.exists(mountlist):
-            os.unlink(mountlist)
+        request_removal(args.media_dir, grant["name"])
         print("revoked %s" % grant["name"])
     write_conf(args.conf, keep, other)
     if rec:
@@ -324,15 +363,16 @@ def cmd_prepare(args):
                   % rec["DeviceIdentifier"], file=sys.stderr)
             continue
         host_readonly(rec, grant["mode"] == "ro")
-        write_mountlist(args.aros, grant["name"], rec, grant["mode"])
+        write_mountlist(args.media_dir, grant["name"], rec, grant["mode"])
         print(grant["name"])
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--aros", default=os.environ.get("MACAROS_AROS_DIR", DEFAULT_AROS),
-                        help="runnable AROS tree (default: %s)" % DEFAULT_AROS)
+    parser.add_argument("--media-dir", default=os.environ.get("MACAROS_MEDIA_DIR", ""),
+                        help="where the mount descriptions are written "
+                             "(default: the host share's .macaros-media)")
     parser.add_argument("--conf", default=os.environ.get("AROS_HOST_CONF", DEFAULT_CONF),
                         help="host settings file holding the grants")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -348,6 +388,8 @@ def main():
     sub.add_parser("status").set_defaults(func=cmd_status)
     sub.add_parser("prepare").set_defaults(func=cmd_prepare)
     args = parser.parse_args()
+    if not args.media_dir:
+        args.media_dir = os.path.join(share_from_env(), ".macaros-media")
     return args.func(args)
 
 

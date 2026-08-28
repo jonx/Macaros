@@ -2,16 +2,21 @@
 
 ## 2026-08-28 - Mount a real USB stick inside Macaros
 
-- **Macaros can now mount a physical macOS disk, and you choose which one.**
-  An exFAT (or FAT) stick, SD card, or attached disk image can be handed to
-  AROS with `aros-ctl media grant /dev/disk4s1` (add `--rw` to allow writes).
-  The Mac unmounts the volume first, so the two systems never write the same
-  filesystem at once, and the grant is remembered by the medium's identity, so
-  replugging it into a different port still works. `aros-ctl media list` shows
-  what is on offer and never lists the Mac's own disk; `revoke` gives the
-  volume back to macOS. Verified end to end: AROS reads Mac-written files,
-  files AROS writes come back byte-exact on the Mac, and the volume passes
-  `fsck_exfat`. A read-only grant really is read-only.
+- **Macaros can now mount a physical Mac disk, and you choose which one.** An
+  exFAT (or FAT) stick, SD card, or attached disk image can be handed to AROS,
+  where it appears as an ordinary volume. Files written on the Mac read inside
+  AROS, and files AROS writes come back byte-exact on the Mac, with the volume
+  still passing `fsck_exfat`.
+- **Settings has a Media tab.** It lists the removable media the Mac has, never
+  its own disk, and gives each one a choice of not shared, read only, or read &
+  write. The list follows the hardware: plug a stick in while the window is open
+  and it appears. Sharing takes effect immediately, without a reboot, and a disk
+  you stop sharing goes back to the Finder within a second. The same choices are
+  available from the command line with `aros-ctl media`.
+- Sharing a disk unmounts it on the Mac first, so the two systems never write one
+  filesystem at once. A read-only share really is read-only: AROS cannot write
+  to the disk at all. A shared disk is remembered by the volume itself, not by
+  the port it was in, so replugging it elsewhere still works.
 - The route is `hostdisk.device`, which needed three fixes to work on macOS at
   all: the darwin build was compiling a placeholder backend, its geometry code
   did not compile and mis-sized disks over 2 TB, and it gave up instead of

@@ -46,7 +46,7 @@ M68K_AROS_GCC ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/crosstools/m68k-aro
 ELF2HUNK ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/elf2hunk
 M68K_LIBS_PATH ?= $(HOME)/Source/references/aros-m68k-20260804/libs
 
-.PHONY: image run shot dbg test hosted hosted-run hosted-preempt hosted-abi hosted-exec hosted-mem hosted-kern hosted-display hosted-cocoametal cocoametal-dylib cocoametal-abi cocoametal-shell cocoametal-statusbar cocoametal-hiddsim cocoametal-d2t cocoametal-input cocoametal-settings cocoametal-fullscreen cocoametal-livedraw cocoametal-show hosted-coreaudio coreaudio-dylib coreaudio-abi audio-smoke bench hosted-clipboard pasteboard-dylib pasteboard-abi hosted-hostvolume hosted-bsdsocket hosted-library hosted-signal hosted-msgport hosted-device hosted-execboot hosted-jit68k hosted-jit68k-hardened hosted-jit68k-j2 hosted-jit68k-j3 hosted-jit68k-j4 hosted-jit68k-j5a hosted-jit68k-j5b hosted-jit68k-j5c hosted-jit68k-j5d hosted-jit68k-j5e hosted-jit68k-j5f hosted-jit68k-j5g hosted-jit68k-j5h hosted-jit68k-j5i hosted-jit68k-j5j hosted-jit68k-j5k hosted-jit68k-j5l hosted-jit68k-j5m hosted-jit68k-j5n hosted-jit68k-j5o hosted-jit68k-j5p hosted-jit68k-j5q hosted-jit68k-j5r hosted-jit68k-j5s hosted-jit68k-j5t hosted-jit68k-apps libjit68k run68k hosted-jit68k-args hosted-emu68k-t0p1 hosted-emu68k-t0p3 hosted-emu68k-t0p4 scan68k hosted-emu68k-t2scan hosted-emu68k-t2guard hosted-emu68k-t3hello hosted-emu68k-t3setsignal hosted-emu68k-t3workbench hosted-emu68k-t3readargs hosted-emu68k-t3gen hosted-emu68k-t3mui hosted-emu68k-t3fmt hosted-emu68k-t3guestlib hosted-emu68k-t3guestlive hosted-emu68k-t3ereal rawdofmt-blob struct-layouts hosted-emu68k-t3lha hosted-emu68k-t3legacy hosted-emu68k-regina-fixtures hosted-jit68k-conform hosted-test clean
+.PHONY: image run shot dbg test hosted hosted-run hosted-preempt hosted-abi hosted-exec hosted-mem hosted-kern hosted-display hosted-cocoametal cocoametal-dylib cocoametal-abi cocoametal-media cocoametal-shell cocoametal-statusbar cocoametal-hiddsim cocoametal-d2t cocoametal-input cocoametal-settings cocoametal-fullscreen cocoametal-livedraw cocoametal-show hosted-coreaudio coreaudio-dylib coreaudio-abi audio-smoke bench hosted-clipboard pasteboard-dylib pasteboard-abi hosted-hostvolume hosted-bsdsocket hosted-library hosted-signal hosted-msgport hosted-device hosted-execboot hosted-jit68k hosted-jit68k-hardened hosted-jit68k-j2 hosted-jit68k-j3 hosted-jit68k-j4 hosted-jit68k-j5a hosted-jit68k-j5b hosted-jit68k-j5c hosted-jit68k-j5d hosted-jit68k-j5e hosted-jit68k-j5f hosted-jit68k-j5g hosted-jit68k-j5h hosted-jit68k-j5i hosted-jit68k-j5j hosted-jit68k-j5k hosted-jit68k-j5l hosted-jit68k-j5m hosted-jit68k-j5n hosted-jit68k-j5o hosted-jit68k-j5p hosted-jit68k-j5q hosted-jit68k-j5r hosted-jit68k-j5s hosted-jit68k-j5t hosted-jit68k-apps libjit68k run68k hosted-jit68k-args hosted-emu68k-t0p1 hosted-emu68k-t0p3 hosted-emu68k-t0p4 scan68k hosted-emu68k-t2scan hosted-emu68k-t2guard hosted-emu68k-t3hello hosted-emu68k-t3setsignal hosted-emu68k-t3workbench hosted-emu68k-t3readargs hosted-emu68k-t3gen hosted-emu68k-t3mui hosted-emu68k-t3fmt hosted-emu68k-t3guestlib hosted-emu68k-t3guestlive hosted-emu68k-t3ereal rawdofmt-blob struct-layouts hosted-emu68k-t3lha hosted-emu68k-t3legacy hosted-emu68k-regina-fixtures hosted-jit68k-conform hosted-test clean
 
 build:
 	@mkdir -p build
@@ -151,10 +151,12 @@ cocoametal-dylib: | build
 		hosted/cocoametal/cocoametal_settings_schema.m hosted/cocoametal/cocoametal_control.m \
 		hosted/cocoametal/cocoametal_shell.m hosted/cocoametal/cocoametal_statusbar.m \
 		hosted/cocoametal/cocoametal_gpu.m \
+		hosted/cocoametal/cocoametal_media.m hosted/cocoametal/cocoametal_media_ui.m \
 		-o $(COCOAMETAL_DYLIB) \
 		-framework Metal -framework Foundation -framework CoreGraphics \
 		-framework QuartzCore -framework AppKit -framework ImageIO \
-		-framework AVFoundation -framework CoreVideo -framework CoreMedia
+		-framework AVFoundation -framework CoreVideo -framework CoreMedia \
+		-framework DiskArbitration
 	codesign -s - -f $(COCOAMETAL_DYLIB)
 	cp -f hosted/cocoametal/settings.json build/settings.json
 	@echo ">> shipped build/settings.json (schema, resolved next to the dylib)"
@@ -179,6 +181,17 @@ cocoametal-gpu: cocoametal-dylib
 	clang -arch arm64 -O2 -Wall -Wextra \
 		-Ihosted/cocoametal hosted/cocoametal/gpu_test.c -o build/cocoametal-gpu
 	BIN=build/cocoametal-gpu ./harness/run-hosted.sh '[GPU] PASS all'
+
+# Host media ([MEDIA], docs/features/host-media): attach a disposable exFAT image
+# as a real /dev/disk node, then drive the broker the way the Settings window
+# does — list it, grant it read-only, grant it read/write, withdraw it — and
+# check the mount description and the recorded grant after each step.
+cocoametal-media: | build
+	clang -fobjc-arc -arch arm64 -O2 -Wall -Wextra \
+		-Ihosted/cocoametal hosted/cocoametal/media_test.m \
+		hosted/cocoametal/cocoametal_media.m -o build/cocoametal-media \
+		-framework Foundation -framework DiskArbitration
+	build/cocoametal-media
 
 # Regenerate the embedded shader library after editing cmshader.metal.
 # (cmshader_metallib.h is committed so plain builds never need Xcode's metal

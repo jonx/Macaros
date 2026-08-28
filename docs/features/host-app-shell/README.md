@@ -66,6 +66,11 @@ The Settings window is *generated* from
 launcher turns into boot env (see
 [`graft/aros-host-conf.sh`](../../../graft/aros-host-conf.sh)).
 
+One control is not a single value: `"control": "media"` generates the Media tab,
+a live list of the Mac's removable disks with a per-disk share setting. It
+follows the hardware while the window is open and applies itself, so it takes no
+store or apply of its own. See [host-media](../host-media/README.md).
+
 ## Docs
 
 - [design.md](design.md) — the app-shell architecture, the two-tier Settings

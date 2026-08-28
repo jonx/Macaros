@@ -1,8 +1,8 @@
 # Host media — physical disks and USB sticks inside Macaros
 
 > Status: **working** · Target: aarch64-darwin hosted · Verified 2026-08-28
-> Tool: [`graft/macaros-media`](../../../graft/macaros-media), also reachable as
-> `aros-ctl media`.
+> In the app: Settings ▸ Media. On the command line:
+> [`graft/macaros-media`](../../../graft/macaros-media), also `aros-ctl media`.
 
 Hosted AROS can mount a real macOS block device: a USB stick, an SD card, an
 attached disk image. The volume shows up as an ordinary AROS device and is
@@ -16,17 +16,26 @@ nothing else is reachable.
 ## How the medium reaches AROS
 
 ```
-user grants a medium
+Settings ▸ Media  (or aros-ctl media grant)
         |
-graft/macaros-media  ->  unmounts it on the macOS side
-        |                writes DEVS:DOSDrivers/<NAME>
-        v
+        |  unmounts it on the macOS side, sets the node's permissions
+        |  to the access granted, writes the mount description into
+        v  the shared folder, records the grant in aros-host.conf
+   <share>/.macaros-media/<NAME>
+        |
+        v  (MacRW:.macaros-media, polled by C:MediaWatch in AROS)
 AROS: Mount <NAME>  ->  exfat-handler / fat-handler
                               |
                         hostdisk.device  (opens /dev/diskN via hostlib)
                               |
                         macOS block device
 ```
+
+The descriptions live in the shared folder rather than in `DEVS:DOSDrivers`
+because a released Macaros.app is signed and sealed: nothing may be written
+inside the bundle's own AROS tree. `MediaWatch` mounts what appears there and
+dismounts what is withdrawn, so a stick granted while the desktop is up shows
+up without a reboot, and one taken back disappears within a second.
 
 `hostdisk.device` is upstream AROS: a hosted device whose units are host device
 nodes or image files, addressed either by unit number (`/dev/disk<N>` on Darwin)
@@ -48,6 +57,15 @@ of the mass-storage interface. See [exfat](../exfat/README.md).
 
 ## Using it
 
+**In the app**: Settings ▸ Media lists the removable media the Mac has, with the
+volume name, size, format, where it currently is, and a per-medium choice of
+*Not shared* / *Read only* / *Read & write*. The list follows the hardware:
+plug a stick in or pull it out and the table updates while the window is open.
+A medium whose filesystem AROS has no handler for is listed but cannot be
+shared.
+
+**On the command line**:
+
 ```sh
 aros-ctl media list                        # what macOS has, minus its own disk
 aros-ctl media grant /dev/disk4s1          # read-only
@@ -56,12 +74,19 @@ aros-ctl media status
 aros-ctl media revoke AROSEX               # give it back to macOS
 ```
 
-`grant` refuses an internal disk, refuses a filesystem AROS has no handler for,
-unmounts the volume on the macOS side, writes the mount description, and records
-the grant. `aros-ctl run` re-resolves every grant against what is attached at
-that moment, rewrites the mount description, and mounts it during startup: a
-`/dev/disk` number is reassigned on every replug, so the grant is remembered by
-volume identity (UUID where the medium has one, else name/size/filesystem).
+Both halves do the same three things: refuse an internal disk and a filesystem
+AROS has no handler for, take the volume from macOS, and write the description
+plus the grant. A grant is remembered by volume identity (UUID where the medium
+has one, else name/size/filesystem), never by device node, because a
+`/dev/disk` number is reassigned on every replug. Every grant is re-resolved and
+its description re-authored as the display comes up (`cm_media_prepare`, and
+`macaros-media prepare` for the harness), so what AROS mounts always names the
+node the medium has right now.
+
+The size in a mount description is the **device's**, never the mounted
+filesystem's: `diskutil`'s `TotalSize` is the volume's usable capacity, which is
+short of the partition, and the exFAT handler correctly refuses a partition that
+ends before the volume does.
 
 Read-only is enforced on the host, by taking write permission off the device
 node: `hostdisk.device` then opens it `O_RDONLY` and reports the unit as
@@ -69,8 +94,9 @@ write-protected. Confirmed live: reads work, an AROS write does not reach the
 medium, and `fsck_exfat -n` stays clean.
 
 Grants live in `aros-host.conf` as `media <name> <ro|rw> <fs> <identity>` lines,
-next to the host app's other settings, so the Settings window can present the
-same choice as a picker later. See [host-app-shell](../host-app-shell/README.md).
+next to the host app's other settings, which is why the window and the command
+line see each other's decisions. See
+[host-app-shell](../host-app-shell/README.md).
 
 ## What this boundary is, and is not
 
@@ -90,15 +116,23 @@ security boundary is the macOS process, not the guest.
   `ERROR_DISK_WRITE_PROTECTED` with `ID_WRITE_PROTECTED`. The medium stays
   correct either way. The same gap applies to a stick with a physical
   write-protect switch.
-- The Settings window has no media picker yet; granting is CLI-only.
-- The release bundle ships `hostdisk.device`, but a grant writes its mount
-  description into whichever AROS tree `--aros` names. For the app that has to
-  be the bundle's tree.
+- A medium withdrawn while AROS holds files open on it is dismounted anyway;
+  AROS reports the device as gone rather than warning first.
+
+## Tests
+
+| Gate | What it proves |
+|---|---|
+| `make cocoametal-media` | The broker itself, on a disposable exFAT image attached as a real `/dev/disk` node: listed, granted read-only then read/write, withdrawn; the mount description, the recorded grant, the node's permissions and the macOS mount state after each step. |
+| `make cocoametal-shell` | The Settings window really generates the Media tab and its device list, against the production dylib. |
+
+The live path (grant while the desktop is up, `MediaWatch` mounts it, withdraw
+it and watch it go) was verified by hand on 2026-08-28.
 
 ## Upstream state
 
-The Darwin side of `hostdisk.device` needed three fixes, carried on the
-`darwin-hostdisk` branch in `../aros-upstream`:
+Carried on the `darwin-hostdisk` branch in `../aros-upstream`: `C:MediaWatch`
+is new, and the Darwin side of `hostdisk.device` needed three fixes:
 
 - the darwin build compiled the non-functional template host backend, because
   its arch mmakefile listed only `geometry`;

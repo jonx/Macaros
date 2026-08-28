@@ -468,17 +468,13 @@ write_startup_sequence() {
 }
 
 # Physical host media the user granted through `aros-ctl media grant`. The mount
-# description is re-authored here, at boot, because /dev/disk numbers are
-# reassigned on every replug. Nothing is mounted that was not granted.
+# descriptions are re-authored here, at boot, because /dev/disk numbers are
+# reassigned on every replug; MediaWatch (started below) mounts them, and keeps
+# mounting whatever is granted later while the system runs.
 mount_granted_media() {
     [ "${AROS_CTL_MEDIA:-1}" = 0 ] && return 0
-    [ -x "$HERE/macaros-media" ] || return 0
-    local name
-    "$HERE/macaros-media" --aros "$AROS" prepare 2>/dev/null | while read -r name; do
-        [ -n "$name" ] || continue
-        printf 'If EXISTS "DEVS:DOSDrivers/%s"\n    Mount DEVS:DOSDrivers/%s\nEndIf\n' \
-            "$name" "$name"
-    done
+    [ -x "$HERE/macaros-media" ] && "$HERE/macaros-media" prepare >/dev/null 2>&1
+    printf 'If EXISTS "C:MediaWatch"\n    Run <NIL: >NIL: C:MediaWatch\nEndIf\n'
     return 0
 }
 
@@ -1078,10 +1074,7 @@ media)
     # granting unmounts the volume on the macOS side (two writers corrupt a
     # filesystem), writes the AROS mount description, and remembers the medium by
     # its identity so a replug still resolves. `run` mounts what is granted.
-    BOOTD="$(find_bootd)"
-    [ -n "$BOOTD" ] || { echo "aros-ctl: no boot dir" >&2; exit 1; }
-    AROS="$(cd "$BOOTD/../.." && pwd)"
-    exec "$HERE/macaros-media" --aros "$AROS" "${@:-list}"
+    exec "$HERE/macaros-media" "${@:-list}"
     ;;
 wait)   sleep "${1:-1}";;
 *)

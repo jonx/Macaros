@@ -27,11 +27,14 @@
 #include <string.h>
 #include <dlfcn.h>
 #include "cocoametal.h"
+#include "cocoametal_media.h"
+#include "cocoametal_media_ui.h"
 
 extern NSString *cm__app_name(void);   /* host app name for window chrome */
 
 /* ---- the descriptor vocabulary (was cmsettings.h in the POC) ---- */
-typedef enum { CMCtlCheckbox, CMCtlPopup, CMCtlSlider, CMCtlText, CMCtlPath } CMCtl;
+typedef enum { CMCtlCheckbox, CMCtlPopup, CMCtlSlider, CMCtlText, CMCtlPath,
+               CMCtlMedia /* a live list, not one value */ } CMCtl;
 typedef enum { CMStoreDefaults, CMStoreConf } CMStoreKind;
 typedef enum { CMApplyNone, CMApplyHostOption, CMApplyArosOption,
                CMApplyArosOptionStr, CMApplyBootOnly } CMApply;
@@ -77,7 +80,8 @@ static long const_num(id v, long deflt) {
 }
 static int ctl_from(NSString *s, CMCtl *out) {
     NSDictionary *M = @{@"checkbox":@(CMCtlCheckbox), @"popup":@(CMCtlPopup), @"slider":@(CMCtlSlider),
-                        @"text":@(CMCtlText), @"path":@(CMCtlPath)};
+                        @"text":@(CMCtlText), @"path":@(CMCtlPath),
+                        @"media":@(CMCtlMedia)};
     NSNumber *n = M[s ?: @""]; if (!n) return 0; *out = (CMCtl)n.intValue; return 1;
 }
 static int store_from(NSString *s, CMStoreKind *out) {
@@ -127,6 +131,8 @@ static int load_schema(const char *pathC) {
             for (NSDictionary *co in ch) { cc[j].label = dupc(co[@"label"]); cc[j].value = const_num(co[@"value"], 0); j++; }
             s.choices = cc; s.nchoices = (int)ch.count;
         }
+        if (s.ctl == CMCtlMedia && s.apply != CMApplyNone) { free(out);
+            return failf([NSString stringWithFormat:@"%@: a media list applies itself", ident]); }
         if (s.ctl == CMCtlPopup && s.nchoices <= 0) { free(out); return failf([NSString stringWithFormat:@"%@: popup needs choices", ident]); }
         if (s.ctl == CMCtlSlider && !(s.minV < s.maxV)) { free(out); return failf([NSString stringWithFormat:@"%@: slider needs min<max", ident]); }
         for (int i = 0; i < k; i++) if (strcmp(out[i].ident, s.ident) == 0) { free(out); return failf([NSString stringWithFormat:@"duplicate ident '%@'", ident]); }
@@ -238,6 +244,7 @@ static NSString *symbol_for_tab(NSString *tab) {
         @"System":   @"memorychip",
         @"Sharing":  @"folder",
         @"Sound":    @"speaker.wave.2",
+        @"Media":    @"externaldrive",
     };
     return M[tab] ?: @"gearshape";
 }
@@ -278,6 +285,8 @@ static NSString *symbol_for_tab(NSString *tab) {
             sl.toolTip = [NSString stringWithFormat:@"%ld–%ld", s->minV, s->maxV];
             return sl;
         }
+        case CMCtlMedia:
+            return nil;                       /* laid out by gridForTab:, not as a row */
         case CMCtlText:
         case CMCtlPath: {
             NSTextField *t = [NSTextField textFieldWithString:@(load_str(s))];
@@ -318,9 +327,11 @@ static NSString *symbol_for_tab(NSString *tab) {
 }
 - (NSView *)gridForTab:(NSString *)tab {
     NSMutableArray *rows = [NSMutableArray array];
+    NSView *media = nil;
     for (int i = 0; i < gCount; i++) {
         const CMSetting *s = &gSettings[i];
         if (![@(s->tab) isEqualToString:tab]) continue;
+        if (s->ctl == CMCtlMedia) { media = cm_media_panel(); continue; }
         NSTextField *lbl = [NSTextField labelWithString:[NSString stringWithFormat:@"%s:", s->label]];
         NSControl *ctl = [self controlFor:s index:i];
         NSView *right = ctl;
@@ -331,12 +342,18 @@ static NSString *symbol_for_tab(NSString *tab) {
         }
         [rows addObject:@[lbl, right]];
     }
+    if (rows.count == 0)                 /* a tab may be only a live list */
+        [rows addObject:@[[NSTextField labelWithString:@""], [NSView new]]];
     NSGridView *grid = [NSGridView gridViewWithViews:rows];
     grid.rowSpacing = 10; grid.columnSpacing = 12;
     grid.translatesAutoresizingMaskIntoConstraints = NO;
     [[grid columnAtIndex:0] setXPlacement:NSGridCellPlacementTrailing];
     NSView *pad = [[NSView alloc] initWithFrame:NSZeroRect];
     [pad addSubview:grid];
+    if (media) {
+        media.translatesAutoresizingMaskIntoConstraints = NO;
+        [pad addSubview:media];
+    }
     /* footer: where the schema + config were loaded from */
     NSTextField *foot = [NSTextField labelWithString:footer_text()];
     foot.font = [NSFont systemFontOfSize:9];
@@ -349,11 +366,17 @@ static NSString *symbol_for_tab(NSString *tab) {
         [grid.topAnchor constraintEqualToAnchor:pad.topAnchor constant:20],
         [grid.leadingAnchor constraintEqualToAnchor:pad.leadingAnchor constant:20],
         [grid.trailingAnchor constraintEqualToAnchor:pad.trailingAnchor constant:-20],
-        [foot.topAnchor constraintEqualToAnchor:grid.bottomAnchor constant:16],
+        [foot.topAnchor constraintEqualToAnchor:(media ?: grid).bottomAnchor constant:16],
         [foot.leadingAnchor constraintEqualToAnchor:pad.leadingAnchor constant:20],
         [foot.trailingAnchor constraintLessThanOrEqualToAnchor:pad.trailingAnchor constant:-20],
         [foot.bottomAnchor constraintEqualToAnchor:pad.bottomAnchor constant:-12],
     ]];
+    if (media)
+        [NSLayoutConstraint activateConstraints:@[
+            [media.topAnchor constraintEqualToAnchor:grid.bottomAnchor constant:12],
+            [media.leadingAnchor constraintEqualToAnchor:pad.leadingAnchor constant:20],
+            [media.trailingAnchor constraintEqualToAnchor:pad.trailingAnchor constant:-20],
+        ]];
     return pad;
 }
 - (void)selectTab:(NSString *)tab {
@@ -462,6 +485,12 @@ int cm__open_settings_appkit(CMContext *cx) {
  * changes still use CM_EV_SETTING after the input task is live. */
 void cm__apply_persisted_options(CMContext *cx) {
     @autoreleasepool {
+        /* Media the user granted earlier: take each one from macOS and re-author
+         * its mount description before AROS is far enough along to mount it. A
+         * /dev/disk number is reassigned on every replug, so the description
+         * cannot be trusted from grant time. */
+        cm_media_prepare();
+
         NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
         if ([d objectForKey:@"cocoametal.effect"])     cm_set_option(cx, CM_OPT_EFFECT,    [d integerForKey:@"cocoametal.effect"]);
         if ([d objectForKey:@"cocoametal.scaleMode"])  cm_set_option(cx, CM_OPT_SCALE_MODE, [d integerForKey:@"cocoametal.scaleMode"]);

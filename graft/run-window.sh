@@ -184,6 +184,9 @@ write_startup_sequence() {
                     'EndIf' \
                     'If EXISTS "C:KeymapWatch"' \
                     '    Run <NIL: >NIL: C:KeymapWatch' \
+                    'EndIf' \
+                    'If EXISTS "C:MediaWatch"' \
+                    '    Run <NIL: >NIL: C:MediaWatch' \
                     'EndIf'
                 printf '%s\n' \
                     'Assign "LOCALE:" "SYS:Locale"' \

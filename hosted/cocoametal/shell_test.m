@@ -43,6 +43,16 @@ static NSMenuItem *item(NSMenu *m, NSString *t) {
     for (NSMenuItem *it in m.itemArray) if ([it.title isEqual:t]) return it;
     return nil;
 }
+/* First view of a class anywhere under `v` (the tab bodies are nested). */
+static NSView *view_of_class(NSView *v, Class wanted) {
+    if ([v isKindOfClass:wanted]) return v;
+    for (NSView *s in v.subviews) {
+        NSView *found = view_of_class(s, wanted);
+        if (found) return found;
+    }
+    return nil;
+}
+
 static int view_has_label(NSView *v, NSString *needle) {
     if ([v isKindOfClass:[NSTextField class]] &&
         [[(NSTextField *)v stringValue] containsString:needle]) return 1;
@@ -245,6 +255,18 @@ int main(int argc, const char **argv) {
         check(sw && sw.toolbar.items.count >= 4, "settings window generated tab toolbar from schema");
         check(sw && view_has_label(sw.contentView, @"Schema:"),
               "settings window shows where the schema was loaded from (footer)");
+
+        /* (3b) The Media tab: a live device list generated from the schema's
+         * "media" control, so the user chooses which physical disk AROS sees. */
+        NSToolbarItem *mediaTab = nil;
+        for (NSToolbarItem *ti in sw.toolbar.items)
+            if ([ti.itemIdentifier isEqualToString:@"Media"]) mediaTab = ti;
+        check(mediaTab != nil, "settings window has the Media tab");
+        if (mediaTab) {
+            [NSApp sendAction:mediaTab.action to:mediaTab.target from:mediaTab];
+            check(view_of_class(sw.contentView, [NSTableView class]) != nil,
+                  "the Media tab presents the device list");
+        }
 
         /* (4) Movie recording: present N frames -> cm__record_frame appends -> probe .mov */
         upload_fn   cm_upload_    = (upload_fn)  dlsym(h, "cm_upload_rect");
