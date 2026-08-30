@@ -9,7 +9,16 @@ deploy stages and runs them.
 > The OS source is a **separate** checkout at `../aros-upstream` (branch
 > `aarch64-darwin-graft`). You build from there, commit there, and push to the
 > jonx fork (remote `fork`). This repo (`Macaros`) is only the host/graft
-> layer.
+> layer. A fresh checkout must include the **submodules** (translation
+> catalogs — without them generated headers are missing and `kernel-dos`
+> fails on undeclared `MSG_STRING_*` identifiers):
+>
+> ```sh
+> git clone --recurse-submodules -b aarch64-darwin-graft \
+>     https://github.com/jonx/AROS.git aros-upstream
+> # or, in an existing checkout:
+> git submodule update --init --recursive
+> ```
 
 ---
 
@@ -94,6 +103,11 @@ There are two toolchain stories; only one works:
 | Thin wrapper around Homebrew clang (retarget system clang to aarch64 ELF) | **Dies at `-noposixc`** — Homebrew clang isn't the AROS-patched clang. A dead end; do not try it. |
 | AROS's own from-source patched **clang 20.1.0** (`--with-toolchain=llvm`) | Works — but building it from source is the ~1–2 h step you want to avoid. This is what `graft/build-darwin-aarch64.sh` and the recipe below do. |
 
+On a machine with no prebuilt toolchain, `make crosstools-toolchain` does work
+from source since the 2026-08-30 fork fixes (before them, the aarch64 LLVM
+metatarget was unregistered — the make "succeeded" while building no compiler —
+and compiler-rt failed to configure against the shared LLVM package).
+
 The working toolchain is self-contained and **relocatable** (only depends on
 system libs + Homebrew `zstd`). Preserve and reuse it instead of rebuilding:
 
@@ -155,12 +169,17 @@ The boot set (47 modules, from the kickstart `AROSBootstrap.conf` + the list
   `kernel-intuition`, `kernel-graphics`, `kernel-layers`, `kernel-keymap`,
   `kernel-debug`, `kernel-bootloader`)
 - `rom/devs/<x>` → `kernel-<x>` (`kernel-console`, `kernel-input`,
-  `kernel-keyboard`, `kernel-gameport`, `kernel-clipboard`)
+  `kernel-keyboard`, `kernel-gameport`)
 - `rom/hidds/<x>` → `kernel-hidd[-<x>]` (`kernel-hidd`, `kernel-hidd-gfx`,
   `kernel-hidd-input`, `kernel-hidd-kbd`, `kernel-hidd-mouse`)
-- `workbench/libs/<x>` → `workbench-libs-<x>` (`-muimaster`, `-cybergraphics`,
-  `-datatypes`, `-gadtools`, `-iffparse`, `-locale`, `-asl`, `-commodities`,
-  `-coolimages`, `-rexxsyslib`, `-stdc`)
+- `workbench/libs/<x>` → `workbench-libs-<x>` (`-muimaster`, `-datatypes`,
+  `-gadtools`, `-iffparse`, `-locale`, `-asl`, `-commodities`, `-coolimages`,
+  `-rexxsyslib`) — the target name follows the **directory**, not the library:
+  cybergraphics.library is `workbench-libs-cgfx` (dir `workbench/libs/cgfx`)
+- the deceptive four: clipboard.device → `workbench-devs-clipboard`
+  (dir `workbench/devs/clipboard`), stdc/stdcio → `compiler-stdc` /
+  `compiler-stdcio` (dir `compiler/crt/stdc`). A wrong guess is a **silent
+  no-op**, not an error (§ troubleshooting)
 - the Cocoa display HIDD → **`kernel-hidd-cocoa`**
 - the host bootstrap (`AROSBootstrap`) → **`kernel-bootstrap-hosted`**
 
@@ -334,6 +353,7 @@ build of the editor staticlib) and `$D/libzed_aros_app.a`, the superseded shim.
 | Builds clean but the boot faults with no diagnostic | clang‑22 `va_start` header compiled by the clang‑20 binary | restore clang‑20.1.0 freestanding headers (§2) |
 | `[MMAKE] Nothing known about project kernel-kernel` | mmake rebuilt itself mid-run; stale metatarget DB | one target per `make` call (§3) |
 | `make <target>` "succeeds" instantly but installs nothing | **typo'd metatarget: mmake exits 0 on an unknown target** (`[MMAKE][0] Nothing known about target X` is not an error). Cost a full debug cycle: `kernel-clipboard`/`workbench-libs-stdc`/`workbench-libs-cybergraphics` were silent no-ops (real names `workbench-devs-clipboard`, `compiler-stdc`, `workbench-libs-cgfx`) | grep the make output for `Nothing known about target` after adding any new target name; resolve names via `grep -rhoE 'mmake=[a-z0-9-]+' <srcdir>/mmakefile.src` |
+| `kernel-dos` fails: `use of undeclared identifier 'MSG_STRING_REQUESTTITLE'` (etc.) | **submodules not initialized** — `rom/dos/catalogs` is empty so `strings.h` is never generated and clang picks up the C `strings.h` instead | `git submodule update --init --recursive` in `../aros-upstream` |
 | Wanderer requester `Could not open … "muimaster.library"` (deps all on disk) | one of Wanderer's hard deps is truly absent — commonly `cybergraphics.library` (target is `workbench-libs-cgfx`, NOT `-cybergraphics`) or `stdcio.library` (`compiler-stdcio`; without it every C: command is also silently mute) | `version <lib>.library` from the boot shell bisects it: "object not found" = missing lib |
 | `Display driver(s) failed… Entering emergency shell` | `icon.library` missing (no monitors load) **or** no `AROS.boot` signature | build the userland libs (§3b); stage `AROS.boot` (deploy doc) |
 | `Please insert volume "THEMES"` requester | AROSDefault theme not staged | `run-window.sh` stages it now; see deploy doc |
