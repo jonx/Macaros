@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-08-30 - A stranger can now build it
+
+The first outside build report (issue #1, thanks apaczi) exposed everything
+that only worked on the machine the port was written on. All five findings are
+fixed:
+
+- **The toolchain builds from source on aarch64.** `make crosstools-toolchain`
+  used to "succeed" while building no compiler (the aarch64 LLVM metatarget was
+  never registered), and compiler-rt failed to configure. Both fixed on the
+  `aarch64-darwin-graft` branch.
+- **The zlib download is reproducible.** The fallback source pointed at a
+  moving Chromium ref, so when the primary cache was unreachable the fetched
+  source no longer matched the patch. The fallback is now pinned to the exact
+  revision the patch was made against.
+- **The build doc tells the whole truth.** Submodule initialization is now
+  documented (without it `kernel-dos` fails on missing catalog strings), and
+  three wrong metatarget names in the naming map are corrected — a wrong name
+  is a silent no-op, which made every one of these expensive to diagnose.
+
 ## 2026-08-28 - Every setting does something
 
 - **The Settings window now changes the machine, not just a file.** Choices that
