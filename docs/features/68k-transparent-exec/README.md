@@ -1,10 +1,10 @@
 # Transparent 68k execution
 
-**Status: design + plan** (drafted 2026-08-01, no implementation yet). The umbrella
-feature that turns the built [68k JIT engine](../68k-jit/README.md) and the
-[typed marshalling boundary](../68k-marshalling/README.md) into something a user
-never has to think about: double-click or shell-type a classic Amiga 68k program
-on AROS and it just runs.
+**Status: experimental implementation; application-breadth verification remains.**
+The umbrella feature turns the built [68k JIT engine](../68k-jit/README.md) and
+the [typed marshalling boundary](../68k-marshalling/README.md) into something a
+user does not have to configure for each normal launch: double-click or
+shell-type a classic Amiga 68k program on AROS and run it through the bridge.
 
 Three ideas, one ladder:
 
@@ -31,6 +31,10 @@ Three ideas, one ladder:
   and widgets, crash handling and the evolution loop
 - [plan.md](plan.md) - the detailed staged plan (`[T0]` four proofs, then
   `[T1]`..`[T7]`), with per-phase verification and exit criteria
+- [HANDOVER.md](HANDOVER.md) - current implementation status, verified coverage,
+  working method, open application-breadth work and regression commands
+- [portability.md](portability.md) - component map and assessment for a portable
+  interpreter backend, hosted/native x86-64, and a possible future x86-64 JIT
 - Companions: [68k-jit](../68k-jit/README.md) (the engine, built) ·
   [68k-marshalling](../68k-marshalling/README.md) (the boundary design) ·
   [crash-handling](../crash-handling/README.md) (the native guru this extends)
