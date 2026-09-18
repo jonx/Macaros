@@ -1,0 +1,4 @@
+word Data 0x00000000
+word Locked 0x00000006
+word Plain 0x00000002
+word Tool 0x00000040

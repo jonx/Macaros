@@ -184,131 +184,177 @@ static void test_v1(void) {
     unlink(pnfc);
 }
 
-/* ---- [V-2] sidecar round-trip -------------------------------------------- */
+/* ---- [V-2] .ameta: one metadata file per directory ---------------------- */
+
+static char *slurp_text(const char *path) {
+    static char buf[65536];
+    int fd = open(path, O_RDONLY);
+    ssize_t n = fd < 0 ? -1 : read(fd, buf, sizeof buf - 1);
+    if (fd >= 0) close(fd);
+    buf[n < 0 ? 0 : n] = '\0';
+    return n < 0 ? NULL : buf;
+}
+
+/* How many metadata files (.ameta and leftover temporaries) g_dir holds. */
+static int metadata_files(const char *dir, int *temporaries) {
+    int count = 0;
+    DIR *d = opendir(dir);
+    *temporaries = 0;
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            if (!strcmp(de->d_name, ".ameta")) count++;
+            else if (!strncmp(de->d_name, ".ameta.", 7)) (*temporaries)++;
+        }
+        closedir(d);
+    }
+    return count;
+}
 
 static void test_v2(void) {
-    printf("[V] [V-2] sidecar: .amimeta round-trip + omit-when-default + atomic\n");
+    printf("[V] [V-2] .ameta: one file per directory, kept in step, safe to share\n");
 
-    char data[4096], side[4096];
-    joinp(data, sizeof data, "doc.txt");
-    write_file(data, "hello", 5);
+    char a[4096], b[4096], meta[4096];
+    joinp(a, sizeof a, "Guru");
+    joinp(b, sizeof b, "Guru.info");
+    joinp(meta, sizeof meta, ".ameta");
+    write_file(a, "x", 1);
+    write_file(b, "y", 1);
 
-    hv_sidecar_path(data, side, sizeof side);
-    /* sidecar name must be ".doc.txt.amimeta" beside the data file */
-    {
-        const char *sb = strrchr(side, '/'); sb = sb ? sb + 1 : side;
-        CHECK(strcmp(sb, ".doc.txt.amimeta") == 0,
-              "sidecar path basename == \".doc.txt.amimeta\" (got \"%s\")", sb);
-        CHECK(hv_is_sidecar_name(sb) == 1, "hv_is_sidecar_name(\"%s\")==1", sb);
-        CHECK(hv_is_sidecar_name("doc.txt") == 0,
-              "hv_is_sidecar_name(\"doc.txt\")==0 (data files not skipped)");
-    }
-
-    /* (a) Default metadata writes NO sidecar. */
+    /* (a) Default metadata needs no file. */
     HVMeta def; memset(&def, 0, sizeof def);
     CHECK(hv_meta_is_default(&def) == 1, "fresh metadata is default");
-    CHECK(hv_meta_write(data, &def) == 0, "hv_meta_write(default) ok");
-    CHECK(!file_exists(side), "no sidecar created for default metadata (dir stays clean)");
+    CHECK(hv_meta_write(a, &def) == 0 && !file_exists(meta),
+          "default metadata writes no .ameta (dir stays clean)");
 
-    /* (b) Non-default metadata: a comment + AmigaOS-only Pure|Script bits. */
-    HVMeta m; memset(&m, 0, sizeof m);
-    m.prot = HV_FIBF_PURE | HV_FIBF_SCRIPT;          /* upper, non-rwx bits */
-    strcpy(m.comment, "needs RAD: 50% & a \"quote\"\n");
-    CHECK(hv_meta_is_default(&m) == 0, "metadata with comment+bits is non-default");
-    CHECK(hv_meta_write(data, &m) == 0, "hv_meta_write(non-default) ok");
-    CHECK(file_exists(side), "sidecar created for non-default metadata");
-
-    /* Assert atomicity left no temp file behind. */
+    /* (b) Filenote and Protect on two files of one directory: one .ameta. */
+    HVMeta ma; memset(&ma, 0, sizeof ma);
+    ma.prot = HV_FIBF_SCRIPT;
+    strcpy(ma.comment, "Alert decoder, \xE9t\xE9 100%");      /* Latin-1 é */
+    HVMeta mb; memset(&mb, 0, sizeof mb);
+    mb.prot = HV_FIBF_ARCHIVE | HV_FIBF_DELETE;                /* Delete: host mode cannot */
+    CHECK(hv_meta_write(a, &ma) == 0 && hv_meta_write(b, &mb) == 0, "two writes ok");
+    int temps = 0;
+    CHECK(metadata_files(g_dir, &temps) == 1 && temps == 0,
+          "a single .ameta holds both, and no temporary file is left");
     {
-        int stray = 0;
-        DIR *d = opendir(g_dir);
-        if (d) {
-            struct dirent *de;
-            while ((de = readdir(d)))
-                if (strstr(de->d_name, ".amimeta.tmp")) stray = 1;
-            closedir(d);
-        }
-        CHECK(!stray, "atomic write left no .tmp file (temp+rename, target replaced)");
+        const char *text = slurp_text(meta);
+        CHECK(text && strstr(text, "file Guru\nprot 0x00000040\n")
+                   && strstr(text, "comment Alert%20decoder,%20%C3%A9t%C3%A9%20100%25\n")
+                   && strstr(text, "file Guru.info\nprot 0x00000011\n"),
+              "on disk: both sections, the comment as escaped UTF-8 (got:\n%s)",
+              text ? text : "(none)");
     }
+    CHECK(hv_is_sidecar_name(".ameta") && hv_is_sidecar_name(".ameta.x7Hq2a")
+          && !hv_is_sidecar_name("Guru") && !hv_is_sidecar_name(".ameta2"),
+          "listings hide .ameta and its temporaries, and nothing else");
 
-    /* (c) Read it back; assert equal. */
+    /* (c) Read back as AROS sees it: Latin-1 comment, full word. */
     HVMeta r; memset(&r, 0, sizeof r);
-    int got = hv_meta_read(data, &r);
-    CHECK(got == 1, "hv_meta_read found the sidecar (rc=%d)", got);
-    CHECK(r.prot == m.prot, "prot round-trips: 0x%X == 0x%X", r.prot, m.prot);
-    CHECK((r.prot & HV_FIBF_AMIGA_ONLY) == (HV_FIBF_PURE | HV_FIBF_SCRIPT),
-          "AmigaOS-only bits preserved (PURE|SCRIPT) = 0x%X",
-          r.prot & HV_FIBF_AMIGA_ONLY);
-    CHECK(strcmp(r.comment, m.comment) == 0,
-          "comment round-trips byte-exact (incl. %% , \" and newline)");
+    CHECK(hv_meta_read(a, &r) == 1 && r.prot == ma.prot && strcmp(r.comment, ma.comment) == 0,
+          "Guru reads back: prot 0x%X, comment byte-exact in Latin-1", r.prot);
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(b, &r) == 1 && r.prot == mb.prot && r.comment[0] == '\0',
+          "Guru.info reads back with its Delete bit (prot 0x%X)", r.prot);
 
-    /* (d) Re-defaulting removes the sidecar (keeps dir clean). */
-    CHECK(hv_meta_write(data, &def) == 0, "hv_meta_write(default) over existing ok");
-    CHECK(!file_exists(side), "sidecar removed when metadata reverts to default");
+    /* (d) Rename and delete, after the host operation, keep .ameta in step. */
+    char renamed[4096];
+    joinp(renamed, sizeof renamed, "Guru.old");
+    rename(a, renamed);
+    CHECK(hv_meta_rename(a, renamed) == 0, "hv_meta_rename ok");
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(renamed, &r) == 1 && strcmp(r.comment, ma.comment) == 0,
+          "the entry follows its file to the new name");
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(a, &r) == 0, "and nothing is left under the old name");
 
-    /* enumeration must skip the sidecar even while it exists */
-    hv_meta_write(data, &m);
+    char subdir[4096], moved[4096];
+    joinp(subdir, sizeof subdir, "Drawer");
+    mkdir(subdir, 0755);
+    snprintf(moved, sizeof moved, "%s/Guru.old", subdir);
+    rename(renamed, moved);
+    CHECK(hv_meta_rename(renamed, moved) == 0, "a move to another directory ok");
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(moved, &r) == 1 && r.prot == ma.prot && strcmp(r.comment, ma.comment) == 0,
+          "the entry moved to the other directory's .ameta");
+
+    unlink(b);
+    CHECK(hv_meta_delete(b) == 0, "hv_meta_delete ok");
+    CHECK(!file_exists(meta), "the last entry gone, the directory's .ameta is deleted");
+
+    /* (e) Concurrent writers of different files of one directory all land:
+     * each re-reads .ameta and starts again if another replaced it first. */
     {
-        int saw_data = 0, saw_side = 0;
-        DIR *d = opendir(g_dir);
-        if (d) {
-            struct dirent *de;
-            while ((de = readdir(d))) {
-                if (!strcmp(de->d_name, "doc.txt")) saw_data = 1;
-                if (hv_is_sidecar_name(de->d_name)) saw_side = 1; /* would-be-skipped */
-            }
-            closedir(d);
-        }
-        CHECK(saw_data && saw_side,
-              "sidecar is present-but-skippable: data listed, .amimeta flagged for skip");
-    }
-
-    /* (e) Concurrency safety (FINDING 2): many writers race to write the SAME
-     * sidecar at once. With a pid-only O_TRUNC temp name they would collide and
-     * truncate each other's temp; with mkstemp each gets a unique O_EXCL temp,
-     * so every write either lands a complete record or fails cleanly, and the
-     * dir is left with NO stray temp file. We fork N children that each write a
-     * non-default record, then assert: all succeeded, the surviving sidecar
-     * parses to a complete valid record, and no ".amimeta.tmp*" temp lingers. */
-    {
-        unlink(side);
-        const int N = 8;
-        HVMeta cm; memset(&cm, 0, sizeof cm);
-        cm.prot = HV_FIBF_PURE | HV_FIBF_SCRIPT;
-        strcpy(cm.comment, "concurrent writer");
-        int rc_all_ok = 1;
+        enum { N = 8 };
+        char names[N][4096];
         for (int i = 0; i < N; i++) {
-            pid_t pid = fork();
-            if (pid == 0) {                       /* child */
-                int rc = hv_meta_write(data, &cm);
-                _exit(rc == 0 ? 0 : 1);
+            char leaf[32];
+            snprintf(leaf, sizeof leaf, "w%d", i);
+            joinp(names[i], sizeof names[i], leaf);
+            write_file(names[i], "z", 1);
+        }
+        int all_ok = 1;
+        for (int i = 0; i < N; i++) {
+            if (fork() == 0) {
+                HVMeta cm; memset(&cm, 0, sizeof cm);
+                cm.prot = HV_FIBF_PURE;
+                snprintf(cm.comment, sizeof cm.comment, "writer %d", i);
+                _exit(hv_meta_write(names[i], &cm) == 0 ? 0 : 1);
             }
         }
         for (int i = 0; i < N; i++) {
             int st = 0; wait(&st);
-            if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) rc_all_ok = 0;
+            if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) all_ok = 0;
         }
-        CHECK(rc_all_ok, "%d concurrent hv_meta_write() to one sidecar all succeeded", N);
-
-        HVMeta cr; memset(&cr, 0, sizeof cr);
-        int cgot = hv_meta_read(data, &cr);
-        CHECK(cgot == 1 && cr.prot == cm.prot && strcmp(cr.comment, cm.comment) == 0,
-              "surviving sidecar after the race is one complete valid record "
-              "(rc=%d prot=0x%X)", cgot, cr.prot);
-
-        int stray = 0;
-        DIR *d = opendir(g_dir);
-        if (d) {
-            struct dirent *de;
-            while ((de = readdir(d)))
-                if (strstr(de->d_name, ".amimeta.tmp")) stray = 1;
-            closedir(d);
+        CHECK(all_ok, "%d concurrent writers each succeeded", N);
+        int landed = 0;
+        for (int i = 0; i < N; i++) {
+            HVMeta cr; memset(&cr, 0, sizeof cr);
+            char want[32];
+            snprintf(want, sizeof want, "writer %d", i);
+            if (hv_meta_read(names[i], &cr) == 1 && !strcmp(cr.comment, want)) landed++;
         }
-        CHECK(!stray, "no stray .amimeta.tmp temp left after the concurrent race");
+        CHECK(landed == N && metadata_files(g_dir, &temps) == 1 && temps == 0,
+              "all %d entries landed in the one .ameta (%d did), no temporary left", N, landed);
+        for (int i = 0; i < N; i++) unlink(names[i]);
+        unlink(meta);
     }
 
-    unlink(side);
-    unlink(data);
+    /* (f) Negative control: a corrupted line is ignored and reported, and the
+     * rest of the directory's metadata still reads. */
+    write_file(a, "x", 1);
+    write_file(b, "y", 1);
+    {
+        const char *broken = "ameta 1\nfile Guru\nprot 0xZZ\ncomment still%20here\n"
+                             "file Guru.info\nprot 0x00000080\n";
+        write_file(meta, broken, strlen(broken));
+    }
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(a, &r) == 1 && strcmp(r.comment, "still here") == 0 && r.prot == 0,
+          "the bad prot line is ignored, Guru's comment still reads");
+    memset(&r, 0, sizeof r);
+    CHECK(hv_meta_read(b, &r) == 1 && r.prot == HV_FIBF_HOLD,
+          "Guru.info is untouched by its neighbour's bad line");
+
+    /* (g) A file of another version is read as absent and never overwritten. */
+    {
+        const char *future = "ameta 2\nfile Guru\nprot 0x00000040\n";
+        write_file(meta, future, strlen(future));
+        memset(&r, 0, sizeof r);
+        CHECK(hv_meta_read(a, &r) == 0, "an unknown version reads as no metadata");
+        CHECK(hv_meta_write(a, &ma) != 0, "a write refuses to replace it");
+        const char *after = slurp_text(meta);
+        CHECK(after && !strcmp(after, future), "and the file is left exactly as it was");
+    }
+
+    unlink(meta);
+    unlink(a);
+    unlink(b);
+    unlink(moved);
+    char submeta[4096];
+    snprintf(submeta, sizeof submeta, "%s/.ameta", subdir);
+    unlink(submeta);
+    rmdir(subdir);
 }
 
 /* ---- [V-3] charset round-trip -------------------------------------------- */
@@ -406,7 +452,7 @@ static void test_v3(void) {
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("[V] host-volume Mac glue: NFC-norm + .amimeta sidecar + Latin1<->UTF8 (standalone)\n");
+    printf("[V] host-volume Mac glue: NFC-norm + .ameta metadata + Latin1<->UTF8 (standalone)\n");
 
     if (make_tmpdir() != 0) {
         printf("[V] FAIL could not create temp dir (errno=%d)\n", errno);
@@ -424,7 +470,8 @@ int main(void) {
         printf("[V] FAIL see checks above\n");
         return 1;
     }
-    printf("[V] PASS R-NORM(NFC==NFD deterministic) + sidecar(prot+comment round-trip, "
-           "omit-default, atomic) + charset(Latin1<->UTF8 'ü' round-trip, escape reversible)\n");
+    printf("[V] PASS R-NORM(NFC==NFD deterministic) + .ameta(one file per directory, "
+           "rename/move/delete in step, 8 concurrent writers, bad line isolated, other "
+           "version kept) + charset(Latin1<->UTF8 'ü' round-trip, escape reversible)\n");
     return 0;
 }

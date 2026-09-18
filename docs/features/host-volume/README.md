@@ -138,9 +138,9 @@ unchanged. Full Unicode tables are a later upgrade — see spec.md.)
 
 ## AmigaOS metadata — comments & protection bits
 
-AmigaOS has metadata POSIX can't hold: the **file comment** and the AmigaOS-only
-**protection bits** (Archive/Pure/Script/Hold). These are preserved in a small,
-portable **sidecar** file next to each data file:
+AmigaOS has metadata POSIX can't hold: the **file comment** and most of the
+**protection word** (Delete, Archive, Pure, Script, Hold). Each host directory
+keeps them for its files in one small text file, `.ameta`:
 
 ```
 Filenote MacRW:tool "needs RAD:"      sets a comment
@@ -148,13 +148,16 @@ Protect  MacRW:tool s ADD             sets the Script bit
 List     MacRW:                       shows the flags + comment
 ```
 
-- The sidecar is `.<name>.amimeta` (a hidden dotfile) — a tiny text file holding
-  the comment and the full protection word.
-- It is written **only when there is something non-default to keep**, so plain
-  files never sprout sidecars and the folder stays clean.
-- It is **hidden** from AROS: `Dir`/`List` never show `.amimeta` files.
+- The format is shared with AFS+ tools and Pkg, and specified in aros-next
+  `docs/features/file-metadata/ameta.md`: one line-oriented UTF-8 file per
+  directory, a section per file.
+- It is written **only when there is something non-default to keep**, so a
+  folder of plain files has no `.ameta`.
+- It is **hidden** from AROS: `Dir`/`List` never show it.
 - It is a **plain text file**, so the folder stays copyable to FAT/zip/another
-  machine with the metadata intact (unlike macOS xattrs).
+  machine with the metadata intact (unlike macOS xattrs). A rename or delete done
+  from AROS keeps it in step; one done in the Finder leaves the entry under the
+  old name, and the next write drops it.
 - The `rwx` bits still come from the file's real Unix permissions, so `chmod` on
   the Mac and `Protect` in AROS agree.
 - On the handler path, comments are returned in filesystem-handler BSTR form so
@@ -193,7 +196,9 @@ In the AROS source tree (`aros-upstream`, branch `aarch64-darwin-graft`):
   the write guard, `ACTION_SET_COMMENT`.
 - `arch/all-unix/filesys/emul_handler/` — the POSIX overlay and our new modules:
   `emul_norm.c` (NFC), `emul_charset.c` (Latin-1/UTF-8 + escape),
-  `emul_meta.c` (the `.amimeta` sidecar), plus the name/sidecar/case hooks.
+  `emul_ameta.c` (the shared `.ameta` core, identical to `hosted/hostvolume/ameta.c`),
+  `emul_meta.c` (reading and replacing a directory's `.ameta`), plus the
+  name/metadata/case hooks.
 
 Launcher script: [graft/run-window.sh](../../../graft/run-window.sh).
 
@@ -207,17 +212,20 @@ verdicts and the intentional deviations from the original spec.
 Current smoke coverage:
 
 ```sh
-make hosted-hostvolume
+make hosted-hostvolume hosted-ameta
 ./graft/hostvol-smoke
 ```
 
-`hosted-hostvolume` exercises the shared Unicode/normalization/sidecar glue
-against the real macOS filesystem. `hostvol-smoke` boots AROS and proves
+`hosted-hostvolume` exercises the shared Unicode/normalization/`.ameta` glue
+against the real macOS filesystem, and `make hosted-ameta` runs the `.ameta`
+core over the shared reference corpus. `hostvol-smoke` boots AROS and proves
 MacRO/MacRW create/read/copy/rename/delete, read-only refusal, case-insensitive
 lookup, long ASCII names, mounted NFD host-name lookup via an NFC/Latin-1 AROS
 name, UTF-8 `grün` host-name access via Latin-1 AROS bytes, AROS Latin-1 filename
-creation as UTF-8 on the host, sidecar creation/rename/delete cleanup, and
-`List` visibility of comments/protection flags. Screenshots and logs land under
+creation as UTF-8 on the host, one `.ameta` per directory kept in step by
+rename, move and delete, a corrupted `.ameta` line ignored and reported, `List`
+visibility of comments/protection flags, and the same metadata after a second
+boot. Screenshots and logs land under
 `run/darwin-aarch64/hostvol-<timestamp>*`.
 
 Darwin hosted `hostlib.resource` uses `Forbid()` / `Permit()` for the global

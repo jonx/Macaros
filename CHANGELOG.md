@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-18 - One metadata file per folder, shared with other tools
+
+- **AROS comments and protection bits now live in one `.ameta` file per host
+  folder**, in a format AFS+ tools and the package tool read too. A folder of
+  plain files still has none. Rename, move and delete from AROS keep it in step,
+  and several programs writing into one folder at once no longer lose each
+  other's changes.
+- **The Delete protection bit survives.** It used to be dropped, as did the
+  group and other Delete bits; every bit the Mac file mode cannot hold is kept.
+- **Comments are stored as UTF-8**, so another tool reading the folder sees
+  `été` as `été`; AROS still sees Latin-1.
+- The old per-file `.<name>.amimeta` files are no longer read or hidden; delete
+  any left in your folders.
+
 ## 2026-08-30 - A stranger can now build it
 
 The first outside build report (issue #1, thanks apaczi) exposed everything

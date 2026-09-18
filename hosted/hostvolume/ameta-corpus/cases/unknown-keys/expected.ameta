@@ -1,0 +1,8 @@
+ameta 1
+file Other
+comment hi
+file Tool
+prot 0x00000040
+comment now%20with%20a%20comment
+colour red
+stack 8192

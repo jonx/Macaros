@@ -1,0 +1,5 @@
+ameta 1
+file Tool
+prot 0x00000040
+file Data
+prot 0x00000002

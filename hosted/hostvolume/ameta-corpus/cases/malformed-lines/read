@@ -1,0 +1,10 @@
+entry Also gid 20
+entry Bad
+entry Good comment fine
+entry Last prot 0x00000080
+report 2 key-before-file
+report 6 malformed-escape
+report 7 prot-too-long
+report 8 bad-number
+report 10 bad-number
+report 12 line-too-long

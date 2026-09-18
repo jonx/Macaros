@@ -1,0 +1,7 @@
+ameta 1
+file Short
+prot 0xff
+file Wide
+prot 0x0000000100000040
+file Max
+prot 0xFFFFFFFFFFFFFFFF

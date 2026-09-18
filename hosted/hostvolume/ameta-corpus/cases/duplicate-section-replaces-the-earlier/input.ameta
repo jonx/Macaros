@@ -1,0 +1,6 @@
+ameta 1
+file Twice
+prot 0x00000040
+comment first
+file Twice
+comment second

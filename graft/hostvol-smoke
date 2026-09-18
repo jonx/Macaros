@@ -52,6 +52,12 @@ HOST_GRUN="$(printf 'gr\303\274n.txt')"
 HOST_AROS_GRUN="$(printf 'aros-gr\303\274n.txt')"
 printf 'nfd cafe input\n' > "$HOST_DIR/$HOST_NFD_CAFE"
 printf 'utf8 latin1 input\n' > "$HOST_DIR/$HOST_GRUN"
+# A directory whose .ameta has one corrupted line: the bad line must be
+# ignored and reported, and its neighbour's comment must still list.
+mkdir -p "$HOST_DIR/corrupt"
+printf 'x\n' > "$HOST_DIR/corrupt/bad.txt"
+printf 'y\n' > "$HOST_DIR/corrupt/good.txt"
+printf 'ameta 1\nfile bad.txt\nprot 0xZZ\nfile good.txt\ncomment still%%20listed\n' > "$HOST_DIR/corrupt/.ameta"
 
 cat > "$STARTUP" <<'EOF'
 Version
@@ -67,6 +73,13 @@ Filenote MacRW:hvdir/alpha.txt "host note"
 Protect MacRW:hvdir/alpha.txt S ADD QUIET
 Copy MacRW:hvdir/alpha.txt MacRW:hvdir/copy.txt
 Rename MacRW:hvdir/copy.txt MacRW:hvdir/renamed.txt
+Echo "beta" TO MacRW:hvdir/beta.txt
+Protect MacRW:hvdir/beta.txt D SUB QUIET
+MakeDir MacRW:hvdir/sub
+Echo "move" TO MacRW:hvdir/moveme.txt
+Filenote MacRW:hvdir/moveme.txt "moved note"
+Rename MacRW:hvdir/moveme.txt MacRW:hvdir/sub/moveme.txt
+List MacRW:corrupt >MacRW:hvdir/corrupt-list.txt
 Echo "delete" TO MacRW:hvdir/delete.txt
 Filenote MacRW:hvdir/delete.txt "gone note"
 Delete MacRW:hvdir/delete.txt
@@ -86,6 +99,7 @@ EOF
     printf 'Type MacRO:caf\351.txt TO MacRW:hvdir/nfd-read.txt\n'
     printf 'Type MacRO:gr\374n.txt TO MacRW:hvdir/latin1-read.txt\n'
     printf 'Echo "aros latin1 create" TO MacRW:hvdir/aros-gr\374n.txt\n'
+    printf 'Filenote MacRW:hvdir/beta.txt "\351t\351 note"\n'
     printf 'Wait 999999\n'
 } >> "$STARTUP"
 
@@ -117,9 +131,9 @@ cp -f "${AROS_CTL_LOG:-/tmp/aros-window.log}" "$LOG" 2>/dev/null || true
 [ -f "$HOST_DIR/hvdir/latin1-read.txt" ] || fail "Latin-1 host filename readback was not written"
 [ -f "$HOST_DIR/hvdir/long-name-abcdefghijklmnopqrstuvwxyz-0123456789.txt" ] || fail "long filename create failed"
 [ -f "$HOST_DIR/hvdir/$HOST_AROS_GRUN" ] || fail "AROS Latin-1 filename create did not produce host UTF-8 name"
-[ -f "$HOST_DIR/hvdir/.alpha.txt.amimeta" ] || fail "metadata sidecar was not written"
-[ -f "$HOST_DIR/hvdir/.renamed.txt.amimeta" ] || fail "renamed metadata sidecar was not written"
-
+META="$HOST_DIR/hvdir/.ameta"
+[ -f "$META" ] || fail "hvdir/.ameta was not written"
+[ "$(ls -A "$HOST_DIR/hvdir" | grep -c '^\.ameta')" = 1 ] || fail "hvdir holds more than one metadata file"
 grep -q "alpha" "$HOST_DIR/hvdir/alpha.txt" || fail "alpha.txt content mismatch"
 grep -q "alpha" "$HOST_DIR/hvdir/renamed.txt" || fail "renamed.txt content mismatch"
 grep -q "host-visible input" "$HOST_DIR/hvdir/readback.txt" || fail "readback content mismatch"
@@ -128,19 +142,53 @@ grep -q "nfd cafe input" "$HOST_DIR/hvdir/nfd-read.txt" || fail "NFD readback co
 grep -q "utf8 latin1 input" "$HOST_DIR/hvdir/latin1-read.txt" || fail "Latin-1 readback content mismatch"
 grep -q "long" "$HOST_DIR/hvdir/long-name-abcdefghijklmnopqrstuvwxyz-0123456789.txt" || fail "long filename content mismatch"
 grep -q "aros latin1 create" "$HOST_DIR/hvdir/$HOST_AROS_GRUN" || fail "AROS Latin-1 filename content mismatch"
-grep -q "comment host note" "$HOST_DIR/hvdir/.alpha.txt.amimeta" || fail "sidecar comment mismatch"
-grep -q "^prot " "$HOST_DIR/hvdir/.alpha.txt.amimeta" || fail "sidecar protection missing"
-grep -q "^prot " "$HOST_DIR/hvdir/.renamed.txt.amimeta" || fail "renamed sidecar protection missing"
-[ ! -e "$HOST_DIR/hvdir/.delete.txt.amimeta" ] || fail "delete left metadata sidecar"
-grep -q "host note" "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show sidecar-backed comment"
+# One .ameta holds every file of the directory that has metadata.
+grep -q "^file alpha.txt$" "$META" || fail ".ameta has no section for alpha.txt"
+grep -q "^file renamed.txt$" "$META" || fail ".ameta has no section for renamed.txt"
+grep -q "^file beta.txt$" "$META" || fail ".ameta has no section for beta.txt"
+grep -q "^comment host%20note$" "$META" || fail ".ameta lost alpha.txt's comment"
+grep -q "^comment %C3%A9t%C3%A9%20note$" "$META" || fail ".ameta did not store beta.txt's Latin-1 comment as UTF-8"
+awk '/^file beta.txt$/{f=1;next} /^file /{f=0} f&&/^prot /{print $2}' "$META" | grep -Eq '^0x[0-9A-F]*[13579BDF]$' \
+    || fail ".ameta did not keep beta.txt's Delete bit"
+# Rename, delete and a move to another directory kept it in step.
+! grep -q "^file copy.txt$" "$META" || fail "rename left the old name in .ameta"
+! grep -q "^file delete.txt$" "$META" || fail "delete left its entry in .ameta"
+! grep -q "^file moveme.txt$" "$META" || fail "a move left its entry in the source .ameta"
+grep -q "^comment moved%20note$" "$HOST_DIR/hvdir/sub/.ameta" || fail "a move did not carry its entry to sub/.ameta"
+ls -a "$HOST_DIR/hvdir" | grep -q '^\.ameta\.' && fail "a temporary .ameta file was left behind"
+# AROS sees the metadata and never the file.
+grep -q "host note" "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show alpha.txt's comment"
 grep -Eq 'alpha\.txt[[:space:]]+[0-9]+[[:space:]]+s--rwed' "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show protection flags for alpha.txt"
-! grep -q "amimeta" "$HOST_DIR/hvdir/dir.txt" || fail "Dir exposed .amimeta sidecar"
-! grep -q "amimeta" "$HOST_DIR/hvdir/list.txt" || fail "List exposed .amimeta sidecar"
+grep -Eq 'beta\.txt[[:space:]]+[0-9]+[[:space:]]+---rwe-' "$HOST_DIR/hvdir/list.txt" || fail "AROS List did not show beta.txt's missing delete flag"
+! grep -q "ameta" "$HOST_DIR/hvdir/dir.txt" || fail "Dir exposed .ameta"
+! grep -q "ameta" "$HOST_DIR/hvdir/list.txt" || fail "List exposed .ameta"
+# Negative control: a corrupted line does not take the directory down.
+grep -q "still listed" "$HOST_DIR/hvdir/corrupt-list.txt" || fail "a corrupted .ameta line hid its neighbour's comment"
+grep -q "corrupt/.ameta line 3: bad-number" "$LOG" || fail "the corrupted .ameta line was not reported"
 
 if "$HERE/aros-ctl" crash | grep -q .; then
     "$HERE/aros-ctl" crash >&2 || true
     fail "crash markers found"
 fi
 
+"$HERE/aros-ctl" stop >/dev/null 2>&1 || true
+
+# Unmount and mount again: a second boot must list the same metadata.
+STARTUP2="$RUN_DIR/hostvol-$STAMP-again.startup"
+cat > "$STARTUP2" <<'EOF'
+FailAt 21
+List MacRW:hvdir >MacRW:hvdir/list-again.txt
+Wait 999999
+EOF
+AROS_CTL_STARTUP_FILE="$STARTUP2" \
+AROS_HOST_VOLUME="MacRW:$HOST_DIR;WRITE" \
+    "$HERE/aros-ctl" run || fail "second launch failed"
+sleep "$WAIT"
+[ -f "$HOST_DIR/hvdir/list-again.txt" ] || fail "second boot did not list hvdir"
+grep -q "host note" "$HOST_DIR/hvdir/list-again.txt" || fail "alpha.txt's comment did not survive a remount"
+LC_ALL=C grep -q "$(printf '\351t\351 note')" "$HOST_DIR/hvdir/list-again.txt" \
+    || fail "beta.txt's Latin-1 comment did not come back as Latin-1 after a remount"
+grep -Eq 'beta\.txt[[:space:]]+[0-9]+[[:space:]]+---rwe-' "$HOST_DIR/hvdir/list-again.txt" \
+    || fail "beta.txt's protection did not survive a remount"
 "$HERE/aros-ctl" stop >/dev/null 2>&1 || true
 echo "PASS: host volume smoke completed"

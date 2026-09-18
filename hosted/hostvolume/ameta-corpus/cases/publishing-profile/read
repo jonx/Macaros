@@ -1,0 +1,3 @@
+entry Data prot 0x00000002
+entry Locked prot 0x00000004
+entry Tool prot 0x00000040

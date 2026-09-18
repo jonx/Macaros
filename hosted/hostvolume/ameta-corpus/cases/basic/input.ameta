@@ -1,0 +1,6 @@
+ameta 1
+file Guru
+prot 0x00000040
+comment Alert%20decoder
+file Guru.info
+prot 0x00000010

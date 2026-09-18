@@ -3,7 +3,7 @@
 > Status: **IMPLEMENTED & verified on darwin-aarch64 (2026-06-26)** · Drafted 2026-06-24
 > The whole spec is grafted into the live `emul-handler` and verified two-sided:
 > mount + read-only-default + `;WRITE` keyword + `AROS_HOST_VOLUME` launcher,
-> NFC normalization, Latin-1↔UTF-8 + escape, the `.amimeta` metadata sidecar, and
+> NFC normalization, Latin-1↔UTF-8 + escape, the `.ameta` metadata file, and
 > the case-sensitivity guard. See [spec.md](spec.md) "Implementation status".
 
 ## What & why
@@ -295,12 +295,13 @@ the dlsym'd `LibCInterface` and is Darwin-aware. Concretely
 - **Dates**: `st_mtime` ↔ AROS `DateStamp` via `Date2Amiga`/`Amiga2Date` and
   host `localtime`/`mktime` (`emul_host.c:165, 195`).
 - **Comments / metadata**: AROS file comments and AmigaOS-only protection bits have no
-  faithful POSIX slot. The spec chooses a portable sidecar, not xattrs: one
-  `.<basename>.amimeta` file beside the data file, omitted when metadata is default and
-  hidden from AROS enumeration. This keeps the mounted directory copyable across hosts
-  and avoids Finder/private-xattr semantics. The cost is an explicit reserved host
-  namespace: files matching `.*.amimeta` are metadata inside the mounted volume, not
-  ordinary AROS-visible files.
+  faithful POSIX slot. The spec chooses a portable text file, not xattrs: one `.ameta`
+  per host directory holds the metadata of that directory's entries, in the format
+  shared with AFS+ tools and Pkg (aros-next `docs/features/file-metadata/ameta.md`).
+  It is omitted when every entry is default and hidden from AROS enumeration. This
+  keeps the mounted directory copyable across hosts and avoids Finder/private-xattr
+  semantics. The cost is two reserved host names: `.ameta` and its `.ameta.*`
+  temporaries are metadata inside the mounted volume, not ordinary AROS-visible files.
 - **Access mode** (implemented): default is read-only; the `;WRITE`/`;W`/`;RW` keyword on
   `fssm_Device` allows AROS-originated mutations. The keyword is **ours** — delivered via
   the `AROS_HOST_VOLUME` launcher, never through `Mount` (see above) — so a mountlist host

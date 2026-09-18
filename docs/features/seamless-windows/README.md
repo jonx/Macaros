@@ -78,7 +78,7 @@ storage.** `SYS:` is the boot directory on the Mac disk served by `emul-handler`
 directory, so the two-way traffic already works: a file dropped into the folder
 from Finder appears in AROS on the next directory scan, and a file saved from
 AROS is immediately a normal Mac file. What Finder lacks is *volume identity*
-(these are plain folders, not drives; `.amimeta` metadata sidecars are opaque
+(these are plain folders, not drives; each folder's `.ameta` metadata file is opaque
 clutter; Latin-1/NFC name translation applies). The only host-invisible
 storage is **`RAM:`** (in-memory `rom/filesys/ram/`) and what's assigned onto it
 (`T:`, `ENV:`, `RAM:Clipboards`). No FUSE/FSKit/NFS/SMB serving code exists in
@@ -183,9 +183,9 @@ Three tiers, independently shippable:
   for the boot dir and the shared folder, surfaced from the Macaros shell (the
   File menu already has "Open Folder as Volume"; this is its mirror image). A
   day of work, ninety percent of the perceived feature. Caveat to document:
-  AROS-side metadata (protection bits, comments) lives in `.amimeta` sidecars
-  (`emul_meta.c`) and filenames are NFC-normalized Latin-1↔UTF-8
-  (`emul_norm.c`, `emul_charset.c`), so Finder sees sidecar files.
+  AROS-side metadata (protection bits, comments) lives in one `.ameta` file per
+  folder (`emul_meta.c`) and filenames are NFC-normalized Latin-1↔UTF-8
+  (`emul_norm.c`, `emul_charset.c`), so Finder sees those files.
 - **FS-B · A generic AROS-volume bridge.** A small AROS daemon that is a plain
   DOS client (`Lock`/`Examine`/`ExNext`/`Open`/`Read`/`Write`, which works
   against *any* handler, `RAM:` included) serving a simple file protocol over a

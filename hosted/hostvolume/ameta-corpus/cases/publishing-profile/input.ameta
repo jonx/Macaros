@@ -1,0 +1,7 @@
+ameta 1
+file Tool
+prot 0x00000040
+file Locked
+prot 0x00000004
+file Data
+prot 0x00000002

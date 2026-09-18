@@ -1,0 +1,3 @@
+entry Max prot 0xFFFFFFFFFFFFFFFF
+entry Short prot 0x000000FF
+entry Wide prot 0x0000000100000040

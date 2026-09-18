@@ -62,13 +62,13 @@ size_t hv_latin1_to_utf8(const char *latin1, char *dst, size_t dstcap);
 size_t hv_utf8_to_latin1(const char *utf8, char *dst, size_t dstcap);
 
 /* ------------------------------------------------------------------ *
- *  R-SIDECAR — ".<name>.amimeta" per-file metadata sidecar
+ *  R-SIDECAR — ".ameta", one metadata file per directory
  *
- *  AmigaOS fib_Protection layout (public AmigaOS ABI, restated [PUB]):
- *  low nibble is ACTIVE-LOW delete/execute/write/read; the upper bits are
- *  the AmigaOS-only Archive/Pure/Script/Hold that POSIX rwx cannot hold.
- *  We round-trip the FULL 32-bit word; the handler keeps rwx from st_mode
- *  and OR-s in the AmigaOS-only bits from the sidecar.
+ *  The format is aros-next docs/features/file-metadata/ameta.md, shared
+ *  with AFS+ tools and Pkg; ameta.c implements it. AmigaOS fib_Protection
+ *  layout (public AmigaOS ABI, restated [PUB]): the low nibble is ACTIVE-LOW
+ *  delete/execute/write/read. The handler takes owner, group and other rwx
+ *  from st_mode and every other bit from .ameta, the Delete bit included.
  * ------------------------------------------------------------------ */
 
 /* fib_Protection bits (AmigaOS public ABI). Active-low for DEWR. */
@@ -98,27 +98,28 @@ typedef struct {
     char     comment[HV_COMMENT_MAX + 1]; /* NUL-terminated Latin-1 (AROS) */
 } HVMeta;
 
-/* Build the sidecar path ".<basename>.amimeta" for a data-file path.
- * Handles a trailing slash-free path; writes to dst (snprintf-style return).
- * e.g. "/a/b/foo.txt" -> "/a/b/.foo.txt.amimeta". */
-size_t hv_sidecar_path(const char *filepath, char *dst, size_t dstcap);
-
-/* True (1) if a name is itself a sidecar (matches ".*.amimeta") and so must
- * be skipped during enumeration (the spec's is_special_dir extension). */
+/* True (1) if a name is .ameta or a writer's temporary ".ameta.*" file, which
+ * enumeration must skip. */
 int hv_is_sidecar_name(const char *name);
 
-/* True (1) if this metadata is the default (no sidecar should exist). */
+/* True (1) if this metadata needs no entry in .ameta. */
 int hv_meta_is_default(const HVMeta *m);
 
-/* Read the sidecar for filepath into *out. Returns 1 if a sidecar existed
- * and parsed (out filled), 0 if absent (out set to defaults), -1 on a hard
- * I/O/parse error. */
+/* Read filepath's entry from its directory's .ameta into *out. Returns 1 if
+ * there is one, 0 if not (out set to defaults), -1 on an I/O error. A .ameta
+ * that cannot be read, or a malformed line in it, is reported on stderr and
+ * never fails the read. */
 int hv_meta_read(const char *filepath, HVMeta *out);
 
-/* Persist metadata for filepath: if *m is default, removes any existing
- * sidecar (keeps the host dir clean); otherwise writes it atomically
- * (temp file in the same dir + rename). Returns 0 on success, -1 on error. */
+/* Record filepath's metadata in its directory's .ameta, dropping the entry
+ * when it is default and the file when no entry is left. Atomic, and safe
+ * against other writers of the same .ameta. Returns 0 or -1. */
 int hv_meta_write(const char *filepath, const HVMeta *m);
+
+/* Keep the metadata with a file renamed or moved on the host, and drop it
+ * with a file deleted there. Call after the host operation. */
+int hv_meta_rename(const char *oldpath, const char *newpath);
+int hv_meta_delete(const char *filepath);
 
 #ifdef __cplusplus
 }

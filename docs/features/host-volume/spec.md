@@ -15,21 +15,17 @@ branch `aarch64-darwin-graft`) and verified two-sided on hosted AROS:
 | R-NORM | NFC normalization at the bridge | **done** | NFD-on-disk `café` reached by NFC name |
 | R-CHARSET | Latin-1 ↔ UTF-8 | **done** | `grün`/`naïve` round-trip both ways |
 | R-ESCAPE | reversible `%uXXXX` for non-Latin-1 | **done** | `œ`/`%u0153` round-trips (lookup + create) |
-| R-SIDECAR | `.amimeta` comment + AmigaOS-only prot bits | **done** | `Filenote`/`Protect` → sidecar; `List` shows `sp`; hidden from `Dir` |
+| R-SIDECAR | `.ameta`: comment + every prot bit st_mode cannot hold | **done** | `Filenote`/`Protect` → one `.ameta` per directory; `List` shows them; hidden from `Dir`; kept in step by rename, move, delete |
 | R-CASE | case-sensitivity guard (`pathconf`) | **done** (no-op on the case-insensitive Mac; sensitive-volume path UNVERIFIED here) | NFD lookup unregressed after the guard |
 
 New overlay modules: `emul_norm.c` (NFC), `emul_charset.c` (Latin-1/UTF-8 +
-escape), `emul_meta.c` (sidecar). Name bridge hooks in `makefilename` (core),
-`DoExamineNext`/`DoExamineEntry`/`fixcase` (overlay); sidecar hooks in those
+escape), `emul_ameta.c` + `emul_meta.c` (`.ameta`). Name bridge hooks in `makefilename` (core),
+`DoExamineNext`/`DoExamineEntry`/`fixcase` (overlay); metadata hooks in those
 examines plus `DoChMod`/`DoRename`/`DoDelete`/`DoSetComment` and the `emul_dir`
-enumeration skip. **Deviations (intentional):** (1) the sidecar's atomic write
-uses `open(O_CREAT|O_TRUNC)` on a per-task temp name, not `mkstemp` (not in the
-overlay's libc symbol set; one handler process per volume serialises writes);
-(2) the comment is stored as escaped AROS (Latin-1) bytes, round-trip-exact, not
-re-encoded to UTF-8; (3) the NFC tables cover the Latin range only — the spike's
-documented scope boundary; full UCD tables remain a production TODO; (4) name
+enumeration skip. **Deviations (intentional):** (1) the NFC tables cover the Latin range only — the spike's
+documented scope boundary; full UCD tables remain a production TODO; (2) name
 translation is `HOST_OS_darwin`-guarded so other unix hosts are byte-for-byte
-unchanged; (5) `ACTION_SAME_LOCK` still uses `strcasecmp` (the `fixcase` R-CASE
+unchanged; (3) `ACTION_SAME_LOCK` still uses `strcasecmp` (the `fixcase` R-CASE
 guard is the load-bearing part).
 
 ## Provenance banner
@@ -118,8 +114,8 @@ AROS side (aarch64, AROS crosstools)              Host side (Apple, via libSyste
 │  unix overlay   emul_host*.c        │  HostLib │  chmod/utime/rename/statfs/...       │
 │   · Do* over struct LibCInterface ──┼──Lock──► │                                     │
 │   · NEW: normalize() at bridge      │ barrier  │  NEW host helpers (same libSystem): │
-│   · NEW: sidecar read/write         │ ◄────────┤   getxattr-free; plain file I/O for │
-│   · NEW: latin1<->utf8 at edge      │          │   the ".<name>.amimeta" sidecar     │
+│   · NEW: .ameta read/write          │ ◄────────┤   getxattr-free; plain file I/O for │
+│   · NEW: latin1<->utf8 at edge      │          │   the directory's ".ameta" file     │
 └─────────────────────────────────────┘          └────────────────────────────────────┘
    AROS DOS packet  ──WaitPkt──►  handler task  ──Do*──►  libc syscall  ──►  macOS FS
 ```
@@ -348,76 +344,47 @@ work and is charset-agnostic for ASCII. New code:
     → AROS. Normalize on the UTF-8 side (Unicode operates on code points, not Latin-1
     bytes). Never case-fold before normalizing.
 
-## Metadata mapping — the decision: a portable sidecar (`[DERIVED]`, restated)
+## Metadata mapping: `.ameta` (`[DERIVED]`, restated)
 
-**What needs a home.** Two AROS metadata items have no faithful POSIX slot:
-(1) the **file comment** (`fib_Comment`/`ed_Comment`) — `ACTION_SET_COMMENT` is in the
-handler's explicit "not supported yet" FIXME (`emul_handler.c:1132–1133`) and Examine
-hard-codes the comment empty (`emul_host.c:1119`, `:1016`); and (2) the **AmigaOS-only
-protection bits** — `FIBF_SCRIPT` is already squeezed into `S_ISVTX` (`emul_host.c:121,
-157`), but **Archive/Pure/Hold/Reserved** have no POSIX `rwx` equivalent and are lost
-today. The date is 1-second-precision via `mtime` (Amiga ticks are 1/50 s — sub-second
-is lost) — acceptable, document it.
+**What needs a home.** Two AROS metadata items have no faithful POSIX slot: the
+**file comment** (`fib_Comment`/`ed_Comment`) and most of the **protection word**.
+`st_mode` holds owner, group and other `rwx`; Delete, Archive, Pure, Script, Hold
+and the group and other Delete bits have nowhere to go. The date is
+1-second-precision via `mtime` (Amiga ticks are 1/50 s; sub-second is lost),
+which is acceptable and documented.
 
-**Decision: a portable sidecar file, not a macOS xattr.** Store the comment + the full
-AROS protection word + (optionally) the high-precision date in a small **text sidecar**
-`.<name>.amimeta` alongside each file, **written only when a value is non-default**
-(plain files with empty comment and plain `rwx`-only protection get **no** sidecar — the
-host dir stays clean). On Examine, if the sidecar exists, its values override the
-`lstat`-derived comment/protection; the `rwx` bits still come from `st_mode` so POSIX
-tools and the sidecar agree on read/write/execute.
+**Decision: a portable text file, not a macOS xattr.** Each host directory keeps
+the metadata of its entries in one file, `.ameta`, whose format is shared with AFS+
+tools and Pkg and specified in aros-next `docs/features/file-metadata/ameta.md`
+with a reference corpus. That document is normative; this section only says how
+the handler applies it.
 
-**Why sidecar over xattr (the justification).**
-- **Portability `[PUB]`.** A sidecar is an ordinary file: the host folder stays copyable
-  to FAT/SMB/zip/another OS with metadata intact. macOS xattrs (`com.apple.*` /
-  `kMDItemFinderComment`) are dropped by most non-APFS transports and by many archivers.
-  The project thesis is "a real Mac folder you can drag files in and out of" — keeping
-  it a plain, portable directory wins.
-- **No new host dependency `[AROS]`.** The sidecar is read/written with the libc calls
-  **already in `LibCInterface`** (`open/read/write/close/unlink/rename`). An xattr path
-  would add `getxattr`/`setxattr`/`removexattr` to `libcSymbols` (Darwin-only symbols),
-  a `pathconf(_PC_XATTR_SIZE_BITS)` capability check, and a new code path — more surface,
-  Mac-locked.
-- **Atomicity `[PUB]`.** Sidecar writes are write-temp-then-`rename` (POSIX atomic
-  replace), reusing the overlay's `rename`.
+**Why a file over xattrs.**
+- **Portability `[PUB]`.** An ordinary file keeps the host folder copyable to
+  FAT/SMB/zip/another OS with its metadata. macOS xattrs are dropped by most
+  non-APFS transports and by many archivers.
+- **Host dependency `[AROS]`.** It needs only plain file calls from
+  `LibCInterface`, to which `fsync` and `flock` were added for it.
 
-*`[DERIVED]`:* we independently determined that the comment/extra-protection/precise-date
-problem is best solved with a portable text sidecar (a per-file text file, or a hidden
-index) rather than host xattrs — the sidecar is the right shape and xattrs are the trap
-to avoid. Our **filename** (`.<name>.amimeta`, dotfile-hidden, per-file, not an
-index), our **format** (see below), our **field set**, and our
-**"omit when default"** rule are stated independently below and owe no expression to
-any reference.
-
-**Sidecar format (R-SIDECAR, ours).** A tiny line-oriented ASCII record, self-describing,
-forward-compatible:
-```
-amimeta 1
-prot 0x<hex of the full AROS fib_Protection word>
-comment <UTF-8 bytes of the AROS comment, percent-escaped past printable ASCII>
-```
-- One file per data file, name `.<basename>.amimeta` in the same host dir (so it sorts
-  next to its file and is hidden as a dotfile).
-- **Excluded from enumeration:** `DoExamineNext`/`DoExamineAll`/`ReadDir` must skip names
-  matching `.*.amimeta` (extend the existing `is_special_dir` skip in `emul_dir.c:18`
-  with an `.amimeta`-suffix skip) so sidecars never appear as AROS files.
-- **Reserved host namespace:** because `.*.amimeta` is hidden from AROS enumeration, that
-  filename shape is reserved for metadata inside a mounted host volume. A pre-existing
-  host file with that shape is intentionally treated as sidecar data, not as a user file.
-  If that reservation becomes too broad, move metadata to a single hidden directory or an
-  index file instead of silently exposing colliding files.
-- **Comment hook:** replace `fib_Comment[0]='\0'` (`emul_host.c:1119`) and the
-  `ED_COMMENT` empty-string (`emul_host.c:1016–1018`) with "read sidecar; if present and
-  has `comment`, copy it; else empty".
-- **Protection hook:** after `prot_u2a(st.st_mode)` sets `fib_Protection`/`ed_Prot`, if
-  the sidecar has `prot`, OR-in the AmigaOS-only bits (Script/Archive/Pure/Hold) from the
-  sidecar word while keeping `rwx` from `st_mode` (so chmod via POSIX still shows).
-- **Write hooks:** wire `ACTION_SET_COMMENT` (remove it from the FIXME list, add a
-  `DoSetComment` that writes/updates/removes the sidecar) and extend `DoChMod`/
-  `ACTION_SET_PROTECT` to persist the non-`rwx` bits to the sidecar (and delete the
-  sidecar when the comment is empty *and* only `rwx` bits remain — keeps dirs clean).
-- **Rename/Delete coupling:** `DoRename` and `DoDelete` must rename/delete the matching
-  sidecar alongside the data file (atomic enough for the spike; document the window).
+**How the handler applies it.**
+- **Protection.** Examine takes owner, group and other `rwx` from `st_mode`
+  (mask `0xEE0E`) and every other bit from the entry's `prot`. `DoChMod` sets
+  `st_mode` and records the whole word; the entry is kept only when a bit outside
+  `0xEE02` is set, so a plain file has none.
+- **Comment.** Stored as UTF-8. AROS comments are Latin-1: each byte is its own
+  code point, and a character beyond Latin-1 reaches AROS as `%uXXXX` and comes
+  back as itself.
+- **Hooks.** Examine, ExAll and `ACTION_SET_COMMENT` read or write the entry;
+  `DoRename` moves it, to the target directory's `.ameta` when the rename crosses
+  directories; `DoDelete` drops it. Each runs after the host operation.
+- **Writing.** Under an exclusive `flock` on the directory: re-read, change, drop
+  entries whose file is gone, write a `.ameta.t*` temporary file with `O_EXCL`,
+  check `.ameta` was not replaced, rename into place or delete it when empty.
+- **Enumeration.** `.ameta` and `.ameta.*` are skipped, so they are reserved names
+  inside a mounted host volume.
+- **Code.** `emul_ameta.c` is the shared core, identical to
+  `hosted/hostvolume/ameta.c`, which `make hosted-ameta` runs over the corpus.
+  `emul_meta.c` does the host I/O.
 
 ## AROS-side binding & bring-up (`[AROS]`, grounded in design.md)
 
@@ -516,12 +483,12 @@ Markers are unique per spike.
   each to a stable, non-conflicting AROS-visible name. If the host FS rejects the pair,
   mark `[VN2] skipped fs=normalization-insensitive`, not failed. Marker `[VN]`. **VN1 is
   the mandatory spike that fails today** without R-NORM and passes with it.
-- **[VM] Metadata sidecar round-trip.** From AROS set a comment + a Pure/Script
-  protection bit on a file (`ACTION_SET_COMMENT`/`SET_PROTECT`); harness reads
-  `.<name>.amimeta` on the Mac side and asserts its `comment`/`prot` contents; then
-  re-`Examine` from AROS and assert the comment + AmigaOS-only bits come back. Also
-  assert `dir MAC:` does **not** list the `.amimeta` file. PASS = sidecar present with
-  correct fields **and** round-trips **and** is hidden. Marker `[VM]`.
+- **[VM] Metadata round-trip.** From AROS set comments and protection bits on two
+  files of one directory (`ACTION_SET_COMMENT`/`SET_PROTECT`); the harness reads the
+  directory's single `.ameta` on the Mac side and asserts both sections; AROS
+  `List` shows them, `Dir` does not show `.ameta`, rename/move/delete keep it in
+  step, a corrupted line is ignored and reported, and a second boot lists the same
+  values. Carried by `graft/hostvol-smoke`.
 - **[V7] (nicety) Live pickup.** Harness drops a new file into `<tmpdir>` after mount; a
   re-`dir MAC:` shows it (re-scan; FSEvents deferred).
 
@@ -530,10 +497,10 @@ Markers are unique per spike.
 - No new dylib, no Cocoa, no AppKit/Metal. The new code is C inside the existing overlay
   files (`emul_host.c`/`emul_dir.c`) plus a small `emul_norm.c`/`emul_meta.c` pair,
   built by the **AROS crosstools** as part of `emul.handler` — **not** the host clang.
-- No new dlsym symbol is *required* (sidecar uses existing `LibCInterface` entries);
-  `pathconf` is the *only* candidate addition, gated behind R-CASE and optional.
+- `.ameta` added `fsync` and `flock` to the dlsym'd `LibCInterface`; `pathconf`
+  came with R-CASE.
 - New code paths are Darwin-guarded (`HOST_OS_darwin`) where behaviour diverges
-  (`_PC_CASE_SENSITIVE`); the normalization/charset/sidecar logic is host-portable POSIX
+  (`_PC_CASE_SENSITIVE`); the normalization/charset/`.ameta` logic is host-portable POSIX
   and may compile for every Unix host (it only *matters* where the FS is a bag-of-bytes,
   but it is correct everywhere). Confirm it doesn't regress the Linux overlay [V0]-style.
 - The handler must not pull CoreFoundation/CoreServices: normalization is a self-

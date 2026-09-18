@@ -1,0 +1,7 @@
+ameta 1
+file Tool
+prot 0x00000040
+colour red
+stack 8192
+file Other
+comment hi

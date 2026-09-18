@@ -46,7 +46,7 @@ M68K_AROS_GCC ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/crosstools/m68k-aro
 ELF2HUNK ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/elf2hunk
 M68K_LIBS_PATH ?= $(HOME)/Source/references/aros-m68k-20260804/libs
 
-.PHONY: image run shot dbg test hosted hosted-run hosted-preempt hosted-abi hosted-exec hosted-mem hosted-kern hosted-display hosted-cocoametal cocoametal-dylib cocoametal-abi cocoametal-media cocoametal-prefs cocoametal-shell cocoametal-statusbar cocoametal-hiddsim cocoametal-d2t cocoametal-input cocoametal-settings cocoametal-fullscreen cocoametal-livedraw cocoametal-show hosted-coreaudio coreaudio-dylib coreaudio-abi audio-smoke bench hosted-clipboard pasteboard-dylib pasteboard-abi hosted-hostvolume hosted-bsdsocket hosted-library hosted-signal hosted-msgport hosted-device hosted-execboot hosted-jit68k hosted-jit68k-hardened hosted-jit68k-j2 hosted-jit68k-j3 hosted-jit68k-j4 hosted-jit68k-j5a hosted-jit68k-j5b hosted-jit68k-j5c hosted-jit68k-j5d hosted-jit68k-j5e hosted-jit68k-j5f hosted-jit68k-j5g hosted-jit68k-j5h hosted-jit68k-j5i hosted-jit68k-j5j hosted-jit68k-j5k hosted-jit68k-j5l hosted-jit68k-j5m hosted-jit68k-j5n hosted-jit68k-j5o hosted-jit68k-j5p hosted-jit68k-j5q hosted-jit68k-j5r hosted-jit68k-j5s hosted-jit68k-j5t hosted-jit68k-apps libjit68k run68k hosted-jit68k-args hosted-emu68k-t0p1 hosted-emu68k-t0p3 hosted-emu68k-t0p4 scan68k hosted-emu68k-t2scan hosted-emu68k-t2guard hosted-emu68k-t3hello hosted-emu68k-t3setsignal hosted-emu68k-t3workbench hosted-emu68k-t3readargs hosted-emu68k-t3gen hosted-emu68k-t3mui hosted-emu68k-t3fmt hosted-emu68k-t3guestlib hosted-emu68k-t3guestlive hosted-emu68k-t3ereal rawdofmt-blob struct-layouts hosted-emu68k-t3lha hosted-emu68k-t3legacy hosted-emu68k-regina-fixtures hosted-jit68k-conform hosted-test clean
+.PHONY: image run shot dbg test hosted hosted-run hosted-preempt hosted-abi hosted-exec hosted-mem hosted-kern hosted-display hosted-cocoametal cocoametal-dylib cocoametal-abi cocoametal-media cocoametal-prefs cocoametal-shell cocoametal-statusbar cocoametal-hiddsim cocoametal-d2t cocoametal-input cocoametal-settings cocoametal-fullscreen cocoametal-livedraw cocoametal-show hosted-coreaudio coreaudio-dylib coreaudio-abi audio-smoke bench hosted-clipboard pasteboard-dylib pasteboard-abi hosted-hostvolume hosted-ameta hosted-bsdsocket hosted-library hosted-signal hosted-msgport hosted-device hosted-execboot hosted-jit68k hosted-jit68k-hardened hosted-jit68k-j2 hosted-jit68k-j3 hosted-jit68k-j4 hosted-jit68k-j5a hosted-jit68k-j5b hosted-jit68k-j5c hosted-jit68k-j5d hosted-jit68k-j5e hosted-jit68k-j5f hosted-jit68k-j5g hosted-jit68k-j5h hosted-jit68k-j5i hosted-jit68k-j5j hosted-jit68k-j5k hosted-jit68k-j5l hosted-jit68k-j5m hosted-jit68k-j5n hosted-jit68k-j5o hosted-jit68k-j5p hosted-jit68k-j5q hosted-jit68k-j5r hosted-jit68k-j5s hosted-jit68k-j5t hosted-jit68k-apps libjit68k run68k hosted-jit68k-args hosted-emu68k-t0p1 hosted-emu68k-t0p3 hosted-emu68k-t0p4 scan68k hosted-emu68k-t2scan hosted-emu68k-t2guard hosted-emu68k-t3hello hosted-emu68k-t3setsignal hosted-emu68k-t3workbench hosted-emu68k-t3readargs hosted-emu68k-t3gen hosted-emu68k-t3mui hosted-emu68k-t3fmt hosted-emu68k-t3guestlib hosted-emu68k-t3guestlive hosted-emu68k-t3ereal rawdofmt-blob struct-layouts hosted-emu68k-t3lha hosted-emu68k-t3legacy hosted-emu68k-regina-fixtures hosted-jit68k-conform hosted-test clean
 
 build:
 	@mkdir -p build
@@ -374,16 +374,24 @@ cocoametal-show: | build
 	build/cocoametal-show
 
 # V: the host-volume Mac glue — self-contained NFC normalization (table-driven,
-# NOT CFStringNormalize), the ".<name>.amimeta" sidecar (atomic temp+rename,
-# omit-when-default), and Latin-1<->UTF-8 filename charset glue, proved against
+# NOT CFStringNormalize), the per-directory ".ameta" metadata file (atomic
+# temp+rename under a directory lock, omit-when-default), and Latin-1<->UTF-8
+# filename charset glue, proved against
 # the real macOS FS in a temp dir. Plain host clang (no framework); clean-room
 # from docs/features/host-volume/spec.md. These are the functions the AROS
 # emul-handler per-host overlay will call (built later by the AROS crosstools).
 hosted-hostvolume: | build
 	clang -O2 -Wall -Wextra hosted/hostvolume/hv_norm.c \
-		hosted/hostvolume/hv_charset.c hosted/hostvolume/hv_meta.c \
-		hosted/hostvolume/v_test.c -o build/host-hostvolume
+		hosted/hostvolume/hv_charset.c hosted/hostvolume/ameta.c \
+		hosted/hostvolume/hv_meta.c hosted/hostvolume/v_test.c -o build/host-hostvolume
 	BIN=build/host-hostvolume ./harness/run-hosted.sh '[V] PASS'
+
+# The .ameta core against the shared reference corpus (aros-next
+# docs/features/file-metadata/ameta-corpus, vendored under hosted/hostvolume).
+hosted-ameta: | build
+	clang -std=c99 -D_DEFAULT_SOURCE -O2 -Wall -Wextra hosted/hostvolume/ameta.c \
+		hosted/hostvolume/ameta_corpus_test.c -o build/host-ameta
+	BIN=build/host-ameta ./harness/run-hosted.sh '[AMETA] PASS'
 
 # A: the CoreAudio host ring + headless/silent offline-render proof — a single-
 # producer/single-consumer lock-free ring of int16 stereo PCM (AHIST_S16S) feeds

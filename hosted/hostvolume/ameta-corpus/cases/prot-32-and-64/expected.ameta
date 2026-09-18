@@ -1,0 +1,8 @@
+ameta 1
+file Max
+prot 0xFFFFFFFFFFFFFFFF
+file Short
+prot 0x000000FF
+comment kept
+file Wide
+prot 0x0000000100000040
