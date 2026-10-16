@@ -7,7 +7,7 @@ Macaros" and a nice thing to show off in the release.
 ## What to bundle
 
 - Ship this one file: `bin/darwin-aarch64/AROS/C/RustHello` (about 1.6 MB, a
-  self-contained AROS ELF). It is already deployed in `~/aros-build`. No extra
+  self-contained AROS ELF). It is already deployed in `~/Source/aros-project/aros-build`. No extra
   runtime, no shared libs to include; it links everything it needs statically.
 - It is already installed as a `C:` command in the boot tree, so a bundled boot
   image picks it up automatically.
@@ -27,7 +27,7 @@ share, which is harmless.
 
 - `./hosted/rust/sample-build.sh` from the repo root. It builds the crate, links
   with the AROS toolchain, and deploys to both `C:RustHello` and the `MacRW:` share.
-- By default it targets `~/aros-build`, which is the tree `graft/run-window.sh`
+- By default it targets `~/Source/aros-project/aros-build`, which is the tree `graft/run-window.sh`
   boots. To target another tree:
   `AROS_BUILD=<tree>/bin/darwin-aarch64 ./hosted/rust/sample-build.sh`.
 - It needs the pinned Rust nightly (`nightly-2026-06-27`, auto-installed by rustup on
@@ -37,7 +37,7 @@ share, which is harmless.
 ## One caveat worth knowing
 
 - The AROS world it runs on must be built with `-ffixed-x18` (the Apple Silicon
-  platform-register reservation). The `~/aros-build` tree already is. If you rebuild
+  platform-register reservation). The `~/Source/aros-project/aros-build` tree already is. If you rebuild
   the OS for the release from a different tree, keep that flag or the Rust
   threads/timers can fault.
 

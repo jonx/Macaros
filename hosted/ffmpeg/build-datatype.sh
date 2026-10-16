@@ -15,8 +15,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
 SYS="$REPO/build/ffmpeg/sysroot-video"
 
-BUILD="${AROS_BUILD:-$HOME/aros-build}"
-XT="${AROS_CROSSTOOLS:-$HOME/aros-crosstools}"
+BUILD="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}"
+XT="${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}"
 [ -e "$XT/bin/objcopy" ] || ln -sf "$XT/bin/llvm-objcopy" "$XT/bin/objcopy"
 export PATH="$XT/bin:/opt/homebrew/bin:$PATH"
 

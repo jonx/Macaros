@@ -7,14 +7,14 @@ the **interactive** companion: boot the real Workbench window and click around i
 it yourself. Use it to sanity-check a feature the way a user would, or to poke at
 something a smoke does not cover.
 
-> Everything here boots the tree in `~/aros-build`, so build/deploy first
+> Everything here boots the tree in `~/Source/aros-project/aros-build`, so build/deploy first
 > ([build](../build/README.md), then `graft/aros-ctl deploy`). Media and test
 > files go in `~/AROS/Shared` — that is `MacRW:` inside AROS.
 
 ## Boot the interactive desktop
 
 ```sh
-cd ~/Source/Macaros
+cd ~/Source/aros-project/Macaros
 AROS_CTL_STARTUP_MODE=desktop graft/run-window.sh
 ```
 

@@ -21,7 +21,7 @@ short version:
 - Toolchain `nightly-2026-06-27` with `rust-src`.
 - `$(rustc +nightly-2026-06-27 --print sysroot)/lib/rustlib/src/rust`
   symlinked to `../../../rust-aros` (so `-Zbuild-std` compiles our AROS pal).
-  Verify: `ls -l` that path resolves to `~/Source/rust-aros`.
+  Verify: `ls -l` that path resolves to `~/Source/aros-project/rust-aros`.
 - Target spec: [../rust/aarch64-unknown-aros.json](../rust/aarch64-unknown-aros.json)
   (aarch64 ELF, `code-model: large`, `+reserve-x18`, static, panic=abort).
 - All sibling repos on their AROS branches: `zed-aros` `aros-platform`,
@@ -75,10 +75,10 @@ Summary:
   `target-lexicon` (trimmable) or `polling`/`socket2`/wasmtime (load-bearing:
   the async reactor + wasm runtime).
 
-## The editor (built — see `~/Source/aros-editor`)
+## The editor (built — see `~/Source/aros-project/aros-editor`)
 
 The frontier decided it: the Apache `gpui-component` editor path was taken and
-stood up as a standalone workspace at **`~/Source/aros-editor`** (a
+stood up as a standalone workspace at **`~/Source/aros-project/aros-editor`** (a
 component-editor build mirroring `feraille-aros-app`, kept out of this repo for
 product/license cleanliness). It runs on hosted AROS today: a code editor with
 tree-sitter highlighting, open/edit/save of real files, and **live

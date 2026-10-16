@@ -2,9 +2,9 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-A64=${AROS_BUILD:-$HOME/aros-build}
+A64=${AROS_BUILD:-$HOME/Source/aros-project/aros-build}
 A64_SYS=$A64/bin/darwin-aarch64
-A64_TOOLS=${AROS_CROSSTOOLS:-$HOME/aros-crosstools}
+A64_TOOLS=${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}
 RASPI=${AROS_RASPI_BUILD:-$HOME/aros-build-850}
 RASPI_SYS=$RASPI/bin/raspi-aarch64
 RASPI_HOST=$RASPI/bin/darwin-aarch64

@@ -431,7 +431,7 @@ The new code above lives in the overlay; these are the wiring tasks that make it
 ## Unattended verification (no TCC — `[OURS]` H7/H11 discipline)
 
 The loop is the project's existing one: `graft/build-darwin-aarch64.sh` builds; hosted
-AROS runs headless via `~/aros-darwin/run.sh` / `graft/bootrun.sh`; the agent reads
+AROS runs headless via `~/Source/aros-project/aros-darwin/run.sh` / `graft/bootrun.sh`; the agent reads
 serial markers from stdout (same channel as M/H milestones). **Two-sided assertion is
 the rule** (proven in H11): the harness **creates the fixture on the macOS side**
 (`/tmp/aros-hostvol-XXXX/…`) and asserts AROS sees it; write-enabled spikes additionally

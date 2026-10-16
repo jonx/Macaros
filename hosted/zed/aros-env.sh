@@ -14,8 +14,8 @@
 # dashed form (CFLAGS_aarch64-unknown-aros) but the shell cannot export names
 # with dashes.
 
-: "${AROS_BUILD:=$HOME/aros-build}"
-: "${AROS_CROSSTOOLS:=$HOME/aros-crosstools}"
+: "${AROS_BUILD:=$HOME/Source/aros-project/aros-build}"
+: "${AROS_CROSSTOOLS:=$HOME/Source/aros-project/aros-crosstools}"
 
 _aros_sdk="$AROS_BUILD/bin/darwin-aarch64"
 _aros_shim="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/c-compat"

@@ -7,7 +7,7 @@ export AROS_CTL_STARTUP_MODE
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 UPSTREAM="${AROS_UPSTREAM:-$ROOT/../aros-upstream}"
-TOP="${AROS_BUILD:-$HOME/aros-build}"
+TOP="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}"
 BUILD="$TOP/bin/darwin-aarch64"
 AROS="$BUILD/AROS"
 MODULE="$AROS/L/exfat-handler"

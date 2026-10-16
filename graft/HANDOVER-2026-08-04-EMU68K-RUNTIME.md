@@ -102,7 +102,7 @@ observed behaviour, so no edit is needed.
 ## Standing constraints
 
 Do not push either repository. Commit per meaningful change in the repo it
-changes. Never a bare `make`; build explicit metatargets in `~/aros-build`
-reusing `~/aros-crosstools`. No Claude/AI mention anywhere outward-facing,
+changes. Never a bare `make`; build explicit metatargets in `~/Source/aros-project/aros-build`
+reusing `~/Source/aros-project/aros-crosstools`. No Claude/AI mention anywhere outward-facing,
 commits included. Anything touching `aros-development-team/AROS` needs explicit
 per-action approval.

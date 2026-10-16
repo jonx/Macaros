@@ -32,8 +32,8 @@ So "build a Rust program for AROS" = *cross-compile on the Mac, run on AROS.*
    ```
    (Full detail + why in [STD-PORT.md](STD-PORT.md#dev-environment-setup).)
 2. **A built AROS tree + crosstools.** The link step needs `collect-aros`, the
-   crosstools, and the AROS libs — i.e. a real AROS build at `~/aros-build`
-   (crosstools at `~/aros-crosstools`). See
+   crosstools, and the AROS libs — i.e. a real AROS build at `~/Source/aros-project/aros-build`
+   (crosstools at `~/Source/aros-project/aros-crosstools`). See
    [docs/features/build](../../docs/features/build/README.md). This is the same
    tree `graft/run-window.sh` boots.
 
@@ -110,7 +110,7 @@ corners are in [STD-PORT.md](STD-PORT.md) and [FIX-PLAN.md](FIX-PLAN.md).
 ## Caveats that will bite you (each cost real time)
 
 - **`-ffixed-x18` OS build.** The AROS world you run on must be built with it, or
-  `time`/threads SIGBUS on Apple Silicon. `~/aros-build` already is.
+  `time`/threads SIGBUS on Apple Silicon. `~/Source/aros-project/aros-build` already is.
 - **Strip before deploy.** `llvm-strip --strip-debug` your binary — a debug-info
   ET_REL takes minutes to `LoadSeg`-relocate.
 - **stdout capture** goes through the shell redirect, not a C harness `PutStr`.

@@ -19,13 +19,13 @@ and the outline/debugger panels. See
 There are two different "editors" that could run on this platform, and the
 licensing (below) is the first thing that separates them.
 
-1. **Zed's own editor crates** (`~/Source/zed-aros`): `editor` + `language` +
+1. **Zed's own editor crates** (`~/Source/aros-project/zed-aros`): `editor` + `language` +
    `lsp` + `project` + `text`/`rope` on top of `gpui`. Maximum fidelity to real
    Zed, but GPL-3.0-or-later (see boundary below), a ~236-crate graph, and a
    single monolithic `zed` binary with no cargo-feature seam for a minimal
    build (the port spine is a custom `zed_aros_app` staticlib entry point that
    boots editor-core only).
-2. **The gpui-component editor** (`~/Source/gpui-component-aros`): longbridge's
+2. **The gpui-component editor** (`~/Source/aros-project/gpui-component-aros`): longbridge's
    Apache-2.0 component set, whose `ui` crate ships a code editor with
    tree-sitter highlighting and LSP-via-provider-traits. Far smaller graph,
    permissive license, already patched for AROS (`smol::channel` →
@@ -82,7 +82,7 @@ What this means in practice:
   release" — that overstated it; aggregation is fine, linking-in is not.)
 - **The gpui-component path avoids the GPL entirely.** An Apache-2.0 editor on
   an Apache-2.0 platform — no ports diff, no GPL notice, folds straight into
-  Macaros. This is what `~/Source/aros-editor` is, and it stays the default.
+  Macaros. This is what `~/Source/aros-project/aros-editor` is, and it stays the default.
 - **Provenance rules still apply** ([CLEANROOM.md](../CLEANROOM.md)): whichever
   path, our own AROS glue carries no third-party product names and no AI
   attribution. The upstream licenses of the vendored crates are theirs and stay
@@ -130,7 +130,7 @@ gpui-based binary as formally GPL-free.
 ### The editor app (the chosen path)
 
 The Apache path is scaffolded as a standalone workspace at
-`~/Source/aros-editor` (kept separate from Feraille for product/license
+`~/Source/aros-project/aros-editor` (kept separate from Feraille for product/license
 cleanliness). Two crates mirroring `feraille-aros-app`: `aros-editor` (the GPUI
 app — a window holding the gpui-component code editor) and `aros-editor-app`
 (the AROS `C:AEdit` staticlib wrapper + C harness + `link-aros.sh`). Host

@@ -1,6 +1,6 @@
 #!/bin/sh
 # make-aros-release.sh — build a SELF-CONTAINED, relocatable Macaros.app that boots
-# the full AROS Wanderer desktop on a clean Mac (no ~/aros-build, no ../aros-upstream).
+# the full AROS Wanderer desktop on a clean Mac (no ~/Source/aros-project/aros-build, no ../aros-upstream).
 #
 # Sibling to make-aros-app.sh (the dev wrapper). The difference is self-containment:
 # this EMBEDS a release-filtered AROS volume (fonts + AROSDefault theme + Cocoa
@@ -10,7 +10,7 @@
 # bundle itself stays read-only so the notarization seal holds).
 #
 # NO DUPLICATION of the deployment: the source tree is the one graft/run-window.sh
-# has already prepared in ~/aros-build (desktop payloads staged, media + rust
+# has already prepared in ~/Source/aros-project/aros-build (desktop payloads staged, media + rust
 # artifacts installed). We copy its runtime payload, normalise the conf paths, and
 # bake the desktop Startup-Sequence. Developer files, test disks, logs, caches,
 # and crash reports are deliberately outside the release boundary.
@@ -244,8 +244,8 @@ L/con-handler L/pipe-handler"
 find_bootd() {
     if [ -n "${AROS_CTL_BOOTD:-}" ]; then printf '%s\n' "$AROS_CTL_BOOTD"; return; fi
     for d in \
-        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/boot/darwin" \
-        "$HOME/aros-build/bin/darwin-aarch64/AROS/boot/darwin" ; do
+        "${BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64/AROS/boot/darwin" \
+        "$HOME/Source/aros-project/aros-build/bin/darwin-aarch64/AROS/boot/darwin" ; do
         [ -x "$d/AROSBootstrap" ] && { printf '%s\n' "$d"; return; }
     done
     printf '%s\n' ""

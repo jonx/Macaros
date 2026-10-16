@@ -19,11 +19,11 @@ set -euo pipefail
 
 # --- Paths (override via env) ------------------------------------------------
 # NOTE: /tmp is NOT stable across multi-day gaps — the macOS periodic cleaner
-# removes /tmp files untouched for ~3 days (it gutted $HOME/aros-build on
+# removes /tmp files untouched for ~3 days (it gutted $HOME/Source/aros-project/aros-build on
 # 2026-07-04). Both the build dir and the preserved crosstools live in $HOME.
 AROS_SRC="${AROS_SRC:-../aros-upstream}"   # checkout on branch aarch64-darwin-graft
-BUILD="${BUILD:-$HOME/aros-build}"         # STABLE build dir (rule 1)
-XT="${XT:-$HOME/aros-crosstools}"          # preserved, reusable crosstools (rule 2)
+BUILD="${BUILD:-$HOME/Source/aros-project/aros-build}"         # STABLE build dir (rule 1)
+XT="${XT:-$HOME/Source/aros-project/aros-crosstools}"          # preserved, reusable crosstools (rule 2)
 LLVM="${LLVM:-/opt/homebrew/opt/llvm/bin}"
 SHIM="${SHIM:-/tmp/graft-tools}"           # objcopy shim dir
 
@@ -43,9 +43,9 @@ export PATH="$SHIM:/opt/homebrew/bin:$PATH"
 # Otherwise configure builds the AROS-patched clang 20.1.0 from source the first
 # time. --without-x: the display is Cocoa, not X11.
 # Migrate a legacy /tmp crosstools copy into $HOME before the cleaner eats it.
-if [ ! -x "$XT/bin/clang" ] && [ -x $HOME/aros-crosstools/bin/clang ]; then
-    echo "### migrating legacy crosstools $HOME/aros-crosstools -> $XT"
-    cp -a $HOME/aros-crosstools "$XT"
+if [ ! -x "$XT/bin/clang" ] && [ -x $HOME/Source/aros-project/aros-crosstools/bin/clang ]; then
+    echo "### migrating legacy crosstools $HOME/Source/aros-project/aros-crosstools -> $XT"
+    cp -a $HOME/Source/aros-project/aros-crosstools "$XT"
 fi
 
 REUSE_ARGS=()

@@ -181,18 +181,18 @@ The upstream head also contains later exFAT handler work (`6a588892ab`,
 ## Useful commands
 
 ```sh
-cd /Users/jkn/Source/Macaros
+cd /Users/jkn/Source/aros-project/Macaros
 ./graft/exfat-acceptance-smoke
 
 # Or run individual gates:
 hosted/exfat-tests/build.sh
 hosted/exfat-tests/build-exfat-discovery.sh
 hosted/exfat-tests/build-exfat-hotplug-probe.sh
-make -C /Users/jkn/aros-m68k-build kernel-dos64-linklib
-make -C /Users/jkn/aros-m68k-build/rom/filesys/exfat \
+make -C /Users/jkn/Source/aros-project/aros-m68k-build kernel-dos64-linklib
+make -C /Users/jkn/Source/aros-project/aros-m68k-build/rom/filesys/exfat \
   -f mmakefile \
-  TOP=/Users/jkn/aros-m68k-build \
-  SRCDIR=/Users/jkn/Source/aros-upstream CURDIR=rom/filesys/exfat \
+  TOP=/Users/jkn/Source/aros-project/aros-m68k-build \
+  SRCDIR=/Users/jkn/Source/aros-project/aros-upstream CURDIR=rom/filesys/exfat \
   TARGET=kernel-fs-exfat AROS_TARGET_ARCH=amiga AROS_TARGET_CPU=m68k \
   AROS_HOST_ARCH=darwin AROS_HOST_CPU=aarch64 kernel-fs-exfat
 ./graft/exfat-fixture-smoke
@@ -241,7 +241,7 @@ On 2026-08-04 that verified `Unit14` was written back to the original 512 MiB
 
 ```sh
 diskutil unmount disk9s1
-sudo dd if=$HOME/aros-build/bin/darwin-aarch64/AROS/DiskImages/Unit14 \
+sudo dd if=$HOME/Source/aros-project/aros-build/bin/darwin-aarch64/AROS/DiskImages/Unit14 \
   of=/dev/rdisk9s1 bs=8m
 sync
 diskutil mount disk9s1
@@ -318,13 +318,13 @@ string as the escape character, so status banners made of asterisks
 swallow their own closing quote; the demo script uses `=` banners.
 
 For the native Raspberry Pi 4B run, the Pi source is
-`/Users/jkn/Source/aros-upstream-raspi`, the build is
+`/Users/jkn/Source/aros-project/aros-upstream-raspi`, the build is
 `/Users/jkn/aros-build-850`, and the deployment harness is
-`/Users/jkn/Source/aros-raspi`. The build contains the AArch64 probe and the
+`/Users/jkn/Source/aros-project/aros-raspi`. The build contains the AArch64 probe and the
 updated board package. Insert the Pi SD card and run on macOS:
 
 ```sh
-cd /Users/jkn/Source/aros-raspi
+cd /Users/jkn/Source/aros-project/aros-raspi
 harness/stage-exfat-test.sh
 harness/deploy-card.sh /Users/jkn/aros-build-850
 ```

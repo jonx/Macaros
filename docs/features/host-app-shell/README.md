@@ -14,7 +14,7 @@ graft/make-aros-app.sh        # a dev Macaros.app that wraps the local boot tree
 graft/make-aros-release.sh    # a SELF-CONTAINED, relocatable Macaros.app (+ --dmg)
 ```
 
-`make-aros-app.sh` is the developer wrapper (points at your `~/aros-build`);
+`make-aros-app.sh` is the developer wrapper (points at your `~/Source/aros-project/aros-build`);
 `make-aros-release.sh` embeds the whole prepared AROS volume so the `.app` boots
 the Wanderer desktop on a clean Mac, ready to Developer-ID sign + notarize.
 `--dmg` wraps it with [`graft/release-README.md`](../../../graft/release-README.md)

@@ -18,7 +18,7 @@ LIBS="gadtools.library,iffparse.library,locale.library,icon.library,\
 datatypes.library,coolimages.library,asl.library,diskfont.library,\
 commodities.library,muimaster.library,stdc.library,posixc.library,fd.library,\
 rexxsyslib.library,rexxsupport.library"
-LIBPATH="/Users/jkn/Source/references/aros-m68k-20260804/libs"
+LIBPATH="/Users/jkn/Source/aros-project/references/aros-m68k-20260804/libs"
 
 # name : startup file : marker file to report (optional)
 APPS="

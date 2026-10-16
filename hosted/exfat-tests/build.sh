@@ -38,8 +38,8 @@ done
 # skipped rather than failed when a toolchain is absent, so the host suite
 # still runs on a bare machine, but a skip is reported loudly.
 
-XT=${AROS_CROSSTOOLS:-$HOME/aros-crosstools}
-BUILD=${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64
+XT=${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}
+BUILD=${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64
 
 echo "== gate 1: aarch64 AROS =="
 if [ -x "$XT/bin/clang" ] && [ -d "$BUILD/gen/include" ]; then
@@ -116,7 +116,7 @@ fi
 echo
 
 echo "== gate 1: complete m68k AROS source compile =="
-M68K_AROS_ROOT=${AROS_M68K_BUILD:-$HOME/aros-m68k-build}
+M68K_AROS_ROOT=${AROS_M68K_BUILD:-$HOME/Source/aros-project/aros-m68k-build}
 M68K_AROS_CC=${AROS_M68K_CC:-$M68K_AROS_ROOT/bin/darwin-aarch64/tools/crosstools/m68k-aros-gcc}
 M68K_AROS_OBJDUMP=${AROS_M68K_OBJDUMP:-$M68K_AROS_ROOT/bin/darwin-aarch64/tools/crosstools/m68k-aros-objdump}
 M68K_AROS_SYS=$M68K_AROS_ROOT/bin/amiga-m68k

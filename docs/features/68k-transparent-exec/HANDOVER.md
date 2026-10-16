@@ -55,11 +55,11 @@ maintain is the bottom boundary.
 
 | path | what it is |
 |---|---|
-| `~/Source/Macaros` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
-| `~/Source/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is `checkpoint/emu68k-progdir-20260807` at `b594c9ba09` plus the uncommitted generated/runtime side of this update. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
-| `~/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
-| `~/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
-| `~/Source/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
+| `~/Source/aros-project/Macaros` | **this repo** — the host/graft layer: JIT, bridge, tooling, docs |
+| `~/Source/aros-project/aros-upstream` | the AROS OS source; OS-side code lives here, incl. `emu68k.library`. Current checkout is `checkpoint/emu68k-progdir-20260807` at `b594c9ba09` plus the uncommitted generated/runtime side of this update. Do not publish it: commits and pushes are authorized only to the user's own `jonx` repositories. |
+| `~/Source/aros-project/aros-build` | the build tree (`make hostlibs-emu68k` here builds the OS-side module) |
+| `~/Source/aros-project/aros-crosstools` | the prebuilt cross toolchain — never rebuild it |
+| `~/Source/aros-project/references/aros-m68k-20260804/libs` | the real m68k library binaries we run guest-side |
 | `hosted/jit68k/` | the 68k JIT engine (`j5d_engine.c`), hunk loader (`j4_loader.c`), diagnostics (`j5n_diag.c`) |
 | `hosted/emu68k/emu68k_host.c` | host runtime: run lifecycle, guest memory, contexts, and guest-library loading |
 | `hosted/emu68k/emu68k_exec.c` | the separately compiled handwritten `exec.library` guest semantics |
@@ -132,7 +132,7 @@ The unit of work is **a library**, never a function.
    - a `grep -c` for duplicate `case` labels beats finding them in a compiler
      error
 6. **THEN one build.** Building is the slow step. Batch every change first.
-   `make emu68k-dylib` (host side) and `make hostlibs-emu68k` in `~/aros-build`
+   `make emu68k-dylib` (host side) and `make hostlibs-emu68k` in `~/Source/aros-project/aros-build`
    (OS side); deploy with `cp build/libemu68k.dylib ~/lib/`.
 7. **THEN one test pass.** Put every fixture in ONE directory
    (`build/t3all`) and run the corpus once with the whole tail set routed
@@ -142,10 +142,10 @@ The unit of work is **a library**, never a function.
    icon.library,datatypes.library,coolimages.library,asl.library,diskfont.library,\
    commodities.library,muimaster.library,stdc.library,posixc.library,fd.library,\
    rexxsyslib.library,rexxsupport.library" \
-   EMU68K_LIBS_PATH=/Users/jkn/Source/references/aros-m68k-20260804/libs \
+   EMU68K_LIBS_PATH=/Users/jkn/Source/aros-project/references/aros-m68k-20260804/libs \
    EMU68K_MAX_SECONDS=40 CORPUS_TIMEOUT=300 \
-   /Users/jkn/Source/Macaros/graft/68k-corpus \
-   /Users/jkn/Source/Macaros/build/t3all <out>
+   /Users/jkn/Source/aros-project/Macaros/graft/68k-corpus \
+   /Users/jkn/Source/aros-project/Macaros/build/t3all <out>
    ```
    Use absolute paths: a compound command that `cd`s elsewhere silently breaks
    relative ones and the corpus never runs (cost an hour twice).
@@ -510,7 +510,7 @@ Fix, deployed in both trees (2026-08-06 evening):
   actually requested.  Both call sites pass it (OpenWindow: facade
   IDCMPFlags; ModifyIDCMP: D0).
 
-Both sides built clean (`make hostlibs-emu68k` in `~/aros-build`,
+Both sides built clean (`make hostlibs-emu68k` in `~/Source/aros-project/aros-build`,
 `make emu68k-dylib` here); dylib deployed to `~/lib` and re-signed;
 `hosted-emu68k-t3setsignal` and `t3hello` PASS.  The first rerun attempt
 proves nothing: a staged macOS update consumed the container's free space
@@ -867,7 +867,7 @@ table, and no classic Amiga program opens it - only our guest-side
 posixc/stdc do.  So it belongs to the tail set and ships as real m68k guest
 code, exactly like the libraries that depend on it: no bridge policy, no
 crossings, nothing to declare.  Built with `make workbench-libs-fd` in
-`~/aros-m68k-build` (its source is `workbench/libs/fd/`), then converted with
+`~/Source/aros-project/aros-m68k-build` (its source is `workbench/libs/fd/`), then converted with
 `elf2hunk` - a module built for m68k is ELF and the guest loader needs HUNK,
 which is why dropping the build output straight into the library directory
 still failed to load.  Verified: failures 1028 -> 0, `guestlib init.done` /

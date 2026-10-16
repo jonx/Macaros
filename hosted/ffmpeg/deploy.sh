@@ -12,7 +12,7 @@ SYS="$OUT/sysroot-video"
 
 find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
-    for d in "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64"; do
+    for d in "${BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64"; do
         [ -e "$d/AROS/Developer/include/aros/posixc/stdio.h" ] \
             && [ -x "$d/tools/collect-aros" ] && { printf '%s\n' "$d"; return; }
     done
@@ -26,7 +26,7 @@ export AROS_BUILD="$T"
 # early with a clear message rather than a cryptic mid-compile error.
 [ -f "$T/gen/include/proto/gpufx.h" ] || {
     echo "deploy: $T is missing the gpufx headers (proto/gpufx.h)." >&2
-    echo "        Build gpufx.library first:  (cd ~/aros-build && make hostlibs-gpufx)" >&2
+    echo "        Build gpufx.library first:  (cd ~/Source/aros-project/aros-build && make hostlibs-gpufx)" >&2
     exit 1; }
 CDEST="$T/AROS/C"
 

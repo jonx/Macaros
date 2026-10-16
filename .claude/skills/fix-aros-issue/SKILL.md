@@ -35,7 +35,7 @@ ships. The work is published as John's, product-neutral, with no AI attribution.
   commit here. Push to remote `fork` (github.com/jonx/AROS).
 - Pristine upstream: `../aros-upstream-master` (a worktree; keep it at
   `origin/master` for grepping current master).
-- Build tree: `~/aros-build`. Crosstools: `~/aros-crosstools`. Never rebuild LLVM.
+- Build tree: `~/Source/aros-project/aros-build`. Crosstools: `~/Source/aros-project/aros-crosstools`. Never rebuild LLVM.
 - PR branches are cut off `origin/master` (clean, upstream-targetable), but
   `origin/master` cannot build on darwin (no host layer) so you VERIFY on the
   `aarch64-darwin-graft` tree. Confirm the touched file is identical on both
@@ -57,8 +57,8 @@ ships. The work is published as John's, product-neutral, with no AI attribution.
    enter / shot). Ground the bug in an observed artifact before touching code.
 3. **Root-cause** in the source. Read the actual code path; do not guess.
 4. **Fix** in the `aros-upstream` working tree (minimal change).
-5. **Build** the specific metatarget in `~/aros-build`
-   (`PATH=~/aros-crosstools/bin:$PATH; make <metatarget>`). Never a bare `make`.
+5. **Build** the specific metatarget in `~/Source/aros-project/aros-build`
+   (`PATH=~/Source/aros-project/aros-crosstools/bin:$PATH; make <metatarget>`). Never a bare `make`.
    Find the metatarget name in the module's `mmakefile.src` (`mmake=...`).
 6. **Verify**: `aros-ctl deploy` -> `run` -> drive the repro -> `shot`. Test
    every affected case for a behaviour change. For high-blast-radius code
@@ -82,21 +82,21 @@ ships. The work is published as John's, product-neutral, with no AI attribution.
 ## Gotchas learned
 
 - `aros-ctl type` drops `>` (the shell redirect char). To test redirection,
-  write a script file host-side into `SYS:` (= `~/aros-build/bin/darwin-aarch64/
+  write a script file host-side into `SYS:` (= `~/Source/aros-project/aros-build/bin/darwin-aarch64/
   AROS/`) and `execute` it, or craft a file and `type`/`execute` it.
 - `Type` flushes in 8192-byte writes, so a byte placed at file offset 8191
   reliably splits across two `Write()`s (useful for split-sequence repros).
 - The `app/todo` bot auto-files an issue per `TODO` comment on merge; the issue
   URL pins the commit it was filed at, so it looks live even after the code
   moved. Most are stale.
-- If John is rebuilding in parallel, avoid concurrent `make` in `~/aros-build`
+- If John is rebuilding in parallel, avoid concurrent `make` in `~/Source/aros-project/aros-build`
   (shared mmake DB) unless told it's fine; the single hosted instance is shared
   too (reboot to run-verify only when free).
 - When the touched file DIFFERS between graft and origin/master: implement and
   verify on the graft tree, then re-apply hunk by hunk to the PR branch with
   upstream anchors, and prove equivalence by diffing the added lines of both
   patches (`git diff | grep '^+'` on each side must match).
-- SYS: is the live host dir `~/aros-build/bin/darwin-aarch64/AROS/` -- files
+- SYS: is the live host dir `~/Source/aros-project/aros-build/bin/darwin-aarch64/AROS/` -- files
   written there (test binaries, scripts) are visible to the RUNNING instance
   immediately, while in-memory handlers/modules stay old until reboot. Useful
   to repro a bug on the old module with a fresh test binary.

@@ -17,9 +17,9 @@ already solve them; read the doc instead of rediscovering the trap.
     breaks on darwin-incomplete modules.
   - Build explicit module **metatargets** (`kernel-dos`, `kernel-kernel`,
     `kernel-dosboot`, …), one target per `make` call.
-  - Build in a **stable** dir (`~/aros-build`), never a session scratchpad or /tmp
+  - Build in a **stable** dir (`~/Source/aros-project/aros-build`), never a session scratchpad or /tmp
     (both get GC'd half-deleted → the "I keep having to redo it" loop).
-  - Reuse the prebuilt toolchain (`~/aros-crosstools`); never rebuild LLVM.
+  - Reuse the prebuilt toolchain (`~/Source/aros-project/aros-crosstools`); never rebuild LLVM.
 - **A fix appears not to take when you run it** → read
   [docs/features/deployment/README.md](docs/features/deployment/README.md).
   There are several runnable copies of the same artifacts (`~/lib`, the boot

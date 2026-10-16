@@ -6,7 +6,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-CAPTURE="${EXFAT_USB_SOURCE:-${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14.physical-capture}"
+CAPTURE="${EXFAT_USB_SOURCE:-${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14.physical-capture}"
 
 run() {
     printf '[exfat-acceptance] %s\n' "$*"
@@ -33,7 +33,7 @@ run env EXFAT_FORMAT_UNIT=12 graft/exfat-format-smoke
 
 if [ -f "$CAPTURE" ]; then
     run env EXFAT_USB_SOURCE="$CAPTURE" graft/exfat-usb-image-smoke
-    if [ -f "${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14" ]; then
+    if [ -f "${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64/AROS/DiskImages/Unit14" ]; then
         run graft/exfat-hotplug-probe-smoke
     else
         echo "[exfat-acceptance] SKIP hotplug oracle: verified Unit14 is absent"

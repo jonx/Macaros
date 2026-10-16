@@ -9,11 +9,11 @@
 # and it fails if any of them regress.
 #
 # LhA is third-party freeware and is deliberately NOT checked in. Point
-# EMU68K_LHA at a copy, or drop one at ~/68k-corpus/lha; without it the test
+# EMU68K_LHA at a copy, or drop one at ~/Source/aros-project/68k-corpus/lha; without it the test
 # reports SKIP rather than failing, so a fresh checkout is not blocked.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
-LHA="${EMU68K_LHA:-$HOME/68k-corpus/lha}"
+LHA="${EMU68K_LHA:-$HOME/Source/aros-project/68k-corpus/lha}"
 SHARE="$HOME/AROS/Shared"; DIR="$SHARE/lharound"
 OUT="${1:-$ROOT/build/t3lha-out.txt}"
 

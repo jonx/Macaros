@@ -29,11 +29,11 @@ GadTools review queue alone.
 ## Repositories and local rules
 
 - Integration/tooling repository:
-  `/Users/jkn/Source/Macaros`, branch `main`
+  `/Users/jkn/Source/aros-project/Macaros`, branch `main`
 - AROS source repository:
-  `/Users/jkn/Source/aros-upstream`, branch
+  `/Users/jkn/Source/aros-project/aros-upstream`, branch
   `aarch64-darwin-graft`
-- Stable build tree: `/Users/jkn/aros-build`
+- Stable build tree: `/Users/jkn/Source/aros-project/aros-build`
 - Candidate legacy corpus: `/tmp/aros-68k-candidates/corpus`
 - Do not push either repository.
 - Commit each meaningful iteration separately in the repository it changes.
@@ -238,7 +238,7 @@ the allocation boundary before release.
 
 ### Uncommitted diagnostic patch
 
-`/Users/jkn/Source/aros-upstream/rom/hidds/gfx/gfx_bitmapclass.c` currently has
+`/Users/jkn/Source/aros-project/aros-upstream/rom/hidds/gfx/gfx_bitmapclass.c` currently has
 an uncommitted diagnostic modification. It allocates 256-byte prefix/suffix
 guards around the shared pixel buffer and checks them after:
 
@@ -262,10 +262,10 @@ The restarted command completed successfully with `2 ok, 0 failed`; both
 the output timestamps when resuming:
 
 ```sh
-tail -30 /Users/jkn/aros-build/rebuild-logs/kernel-link-unix.log
-tail -30 /Users/jkn/aros-build/rebuild-logs/boot.log
+tail -30 /Users/jkn/Source/aros-project/aros-build/rebuild-logs/kernel-link-unix.log
+tail -30 /Users/jkn/Source/aros-project/aros-build/rebuild-logs/boot.log
 stat -f '%Sm %N' -t '%Y-%m-%d %H:%M:%S' \
-  /Users/jkn/aros-build/bin/darwin-aarch64/AROS/boot/darwin/kernel
+  /Users/jkn/Source/aros-project/aros-build/bin/darwin-aarch64/AROS/boot/darwin/kernel
 ```
 
 After the relink, run `genrecord` by itself or the full main T3GEN folder and

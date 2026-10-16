@@ -30,7 +30,7 @@ Screenshots of each verdict are regenerated locally by the smoke run
 ## Quick start
 
 ```sh
-cd ~/Source/Macaros
+cd ~/Source/aros-project/Macaros
 make bsdsock-dylib                          # build the host pump shim
 ./graft/aros-ctl deploy                     # deploy it to ~/lib for HostLib_Open
 graft/bsdsock-livetest.sh                   # host unit tests + the live nettest

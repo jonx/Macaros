@@ -3,7 +3,7 @@
 # aggregate gaps, and separately make LhA do a byte-exact archive round trip.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
-SOURCE="${1:-$HOME/68k-corpus}"
+SOURCE="${1:-$HOME/Source/aros-project/68k-corpus}"
 OUT="${2:-$ROOT/run/darwin-aarch64/legacy-corpus-$(date +%H%M%S).txt}"
 MANIFEST="$ROOT/hosted/emu68k/legacy-corpus.manifest"
 STAGE="$ROOT/build/legacy-corpus"

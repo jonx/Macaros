@@ -29,22 +29,22 @@ reusing the preserved toolchain (this is also the recovery tool after the macOS
 `/tmp` cleaner or a disk-full purge eats a tree):
 
 ```sh
-graft/rebuild-aros.sh            # boot module set + desktop userland -> ~/aros-build
+graft/rebuild-aros.sh            # boot module set + desktop userland -> ~/Source/aros-project/aros-build
 # TARGETS="kernel-dos kernel-intuition" graft/rebuild-aros.sh   # a subset
 ```
 
 It builds each metatarget in its own `make` call (avoids the mmake stale-DB
-failure), logs per target under `~/aros-build/rebuild-logs/`, continues past
+failure), logs per target under `~/Source/aros-project/aros-build/rebuild-logs/`, continues past
 individual failures with a summary, writes the `AROS.boot` signature, and sets
 up the `objcopy` shim + PATH. It never runs a bare `make` and never rebuilds
-LLVM. If `~/aros-build` isn't configured yet, it prints the one-time configure
+LLVM. If `~/Source/aros-project/aros-build` isn't configured yet, it prints the one-time configure
 line to run first.
 
 <details><summary>What that automates (the manual recipe)</summary>
 
 ```sh
 # 1. Stable locations (NOT a session scratchpad, NOT /tmp) + reuse the toolchain
-BUILD=~/aros-build ; XT=~/aros-crosstools
+BUILD=~/Source/aros-project/aros-build ; XT=~/Source/aros-project/aros-crosstools
 ln -sf "$XT/bin/llvm-objcopy" "$XT/bin/objcopy"        # macOS lacks objcopy; stable shim
 export PATH="$XT/bin:/opt/homebrew/bin:$PATH"
 
@@ -89,10 +89,10 @@ guru. *This is the "I keep having to redo it" loop.*
 `Libs/` down to 3 libraries, `C:` empty, kickstart reduced to `exec.library` +
 `kernel.resource`). The same fate awaits `/tmp/aros-crosstools`.
 
-Use a home location: **`~/aros-build`** for the build and **`~/aros-crosstools`**
+Use a home location: **`~/Source/aros-project/aros-build`** for the build and **`~/Source/aros-project/aros-crosstools`**
 for the preserved toolchain (both are the defaults of
 `graft/build-darwin-aarch64.sh`, and `run-window.sh`/`aros-ctl` search
-`~/aros-build` first; `/tmp/arosbuild` remains a legacy fallback).
+`~/Source/aros-project/aros-build` first; `/tmp/arosbuild` remains a legacy fallback).
 
 ## 2. The cross-toolchain — do NOT rebuild it (~1–2 h)
 
@@ -112,12 +112,12 @@ The working toolchain is self-contained and **relocatable** (only depends on
 system libs + Homebrew `zstd`). Preserve and reuse it instead of rebuilding:
 
 ```sh
-cp -a <build>/bin/darwin-aarch64/tools/crosstools ~/aros-crosstools
-~/aros-crosstools/bin/clang --version   # -> clang 20.1.0, Target: aarch64-unknown-aros
+cp -a <build>/bin/darwin-aarch64/tools/crosstools ~/Source/aros-project/aros-crosstools
+~/Source/aros-project/aros-crosstools/bin/clang --version   # -> clang 20.1.0, Target: aarch64-unknown-aros
 ```
 
 Then point `configure` at it with `--with-aros-toolchain=yes
---with-aros-toolchain-install=$HOME/aros-crosstools`. Confirm configure prints
+--with-aros-toolchain-install=$HOME/Source/aros-project/aros-crosstools`. Confirm configure prints
 **`checking whether to build crosstools... no`**. Keep the copy in `$HOME`,
 not `/tmp` — the tmp purge (§1) eats it too.
 
@@ -126,7 +126,7 @@ prebuilt toolchain will silently start the 1–2 h LLVM build — nothing blocks
 (a local refuse-guard existed briefly and was removed 2026-07-22 to stay closer
 to upstream, whose normal flow builds the toolchain via `make`). The protection
 is the configure line: always pass `--with-aros-toolchain=yes
---with-aros-toolchain-install=$HOME/aros-crosstools` and check for
+--with-aros-toolchain-install=$HOME/Source/aros-project/aros-crosstools` and check for
 `checking whether to build crosstools... no`.
 
 **Stripped resource dir?** If you see `fatal error: 'stdarg.h' file not found`,
@@ -142,14 +142,14 @@ useful diagnostic. Restore the **matching clang-20.1.0** freestanding headers:
 ```sh
 # the two that actually differ and bite: __stdarg_va_arg.h (the va_start macro)
 # and float.h. The rest of the freestanding set is version-stable.
-XT=~/aros-crosstools/lib/clang/20/include
+XT=~/Source/aros-project/aros-crosstools/lib/clang/20/include
 for h in __stdarg_va_arg.h float.h stdarg.h stddef.h ; do
   curl -fsSL "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.0/clang/lib/Headers/$h" -o "$XT/$h"
 done
 ```
 
 The robust fix is to **preserve the toolchain** (copy `crosstools` to
-`~/aros-crosstools`, §2 top) so the headers never get stripped in the first
+`~/Source/aros-project/aros-crosstools`, §2 top) so the headers never get stripped in the first
 place — then you never reach for Homebrew's mismatched set.
 
 ## 3. Build module metatargets — never a bare `make`
@@ -319,10 +319,10 @@ Reclaim the superseded copies (keeps the newest of each crate, so the next build
 still incremental-links):
 
 ```sh
-D=~/Source/zed-aros/target/aarch64-unknown-aros/release
+D=~/Source/aros-project/zed-aros/target/aarch64-unknown-aros/release
 python3 - <<'EOF'
 import os, glob, collections, re
-d = os.path.expanduser('~/Source/zed-aros/target/aarch64-unknown-aros/release/deps')
+d = os.path.expanduser('~/Source/aros-project/zed-aros/target/aarch64-unknown-aros/release/deps')
 groups = collections.defaultdict(list)
 for f in glob.glob(os.path.join(d, 'lib*.rlib')):
     m = re.match(r'^(lib.+)-[0-9a-f]{16}\.rlib$', os.path.basename(f))
@@ -343,7 +343,7 @@ build of the editor staticlib) and `$D/libzed_aros_app.a`, the superseded shim.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `make: No rule to make target 'kernel-dos'` | `Makefile`/`mmake.config` gone (scratchpad GC) | rebuild in a stable dir; re-run `configure` |
-| `The configure script must be executed before running 'make'` on EVERY target | a git branch switch in the source tree touched `configure`'s **mtime** (content unchanged), so the Makefile guard thinks the config is stale | `cd ~/aros-build && ./config.status && touch config.status` (`rebuild-aros.sh` now does this automatically); a real `configure` content change still needs a real reconfigure |
+| `The configure script must be executed before running 'make'` on EVERY target | a git branch switch in the source tree touched `configure`'s **mtime** (content unchanged), so the Makefile guard thinks the config is stale | `cd ~/Source/aros-project/aros-build && ./config.status && touch config.status` (`rebuild-aros.sh` now does this automatically); a real `configure` content change still needs a real reconfigure |
 | `can't open dos.library v36` then `dosboot` guru | ABI skew: modules built across genmodule/startup/struct changes | one coordinated rebuild of the whole boot set |
 | `fatal error: 'stdarg.h' file not found` | stripped toolchain resource headers | restore from Homebrew clang (§2) |
 | `ld.lld: duplicate symbol __aros_libreq_SysBase` | `KOBJ_LDFLAGS` not reaching the kobj link | fixed in `make.cfg.in`/`make.tmpl` (§4) |

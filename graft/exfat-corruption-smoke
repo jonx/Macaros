@@ -5,7 +5,7 @@ set -euo pipefail
 : "${AROS_CTL_STARTUP_MODE:=minimal}"
 export AROS_CTL_STARTUP_MODE
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
-AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+AROS="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64/AROS"
 IMAGE="$AROS/DiskImages/Unit8"; DRIVER="$AROS/Devs/DOSDrivers/EXFAT8"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/aros-exfat-corrupt.XXXXXX")"
 BASE="$WORK/base.img"; HOST_MOUNT="$WORK/mount"; RESULTS="$WORK/results"; DEVICE=""

@@ -12,7 +12,7 @@ follow the arrows top-to-bottom, and the **green** boxes are already done.
 > AArch64 register dump) and AROS's native Guru-Meditation alert renders. Boot now
 > proceeds through the full boot module set and `dos.library`, mounts SYS:, runs the
 > AmigaDOS Shell with the standard C: command set, and renders a full Wanderer desktop
-> in a live Cocoa/Metal window (see the root README). Run it: `~/aros-darwin/run.sh`.
+> in a live Cocoa/Metal window (see the root README). Run it: `~/Source/aros-project/aros-darwin/run.sh`.
 
 > **Legend** — 🟢 done · 🟡 in progress · ⚪ pending
 > (Mermaid renders on GitHub; a plain-text table follows for terminal readers.)
@@ -116,7 +116,7 @@ stands on it.
 | 19 | `-mcmodel=large` → kill GOT relocs for weak symbols | 🟢 done | build-dir `make.cfg` |
 | 20 | Force-load static C runtime (libkrnmem.a) into exec/kernel/hostlib | 🟢 done | `rom/exec`, `rom/kernel`, `hostlib` mmakefiles |
 | 21 | hostlib.resource in the kickstart | 🟢 done | `kernel-hostlib` |
-| 22 | **AROS BOOTS** (exec+kernel+hostlib up, trap handler + alert render) | 🟢 done | `~/aros-darwin/run.sh` |
+| 22 | **AROS BOOTS** (exec+kernel+hostlib up, trap handler + alert render) | 🟢 done | `~/Source/aros-project/aros-darwin/run.sh` |
 | 23 | Past the cold-start SIGSEGV; dos.library; reach a shell | 🟡 / ⚪ | Phase 5 |
 
 ## Related docs

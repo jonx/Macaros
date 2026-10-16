@@ -259,7 +259,7 @@ So the async socket stack assumes a **unified fd space** AROS does not have.
 2. **Blocking-`std::net` LSP transport.** Skip the async socket stack for LSP:
    connect with blocking `std::net::TcpStream` (works today via the net pal) plus
    reader/writer threads bridging into the editor's async channels — the model
-   `~/Source/aros-editor` already proved live. Targeted to LSP; needs a custom
+   `~/Source/aros-project/aros-editor` already proved live. Targeted to LSP; needs a custom
    transport in Zed's `lsp` crate (which is built around async subprocess stdio),
    not a general networking fix.
 

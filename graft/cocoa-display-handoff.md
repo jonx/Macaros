@@ -167,15 +167,15 @@ ever the one we were `Show`'d.
 | `workbench/c/GrabScreen.c` | the *working* reference: `LockPubScreen(NULL)` + `ReadPixelArray` reaches the shell |
 
 (`cocoagfx_hiddclass.c` and the cocoametal sources live in the two repos:
-AROS core under `~/Source/aros-upstream`, the dylib under
-`~/Source/Macaros/hosted/cocoametal`.)
+AROS core under `~/Source/aros-project/aros-upstream`, the dylib under
+`~/Source/aros-project/Macaros/hosted/cocoametal`.)
 
 ## 9. Repro
 
 ```sh
 # windowed boot with a control FIFO:
-~/Source/Macaros/graft/aros-ctl run
-~/Source/Macaros/graft/aros-ctl shot /tmp/x.png   # cm_readback -> gray
+~/Source/aros-project/Macaros/graft/aros-ctl run
+~/Source/aros-project/Macaros/graft/aros-ctl shot /tmp/x.png   # cm_readback -> gray
 
 # the shell IS there — dump the AROS framebuffer directly:
 #   set startup-sequence to "Version\nC:GrabScreen SYS:gs.ppm", boot, convert gs.ppm

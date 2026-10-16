@@ -109,7 +109,7 @@ The AHI audio build is now part of the standard rebuild — no manual rescue.
 `graft/rebuild-aros.sh` builds it (target group `AUDIO_TARGETS`), or by hand:
 
 ```sh
-cd ~/aros-build
+cd ~/Source/aros-project/aros-build
 make AHI-coreaudio-bridge-darwin     # the host-CoreAudio bridge linklib FIRST
 make workbench-devs-AHI-quick        # subsystem + drivers (installs all 4 pieces)
 make workbench-c-ahismoke            # the AHISmoke test client

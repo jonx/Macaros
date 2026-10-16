@@ -8,8 +8,8 @@ set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=${AROS_UPSTREAM:-$HERE/../../../aros-upstream}
-A64=${AROS_BUILD:-$HOME/aros-build}
-M68K=${AROS_M68K_BUILD:-$HOME/aros-m68k-build}
+A64=${AROS_BUILD:-$HOME/Source/aros-project/aros-build}
+M68K=${AROS_M68K_BUILD:-$HOME/Source/aros-project/aros-m68k-build}
 
 # A directly buildable module is insufficient: normal hosted/native images
 # must actually request it wherever they already request the FAT handler.

@@ -1,25 +1,25 @@
 # 68k JIT console demo
 
-Run this from `/Users/jkn/Source/Macaros`. It demonstrates an unchanged
+Run this from `/Users/jkn/Source/aros-project/Macaros`. It demonstrates an unchanged
 68k LhA archive/list/extract cycle, then starts `AMIGAPeek` to show the safe
 report for a legacy program that dynamically reaches Amiga hardware.
 
 Prerequisites:
 
 ```text
-~/68k-corpus/lha
-~/68k-corpus/AMIGAPeek
+~/Source/aros-project/68k-corpus/lha
+~/Source/aros-project/68k-corpus/AMIGAPeek
 ```
 
 ## Prepare and launch
 
 ```sh
-cd /Users/jkn/Source/Macaros
+cd /Users/jkn/Source/aros-project/Macaros
 
 DEMO="$HOME/AROS/Shared/68k-demo"
 mkdir -p "$DEMO/unpack"
-cp "$HOME/68k-corpus/lha" "$DEMO/lha"
-cp "$HOME/68k-corpus/AMIGAPeek" "$DEMO/AMIGAPeek"
+cp "$HOME/Source/aros-project/68k-corpus/lha" "$DEMO/lha"
+cp "$HOME/Source/aros-project/68k-corpus/AMIGAPeek" "$DEMO/AMIGAPeek"
 
 printf '%s\n' \
   'Transparent 68k execution demonstration.' \

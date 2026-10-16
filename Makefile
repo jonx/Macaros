@@ -40,11 +40,11 @@ INPUT   ?= ping\nticks\nquit\n
 
 # The AROS OS source tree (kernel, modules, libraries) lives OUTSIDE this repo;
 # this one is the host/graft layer. Override if your checkout is elsewhere.
-AROS_SRC ?= $(HOME)/Source/aros-upstream
-M68K_AROS_BUILD ?= $(HOME)/aros-m68k-build
+AROS_SRC ?= $(HOME)/Source/aros-project/aros-upstream
+M68K_AROS_BUILD ?= $(HOME)/Source/aros-project/aros-m68k-build
 M68K_AROS_GCC ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/crosstools/m68k-aros-gcc
 ELF2HUNK ?= $(M68K_AROS_BUILD)/bin/darwin-aarch64/tools/elf2hunk
-M68K_LIBS_PATH ?= $(HOME)/Source/references/aros-m68k-20260804/libs
+M68K_LIBS_PATH ?= $(HOME)/Source/aros-project/references/aros-m68k-20260804/libs
 
 .PHONY: image run shot dbg test hosted hosted-run hosted-preempt hosted-abi hosted-exec hosted-mem hosted-kern hosted-display hosted-cocoametal cocoametal-dylib cocoametal-abi cocoametal-media cocoametal-prefs cocoametal-shell cocoametal-statusbar cocoametal-hiddsim cocoametal-d2t cocoametal-input cocoametal-settings cocoametal-fullscreen cocoametal-livedraw cocoametal-show hosted-coreaudio coreaudio-dylib coreaudio-abi audio-smoke bench hosted-clipboard pasteboard-dylib pasteboard-abi hosted-hostvolume hosted-ameta hosted-bsdsocket hosted-library hosted-signal hosted-msgport hosted-device hosted-execboot hosted-jit68k hosted-jit68k-hardened hosted-jit68k-j2 hosted-jit68k-j3 hosted-jit68k-j4 hosted-jit68k-j5a hosted-jit68k-j5b hosted-jit68k-j5c hosted-jit68k-j5d hosted-jit68k-j5e hosted-jit68k-j5f hosted-jit68k-j5g hosted-jit68k-j5h hosted-jit68k-j5i hosted-jit68k-j5j hosted-jit68k-j5k hosted-jit68k-j5l hosted-jit68k-j5m hosted-jit68k-j5n hosted-jit68k-j5o hosted-jit68k-j5p hosted-jit68k-j5q hosted-jit68k-j5r hosted-jit68k-j5s hosted-jit68k-j5t hosted-jit68k-apps libjit68k run68k hosted-jit68k-args hosted-emu68k-t0p1 hosted-emu68k-t0p3 hosted-emu68k-t0p4 scan68k hosted-emu68k-t2scan hosted-emu68k-t2guard hosted-emu68k-t3hello hosted-emu68k-t3setsignal hosted-emu68k-t3workbench hosted-emu68k-t3readargs hosted-emu68k-t3gen hosted-emu68k-t3mui hosted-emu68k-t3fmt hosted-emu68k-t3guestlib hosted-emu68k-t3guestlive hosted-emu68k-t3ereal rawdofmt-blob struct-layouts hosted-emu68k-t3lha hosted-emu68k-t3legacy hosted-emu68k-regina-fixtures hosted-jit68k-conform hosted-test clean
 
@@ -1874,7 +1874,7 @@ hosted-emu68k-progdir: hosted-emu68k-regina-fixtures
 	AROS_CTL_RESTART=1 \
 	AROS_CTL_STARTUP_FILE=$(HOME)/AROS/Shared/regina-progdir-startup \
 	EMU68K_GUESTSIDE_LIBS="stdc.library,posixc.library" \
-	EMU68K_LIBS_PATH="$(HOME)/Source/references/aros-m68k-20260804/libs:$(HOME)/AROS/Shared/Regina68k/libs" \
+	EMU68K_LIBS_PATH="$(HOME)/Source/aros-project/references/aros-m68k-20260804/libs:$(HOME)/AROS/Shared/Regina68k/libs" \
 	graft/aros-ctl run >/dev/null 2>&1
 	@for i in $$(seq 1 60); do \
 	  grep -q "PASS\|FAIL" $(HOME)/AROS/Shared/Regina68k/progdir.result 2>/dev/null && break; \
@@ -1897,7 +1897,7 @@ hosted-emu68k-idle: hosted-emu68k-regina-fixtures
 	AROS_CTL_RESTART=1 \
 	AROS_CTL_STARTUP_FILE=$(HOME)/AROS/Shared/regina-idle-startup \
 	EMU68K_GUESTSIDE_LIBS="stdc.library,posixc.library,fd.library" \
-	EMU68K_LIBS_PATH="$(HOME)/Source/references/aros-m68k-20260804/libs" \
+	EMU68K_LIBS_PATH="$(HOME)/Source/aros-project/references/aros-m68k-20260804/libs" \
 	graft/aros-ctl run >/dev/null 2>&1
 	@for i in $$(seq 1 45); do \
 	  grep -q "IDLE-READY\|FAIL" $(HOME)/AROS/Shared/Regina68k/idle.result 2>/dev/null && break; \

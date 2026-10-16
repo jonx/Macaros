@@ -13,7 +13,7 @@ if not path:
 
 # authoritative exec LVO names, from the generated AROS headers
 lvonames = {}          # (library, lvo) -> function name, from the AROS headers
-gendir = os.path.expanduser('~/aros-build/bin/darwin-aarch64/gen/include/defines')
+gendir = os.path.expanduser('~/Source/aros-project/aros-build/bin/darwin-aarch64/gen/include/defines')
 for lib, base in (('exec','ExecBase'), ('dos','DosLibrary'), ('icon','IconBase'),
                   ('intuition','IntuitionBase'), ('graphics','GfxBase'),
                   ('utility','UtilityBase'), ('gadtools','Library'),

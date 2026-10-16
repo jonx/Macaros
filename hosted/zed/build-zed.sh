@@ -19,7 +19,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
 RUSTDIR="$REPO/hosted/rust"
 WS="$REPO/../zed-aros"                       # the vendored Zed workspace
-[ -d "$WS" ] || WS="$HOME/Source/zed-aros"
+[ -d "$WS" ] || WS="$HOME/Source/aros-project/zed-aros"
 RSLIB="$WS/target/aarch64-unknown-aros/release/libzed_aros_entry.a"
 
 # The cc-rs C recipe (CC_/AR_/CFLAGS_aarch64_unknown_aros).
@@ -28,7 +28,7 @@ RSLIB="$WS/target/aarch64-unknown-aros/release/libzed_aros_entry.a"
 find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD/bin/darwin-aarch64"; return; fi
     local best="" bt=0 d t
-    for d in "$HOME/aros-build/bin/darwin-aarch64" /tmp/*/bin/darwin-aarch64 ; do
+    for d in "$HOME/Source/aros-project/aros-build/bin/darwin-aarch64" /tmp/*/bin/darwin-aarch64 ; do
         [ -x "$d/tools/collect-aros" ] && [ -d "$d/gen/include" ] || continue
         t="$(stat -f %m "$d/tools/collect-aros" 2>/dev/null || echo 0)"
         if [ "$t" -ge "$bt" ]; then bt="$t"; best="$d"; fi

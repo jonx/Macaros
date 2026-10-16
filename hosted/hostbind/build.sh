@@ -5,7 +5,7 @@
 set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-T="${AROS_BUILD:-$HOME/aros-build/bin/darwin-aarch64}"
+T="${AROS_BUILD:-$HOME/Source/aros-project/aros-build/bin/darwin-aarch64}"
 CC="${AROS_CC:-clang}"
 
 [ -f "$T/gen/include/aros/hostbind.h" ] || {

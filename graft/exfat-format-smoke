@@ -6,7 +6,7 @@ export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-BUILD="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64"
+BUILD="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64"
 AROS="$BUILD/AROS"
 UNIT="${EXFAT_FORMAT_UNIT:-6}"
 VOLUME="EXFAT${UNIT}:"

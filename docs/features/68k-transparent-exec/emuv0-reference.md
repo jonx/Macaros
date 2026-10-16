@@ -1,6 +1,6 @@
 # EmuV0 (AoA) as a reference project
 
-Reference checkout: `/Users/jkn/Source/references/deadwood-aros` (sparse clone
+Reference checkout: `/Users/jkn/Source/aros-project/references/deadwood-aros` (sparse clone
 of github.com/deadwood2/AROS, only `workbench/tools/AoA`, ~13k lines).
 
 Provenance: this is APL-licensed AROS code, offered explicitly for study and
@@ -61,7 +61,7 @@ the evidence. Both gathered:
 - **Supply**: AROS amiga-m68k nightly builds are current (checked 20260804)
   and ship the full `Libs/` set as plain HUNK files — the format our loader
   already speaks. Reference copy:
-  `/Users/jkn/Source/references/aros-m68k-20260804/libs/`. For shipping we
+  `/Users/jkn/Source/aros-project/references/aros-m68k-20260804/libs/`. For shipping we
   would cross-build them ourselves (APL).
 - **Dependencies** (from the binaries): every tail library bottoms out in
   exactly the set we already bridge — {exec, dos, graphics, intuition,

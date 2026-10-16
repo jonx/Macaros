@@ -7,13 +7,13 @@
 #   hosted/gpufx/build.sh            # build + deploy C:GpuFxTest
 set -eu
 DIR="$(cd "$(dirname "$0")" && pwd)"
-T="${AROS_BUILD:-$HOME/aros-build}"
+T="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}"
 [ -d "$T/AROS/Developer/include" ] || T="$T/bin/darwin-aarch64"
 [ -d "$T/AROS/Developer/include" ] || {
     echo "build.sh: no AROS SDK at \$AROS_BUILD (need AROS/Developer/include)" >&2
     exit 1
 }
-CT="${AROS_CROSSTOOLS:-$HOME/aros-crosstools}"
+CT="${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}"
 CLANG="$CT/bin/clang"
 [ -x "$CLANG" ] || { echo "build.sh: AROS clang not found at $CLANG" >&2; exit 1; }
 DEV="$T/AROS/Developer/include"

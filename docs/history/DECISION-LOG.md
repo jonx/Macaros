@@ -418,7 +418,7 @@ and runs on this Mac.** `exec.library` (175KB) + `kernel.resource` (70KB) +
 `hostlib.resource` come up with valid `SysBase`/`KernelBase`; a SIGSEGV is caught via
 the `cpu_aarch64.h` host-signal→AROS-trap bridge and AROS prints its AArch64 register
 dump + native Guru alert. It halts at a cold-start trap (no `dos.library` in a
-3-module kickstart). Run it: `~/aros-darwin/run.sh`. Full map: `graft/WORKFLOW.md`;
+3-module kickstart). Run it: `~/Source/aros-project/aros-darwin/run.sh`. Full map: `graft/WORKFLOW.md`;
 upstream friction (25 items): `graft/UPSTREAM-NOTES.md`.
 
 ### Key decisions / trade-offs under the "make it boot" push

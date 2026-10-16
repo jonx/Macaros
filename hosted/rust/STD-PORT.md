@@ -261,7 +261,7 @@ Remaining pal pieces / disclosed tier-3 gaps (the full list is in
    `SystemTagList` is line-oriented. `output()`/`status()`/env/cwd done.
 2. **`std::net`** `set_nonblocking`/timeouts (library park model + `fd_set` ABI risk),
    IPv6 (`AF_INET6` numbering). `try_clone` needs `bsdsocket.library` deployed to
-   verify live (only headers are in `~/aros-build`; build it with
+   verify live (only headers are in `~/Source/aros-project/aros-build`; build it with
    `make workbench-libs-bsdsocket` and copy into `.../AROS/Libs/`, then the RS3e UDP
    `try_clone` check passes — self-contained, no host server).
 3. **`fs`** `File::set_times`/`set_times_nofollow` (no `futimes`/`lutimes`),

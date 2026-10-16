@@ -30,9 +30,9 @@ import sys
 
 AROS_INC = os.environ.get(
     "AROS_INC",
-    os.path.expanduser("~/aros-build/bin/darwin-aarch64/AROS/Developer/include"))
+    os.path.expanduser("~/Source/aros-project/aros-build/bin/darwin-aarch64/AROS/Developer/include"))
 CLANG = os.environ.get("AROS_CLANG",
-                       os.path.expanduser("~/aros-crosstools/bin/clang"))
+                       os.path.expanduser("~/Source/aros-project/aros-crosstools/bin/clang"))
 
 # The structures that actually cross. Data structures the guest reads or writes
 # need converting; OS-owned handles (Window, Screen, RastPort...) do not appear

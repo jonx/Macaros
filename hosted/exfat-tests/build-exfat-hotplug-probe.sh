@@ -2,10 +2,10 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-A64=${AROS_BUILD:-$HOME/aros-build}
+A64=${AROS_BUILD:-$HOME/Source/aros-project/aros-build}
 A64_SYS=$A64/bin/darwin-aarch64
-A64_TOOLS=${AROS_CROSSTOOLS:-$HOME/aros-crosstools}
-M68K=${AROS_M68K_BUILD:-$HOME/aros-m68k-build}
+A64_TOOLS=${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}
+M68K=${AROS_M68K_BUILD:-$HOME/Source/aros-project/aros-m68k-build}
 M68K_SYS=$M68K/bin/amiga-m68k
 M68K_CC=${AROS_M68K_CC:-$M68K/bin/darwin-aarch64/tools/crosstools/m68k-aros-gcc}
 RASPI=${AROS_RASPI_BUILD:-$HOME/aros-build-850}

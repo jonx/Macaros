@@ -11,7 +11,7 @@ nav-key automation (`aros-ctl wheel`/`key`), and the emul-handler stack fix
 that un-gates Feraille's folder-size walker. Day-to-day status, launch
 contract, and feature-parity table live in the Feraille repo:
 `~/Source/Feraille/docs/features/aros-port.md` (the authoritative page);
-backend field notes in `~/Source/zed-aros/crates/gpui_aros/PORTING.md` +
+backend field notes in `~/Source/aros-project/zed-aros/crates/gpui_aros/PORTING.md` +
 the [July 2026 historical handoff](../../history/handoffs/HANDOFF-2026-07-06.md).
 
 Stage-1 probe (still useful as a smoke): `C:FerailleProbe` prints
@@ -35,7 +35,7 @@ use at Feraille's pinned zed rev (`1d217ee`), where platform backends are
 separate crates:
 
 - **`gpui_aros`** — new crate in the local zed fork
-  (`~/Source/zed-aros`, branch `aros-platform`), plus one
+  (`~/Source/aros-project/zed-aros`, branch `aros-platform`), plus one
   `cfg(target_os = "aros")` arm in `gpui_platform::current_platform()`.
   Feraille's `aros-port` branch redirects the zed git deps to this fork via
   `[patch]`.
@@ -112,7 +112,7 @@ All encoded in `hosted/feraille/core-probe/.cargo/config.toml` and
 | Piece | Where |
 |---|---|
 | Stage-1 probe (crates + harness + build) | `hosted/feraille/` |
-| GPUI fork (gpui_aros) | `~/Source/zed-aros` @ `aros-platform` |
+| GPUI fork (gpui_aros) | `~/Source/aros-project/zed-aros` @ `aros-platform` |
 | Feraille app branch | `~/Source/Feraille` @ `aros-port` |
 | Rust std pal | `../rust-aros` ([rust-aros](../rust-aros/README.md)) |
 

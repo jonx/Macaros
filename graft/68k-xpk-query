@@ -7,7 +7,7 @@ set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-ARCHIVE="${EMU68K_XPK_ARCHIVE:-$HOME/68k-corpus/xpk_User.lha}"
+ARCHIVE="${EMU68K_XPK_ARCHIVE:-$HOME/Source/aros-project/68k-corpus/xpk_User.lha}"
 EXPECT="ec48c2820e45e64e1c1970592f06dc32c64546a6c7d545b39c79b469012879f3"
 
 if [ ! -f "$ARCHIVE" ]; then

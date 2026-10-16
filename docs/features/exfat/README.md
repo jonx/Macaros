@@ -101,7 +101,7 @@ separate real-hardware gate.
 This runs the bounds, boot-region, metadata/up-case, ASan and UBSan suites,
 the AArch64 AROS compile gate, the m68k byte-I/O code-generation check, and a
 complete production-source compile with a genuine big-endian m68k AROS
-toolchain when `$HOME/aros-m68k-build` is present. Its output objects are
+toolchain when `$HOME/Source/aros-project/aros-m68k-build` is present. Its output objects are
 verified as `m68k:68000`; `AROS_M68K_BUILD` can select another build tree.
 The genuine m68k module also links as `AROS/L/exfat-handler`; this required a
 portable D0/D1 return alias in the m68k library-call generator for the

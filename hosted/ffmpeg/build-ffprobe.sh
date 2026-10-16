@@ -15,7 +15,7 @@ OUT="$REPO/build/ffmpeg"
 SRC="$OUT/ffmpeg-8.1.2"
 BLD="$OUT/build-videox"            # generated config.h / ffversion.h live here
 SYSX="$OUT/sysroot-videox"        # the installed broad-codec libs
-: "${AROS_BUILD:=$HOME/aros-build/bin/darwin-aarch64}"; export AROS_BUILD
+: "${AROS_BUILD:=$HOME/Source/aros-project/aros-build/bin/darwin-aarch64}"; export AROS_BUILD
 
 [ -d "$SYSX/lib" ] || { echo "build-ffprobe: $SYSX missing -- run build-videox.sh first" >&2; exit 1; }
 [ -f "$BLD/config.h" ] || { echo "build-ffprobe: $BLD/config.h missing -- run build-videox.sh first" >&2; exit 1; }

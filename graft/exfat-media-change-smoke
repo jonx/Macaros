@@ -6,7 +6,7 @@ export AROS_CTL_STARTUP_MODE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-AROS="${AROS_BUILD:-$HOME/aros-build}/bin/darwin-aarch64/AROS"
+AROS="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64/AROS"
 IMAGE="$AROS/DiskImages/Unit13"
 NEW_IMAGE="$AROS/DiskImages/Unit13.new"
 OLD_IMAGE="$AROS/DiskImages/Unit13.old"

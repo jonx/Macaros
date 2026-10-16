@@ -6,9 +6,9 @@
 # (the expensive part is preserved at $AROS_CROSSTOOLS).
 #
 # Stable locations (canonical, out of /tmp so the periodic cleaner can't eat them):
-#   AROS_BUILD        ~/aros-build          the AROS build tree / SDK / boot image
-#   AROS_CROSSTOOLS   ~/aros-crosstools     the patched clang/lld + compiler-rt
-#   AROS_SRC          ~/Source/aros-upstream (branch: crash-containment)
+#   AROS_BUILD        ~/Source/aros-project/aros-build          the AROS build tree / SDK / boot image
+#   AROS_CROSSTOOLS   ~/Source/aros-project/aros-crosstools     the patched clang/lld + compiler-rt
+#   AROS_SRC          ~/Source/aros-project/aros-upstream (branch: crash-containment)
 #
 #   graft/rebuild-aros.sh                 # build the whole boot+desktop set
 #   TARGETS="kernel-dos kernel-intuition" graft/rebuild-aros.sh   # subset
@@ -19,9 +19,9 @@
 # and builds LLVM from source).
 set -uo pipefail
 
-AROS_SRC="${AROS_SRC:-$HOME/Source/aros-upstream}"
-AROS_BUILD="${AROS_BUILD:-$HOME/aros-build}"
-AROS_CROSSTOOLS="${AROS_CROSSTOOLS:-$HOME/aros-crosstools}"
+AROS_SRC="${AROS_SRC:-$HOME/Source/aros-project/aros-upstream}"
+AROS_BUILD="${AROS_BUILD:-$HOME/Source/aros-project/aros-build}"
+AROS_CROSSTOOLS="${AROS_CROSSTOOLS:-$HOME/Source/aros-project/aros-crosstools}"
 LOGDIR="${LOGDIR:-$AROS_BUILD/rebuild-logs}"
 mkdir -p "$LOGDIR"
 

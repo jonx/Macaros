@@ -185,7 +185,7 @@ in order:
    and `dos.library`, mounts SYS:, runs the AmigaDOS Shell, and renders a full
    Wanderer desktop in a live Cocoa/Metal window (see the root README).
 
-Run it yourself: **`~/aros-darwin/run.sh`** (a self-contained signed bundle). The
+Run it yourself: **`~/Source/aros-project/aros-darwin/run.sh`** (a self-contained signed bundle). The
 upstream-worthy friction along the way is logged in
 `../../../graft/UPSTREAM-NOTES.md`
 (25 items).

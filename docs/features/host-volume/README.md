@@ -30,8 +30,8 @@ keyword** (see below) — and that keyword is ours, never handed to AROS's `Moun
 ## Quick start
 
 ```sh
-~/Source/Macaros/graft/run-window.sh            # shares ~/AROS/Shared
-~/Source/Macaros/graft/run-window.sh ~/Work     # share a different folder
+~/Source/aros-project/Macaros/graft/run-window.sh            # shares ~/AROS/Shared
+~/Source/aros-project/Macaros/graft/run-window.sh ~/Work     # share a different folder
 ```
 
 This boots AROS in a Mac window and maps the folder as **two** volumes:

@@ -4,7 +4,7 @@
 #   2. <share>/RustHello  on the Mac folder that mounts as MacRW: (run it as
 #      `MacRW:RustHello` from the AROS shell -- a Rust program off the mounted share)
 #
-# Mirrors std-build.sh's collect-aros link recipe. It defaults to ~/aros-build (the
+# Mirrors std-build.sh's collect-aros link recipe. It defaults to ~/Source/aros-project/aros-build (the
 # tree graft/run-window.sh boots); override with AROS_BUILD=<tree>/bin/darwin-aarch64.
 set -eu
 
@@ -14,16 +14,16 @@ RSLIB="$DIR/sample/target/aarch64-unknown-aros/release/librust_hello_aros.a"
 SHARE="${AROS_CTL_HOST_FOLDER:-$HOME/AROS/Shared}"
 NIGHTLY="${RUST_NIGHTLY:-nightly-2026-06-27}"
 
-# Prefer ~/aros-build (what run-window.sh boots); fall back to newest /tmp tree.
+# Prefer ~/Source/aros-project/aros-build (what run-window.sh boots); fall back to newest /tmp tree.
 find_tree() {
     if [ -n "${AROS_BUILD:-}" ]; then printf '%s\n' "$AROS_BUILD"; return; fi
     local best="" bt=0 d t
     for d in \
-        "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" \
+        "${BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64" \
         /tmp/*/bin/darwin-aarch64 ; do
         [ -x "$d/tools/collect-aros" ] && [ -d "$d/gen/include" ] || continue
-        # first complete tree wins if it is ~/aros-build; else newest collect-aros
-        if [ "$d" = "${BUILD:-$HOME/aros-build}/bin/darwin-aarch64" ]; then best="$d"; break; fi
+        # first complete tree wins if it is ~/Source/aros-project/aros-build; else newest collect-aros
+        if [ "$d" = "${BUILD:-$HOME/Source/aros-project/aros-build}/bin/darwin-aarch64" ]; then best="$d"; break; fi
         t="$(stat -f %m "$d/tools/collect-aros" 2>/dev/null || echo 0)"
         if [ "$t" -ge "$bt" ]; then bt="$t"; best="$d"; fi
     done

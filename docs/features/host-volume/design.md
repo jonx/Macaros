@@ -358,7 +358,7 @@ agent greps; the agent creates/asserts files on **both** sides so there is no ma
 ### How we verify it unattended
 
 The loop is the project's existing one: `graft/build-darwin-aarch64.sh` builds, the
-hosted AROS runs headless via `~/aros-darwin/run.sh` / `graft/bootrun.sh`, and the
+hosted AROS runs headless via `~/Source/aros-project/aros-darwin/run.sh` / `graft/bootrun.sh`, and the
 agent reads serial markers from stdout — same channel as the M/H milestones. No
 screenshot, no TCC, no manual approval (the home-folder/`~/Amiga` access the handler
 uses is ordinary file I/O by the AROS *process itself*, which inherits the launching
