@@ -22,6 +22,9 @@ EXFATNameProbe
 EXFATReadonlyProbe
 EXFATWriteProbe
 EXFATSparseProbe
+EXFATBootRegionProbe.aarch64
+EXFATBootRegionProbe.raspi-aarch64
+EXFATProtectProbe
 FDSK64Probe
 __pycache__/
 *.o
