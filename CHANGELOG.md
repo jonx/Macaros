@@ -1,5 +1,14 @@
 # Changelog
 
+
+## 2026-10-27 - Rust filesystem bridge uses the public errno API
+
+The filesystem bridge reads and clears `errno` through the SDK accessor rather
+than the private StdCBase layout. It expects the common runtime's task-owned
+errno contract, shared by clients and resident libraries. The native AFS+
+package builds and passes its ABI audit against that SDK; runtime and hosted
+product qualification are separate.
+
 ## 2026-09-18 - One metadata file per folder, shared with other tools
 
 - **AROS comments and protection bits now live in one `.ameta` file per host

@@ -17,31 +17,17 @@
 #include <fcntl.h>
 #include <stdio.h>   /* rename() -- implicit decls are an error on clang 16+ */
 #include <proto/dos.h>   /* IoErr() */
-#include <libraries/stdc.h>  /* struct StdCBase + __aros_getbase_StdCBase() */
-
-/* The errno cell in the task's shared StdCBase.
- *
- * There are two errno cells, an accident of linkage: __stdc_geterrnoptr() is a
- * link-library function, so each image carries its own copy and its own hook
- * variable. pthread installs the per-thread hook in the application's copy, so
- * in-app code gets a per-thread cell -- while stdc.library and posixc.library,
- * being their own images with a NULL hook, write this base cell. A reader that
- * only looks at the per-thread cell therefore misses every error a library
- * set; std's errno() consults this when the per-thread cell says nothing. */
+/* Rust's bridge reads the public errno cell. The shared runtime selects that
+ * cell for the current task, including calls made through resident libraries;
+ * consumers must not depend on the private StdCBase layout. */
 int aros_libbase_errno(void)
 {
-    struct StdCBase *base = __aros_getbase_StdCBase();
-    return base ? base->_errno : 0;
+    return errno;
 }
 
-/* Clear both cells before a call whose failure we intend to attribute; the
- * shared one holds whatever error some earlier library call left there. */
 static void errno_clear(void)
 {
-    struct StdCBase *base = __aros_getbase_StdCBase();
     errno = 0;
-    if (base)
-        base->_errno = 0;
 }
 
 /* stdc.library's own IoErr()->errno mapping, the one its mkdir and readlink
@@ -57,14 +43,7 @@ extern int __stdc_ioerr2errno(int ioerr);
 static int errno_from_ioerr(int fallback)
 {
     if (errno == 0) {
-        /* The library's own report first: posixc and stdc write the shared
-         * base cell (see aros_libbase_errno above), and an error they set
-         * without a failing dos call -- EEXIST from an O_EXCL check -- exists
-         * nowhere else. Guessing from IoErr() before looking there turned
-         * that EEXIST into a stale-IoErr ENOENT. */
-        int e = aros_libbase_errno();
-        if (!e)
-            e = __stdc_ioerr2errno(IoErr());
+        int e = __stdc_ioerr2errno(IoErr());
         errno = e ? e : fallback;
     }
     return -1;
@@ -84,12 +63,7 @@ int aros_open(const char *path, int flags, unsigned int mode)
     return fd;
 }
 
-/* The path-taking calls, wrapped for the same reason as open: clear both
- * errno cells going in, recover a reason coming out. Without the clear, a
- * failure here reads back whatever stale value the shared cell held -- which
- * is exactly what happened to mkdir once errno() learned to consult that
- * cell: create_dir_all on an existing directory read a stale ENOENT instead
- * of its EEXIST, and concluded the parent was missing. */
+/* Attribute each path operation's error to that operation. */
 int aros_mkdir(const char *path, unsigned int mode)
 {
     if (!path) { errno = EINVAL; return -1; }
